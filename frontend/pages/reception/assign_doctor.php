@@ -2,15 +2,16 @@
 // ================================================================
 // FILE: frontend/pages/reception/assign_doctor.php
 // RECEPTION - ASSIGN / CHANGE DOCTOR & LAB TESTS
-// USING: lab_tests_catalog and lab_tests tables
 // FIXED: 
 // 1. Lab only mode - No doctor required
 // 2. No consultation fee for lab only
-// 3. Patient goes to Lab Only status
+// 3. Patient goes to Lab Only status (lab_test with no doctor)
 // 4. Doctor is OPTIONAL for lab tests
 // 5. Selection stays checked (tick inabaki)
 // 6. Can select multiple lab tests
-// 7. Using NEW DATABASE: dispensary_db (bills, bill_items)
+// 7. Lab tests have their own card with VIEW button WORKING
+// 8. View button links to lab_tests.php?id=LAB_TEST_ID
+// 9. Using NEW DATABASE: dispensary_db (bills, bill_items)
 // ================================================================
 
 // ================================================================
@@ -64,6 +65,7 @@ $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $all_patients = [];
 $pending_patients = [];
 $assigned_patients = [];
+$lab_only_patients = [];
 $doctors = [];
 $online_doctors = [];
 $offline_doctors = [];
@@ -73,6 +75,7 @@ $total_doctors = 0;
 $visit_type_options = [];
 $pending_count = 0;
 $assigned_count = 0;
+$lab_only_count = 0;
 $selected_patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 $latest_vital_signs = null;
 $selected_patient_data = null;
@@ -179,7 +182,7 @@ try {
     }
     
     // ================================================================
-    // GET LAB TESTS CATALOG - From lab_tests_catalog table
+    // GET LAB TESTS CATALOG
     // ================================================================
     $stmt = $db->prepare("
         SELECT id, test_name, price, category 
@@ -259,15 +262,21 @@ try {
     // ================================================================
     $pending_patients = [];
     $assigned_patients = [];
+    $lab_only_patients = [];
     $pending_count = 0;
     $assigned_count = 0;
+    $lab_only_count = 0;
     
     foreach ($all_patients as $patient) {
         $patient['has_active_visit'] = !empty($patient['visit_id']);
         $patient['patient_days'] = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
         
         if ($patient['has_active_visit']) {
-            if (in_array($patient['visit_status'], ['new', 'pending', 'lab_test'])) {
+            if ($patient['visit_status'] === 'lab_test' && empty($patient['visit_doctor_id'])) {
+                $lab_only_patients[] = $patient;
+                $lab_only_count++;
+            }
+            elseif (in_array($patient['visit_status'], ['new', 'pending'])) {
                 $pending_patients[] = $patient;
                 $pending_count++;
             } 
@@ -331,7 +340,9 @@ try {
                    CONCAT('Test #', lt.id) as request_number,
                    'Lab Test' as test_names,
                    1 as test_count,
-                   lt.test_price as lab_total
+                   lt.test_price as lab_total,
+                   lt.status as test_status,
+                   lt.results as test_results
             FROM lab_tests lt
             WHERE lt.patient_id = ? AND lt.branch_id = ?
             ORDER BY lt.created_at DESC
@@ -342,10 +353,9 @@ try {
     }
     
     // ================================================================
-    // FUNCTION: CREATE VISIT BILL - Using NEW DATABASE (bills table)
+    // FUNCTION: CREATE VISIT BILL
     // ================================================================
     function createVisitBill($db, $patient_id, $visit_id, $visit_type, $consultation_fee, $user_id, $branch_id) {
-        // Check if bill exists in bills table
         $stmt = $db->prepare("
             SELECT id, bill_number, status 
             FROM bills 
@@ -356,7 +366,6 @@ try {
         $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($existing_bill) {
-            // Update existing bill
             $stmt = $db->prepare("
                 UPDATE bills 
                 SET subtotal = ?, 
@@ -372,7 +381,6 @@ try {
                 $existing_bill['id']
             ]);
             
-            // Update bill items
             $stmt = $db->prepare("
                 UPDATE bill_items 
                 SET unit_price = ?, total_price = ?, item_name = ?
@@ -381,7 +389,6 @@ try {
             $item_name = 'Consultation (' . ucfirst(str_replace('_', ' ', $visit_type)) . ')';
             $stmt->execute([$consultation_fee, $consultation_fee, $item_name, $existing_bill['id']]);
             
-            // Update visit with consultation_fee
             $stmt = $db->prepare("UPDATE visits SET consultation_fee = ? WHERE id = ?");
             $stmt->execute([$consultation_fee, $visit_id]);
             
@@ -393,7 +400,6 @@ try {
             ];
         }
         
-        // Create new bill
         $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
         
         $stmt = $db->prepare("
@@ -427,11 +433,9 @@ try {
         ");
         $stmt->execute([$bill_id, $patient_id, $branch_id, $item_name, $consultation_fee, $consultation_fee]);
         
-        // Update visit with consultation_fee
         $stmt = $db->prepare("UPDATE visits SET consultation_fee = ? WHERE id = ?");
         $stmt->execute([$consultation_fee, $visit_id]);
         
-        // Notify cashiers
         try {
             $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
             $stmt->execute([$branch_id]);
@@ -578,12 +582,19 @@ try {
                     }
                 }
                 
+                // Count patients by status
                 $pending = 0;
                 $assigned = 0;
+                $lab_only = 0;
                 foreach ($updated_patients as $p) {
                     if (!empty($p['visit_id'])) {
-                        if (in_array($p['visit_status'], ['new', 'pending', 'lab_test'])) $pending++;
-                        elseif ($p['visit_status'] === 'assigned' || $p['visit_status'] === 'with_doctor') $assigned++;
+                        if ($p['visit_status'] === 'lab_test' && empty($p['visit_doctor_id'])) {
+                            $lab_only++;
+                        } elseif (in_array($p['visit_status'], ['new', 'pending'])) {
+                            $pending++;
+                        } elseif ($p['visit_status'] === 'assigned' || $p['visit_status'] === 'with_doctor') {
+                            $assigned++;
+                        }
                     }
                 }
                 
@@ -596,16 +607,14 @@ try {
                     $status_icon = '📋';
                     
                     if (!empty($p['visit_id'])) {
-                        if (in_array($p['visit_status'], ['new', 'pending', 'lab_test'])) {
-                            if ($p['visit_status'] === 'lab_test' && empty($p['visit_doctor_id'])) {
-                                $status_label = '🧪 Lab Only';
-                                $status_class = 'lab_only';
-                                $status_icon = '🧪';
-                            } else {
-                                $status_label = '⏳ Pending';
-                                $status_class = 'pending';
-                                $status_icon = '⏳';
-                            }
+                        if ($p['visit_status'] === 'lab_test' && empty($p['visit_doctor_id'])) {
+                            $status_label = '🧪 Lab Only';
+                            $status_class = 'lab_only';
+                            $status_icon = '🧪';
+                        } elseif (in_array($p['visit_status'], ['new', 'pending'])) {
+                            $status_label = '⏳ Pending';
+                            $status_class = 'pending';
+                            $status_icon = '⏳';
                         } elseif ($p['visit_status'] === 'assigned' || $p['visit_status'] === 'with_doctor') {
                             $status_label = '✅ Assigned';
                             $status_class = 'assigned';
@@ -626,7 +635,7 @@ try {
                     $assigned_days_text = '';
                     if (!empty($p['visit_id']) && !empty($p['visit_created_at'])) {
                         $assigned_days = (int)floor((time() - strtotime($p['visit_created_at'])) / 86400);
-                        $assigned_days_text = ' <span class="assigned-days-badge-blue">Assigned: ' . $assigned_days . ' days ago</span>';
+                        $assigned_days_text = ' <span class="assigned-days-badge-blue">Visit: ' . $assigned_days . ' days ago</span>';
                     }
                     
                     $patient_options .= '<option value="' . $p['id'] . '" data-status="' . $status_class . '" data-doctor="' . htmlspecialchars($p['assigned_doctor_name'] ?? '') . '" ' . $selected . '>';
@@ -651,6 +660,7 @@ try {
                 foreach ($updated_patients as $p) {
                     if (empty($p['visit_id'])) continue;
                     if (!in_array($p['visit_status'], ['assigned', 'with_doctor'])) continue;
+                    if (empty($p['visit_doctor_id'])) continue;
                     
                     $assigned_count_list++;
                     $doctor_name = !empty($p['assigned_doctor_name']) ? 'Dr. ' . htmlspecialchars($p['assigned_doctor_name']) : 'No doctor';
@@ -693,7 +703,84 @@ try {
                         <tr>
                             <td colspan="5" style="padding:30px 12px;text-align:center;color:var(--text-secondary);">
                                 <i class="fas fa-user-check text-2xl block mb-2"></i>
-                                <p>No patients currently assigned</p>
+                                <p>No patients currently assigned to a doctor</p>
+                            </td>
+                        </tr>
+                    ';
+                }
+                
+                // ================================================================
+                // LAB ONLY PATIENTS LIST - FIXED VIEW LINK
+                // ================================================================
+                $lab_only_html = '';
+                $lab_only_count_list = 0;
+                foreach ($updated_patients as $p) {
+                    if (empty($p['visit_id'])) continue;
+                    if ($p['visit_status'] !== 'lab_test') continue;
+                    if (!empty($p['visit_doctor_id'])) continue;
+                    
+                    $lab_only_count_list++;
+                    
+                    // ✅ GET LAB TEST ID
+                    $lab_test_id = 0;
+                    $lab_test_name = '';
+                    $stmt2 = $db->prepare("SELECT id, test_name FROM lab_tests WHERE patient_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1");
+                    $stmt2->execute([$p['id']]);
+                    $lab_result = $stmt2->fetch(PDO::FETCH_ASSOC);
+                    if ($lab_result) {
+                        $lab_test_id = $lab_result['id'];
+                        $lab_test_name = $lab_result['test_name'];
+                    }
+                    
+                    $lab_days = 0;
+                    if (!empty($p['visit_created_at'])) {
+                        $lab_days = (int)floor((time() - strtotime($p['visit_created_at'])) / 86400);
+                    }
+                    $lab_days_text = $lab_days > 0 ? '<span class="assigned-days-badge-blue">' . $lab_days . ' days</span>' : '<span class="assigned-days-badge-blue new">Just requested</span>';
+                    
+                    $lab_status_text = '🧪 Pending';
+                    $lab_status_class = 'lab_only';
+                    
+                    // ✅ FIXED VIEW LINK
+                    if ($lab_test_id > 0) {
+                        $view_link = '<a href="lab_tests.php?id=' . $lab_test_id . '" class="btn-modern btn-modern-purple btn-modern-sm" style="padding:4px 12px;font-size:0.7rem;background:var(--purple);color:white;border-radius:6px;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
+                            <i class="fas fa-eye"></i> View
+                        </a>';
+                    } else {
+                        $view_link = '<span class="text-gray-400 text-xs">No test</span>';
+                    }
+                    
+                    $lab_only_html .= '
+                        <tr id="lab-row-' . $p['id'] . '" style="border-bottom:1px solid var(--border-color);">
+                            <td style="padding:10px 12px;font-weight:500;">
+                                ' . htmlspecialchars($p['full_name']) . '
+                                ' . $lab_days_text . '
+                                ' . ($lab_test_id > 0 ? '<span class="text-xs text-purple-500 block">' . htmlspecialchars($lab_test_name) . '</span>' : '') . '
+                            </td>
+                            <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;">' . htmlspecialchars($p['patient_id'] ?? 'N/A') . '</td>
+                            <td style="padding:10px 12px;">
+                                <span class="lab-only-tag-modern">
+                                    <i class="fas fa-flask"></i>
+                                    Lab Only
+                                    <span class="text-xs" style="color:var(--purple);">🧪</span>
+                                </span>
+                            </td>
+                            <td style="padding:10px 12px;">
+                                <span class="status-badge-dropdown ' . $lab_status_class . '">' . $lab_status_text . '</span>
+                            </td>
+                            <td style="padding:10px 12px;">
+                                ' . $view_link . '
+                            </td>
+                        </tr>
+                    ';
+                }
+                
+                if (empty($lab_only_html)) {
+                    $lab_only_html = '
+                        <tr>
+                            <td colspan="5" style="padding:30px 12px;text-align:center;color:var(--text-secondary);">
+                                <i class="fas fa-flask text-2xl block mb-2" style="color:var(--purple);"></i>
+                                <p>No lab test requests pending</p>
                             </td>
                         </tr>
                     ';
@@ -726,23 +813,16 @@ try {
                     $doctor_options = '<option value="" disabled>No doctors available</option>';
                 }
                 
-                // Build lab tests HTML - FIXED: With checked state preserved
+                // Build lab tests HTML
                 $lab_tests_html = '';
                 $stmt = $db->prepare("SELECT id, test_name, price, category FROM lab_tests_catalog WHERE is_active = 1 ORDER BY category, test_name");
                 $stmt->execute();
                 $lab_tests_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
-                // Get currently selected tests from POST if any
-                $selected_lab_tests = isset($_POST['lab_test_ids']) ? $_POST['lab_test_ids'] : [];
-                if (!is_array($selected_lab_tests)) {
-                    $selected_lab_tests = [];
-                }
-                
                 foreach ($lab_tests_data as $test) {
-                    $checked = in_array($test['id'], $selected_lab_tests) ? 'checked' : '';
                     $lab_tests_html .= '
                         <div class="lab-test-item-modern">
-                            <input type="checkbox" name="lab_test_ids[]" value="' . $test['id'] . '" id="lab_test_' . $test['id'] . '" class="lab-test-checkbox" onchange="updateLabSelection(this)" ' . $checked . '>
+                            <input type="checkbox" name="lab_test_ids[]" value="' . $test['id'] . '" id="lab_test_' . $test['id'] . '" class="lab-test-checkbox" onchange="updateLabSelection(this)">
                             <label for="lab_test_' . $test['id'] . '">
                                 <strong>' . htmlspecialchars($test['test_name']) . '</strong>
                                 ' . (!empty($test['category']) ? '<span class="lab-test-category">' . htmlspecialchars($test['category']) . '</span>' : '') . '
@@ -766,6 +846,7 @@ try {
                     'success' => true,
                     'pending_count' => $pending,
                     'assigned_count' => $assigned,
+                    'lab_only_count' => $lab_only,
                     'online_count' => $online,
                     'offline_count' => $offline,
                     'total_doctors' => count($updated_doctors),
@@ -773,6 +854,8 @@ try {
                     'doctor_options' => $doctor_options,
                     'assigned_list_html' => $assigned_html,
                     'assigned_list_count' => $assigned_count_list,
+                    'lab_only_html' => $lab_only_html,
+                    'lab_only_count' => $lab_only_count_list,
                     'visit_type_options' => $visit_type_options_html,
                     'lab_tests_html' => $lab_tests_html,
                     'online_doctors_list' => $online_options,
@@ -827,7 +910,6 @@ try {
                     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     if ($patient) {
-                        // consultation_fee inachukuliwa kutoka visits
                         $consultation_fee = $patient['consultation_fee'] ?? 0;
                         
                         echo json_encode([
@@ -861,7 +943,7 @@ try {
         }
         
         // ================================================================
-        // AJAX: CHANGE DOCTOR WITH LAB TESTS - FIXED (Lab Only Mode)
+        // AJAX: CHANGE DOCTOR WITH LAB TESTS
         // ================================================================
         if ($action === 'change_doctor') {
             header('Content-Type: application/json');
@@ -888,10 +970,8 @@ try {
                 exit;
             }
             
-            // Check if lab only mode (no doctor required)
             $is_lab_only = ($assignment_type === 'lab');
             
-            // For lab only, doctor is optional
             if (!$is_lab_only && $doctor_id <= 0) {
                 $response['message'] = 'Please select a doctor';
                 echo json_encode($response);
@@ -901,7 +981,6 @@ try {
             try {
                 $db->beginTransaction();
                 
-                // Get doctor info if assigned
                 $doctor_name = 'No Doctor Assigned';
                 $doctor_online = 0;
                 if ($doctor_id > 0) {
@@ -914,15 +993,11 @@ try {
                     }
                 }
                 
-                // Consultation fee - 0 for lab only
                 $consultation_fee = 0;
                 if (!$is_lab_only && $doctor_id > 0) {
                     $consultation_fee = $visit_type_options[$visit_type_key]['price'] ?? 0;
                 }
                 
-                // ================================================================
-                // CHECK IF PATIENT ALREADY HAS ACTIVE VISIT
-                // ================================================================
                 $stmt = $db->prepare("
                     SELECT id, status, doctor_id, visit_number, visit_type
                     FROM visits 
@@ -941,7 +1016,8 @@ try {
                     $visit_id = $existing_visit['id'];
                     $visit_number = $existing_visit['visit_number'];
                     
-                    // Update existing visit
+                    $visit_type_to_store = $is_lab_only ? 'lab_only' : $visit_type_key;
+                    
                     $stmt = $db->prepare("
                         UPDATE visits 
                         SET doctor_id = ?, 
@@ -955,14 +1031,15 @@ try {
                         WHERE id = ?
                     ");
                     
-                    // Status: 'assigned' if doctor assigned, 'lab_test' if lab only
                     $visit_status = ($is_lab_only && !empty($lab_test_ids)) ? 'lab_test' : 
                                     ($is_lab_only ? 'pending' : 'assigned');
                     
+                    $doctor_id_to_store = ($is_lab_only) ? null : ($doctor_id > 0 ? $doctor_id : null);
+                    
                     $stmt->execute([
-                        $doctor_id > 0 ? $doctor_id : null,
+                        $doctor_id_to_store,
                         $visit_status,
-                        $visit_type_key,
+                        $visit_type_to_store,
                         $symptoms,
                         $complaint,
                         $notes,
@@ -971,12 +1048,14 @@ try {
                     ]);
                     
                 } else {
-                    // Create new visit
                     $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                     
-                    // Status: 'assigned' if doctor assigned, 'lab_test' if lab only
+                    $visit_type_to_store = $is_lab_only ? 'lab_only' : $visit_type_key;
+                    
                     $visit_status = ($is_lab_only && !empty($lab_test_ids)) ? 'lab_test' : 
                                     ($is_lab_only ? 'pending' : 'assigned');
+                    
+                    $doctor_id_to_store = ($is_lab_only) ? null : ($doctor_id > 0 ? $doctor_id : null);
                     
                     $stmt = $db->prepare("
                         INSERT INTO visits (
@@ -988,9 +1067,9 @@ try {
                     $stmt->execute([
                         $visit_number, 
                         $patient_id, 
-                        $doctor_id > 0 ? $doctor_id : null, 
+                        $doctor_id_to_store, 
                         $selected_branch_id, 
-                        $visit_type_key, 
+                        $visit_type_to_store, 
                         $visit_status, 
                         $symptoms, 
                         $complaint, 
@@ -1001,13 +1080,14 @@ try {
                     $visit_id = $db->lastInsertId();
                 }
                 
-                // Update patient's assigned doctor
-                if ($doctor_id > 0) {
+                if ($doctor_id > 0 && !$is_lab_only) {
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
                     $stmt->execute([$doctor_id, $patient_id]);
+                } elseif ($is_lab_only) {
+                    $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
+                    $stmt->execute([$patient_id]);
                 }
                 
-                // Create bill ONLY if consultation fee > 0 (doctor assigned)
                 $bill_result = null;
                 $bill_created = false;
                 if (!$is_lab_only && $consultation_fee > 0 && $doctor_id > 0) {
@@ -1017,9 +1097,9 @@ try {
                     }
                 }
                 
-                // Handle Lab Tests - Create lab test records
                 $lab_created = false;
                 $total_lab_fee = 0;
+                $lab_test_ids_created = [];
                 if (!empty($lab_test_ids)) {
                     $test_ids_imploded = implode(',', array_map('intval', $lab_test_ids));
                     $stmt = $db->prepare("SELECT id, test_name, price FROM lab_tests_catalog WHERE id IN ($test_ids_imploded)");
@@ -1028,6 +1108,7 @@ try {
                     
                     foreach ($tests as $test) {
                         $total_lab_fee += $test['price'];
+                        $lab_test_ids_created[] = $test['id'];
                         
                         $stmt = $db->prepare("
                             INSERT INTO lab_tests (
@@ -1038,7 +1119,7 @@ try {
                         $stmt->execute([
                             $visit_id,
                             $patient_id,
-                            $doctor_id > 0 ? $doctor_id : null,
+                            null,
                             $test['id'],
                             $test['test_name'],
                             $test['price'],
@@ -1047,7 +1128,6 @@ try {
                         $lab_created = true;
                     }
                     
-                    // Update visit with lab fees
                     $stmt = $db->prepare("
                         UPDATE visits 
                         SET lab_fees_total = lab_fees_total + ?,
@@ -1106,7 +1186,6 @@ try {
                 
                 $db->commit();
                 
-                // Build success message
                 $fee_text = '';
                 if (!$is_lab_only && $consultation_fee > 0 && $doctor_id > 0) {
                     $fee_text = ' - Fee: TSh ' . number_format($consultation_fee);
@@ -1116,7 +1195,7 @@ try {
                 } else if ($is_lab_only) {
                     $fee_text = ' - No consultation fee (Lab only)';
                 } else {
-                    $fee_text = ' - Fee WAIVED (consultation fee is zero)';
+                    $fee_text = ' - Fee WAIVED';
                 }
                 
                 $lab_text = '';
@@ -1125,11 +1204,11 @@ try {
                 }
                 
                 $doctor_text = '';
-                if ($doctor_id > 0) {
+                if ($doctor_id > 0 && !$is_lab_only) {
                     $online_text = $doctor_online == 1 ? '🟢 Online' : '⚪ Offline';
                     $doctor_text = "Doctor <strong>$doctor_name</strong> ($online_text) assigned";
                 } else {
-                    $doctor_text = "No doctor assigned (Lab only)";
+                    $doctor_text = "🧪 Lab tests requested - No doctor assigned";
                 }
                 
                 $response['success'] = true;
@@ -1138,13 +1217,14 @@ try {
                 $response['doctor_name'] = $doctor_name;
                 $response['patient_id'] = $patient_id;
                 $response['bill'] = $bill_result;
-                $response['visit_type'] = $visit_type_key;
+                $response['visit_type'] = $visit_type_to_store;
                 $response['doctor_online'] = $doctor_online;
                 $response['bill_sent_to_cashier'] = $bill_created;
                 $response['lab_tests_added'] = $lab_created;
                 $response['is_lab_only'] = $is_lab_only;
-                $response['has_doctor'] = ($doctor_id > 0);
+                $response['has_doctor'] = ($doctor_id > 0 && !$is_lab_only);
                 $response['total_lab_fee'] = $total_lab_fee;
+                $response['lab_test_ids'] = $lab_test_ids_created;
                 
             } catch (Exception $e) {
                 $db->rollBack();
@@ -1162,12 +1242,14 @@ try {
     $all_patients = [];
     $pending_patients = [];
     $assigned_patients = [];
+    $lab_only_patients = [];
     $doctors = [];
     $online_doctors = [];
     $offline_doctors = [];
     $visit_type_options = [];
     $pending_count = 0;
     $assigned_count = 0;
+    $lab_only_count = 0;
     $unread_notifications = 0;
 }
 
@@ -1206,6 +1288,7 @@ include_once '../../components/reception_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* ===== CSS STYLES ===== */
         :root {
             --primary: #2563EB;
             --primary-dark: #1D4ED8;
@@ -1612,6 +1695,11 @@ include_once '../../components/reception_sidebar.php';
             color: var(--success);
         }
         
+        .modern-card .card-badge.lab-badge {
+            background: var(--purple-bg);
+            color: var(--purple);
+        }
+        
         .form-card-modern {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1756,6 +1844,8 @@ include_once '../../components/reception_sidebar.php';
         }
         
         .btn-modern-sm { padding: 5px 14px; font-size: 0.75rem; border-radius: 8px; }
+        .btn-modern-purple { background: var(--purple); color: white; }
+        .btn-modern-purple:hover { background: var(--purple-dark); }
         
         .form-actions-modern {
             display: flex;
@@ -1776,8 +1866,6 @@ include_once '../../components/reception_sidebar.php';
         }
         .status-badge-dropdown.pending { background: #FEF3C7; color: #D97706; }
         .status-badge-dropdown.assigned { background: #D1FAE5; color: #059669; }
-        .status-badge-dropdown.with_doctor { background: #EDE9FE; color: #7C3AED; }
-        .status-badge-dropdown.lab_test { background: #EDE9FE; color: #7C3AED; }
         .status-badge-dropdown.lab_only { background: #EDE9FE; color: #7C3AED; border: 1px dashed #7C3AED; }
         .status-badge-dropdown.no_visit { background: var(--gray-200); color: var(--gray-600); }
         
@@ -1792,6 +1880,19 @@ include_once '../../components/reception_sidebar.php';
             font-size: 0.65rem;
             font-weight: 500;
             border: 1px solid var(--success);
+        }
+        
+        .lab-only-tag-modern {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: var(--purple-bg);
+            color: var(--purple);
+            padding: 3px 12px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 500;
+            border: 1px solid var(--purple);
         }
         
         .stat-card-modern {
@@ -1850,9 +1951,7 @@ include_once '../../components/reception_sidebar.php';
         .vital-item-modern .vital-unit { font-size: 0.55rem; color: var(--text-secondary); display: block; }
         .vital-item-modern.bmi-item { background: var(--primary-bg); border-color: var(--primary); }
         
-        /* ================================================================
-           LAB TESTS - FIXED: Better visibility and selection
-           ================================================================ */
+        /* Lab Tests */
         .lab-modal-container-modern {
             background: var(--bg-card);
             border-radius: var(--radius);
@@ -2051,15 +2150,6 @@ include_once '../../components/reception_sidebar.php';
             margin-right: 4px;
         }
         
-        /* Lab only mode styles */
-        .lab-only-mode .doctor-section-hidden {
-            display: none !important;
-        }
-        
-        .lab-only-mode .consultation-fee-hidden {
-            display: none !important;
-        }
-        
         .lab-only-badge {
             background: var(--purple-bg);
             color: var(--purple);
@@ -2068,6 +2158,30 @@ include_once '../../components/reception_sidebar.php';
             font-size: 0.6rem;
             font-weight: 600;
             border: 1px solid var(--purple);
+        }
+        
+        /* No Doctor Required Message */
+        .no-doctor-required {
+            background: var(--purple-bg);
+            border: 2px solid var(--purple);
+            border-radius: var(--radius);
+            padding: 10px 16px;
+            margin-top: 6px;
+            display: none;
+        }
+        
+        .no-doctor-required .message {
+            color: var(--purple);
+            font-weight: 500;
+            font-size: 0.8rem;
+        }
+        
+        .no-doctor-required .message i {
+            margin-right: 6px;
+        }
+        
+        .visit-type-hidden {
+            display: none !important;
         }
         
         @media (max-width: 1024px) {
@@ -2164,7 +2278,7 @@ include_once '../../components/reception_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
-                Select patient, assign doctor or change existing doctor in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                Select patient, assign doctor or request lab tests in <strong><?= htmlspecialchars($branch_name) ?></strong>
                 
                 <span class="header-badge">
                     <i class="fas fa-user-md"></i>
@@ -2182,9 +2296,9 @@ include_once '../../components/reception_sidebar.php';
                     <i class="fas fa-user-check"></i>
                     <span id="assignedCount"><?= $assigned_count ?></span> Assigned
                 </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-receipt"></i>
-                    <span id="billStatus">Bill: Pending</span>
+                <span class="header-badge" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.3);color:#7C3AED;">
+                    <i class="fas fa-flask"></i>
+                    <span id="labOnlyCount"><?= $lab_only_count ?></span> Lab Only
                 </span>
             </p>
         </div>
@@ -2199,7 +2313,7 @@ include_once '../../components/reception_sidebar.php';
     </div>
 
     <?php if ($message): ?>
-        <div class="alert-modern alert-modern-<?= $message_type === 'success' ? 'success' : 'error' ?>" style="max-width:1100px;margin:0 auto 16px;padding:12px 18px;border-radius:var(--radius);background:<?= $message_type === 'success' ? 'var(--success-bg)' : 'var(--danger-bg)' ?>;color:<?= $message_type === 'success' ? 'var(--success)' : 'var(--danger)' ?>;border:2px solid <?= $message_type === 'success' ? 'var(--success)' : 'var(--danger)' ?>;display:flex;align-items:center;gap:10px;">
+        <div class="alert-modern" style="max-width:1100px;margin:0 auto 16px;padding:12px 18px;border-radius:var(--radius);background:<?= $message_type === 'success' ? 'var(--success-bg)' : 'var(--danger-bg)' ?>;color:<?= $message_type === 'success' ? 'var(--success)' : 'var(--danger)' ?>;border:2px solid <?= $message_type === 'success' ? 'var(--success)' : 'var(--danger)' ?>;display:flex;align-items:center;gap:10px;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <div><?= $message ?></div>
         </div>
@@ -2212,7 +2326,7 @@ include_once '../../components/reception_sidebar.php';
         <div class="card-header">
             <div class="card-title">
                 <i class="fas fa-user-check"></i>
-                Assigned Patients
+                Assigned Patients (With Doctor)
                 <span class="card-badge success" id="assignedListCount"><?= $assigned_count ?></span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
@@ -2281,7 +2395,107 @@ include_once '../../components/reception_sidebar.php';
             <?php else: ?>
                 <div class="text-center py-6 text-gray-400" id="noAssignedPatients">
                     <i class="fas fa-user-check text-2xl block mb-2"></i>
-                    <p>No patients currently assigned</p>
+                    <p>No patients currently assigned to a doctor</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- LAB TESTS CARD - FIXED VIEW BUTTON -->
+    <!-- ================================================================ -->
+    <div class="modern-card animate-fade-in-up" style="animation-delay:0.15s;border-color:var(--purple);">
+        <div class="card-header">
+            <div class="card-title">
+                <i class="fas fa-flask" style="color:var(--purple);"></i>
+                Lab Test Requests (No Doctor)
+                <span class="card-badge lab-badge" id="labOnlyListCount"><?= $lab_only_count ?></span>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;">
+                <span class="text-xs text-gray-400" id="labOnlyUpdate">(Auto-updated <?= date('h:i:s A') ?>)</span>
+                <span class="text-xs text-purple-500">
+                    <span class="live-indicator-modern"></span> Live
+                </span>
+            </div>
+        </div>
+        
+        <div id="labOnlyPatientsList">
+            <?php if (count($lab_only_patients) > 0): ?>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                        <thead>
+                            <tr style="border-bottom:2px solid var(--border-color);">
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient / Days</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient ID</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Type</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="labOnlyTableBody">
+                            <?php foreach ($lab_only_patients as $patient): 
+                                $lab_days = 0;
+                                if (!empty($patient['visit_created_at'])) {
+                                    $lab_days = (int)floor((time() - strtotime($patient['visit_created_at'])) / 86400);
+                                }
+                                $days_text = $lab_days > 0 ? '<span class="assigned-days-badge-blue">' . $lab_days . ' days</span>' : '<span class="assigned-days-badge-blue new">Just requested</span>';
+                                
+                                // ✅ GET LAB TEST ID
+                                $lab_test_id = 0;
+                                $lab_test_name = '';
+                                try {
+                                    $stmt = $db->prepare("SELECT id, test_name FROM lab_tests WHERE patient_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1");
+                                    $stmt->execute([$patient['id']]);
+                                    $lab_result = $stmt->fetch(PDO::FETCH_ASSOC);
+                                    if ($lab_result) {
+                                        $lab_test_id = $lab_result['id'];
+                                        $lab_test_name = $lab_result['test_name'];
+                                    }
+                                } catch (Exception $e) {}
+                                
+                                $status_label = '🧪 Pending';
+                                $status_class = 'lab_only';
+                                
+                                // ✅ FIXED VIEW LINK
+                                if ($lab_test_id > 0) {
+                                    $view_link = '<a href="lab_tests.php?id=' . $lab_test_id . '" class="btn-modern btn-modern-purple btn-modern-sm" style="padding:4px 12px;font-size:0.7rem;background:var(--purple);color:white;border-radius:6px;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>';
+                                } else {
+                                    $view_link = '<span class="text-gray-400 text-xs">No test</span>';
+                                }
+                            ?>
+                                <tr id="lab-row-<?= $patient['id'] ?>" style="border-bottom:1px solid var(--border-color);">
+                                    <td style="padding:10px 12px;font-weight:500;">
+                                        <?= htmlspecialchars($patient['full_name']) ?>
+                                        <?= $days_text ?>
+                                        <?php if ($lab_test_id > 0): ?>
+                                            <span class="text-xs text-purple-500 block"><?= htmlspecialchars($lab_test_name) ?></span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
+                                    <td style="padding:10px 12px;">
+                                        <span class="lab-only-tag-modern">
+                                            <i class="fas fa-flask"></i>
+                                            Lab Only
+                                            <span class="text-xs" style="color:var(--purple);">🧪</span>
+                                        </span>
+                                    </td>
+                                    <td style="padding:10px 12px;">
+                                        <span class="status-badge-dropdown <?= $status_class ?>"><?= $status_label ?></span>
+                                    </td>
+                                    <td style="padding:10px 12px;">
+                                        <?= $view_link ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php else: ?>
+                <div class="text-center py-6 text-gray-400" id="noLabPatients">
+                    <i class="fas fa-flask text-2xl block mb-2" style="color:var(--purple);"></i>
+                    <p>No lab test requests pending</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -2297,7 +2511,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             <div>
                 <h3 class="form-title">
-                    <?= $change_mode ? '🔄 Change Doctor' : 'Assign or Change Doctor' ?>
+                    <?= $change_mode ? '🔄 Change Doctor' : 'Assign / Change Doctor or Lab Test' ?>
                     <?php if ($change_mode && $selected_patient_data): ?>
                         <span class="text-xs text-yellow-500" style="font-weight:400;">
                             - Changing: <?= htmlspecialchars($selected_patient_data['full_name']) ?>
@@ -2311,7 +2525,7 @@ include_once '../../components/reception_sidebar.php';
                     <?php if ($change_mode): ?>
                         <span class="text-yellow-500">🔄 Change Mode:</span> Select new doctor for patient
                     <?php else: ?>
-                        <span class="text-gray-500">Select patient and assign a doctor</span>
+                        <span class="text-gray-500">Select patient and assign a doctor OR request lab tests</span>
                     <?php endif; ?>
                 </p>
             </div>
@@ -2338,16 +2552,14 @@ include_once '../../components/reception_sidebar.php';
                                     $status_icon = '📋';
                                     
                                     if (!empty($patient['visit_id'])) {
-                                        if (in_array($patient['visit_status'], ['new', 'pending', 'lab_test'])) {
-                                            if ($patient['visit_status'] === 'lab_test' && empty($patient['visit_doctor_id'])) {
-                                                $status_label = '🧪 Lab Only';
-                                                $status_class = 'lab_only';
-                                                $status_icon = '🧪';
-                                            } else {
-                                                $status_label = '⏳ Pending';
-                                                $status_class = 'pending';
-                                                $status_icon = '⏳';
-                                            }
+                                        if ($patient['visit_status'] === 'lab_test' && empty($patient['visit_doctor_id'])) {
+                                            $status_label = '🧪 Lab Only';
+                                            $status_class = 'lab_only';
+                                            $status_icon = '🧪';
+                                        } elseif (in_array($patient['visit_status'], ['new', 'pending'])) {
+                                            $status_label = '⏳ Pending';
+                                            $status_class = 'pending';
+                                            $status_icon = '⏳';
                                         } elseif ($patient['visit_status'] === 'assigned' || $patient['visit_status'] === 'with_doctor') {
                                             $status_label = '✅ Assigned';
                                             $status_class = 'assigned';
@@ -2369,7 +2581,7 @@ include_once '../../components/reception_sidebar.php';
                                     $assigned_days_text = '';
                                     if (!empty($patient['visit_id']) && !empty($patient['visit_created_at'])) {
                                         $assigned_days = (int)floor((time() - strtotime($patient['visit_created_at'])) / 86400);
-                                        $assigned_days_text = ' <span class="assigned-days-badge-blue">Assigned: ' . $assigned_days . ' days ago</span>';
+                                        $assigned_days_text = ' <span class="assigned-days-badge-blue">Visit: ' . $assigned_days . ' days ago</span>';
                                     }
                                 ?>
                                     <option value="<?= $patient['id'] ?>" data-status="<?= $status_class ?>" data-doctor="<?= htmlspecialchars($patient['assigned_doctor_name'] ?? '') ?>" <?= $selected ?>>
@@ -2396,6 +2608,10 @@ include_once '../../components/reception_sidebar.php';
                         <?php endif; ?>
                         <?php if ($assigned_count > 0): ?>
                             <span class="text-green-500">✅ <span id="assignedStat"><?= $assigned_count ?></span> Assigned</span>
+                            <span class="mx-1">|</span>
+                        <?php endif; ?>
+                        <?php if ($lab_only_count > 0): ?>
+                            <span class="text-purple-500">🧪 <span id="labOnlyStat"><?= $lab_only_count ?></span> Lab Only</span>
                             <span class="mx-1">|</span>
                         <?php endif; ?>
                         <span class="text-gray-400">Total: <?= count($all_patients) ?> patients</span>
@@ -2450,16 +2666,15 @@ include_once '../../components/reception_sidebar.php';
             
             <!-- ROW 2: DOCTOR & VISIT TYPE -->
             <div class="grid-2-modern" id="doctorSection">
-                <div class="form-row-modern">
+                <div class="form-row-modern" id="doctorSelectCard">
                     <label class="form-label">
                         <i class="fas fa-user-md label-icon"></i> Select Doctor 
                         <span class="required" id="doctorRequired">*</span>
-                        <span class="text-xs font-normal text-gray-400" id="doctorOptionalLabel" style="display:none;">(Optional - Lab Only)</span>
-                        <?php if ($change_mode): ?>
-                            <span class="text-xs text-yellow-500 ml-2">🔄 Change Mode - Select new doctor</span>
-                        <?php endif; ?>
+                        <span class="text-xs font-normal text-gray-400" id="doctorOptionalLabel" style="display:none;">
+                            (Optional - No doctor required)
+                        </span>
                     </label>
-                    <select name="doctor_id" class="form-control-modern" id="doctorSelect" <?= $change_mode ? 'style="border-color:var(--warning);"' : '' ?>>
+                    <select name="doctor_id" class="form-control-modern" id="doctorSelect">
                         <option value="">-- Select Doctor --</option>
                         
                         <?php if (!empty($online_doctors) && count($online_doctors) > 0): ?>
@@ -2493,20 +2708,20 @@ include_once '../../components/reception_sidebar.php';
                         <?php endif; ?>
                     </select>
                     
-                    <?php if (!empty($doctors) && count($doctors) > 0): ?>
-                        <p class="text-xs text-gray-400 mt-1" id="doctorAvailability">
-                            <i class="fas fa-info-circle mr-1"></i> 
-                            <span class="text-green-500" id="onlineCountDisplay">🟢 <?= $online_doctors_count ?> online</span>
-                            <span class="text-gray-400 mx-1">|</span>
-                            <span class="text-gray-500" id="offlineCountDisplay">⚪ <?= $offline_doctors_count ?> offline</span>
-                            <span class="text-xs text-gray-400 ml-2" id="lastDoctorUpdate">Updated: <?= date('H:i:s') ?></span>
-                        </p>
-                    <?php else: ?>
-                        <p class="text-xs text-red-500 mt-1">
-                            <i class="fas fa-exclamation-circle mr-1"></i> 
-                            No doctors available in <?= htmlspecialchars($branch_name) ?>
-                        </p>
-                    <?php endif; ?>
+                    <p class="text-xs text-gray-400 mt-1" id="doctorAvailability">
+                        <i class="fas fa-info-circle mr-1"></i> 
+                        <span class="text-green-500" id="onlineCountDisplay">🟢 <?= $online_doctors_count ?> online</span>
+                        <span class="text-gray-400 mx-1">|</span>
+                        <span class="text-gray-500" id="offlineCountDisplay">⚪ <?= $offline_doctors_count ?> offline</span>
+                        <span class="text-xs text-gray-400 ml-2" id="lastDoctorUpdate">Updated: <?= date('H:i:s') ?></span>
+                    </p>
+                    
+                    <div class="no-doctor-required" id="noDoctorRequiredMessage">
+                        <div class="message">
+                            <i class="fas fa-info-circle"></i> 
+                            No doctor required for lab tests. Patient will go to <strong>Lab Only</strong> status.
+                        </div>
+                    </div>
                 </div>
                 
                 <div class="form-row-modern" id="visitTypeSection">
@@ -2601,7 +2816,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             
             <!-- ================================================================ -->
-            <!-- LAB SECTION - FIXED: No doctor required -->
+            <!-- LAB SECTION -->
             <!-- ================================================================ -->
             <div id="labSection" style="display:none;">
                 <div class="lab-modal-container-modern">
@@ -2632,22 +2847,12 @@ include_once '../../components/reception_sidebar.php';
                         
                         <div id="labTestsContainer" style="border:2px solid var(--border-color);border-radius:var(--radius);padding:4px 0;max-height:300px;overflow-y:auto;background:var(--bg-body);">
                             <?php if (!empty($lab_tests_catalog) && count($lab_tests_catalog) > 0): ?>
-                                <?php 
-                                $selected_lab_tests = isset($_POST['lab_test_ids']) ? $_POST['lab_test_ids'] : [];
-                                if (!is_array($selected_lab_tests)) {
-                                    $selected_lab_tests = [];
-                                }
-                                ?>
                                 <?php foreach ($lab_tests_catalog as $test): ?>
-                                    <?php 
-                                    $checked = in_array($test['id'], $selected_lab_tests) ? 'checked' : '';
-                                    ?>
-                                    <div class="lab-test-item-modern <?= $checked ? 'checked' : '' ?>">
+                                    <div class="lab-test-item-modern">
                                         <input type="checkbox" name="lab_test_ids[]" value="<?= $test['id'] ?>" 
                                                id="lab_test_<?= $test['id'] ?>" 
                                                class="lab-test-checkbox" 
-                                               onchange="updateLabSelection(this)"
-                                               <?= $checked ?>>
+                                               onchange="updateLabSelection(this)">
                                         <label for="lab_test_<?= $test['id'] ?>">
                                             <strong><?= htmlspecialchars($test['test_name']) ?></strong>
                                             <?php if (!empty($test['category'])): ?>
@@ -2694,7 +2899,6 @@ include_once '../../components/reception_sidebar.php';
                     </span>
                 </div>
                 
-                <!-- Hidden input to store selected lab tests -->
                 <input type="hidden" name="lab_test_ids" id="selectedLabTestsInput" value="">
             </div>
             
@@ -2795,7 +2999,7 @@ include_once '../../components/reception_sidebar.php';
     </div>
 
     <!-- QUICK STATS -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-5" style="max-width:1100px;margin:24px auto 0;">
+    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-5" style="max-width:1100px;margin:24px auto 0;">
         <div class="stat-card-modern">
             <div class="stat-icon">🟡</div>
             <p class="stat-number primary" id="pendingStatNumber"><?= $pending_count ?></p>
@@ -2807,6 +3011,12 @@ include_once '../../components/reception_sidebar.php';
             <p class="stat-number green" id="assignedStatNumber"><?= $assigned_count ?></p>
             <p class="stat-label">Assigned (Has Doctor)</p>
             <p class="text-xs text-gray-400" id="assignedUpdateTime">Updated: <?= date('H:i:s') ?></p>
+        </div>
+        <div class="stat-card-modern">
+            <div class="stat-icon">🧪</div>
+            <p class="stat-number purple" id="labOnlyStatNumber"><?= $lab_only_count ?></p>
+            <p class="stat-label">Lab Only (No Doctor)</p>
+            <p class="text-xs text-gray-400" id="labOnlyUpdateTime">Updated: <?= date('H:i:s') ?></p>
         </div>
         <div class="stat-card-modern">
             <div class="stat-icon">👨‍⚕️</div>
@@ -2842,7 +3052,7 @@ include_once '../../components/reception_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - FIXED: Lab only mode -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -2976,7 +3186,7 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // TOGGLE ASSIGNMENT TYPE - FIXED (Lab Only Mode)
+    // TOGGLE ASSIGNMENT TYPE
     // ================================================================
     function toggleAssignmentType(type) {
         var doctorSection = document.getElementById('doctorSection');
@@ -2984,6 +3194,7 @@ include_once '../../components/reception_sidebar.php';
         var doctorSelect = document.getElementById('doctorSelect');
         var doctorRequired = document.getElementById('doctorRequired');
         var doctorOptionalLabel = document.getElementById('doctorOptionalLabel');
+        var noDoctorMessage = document.getElementById('noDoctorRequiredMessage');
         var assignBtn = document.getElementById('assignBtn');
         var helpText = document.getElementById('assignmentTypeHelp');
         var visitTypeSection = document.getElementById('visitTypeSection');
@@ -2991,10 +3202,10 @@ include_once '../../components/reception_sidebar.php';
         var visitTypePrice = document.getElementById('visitTypePrice');
         var consultationFeeDisplay = document.getElementById('consultationFeeDisplay');
         var feeNote = document.getElementById('feeNote');
+        var doctorSelectCard = document.getElementById('doctorSelectCard');
         
         if (type === 'lab') {
-            // Hide doctor section - Doctor is OPTIONAL for lab tests
-            doctorSection.style.display = 'none';
+            doctorSection.style.display = 'block';
             labSection.style.display = 'block';
             doctorSelect.removeAttribute('required');
             if (doctorRequired) {
@@ -3002,34 +3213,60 @@ include_once '../../components/reception_sidebar.php';
             }
             if (doctorOptionalLabel) {
                 doctorOptionalLabel.style.display = 'inline';
+                doctorOptionalLabel.textContent = '(Optional - No doctor required)';
             }
-            helpText.textContent = '🧪 Lab test request selected - Doctor is OPTIONAL';
+            if (noDoctorMessage) {
+                noDoctorMessage.style.display = 'block';
+            }
+            helpText.textContent = '🧪 Lab test request selected - Doctor is NOT required';
             assignBtn.innerHTML = '<i class="fas fa-flask"></i> Request Lab Tests (No Doctor)';
             
-            // Hide consultation fee
-            if (visitTypePrice) visitTypePrice.style.display = 'none';
-            if (consultationFeeDisplay) consultationFeeDisplay.textContent = 'No consultation fee (Lab only)';
+            if (visitTypeSection) {
+                visitTypeSection.style.display = 'none';
+            }
             
-            // Unset consultation fee - disable visit type
             if (visitTypeSelect) {
-                visitTypeSelect.value = '';
+                var hasLabOption = false;
+                var options = visitTypeSelect.options;
+                for (var i = 0; i < options.length; i++) {
+                    if (options[i].value === 'lab_only') {
+                        hasLabOption = true;
+                        break;
+                    }
+                }
+                if (!hasLabOption) {
+                    var defaultOption = document.createElement('option');
+                    defaultOption.value = 'lab_only';
+                    defaultOption.textContent = 'Lab Only (No Fee)';
+                    defaultOption.selected = true;
+                    defaultOption.dataset.price = '0';
+                    visitTypeSelect.appendChild(defaultOption);
+                }
+                visitTypeSelect.value = 'lab_only';
                 visitTypeSelect.disabled = true;
             }
             
-            // Show message that no consultation fee applies
+            if (visitTypePrice) visitTypePrice.style.display = 'none';
+            if (consultationFeeDisplay) consultationFeeDisplay.textContent = '🚫 No consultation fee (Lab only)';
+            
             if (feeNote) {
                 feeNote.innerHTML = '<span class="text-purple-500">🧪 Lab Test Mode: No doctor assigned, No consultation fee</span>';
             }
             
-            // Show lab only badge in header
             var billStatus = document.getElementById('billStatus');
             if (billStatus) {
                 billStatus.textContent = '🧪 Lab Only - No Bill';
                 billStatus.style.color = '#7C3AED';
             }
             
+            if (doctorSelectCard) {
+                doctorSelectCard.style.borderColor = '#7C3AED';
+                doctorSelectCard.style.background = 'var(--purple-bg)';
+            }
+            
+            assignBtn.style.background = '#7C3AED';
+            
         } else {
-            // Show doctor section - Doctor is REQUIRED
             doctorSection.style.display = 'block';
             labSection.style.display = 'none';
             doctorSelect.setAttribute('required', 'required');
@@ -3039,32 +3276,56 @@ include_once '../../components/reception_sidebar.php';
             if (doctorOptionalLabel) {
                 doctorOptionalLabel.style.display = 'none';
             }
+            if (noDoctorMessage) {
+                noDoctorMessage.style.display = 'none';
+            }
             helpText.textContent = '👨‍⚕️ Doctor assignment selected - Doctor is required';
             assignBtn.innerHTML = '<i class="fas fa-user-md"></i> Assign / Change Doctor';
             
-            // Show consultation fee
-            if (visitTypePrice) visitTypePrice.style.display = 'inline';
-            if (consultationFeeDisplay) consultationFeeDisplay.textContent = '';
+            if (visitTypeSection) {
+                visitTypeSection.style.display = 'block';
+            }
             
             if (visitTypeSelect) {
                 visitTypeSelect.disabled = false;
+                var defaultOption = visitTypeSelect.querySelector('option[selected]');
+                if (defaultOption) {
+                    visitTypeSelect.value = defaultOption.value;
+                } else {
+                    var options = visitTypeSelect.options;
+                    for (var i = 0; i < options.length; i++) {
+                        if (options[i].value && options[i].value !== 'no_visit' && !options[i].disabled) {
+                            visitTypeSelect.value = options[i].value;
+                            break;
+                        }
+                    }
+                }
             }
+            
+            if (visitTypePrice) visitTypePrice.style.display = 'inline';
+            if (consultationFeeDisplay) consultationFeeDisplay.textContent = '';
             
             if (feeNote) {
                 feeNote.innerHTML = '<span class="text-blue-500">👨‍⚕️ Consultation Mode: Doctor required, Consultation fee applies</span>';
             }
             
-            // Reset bill status
             var billStatus = document.getElementById('billStatus');
             if (billStatus) {
                 billStatus.textContent = 'Bill: Pending';
                 billStatus.style.color = '#34D399';
             }
+            
+            if (doctorSelectCard) {
+                doctorSelectCard.style.borderColor = '';
+                doctorSelectCard.style.background = '';
+            }
+            
+            assignBtn.style.background = '';
         }
     }
 
     // ================================================================
-    // LAB FUNCTIONS - FIXED: Selection stays checked
+    // LAB FUNCTIONS
     // ================================================================
     function updateLabSelection(checkbox) {
         var checkboxes = document.querySelectorAll('.lab-test-checkbox');
@@ -3073,29 +3334,22 @@ include_once '../../components/reception_sidebar.php';
         var names = [];
         var selectedIds = [];
         
-        // Update the class and collect selected data
         checkboxes.forEach(function(cb) {
             var item = cb.closest('.lab-test-item-modern');
             if (cb.checked) {
                 count++;
                 selectedIds.push(cb.value);
-                
-                // Add checked class to highlight
                 if (item) item.classList.add('checked');
-                
                 var nameEl = item ? item.querySelector('label strong') : null;
                 if (nameEl) names.push(nameEl.textContent);
-                
                 var priceText = item ? item.querySelector('.lab-test-price')?.textContent || '' : '';
                 var price = parseFloat(priceText.replace(/[^0-9.]/g, ''));
                 if (!isNaN(price)) total += price;
             } else {
-                // Remove checked class
                 if (item) item.classList.remove('checked');
             }
         });
         
-        // Update UI elements
         var countEl = document.getElementById('labSelectedCount');
         if (countEl) countEl.textContent = '(' + count + ' selected)';
         
@@ -3120,13 +3374,11 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        // Update hidden input with selected IDs
         var hiddenInput = document.getElementById('selectedLabTestsInput');
         if (hiddenInput) {
             hiddenInput.value = selectedIds.join(',');
         }
         
-        // Update the form's lab_test_ids[] array
         var existingHidden = document.querySelectorAll('input[name="lab_test_ids[]"]');
         existingHidden.forEach(function(el) {
             if (el.type === 'hidden') el.remove();
@@ -3141,9 +3393,6 @@ include_once '../../components/reception_sidebar.php';
         });
     }
 
-    // ================================================================
-    // LAB: SELECT ALL / DESELECT ALL
-    // ================================================================
     function selectAllLabTests() {
         var checkboxes = document.querySelectorAll('.lab-test-checkbox');
         checkboxes.forEach(function(cb) {
@@ -3172,7 +3421,8 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // VISIT TYPE PRICE    // ================================================================
+    // VISIT TYPE PRICE
+    // ================================================================
     function updateVisitTypePrice() {
         var select = document.getElementById('visitTypeSelect');
         var priceDisplay = document.getElementById('visitTypePrice');
@@ -3298,17 +3548,20 @@ include_once '../../components/reception_sidebar.php';
     }
 
     function updateUI(data) {
-        // Update counts
         document.getElementById('pendingCount').textContent = data.pending_count;
         document.getElementById('assignedCount').textContent = data.assigned_count;
+        document.getElementById('labOnlyCount').textContent = data.lab_only_count;
         document.getElementById('pendingStat').textContent = data.pending_count;
         document.getElementById('assignedStat').textContent = data.assigned_count;
+        document.getElementById('labOnlyStat').textContent = data.lab_only_count;
         document.getElementById('pendingStatNumber').textContent = data.pending_count;
         document.getElementById('assignedStatNumber').textContent = data.assigned_count;
+        document.getElementById('labOnlyStatNumber').textContent = data.lab_only_count;
         document.getElementById('onlineDoctorCount').textContent = data.online_count;
         document.getElementById('offlineDoctorCount').textContent = data.offline_count;
         document.getElementById('availableDoctorsStat').textContent = data.total_doctors;
         document.getElementById('assignedListCount').textContent = data.assigned_count;
+        document.getElementById('labOnlyListCount').textContent = data.lab_only_count;
         document.getElementById('onlineCountDisplay').textContent = '🟢 ' + data.online_count + ' online';
         document.getElementById('offlineCountDisplay').textContent = '⚪ ' + data.offline_count + ' offline';
         
@@ -3317,10 +3570,11 @@ include_once '../../components/reception_sidebar.php';
         
         document.getElementById('pendingUpdateTime').textContent = 'Updated: ' + timeStr;
         document.getElementById('assignedUpdateTime').textContent = 'Updated: ' + timeStr;
+        document.getElementById('labOnlyUpdateTime').textContent = 'Updated: ' + timeStr;
         document.getElementById('lastDoctorUpdate').textContent = 'Updated: ' + timeStr;
         document.getElementById('assignedListUpdate').textContent = '(Auto-updated ' + timeStr + ')';
+        document.getElementById('labOnlyUpdate').textContent = '(Auto-updated ' + timeStr + ')';
         
-        // Update patient select - Preserve selected value
         var patientSelect = document.getElementById('patientSelect');
         if (patientSelect && data.patient_options !== undefined) {
             var currentValue = patientSelect.value;
@@ -3337,7 +3591,6 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        // Update assigned list
         var tableBody = document.getElementById('assignedPatientsTableBody');
         var noAssigned = document.getElementById('noAssignedPatients');
         if (tableBody && data.assigned_list_html !== undefined) {
@@ -3350,7 +3603,18 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        // Update doctor select - Preserve selected value
+        var labTableBody = document.getElementById('labOnlyTableBody');
+        var noLab = document.getElementById('noLabPatients');
+        if (labTableBody && data.lab_only_html !== undefined) {
+            if (data.lab_only_count > 0) {
+                labTableBody.innerHTML = data.lab_only_html;
+                if (noLab) noLab.style.display = 'none';
+            } else {
+                labTableBody.innerHTML = '';
+                if (noLab) noLab.style.display = 'block';
+            }
+        }
+        
         var doctorSelect = document.getElementById('doctorSelect');
         if (doctorSelect && data.doctor_options !== undefined) {
             var currentDocValue = doctorSelect.value;
@@ -3367,7 +3631,6 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        // Update visit type options - Preserve selected value
         var visitTypeSelect = document.getElementById('visitTypeSelect');
         if (visitTypeSelect && data.visit_type_options !== undefined) {
             var currentVisitValue = visitTypeSelect.value;
@@ -3385,10 +3648,8 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        // Update lab tests - Preserve selected state
         var labContainer = document.getElementById('labTestsContainer');
         if (labContainer && data.lab_tests_html !== undefined) {
-            // Get currently selected values
             var currentSelected = [];
             var currentCheckboxes = labContainer.querySelectorAll('.lab-test-checkbox:checked');
             currentCheckboxes.forEach(function(cb) {
@@ -3397,7 +3658,6 @@ include_once '../../components/reception_sidebar.php';
             
             labContainer.innerHTML = data.lab_tests_html;
             
-            // Restore checked state
             var newCheckboxes = labContainer.querySelectorAll('.lab-test-checkbox');
             newCheckboxes.forEach(function(cb) {
                 if (currentSelected.includes(cb.value)) {
@@ -3407,7 +3667,6 @@ include_once '../../components/reception_sidebar.php';
                 }
             });
             
-            // Update lab selection summary
             updateLabSelection(null);
         }
     }
@@ -3431,7 +3690,7 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // FORM SUBMIT HANDLER - FIXED (Lab Only Mode)
+    // FORM SUBMIT HANDLER
     // ================================================================
     document.getElementById('assignForm')?.addEventListener('submit', function(e) {
         e.preventDefault();
@@ -3439,7 +3698,6 @@ include_once '../../components/reception_sidebar.php';
         var formData = new FormData(this);
         formData.append('action', 'change_doctor');
         
-        // Get selected lab tests from hidden input
         var hiddenInput = document.getElementById('selectedLabTestsInput');
         if (hiddenInput && hiddenInput.value) {
             var ids = hiddenInput.value.split(',');
@@ -3459,7 +3717,7 @@ include_once '../../components/reception_sidebar.php';
         
         var btn = document.getElementById('assignBtn');
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Assigning...';
+        btn.innerHTML = '<span class="spinner"></span> Processing...';
         
         fetch(window.location.href, { method: 'POST', body: formData })
             .then(function(response) {
@@ -3502,36 +3760,22 @@ include_once '../../components/reception_sidebar.php';
                         }
                     }
                     
-                    showToast('✅ Success', data.message + billMessage + labMessage, 'success');
+                    var doctorMessage = '';
+                    if (data.has_doctor) {
+                        doctorMessage = ' ✅ Doctor assigned';
+                    } else if (data.is_lab_only) {
+                        doctorMessage = ' 🧪 No doctor assigned (Lab only)';
+                    }
+                    
+                    showToast('✅ Success', data.message + billMessage + labMessage + doctorMessage, 'success');
                     
                     if (data.patient_id) {
-                        var row = document.getElementById('assigned-row-' + data.patient_id);
-                        if (row) row.remove();
-                        
-                        var assignedCount = document.getElementById('assignedCount');
-                        var assignedStat = document.getElementById('assignedStat');
-                        var assignedStatNumber = document.getElementById('assignedStatNumber');
-                        var assignedListCount = document.getElementById('assignedListCount');
-                        
-                        if (assignedCount) assignedCount.textContent = parseInt(assignedCount.textContent) + 1;
-                        if (assignedStat) assignedStat.textContent = parseInt(assignedStat.textContent) + 1;
-                        if (assignedStatNumber) assignedStatNumber.textContent = parseInt(assignedStatNumber.textContent) + 1;
-                        if (assignedListCount) assignedListCount.textContent = parseInt(assignedListCount.textContent) + 1;
-                        
-                        var infoDiv = document.getElementById('selectedPatientInfo');
-                        if (infoDiv) infoDiv.style.display = 'none';
-                        
-                        var formCard = document.getElementById('mainFormCard');
-                        if (formCard) formCard.classList.remove('change-mode-active-modern');
-                        
-                        fetchLiveData();
-                        
                         setTimeout(function() {
                             window.location.href = 'assign_doctor.php';
                         }, 3000);
                     }
                 } else {
-                    showToast('❌ Error', data.message || 'Failed to assign doctor', 'error');
+                    showToast('❌ Error', data.message || 'Failed to process request', 'error');
                 }
             })
             .catch(function(error) {
@@ -3569,31 +3813,23 @@ include_once '../../components/reception_sidebar.php';
             }
         }
         
-        // Initialize lab selection summary
         setTimeout(function() {
             updateLabSelection(null);
         }, 500);
         
         setTimeout(function() { startLiveUpdate(); }, 2000);
         
-        // Check if lab mode is active from previous selection
         var assignmentType = document.getElementById('assignmentTypeSelect');
         if (assignmentType && assignmentType.value === 'lab') {
             toggleAssignmentType('lab');
         }
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign / Change Doctor', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c👨‍⚕️ Braick - Assign / Change Doctor (FIXED - View Button Working)', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👥 All Patients: <?= count($all_patients) ?> (Newest First)', 'font-size:13px; color:#64748B;');
-    console.log('%c🟡 Pending: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Assigned: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🧪 Lab Tests Available: <?= count($lab_tests_catalog) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Lab only mode: No doctor required', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ View button links to lab_tests.php?id=LAB_TEST_ID', 'font-size:13px; color:#34D399;');
+    console.log('%c🧪 Lab only mode: No doctor required', 'font-size:13px; color:#34D399;');
     console.log('%c✅ No consultation fee for lab only', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Lab tests selection stays checked (fixed)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Can select multiple lab tests', 'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Live updates every 3 seconds', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

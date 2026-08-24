@@ -2,13 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/reception/view_patient.php
 // VIEW PATIENT - COMPLETE PATIENT DETAILS WITH PDF
-// USING NEW DATABASE: dispensary_db (bills, bill_items)
-// FIXED: 
-// 1. Removed "New DB" badge
-// 2. Added clock in header
-// 3. Fixed PDF buttons (Download & Print working)
-// 4. Official Stamp included
-// BRAICK DISPENSARY
+// ORDER: Personal Info → Assigned Doctor → Vitals → Visit History → Symptoms → Lab Tests → Diagnosis → Medical Info → Prescriptions → Procedures → Tools → Bills
+// BRAICK DISPENSARY - TUNAJARI AFYA YAKO
 // ================================================================
 
 // ================================================================
@@ -1611,7 +1606,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- PERSONAL INFORMATION -->
+    <!-- 1. PERSONAL INFORMATION -->
     <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="card-title">
@@ -1681,45 +1676,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- MEDICAL INFORMATION -->
+    <!-- 2. ASSIGNED DOCTOR & ACTIVE VISIT -->
     <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="card-title">
-            <i class="fas fa-notes-medical"></i>
-            Medical Information
-        </div>
-        
-        <div class="detail-grid">
-            <div class="detail-item">
-                <span class="detail-label">Blood Group</span>
-                <span class="detail-value"><?= htmlspecialchars($patient['blood_group'] ?? 'Not recorded') ?></span>
-            </div>
-            <div class="detail-item">
-                <span class="detail-label">Emergency Contact</span>
-                <span class="detail-value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'Not recorded') ?></span>
-            </div>
-            <div class="detail-item" style="grid-column: 1 / -1;">
-                <span class="detail-label">Allergies</span>
-                <span class="detail-value">
-                    <?php if (!empty($patient['allergies'])): ?>
-                        <?php 
-                            $allergy_list = array_map('trim', explode(',', $patient['allergies']));
-                            foreach ($allergy_list as $allergy): 
-                        ?>
-                            <span class="badge badge-danger" style="margin:2px;">⚠️ <?= htmlspecialchars($allergy) ?></span>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <span class="text-gray-400">No known allergies</span>
-                    <?php endif; ?>
-                </span>
-            </div>
-        </div>
-    </div>
-    
-    <!-- ================================================================ -->
-    <!-- ASSIGNED DOCTOR & ACTIVE VISIT -->
-    <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="card-title">
             <i class="fas fa-user-md"></i>
             Assigned Doctor & Active Visit
@@ -1761,10 +1720,10 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- LATEST VITAL SIGNS -->
+    <!-- 3. LATEST VITAL SIGNS -->
     <!-- ================================================================ -->
     <?php if ($latest_vitals): ?>
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.2s;">
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="card-title" style="border-bottom: 2px solid var(--primary-light);">
             <i class="fas fa-heartbeat" style="color:#DC2626;"></i>
             Latest Vital Signs
@@ -1840,9 +1799,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <?php endif; ?>
     
     <!-- ================================================================ -->
-    <!-- VISIT HISTORY -->
+    <!-- 4. VISIT HISTORY -->
     <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.25s;">
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-title">
             <i class="fas fa-clock"></i>
             Visit History
@@ -1904,62 +1863,38 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- PRESCRIPTIONS -->
+    <!-- 5. SYMPTOMS (From Active Visit) -->
     <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.3s;">
+    <?php if ($active_visit && !empty($active_visit['symptoms'])): ?>
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="card-title">
-            <i class="fas fa-prescription"></i>
-            Prescriptions
-            <span class="text-xs text-gray-400">(Last 10)</span>
+            <i class="fas fa-notes-medical"></i>
+            Symptoms & Complaint
         </div>
         
-        <?php if (!empty($prescriptions) && count($prescriptions) > 0): ?>
-            <div class="table-wrapper">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Prescription #</th>
-                            <th>Date</th>
-                            <th>Doctor</th>
-                            <th>Medication</th>
-                            <th>Status</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($prescriptions as $prescription): ?>
-                            <tr>
-                                <td><span class="font-mono text-sm"><?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?></span></td>
-                                <td><?= date('d M Y', strtotime($prescription['created_at'])) ?></td>
-                                <td><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($prescription['medication'] ?? 'N/A') ?></td>
-                                <td>
-                                    <span class="badge badge-<?= $prescription['status'] ?? 'pending' ?>">
-                                        <?= ucfirst($prescription['status'] ?? 'Pending') ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <a href="view_prescription.php?id=<?= $prescription['id'] ?>" class="btn btn-outline btn-sm">
-                                        <i class="fas fa-eye"></i> View
-                                    </a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">Symptoms</span>
+                <span class="detail-value"><?= htmlspecialchars($active_visit['symptoms'] ?? 'N/A') ?></span>
             </div>
-        <?php else: ?>
-            <div class="empty-state">
-                <i class="fas fa-prescription"></i>
-                <p>No prescriptions found</p>
+            <div class="detail-item">
+                <span class="detail-label">Complaint / Reason</span>
+                <span class="detail-value"><?= htmlspecialchars($active_visit['complaint'] ?? 'N/A') ?></span>
             </div>
-        <?php endif; ?>
+            <?php if (!empty($active_visit['notes'])): ?>
+            <div class="detail-item" style="grid-column: 1 / -1;">
+                <span class="detail-label">Notes</span>
+                <span class="detail-value"><?= htmlspecialchars($active_visit['notes']) ?></span>
+            </div>
+            <?php endif; ?>
+        </div>
     </div>
+    <?php endif; ?>
     
     <!-- ================================================================ -->
-    <!-- LAB TESTS -->
+    <!-- 6. LAB TESTS -->
     <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.35s;">
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.3s;">
         <div class="card-title">
             <i class="fas fa-flask"></i>
             Lab Tests
@@ -2016,9 +1951,127 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- PROCEDURES -->
+    <!-- 7. DIAGNOSIS (From Active Visit) -->
     <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.37s;">
+    <?php if ($active_visit && !empty($active_visit['diagnosis'])): ?>
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.35s;">
+        <div class="card-title">
+            <i class="fas fa-stethoscope"></i>
+            Diagnosis & Treatment
+        </div>
+        
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">Diagnosis</span>
+                <span class="detail-value"><?= htmlspecialchars($active_visit['diagnosis'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Treatment</span>
+                <span class="detail-value"><?= htmlspecialchars($active_visit['treatment'] ?? 'N/A') ?></span>
+            </div>
+            <?php if (!empty($active_visit['follow_up_date'])): ?>
+            <div class="detail-item">
+                <span class="detail-label">Follow-up Date</span>
+                <span class="detail-value"><?= date('d M Y', strtotime($active_visit['follow_up_date'])) ?></span>
+            </div>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php endif; ?>
+    
+    <!-- ================================================================ -->
+    <!-- 8. MEDICAL INFORMATION -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.4s;">
+        <div class="card-title">
+            <i class="fas fa-notes-medical"></i>
+            Medical Information
+        </div>
+        
+        <div class="detail-grid">
+            <div class="detail-item">
+                <span class="detail-label">Blood Group</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['blood_group'] ?? 'Not recorded') ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Emergency Contact</span>
+                <span class="detail-value"><?= htmlspecialchars($patient['emergency_contact'] ?? 'Not recorded') ?></span>
+            </div>
+            <div class="detail-item" style="grid-column: 1 / -1;">
+                <span class="detail-label">Allergies</span>
+                <span class="detail-value">
+                    <?php if (!empty($patient['allergies'])): ?>
+                        <?php 
+                            $allergy_list = array_map('trim', explode(',', $patient['allergies']));
+                            foreach ($allergy_list as $allergy): 
+                        ?>
+                            <span class="badge badge-danger" style="margin:2px;">⚠️ <?= htmlspecialchars($allergy) ?></span>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <span class="text-gray-400">No known allergies</span>
+                    <?php endif; ?>
+                </span>
+            </div>
+        </div>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- 9. PRESCRIPTIONS -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.45s;">
+        <div class="card-title">
+            <i class="fas fa-prescription"></i>
+            Prescriptions
+            <span class="text-xs text-gray-400">(Last 10)</span>
+        </div>
+        
+        <?php if (!empty($prescriptions) && count($prescriptions) > 0): ?>
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Prescription #</th>
+                            <th>Date</th>
+                            <th>Doctor</th>
+                            <th>Medication</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($prescriptions as $prescription): ?>
+                            <tr>
+                                <td><span class="font-mono text-sm"><?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?></span></td>
+                                <td><?= date('d M Y', strtotime($prescription['created_at'])) ?></td>
+                                <td><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($prescription['medication'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="badge badge-<?= $prescription['status'] ?? 'pending' ?>">
+                                        <?= ucfirst($prescription['status'] ?? 'Pending') ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <a href="view_prescription.php?id=<?= $prescription['id'] ?>" class="btn btn-outline btn-sm">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state">
+                <i class="fas fa-prescription"></i>
+                <p>No prescriptions found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+    
+    <!-- ================================================================ -->
+    <!-- 10. PROCEDURES -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.5s;">
         <div class="card-title">
             <i class="fas fa-syringe" style="color:#7C3AED;"></i>
             Procedures
@@ -2067,9 +2120,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- TOOLS -->
+    <!-- 11. TOOLS -->
     <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.38s;">
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.55s;">
         <div class="card-title">
             <i class="fas fa-tools" style="color:#D97706;"></i>
             Tools
@@ -2118,9 +2171,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- BILLS - MOVED TO LAST POSITION -->
+    <!-- 12. BILLS - CHINI -->
     <!-- ================================================================ -->
-    <div class="detail-card animate-fade-in-up" style="animation-delay:0.4s;">
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.6s;">
         <div class="card-title">
             <i class="fas fa-receipt"></i>
             Bills
@@ -2175,20 +2228,30 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- FOOTER -->
+    <!-- FOOTER: BRAICK DISPENSARY, TUNAJARI AFYA YAKO -->
     <!-- ================================================================ -->
-    <footer class="footer no-print">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            View Patient
-            <span class="text-gray-300 mx-2">|</span>
-            <?= htmlspecialchars($patient['full_name']) ?>
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
+    <footer class="footer no-print" style="border-top: 3px solid var(--primary); padding: 20px 0; margin-top: 30px;">
+        <div style="text-align: center;">
+            <div style="font-size: 1.2rem; font-weight: 800; color: var(--primary); letter-spacing: 1px;">
+                BRAICK DISPENSARY
+            </div>
+            <div style="font-size: 0.9rem; font-weight: 600; color: var(--text-secondary); margin-top: 4px;">
+                <i class="fas fa-heart" style="color: #DC2626;"></i> 
+                TUNAJARI AFYA YAKO 
+                <i class="fas fa-heart" style="color: #DC2626;"></i>
+            </div>
+            <div style="font-size: 0.7rem; color: var(--text-secondary); margin-top: 8px;">
+                <span class="footer-brand">Braick Dispensary</span> Management System
+                <span class="text-gray-300 mx-2">|</span>
+                View Patient
+                <span class="text-gray-300 mx-2">|</span>
+                <?= htmlspecialchars($patient['full_name']) ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+                <span class="text-gray-300 mx-2">|</span>
+                &copy; <?= date('Y') ?> All rights reserved
+            </div>
+        </div>
     </footer>
     
     <?php else: ?>
@@ -2414,6 +2477,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         // Lab tests
         var labTests = <?= json_encode($lab_tests) ?>;
         
+        // Active visit
+        var activeVisit = <?= $active_visit ? json_encode($active_visit) : 'null' ?>;
+        
         var now = new Date();
         var reportDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
         var reportTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
@@ -2494,6 +2560,34 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             visitHtml = `<p style="color:var(--text-secondary);">No visit history</p>`;
         }
         
+        // Build symptoms HTML
+        var symptomsHtml = '';
+        if (activeVisit) {
+            symptomsHtml = `
+                <div class="pdf-grid-2">
+                    <div class="pdf-row"><span class="pdf-label">Symptoms</span><span class="pdf-value">${activeVisit.symptoms || 'N/A'}</span></div>
+                    <div class="pdf-row"><span class="pdf-label">Complaint</span><span class="pdf-value">${activeVisit.complaint || 'N/A'}</span></div>
+                    ${activeVisit.notes ? `<div class="pdf-row" style="grid-column: 1 / -1;"><span class="pdf-label">Notes</span><span class="pdf-value">${activeVisit.notes}</span></div>` : ''}
+                </div>
+            `;
+        } else {
+            symptomsHtml = `<p style="color:var(--text-secondary);">No active visit symptoms</p>`;
+        }
+        
+        // Build diagnosis HTML
+        var diagnosisHtml = '';
+        if (activeVisit && (activeVisit.diagnosis || activeVisit.treatment)) {
+            diagnosisHtml = `
+                <div class="pdf-grid-2">
+                    <div class="pdf-row"><span class="pdf-label">Diagnosis</span><span class="pdf-value">${activeVisit.diagnosis || 'N/A'}</span></div>
+                    <div class="pdf-row"><span class="pdf-label">Treatment</span><span class="pdf-value">${activeVisit.treatment || 'N/A'}</span></div>
+                    ${activeVisit.follow_up_date ? `<div class="pdf-row"><span class="pdf-label">Follow-up Date</span><span class="pdf-value">${new Date(activeVisit.follow_up_date).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' })}</span></div>` : ''}
+                </div>
+            `;
+        } else {
+            diagnosisHtml = `<p style="color:var(--text-secondary);">No diagnosis recorded</p>`;
+        }
+        
         // Build bills HTML
         var billsHtml = '';
         if (bills && bills.length > 0) {
@@ -2529,8 +2623,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             billsHtml = `<p style="color:var(--text-secondary);">No bills found</p>`;
         }
         
-        // Build prescriptions HTML
-        var prescriptionsHtml = '';
+        // Build prescriptions HTML        var prescriptionsHtml = '';
         if (prescriptions && prescriptions.length > 0) {
             prescriptionsHtml = `
                 <table class="pdf-table">
@@ -2674,8 +2767,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- Patient Information -->
-            <div class="section-title">👤 Patient Information</div>
+            <!-- 1. Personal Information -->
+            <div class="section-title">👤 Personal Information</div>
             <div class="pdf-grid-2">
                 <div class="pdf-row"><span class="pdf-label">Full Name</span><span class="pdf-value"><strong>${patientData.full_name}</strong></span></div>
                 <div class="pdf-row"><span class="pdf-label">Patient ID</span><span class="pdf-value">${patientData.patient_id}</span></div>
@@ -2686,37 +2779,58 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <div class="pdf-row"><span class="pdf-label">Email</span><span class="pdf-value">${patientData.email}</span></div>
                 <div class="pdf-row"><span class="pdf-label">Blood Group</span><span class="pdf-value">${patientData.blood_group}</span></div>
                 <div class="pdf-row" style="grid-column: 1 / -1;"><span class="pdf-label">Address</span><span class="pdf-value">${patientData.address}</span></div>
-                <div class="pdf-row" style="grid-column: 1 / -1;"><span class="pdf-label">Allergies</span><span class="pdf-value">${patientData.allergies}</span></div>
-                <div class="pdf-row"><span class="pdf-label">Emergency Contact</span><span class="pdf-value">${patientData.emergency_contact}</span></div>
-                <div class="pdf-row"><span class="pdf-label">Assigned Doctor</span><span class="pdf-value">${patientData.assigned_doctor}</span></div>
                 <div class="pdf-row"><span class="pdf-label">Registered</span><span class="pdf-value">${patientData.created_at} by ${patientData.created_by}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Branch</span><span class="pdf-value">${patientData.branch_name}</span></div>
             </div>
             
-            <!-- Vital Signs -->
+            <!-- 2. Assigned Doctor -->
+            <div class="section-title">👨‍⚕️ Assigned Doctor & Active Visit</div>
+            <div class="pdf-grid-2">
+                <div class="pdf-row"><span class="pdf-label">Assigned Doctor</span><span class="pdf-value">${patientData.assigned_doctor}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Active Visit</span><span class="pdf-value">${activeVisit ? activeVisit.visit_number + ' (' + activeVisit.status + ')' : 'No active visit'}</span></div>
+            </div>
+            
+            <!-- 3. Vital Signs -->
             <div class="section-title">❤️ Vital Signs</div>
             ${vitalsHtml}
             
-            <!-- Visit History -->
+            <!-- 4. Visit History -->
             <div class="section-title">📋 Visit History (Last 10)</div>
             ${visitHtml}
             
-            <!-- Prescriptions -->
-            <div class="section-title">💊 Prescriptions (Last 10)</div>
-            ${prescriptionsHtml}
+            <!-- 5. Symptoms -->
+            <div class="section-title">🩺 Symptoms & Complaint</div>
+            ${symptomsHtml}
             
-            <!-- Lab Tests -->
+            <!-- 6. Lab Tests -->
             <div class="section-title">🧪 Lab Tests (Last 10)</div>
             ${labTestsHtml}
             
-            <!-- Procedures -->
+            <!-- 7. Diagnosis -->
+            <div class="section-title">📋 Diagnosis & Treatment</div>
+            ${diagnosisHtml}
+            
+            <!-- 8. Medical Information -->
+            <div class="section-title">🏥 Medical Information</div>
+            <div class="pdf-grid-2">
+                <div class="pdf-row"><span class="pdf-label">Blood Group</span><span class="pdf-value">${patientData.blood_group}</span></div>
+                <div class="pdf-row"><span class="pdf-label">Emergency Contact</span><span class="pdf-value">${patientData.emergency_contact}</span></div>
+                <div class="pdf-row" style="grid-column: 1 / -1;"><span class="pdf-label">Allergies</span><span class="pdf-value">${patientData.allergies}</span></div>
+            </div>
+            
+            <!-- 9. Prescriptions -->
+            <div class="section-title">💊 Prescriptions (Last 10)</div>
+            ${prescriptionsHtml}
+            
+            <!-- 10. Procedures -->
             <div class="section-title">💉 Procedures (Last 10)</div>
             ${proceduresHtml}
             
-            <!-- Tools -->
+            <!-- 11. Tools -->
             <div class="section-title">🔧 Tools / Equipment (Last 10)</div>
             ${toolsHtml}
             
-            <!-- Bills -->
+            <!-- 12. Bills -->
             <div class="section-title">💰 Bills (Last 10)</div>
             ${billsHtml}
             
@@ -2736,6 +2850,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 </div>
                 <div class="footer-bottom">
                     <span class="footer-brand">Braick Dispensary</span> • 
+                    <span style="font-weight:600;color:#DC2626;">❤️ TUNAJARI AFYA YAKO</span> • 
                     Generated on ${reportDate} at ${reportTime} • 
                     All rights reserved
                 </div>
@@ -2798,14 +2913,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         showToast('📄 PDF Download', 'Downloading patient PDF...', 'info');
     });
 
-    console.log('%c👤 Braick - View Patient (With Official Stamp)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick - View Patient (Updated Order)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c🆔 ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🕐 Clock in header: Active', 'font-size:13px; color:#34D399;');
-    console.log('%c📄 PDF with Official Stamp and all patient information', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ PDF Download button works with html2pdf.js', 'font-size:13px; color:#34D399;');
-    console.log('%c🗄️ Using NEW DATABASE: dispensary_db (bills, bill_items)', 'font-size:13px; color:#34D399;');
-    console.log('%c❌ "New DB" badge removed', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ ORDER: Personal Info → Assigned Doctor → Vitals → Visit History → Symptoms → Lab Tests → Diagnosis → Medical Info → Prescriptions → Procedures → Tools → Bills', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c❤️ Footer: BRAICK DISPENSARY, TUNAJARI AFYA YAKO', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>
