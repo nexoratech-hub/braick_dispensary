@@ -120,9 +120,14 @@ if ($db !== null && isset($_SESSION['user_id'])) {
             $lab_count = 0;
         }
         
-        // 3. Pending Referrals
+        // 3. Pending Referrals - FIXED: includes 'referred' status
         try {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM referrals WHERE from_doctor_id = ? AND status = 'pending'");
+            $stmt = $db->prepare("
+                SELECT COUNT(*) as count 
+                FROM referrals 
+                WHERE from_doctor_id = ? 
+                AND status IN ('pending', 'referred')
+            ");
             $stmt->execute([$doctor_id]);
             $referral_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         } catch (Exception $e) {
@@ -138,7 +143,7 @@ if ($db !== null && isset($_SESSION['user_id'])) {
             $appointment_count = 0;
         }
         
-        // 5. Pending Consultations - FIXED: includes 'prescribed' status
+        // 5. Pending Consultations - includes 'prescribed' status
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -339,9 +344,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $data['labCount'] = 0;
             }
             
-            // 3. Pending Referrals
+            // 3. Pending Referrals - FIXED: includes 'referred' status
             try {
-                $stmt = $db->prepare("SELECT COUNT(*) as count FROM referrals WHERE from_doctor_id = ? AND status = 'pending'");
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) as count 
+                    FROM referrals 
+                    WHERE from_doctor_id = ? 
+                    AND status IN ('pending', 'referred')
+                ");
                 $stmt->execute([$doctor_id]);
                 $data['referralCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             } catch (Exception $e) {
@@ -357,7 +367,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $data['appointmentCount'] = 0;
             }
             
-            // 5. Pending Consultations - FIXED: includes 'prescribed' status
+            // 5. Pending Consultations - includes 'prescribed' status
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM visits 
@@ -1156,7 +1166,7 @@ $initial_data = [
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // CONFIGURATION - FIXED API URL
+    // CONFIGURATION
     // ================================================================
     var SIDEBAR_CONFIG = {
         API_URL: '/dispensary_system/backend/api/get_doctor_sidebar_stats.php',
@@ -1180,7 +1190,7 @@ $initial_data = [
     };
     
     // ================================================================
-    // SIDEBAR TOGGLE - FULLY FIXED
+    // SIDEBAR TOGGLE
     // ================================================================
     (function() {
         if (document.readyState === 'loading') {
@@ -1274,7 +1284,7 @@ $initial_data = [
     })();
 
     // ================================================================
-    // UPDATE SIDEBAR BADGES
+    // UPDATE SIDEBAR BADGES - FIXED
     // ================================================================
     function updateSidebarBadges(data) {
         if (!data) return false;
@@ -1303,16 +1313,21 @@ $initial_data = [
                         void el.offsetWidth;
                         el.classList.add('badge-update');
                         
-                        // Update badge class based on value
                         var numValue = parseInt(newValue);
-                        if (key === 'pendingConsultations' || key === 'labCount' || key === 'referralCount') {
+                        if (key === 'pendingConsultations' || key === 'labCount') {
                             el.className = numValue > 0 ? 'badge danger badge-update' : 'badge badge-update';
                         }
                         if (key === 'pendingPrescriptions') {
                             el.className = numValue > 0 ? 'badge warning badge-update' : 'badge badge-update';
                         }
+                        if (key === 'referralCount') {
+                            el.className = numValue > 0 ? 'badge warning badge-update' : 'badge badge-update';
+                        }
                         if (key === 'appointmentCount') {
                             el.className = numValue > 0 ? 'badge blue badge-update' : 'badge badge-update';
+                        }
+                        if (key === 'patientCount') {
+                            el.className = numValue > 0 ? 'badge badge-update' : 'badge badge-update';
                         }
                     }
                 }
@@ -1328,10 +1343,7 @@ $initial_data = [
                 if (oldVal !== String(total)) {
                     hasChanges = true;
                     el.textContent = total;
-                    el.className = total > 0 ? 'badge purple' : 'badge';
-                    el.classList.remove('badge-update');
-                    void el.offsetWidth;
-                    el.classList.add('badge-update');
+                    el.className = total > 0 ? 'badge purple badge-update' : 'badge badge-update';
                 }
             }
         }
@@ -1384,7 +1396,7 @@ $initial_data = [
     }
 
     // ================================================================
-    // FETCH LIVE DATA FROM API (WITH HASH) - FIXED
+    // FETCH LIVE DATA FROM API (WITH HASH)
     // ================================================================
     function fetchSidebarData(forceUpdate) {
         var doctorId = <?= json_encode($doctor_id) ?>;
@@ -1402,7 +1414,6 @@ $initial_data = [
         formData.append('hash', sidebarState.dataHash);
         formData.append('force_update', forceUpdate ? '1' : '0');
         
-        // FIXED: Use the correct API endpoint
         var url = SIDEBAR_CONFIG.API_URL;
         
         fetch(url, {
@@ -1420,20 +1431,16 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
-                // Check if data has changed
                 if (data.has_changed && data.data) {
-                    // Update UI with new data
                     updateSidebarBadges(data.data);
                     updateDoctorStatus(data.data);
                     
-                    // Store new hash from server
                     if (data.hash) {
                         sidebarState.dataHash = data.hash;
                     }
                     sidebarState.hasInitialData = true;
                     sidebarState.lastUpdate = new Date();
                     
-                    // Dispatch custom event for other components
                     var event = new CustomEvent('sidebarDataUpdated', {
                         detail: {
                             data: data.data,
@@ -1445,7 +1452,6 @@ $initial_data = [
                     console.log('📊 Sidebar updated at:', sidebarState.lastUpdate.toLocaleTimeString());
                     
                 } else if (data.has_changed === false) {
-                    // No change - just update timestamp
                     var timeEl = document.getElementById('sidebarUpdateTime');
                     if (timeEl) {
                         var now = new Date();
@@ -1458,7 +1464,6 @@ $initial_data = [
                 }
             } else {
                 console.warn('Sidebar API error:', data.message || 'Unknown error');
-                // If unauthorized, redirect to login
                 if (data.message && (data.message.includes('Unauthorized') || data.message.includes('login'))) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
@@ -1482,12 +1487,10 @@ $initial_data = [
             clearInterval(sidebarUpdateInterval);
         }
         
-        // Initial fetch after 1 second
         setTimeout(function() {
             fetchSidebarData(true);
-        }, 1000);
+        }, 500);
         
-        // Check for changes every 3 seconds
         sidebarUpdateInterval = setInterval(function() {
             if (!sidebarState.isUpdating) {
                 fetchSidebarData(false);
@@ -1506,17 +1509,11 @@ $initial_data = [
         console.log('🔄 Sidebar auto-update stopped');
     }
 
-    // ================================================================
-    // MANUAL REFRESH (Exposed for other pages)
-    // ================================================================
     function refreshSidebarData() {
         fetchSidebarData(true);
         return true;
     }
 
-    // ================================================================
-    // EXPOSE FUNCTIONS
-    // ================================================================
     window.refreshSidebarData = refreshSidebarData;
     window.fetchSidebarData = fetchSidebarData;
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
@@ -1524,56 +1521,35 @@ $initial_data = [
     window.getSidebarState = function() { return sidebarState; };
     window.getSidebarHash = function() { return sidebarState.dataHash; };
 
-    // ================================================================
-    // VISIBILITY CHANGE - Pause when tab is hidden
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
         } else {
             startSidebarAutoUpdate();
-            // Force immediate refresh when tab becomes visible
             setTimeout(function() {
                 fetchSidebarData(true);
             }, 500);
         }
     });
 
-    // ================================================================
-    // DOM READY
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        // Small delay to ensure DOM is fully rendered
         setTimeout(function() {
             startSidebarAutoUpdate();
-        }, 1500);
+        }, 1000);
     });
 
-    // ================================================================
-    // CONSOLE LOG
-    // ================================================================
-    console.log('%c👨‍⚕️ Braick Dispensary - Doctor Sidebar (API Integrated)', 
+    console.log('%c👨‍⚕️ Braick Dispensary - Doctor Sidebar (FIXED)', 
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($doctor_full_name) ?> (<?= htmlspecialchars($doctor_role) ?>)', 
+    console.log('%c👤 User: <?= htmlspecialchars($doctor_full_name) ?>', 
         'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 
-        'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Patients: <?= $patient_count ?>', 
         'font-size:13px; color:#9EC5FE;');
     console.log('%c📋 Pending Consultations: <?= $pending_consultations ?>', 
         'font-size:13px; color:#EF4444;');
-    console.log('%c💊 Pending Prescriptions: <?= $pending_prescriptions ?>', 
+    console.log('%c🔄 Referrals: <?= $referral_count ?> (includes "referred" status)', 
         'font-size:13px; color:#D97706;');
-    console.log('%c🔬 Pending Lab Tests: <?= $lab_count ?>', 
-        'font-size:13px; color:#D97706;');
-    console.log('%c❤️ Slogan: <?= $site_slogan ?>', 
-        'font-size:13px; color:#34D399;');
-    console.log('%c📌 FIXED: Consultations query includes "prescribed" status', 
-        'font-size:13px; color:#34D399;');
     console.log('%c⚡ Smart Updates: Every 3s (only if data changed)', 
         'font-size:13px; color:#34D399;');
-    console.log('%c🔄 API Endpoint: ' + SIDEBAR_CONFIG.API_URL, 
-        'font-size:12px; color:#6EA8FE;');
     console.log('%c💡 Call window.refreshSidebarData() to manually update', 
         'font-size:12px; color:#6EA8FE;');
 </script>

@@ -2,32 +2,21 @@
 // ================================================================
 // FILE: backend/api/get_doctor_sidebar_stats.php
 // DOCTOR SIDEBAR STATS API - REAL-TIME UPDATES
+// FIXED: Referrals query includes 'referred' status
 // BRAICK DISPENSARY
 // ================================================================
 
-// ================================================================
-// HEADERS
-// ================================================================
 header('Content-Type: application/json');
 header('Access-Control-Allow-Origin: *');
 header('Access-Control-Allow-Methods: POST, GET');
 header('Access-Control-Allow-Headers: Content-Type');
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../config/database.php';
 
-// ================================================================
-// RESPONSE HELPER
-// ================================================================
 function sendResponse($success, $data = null, $message = null, $statusCode = 200) {
     http_response_code($statusCode);
     echo json_encode([
@@ -40,9 +29,6 @@ function sendResponse($success, $data = null, $message = null, $statusCode = 200
     exit;
 }
 
-// ================================================================
-// AUTHENTICATION CHECK
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     sendResponse(false, null, 'Unauthorized - Please login', 401);
 }
@@ -51,15 +37,11 @@ if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
     sendResponse(false, null, 'Forbidden - Doctor access required', 403);
 }
 
-// ================================================================
-// GET PARAMETERS
-// ================================================================
 $doctor_id = isset($_POST['doctor_id']) ? (int)$_POST['doctor_id'] : 0;
 $branch_id = isset($_POST['branch_id']) ? (int)$_POST['branch_id'] : 0;
 $client_hash = isset($_POST['hash']) ? $_POST['hash'] : '';
 $force_update = isset($_POST['force_update']) ? (bool)$_POST['force_update'] : false;
 
-// Also support GET requests for debugging
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $doctor_id = isset($_GET['doctor_id']) ? (int)$_GET['doctor_id'] : 0;
     $branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : 0;
@@ -67,99 +49,72 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $force_update = isset($_GET['force_update']) ? (bool)$_GET['force_update'] : false;
 }
 
-// Validate doctor_id
 if ($doctor_id <= 0) {
     $doctor_id = (int)$_SESSION['user_id'];
 }
 
-// Validate branch_id
 if ($branch_id <= 0) {
     $branch_id = (int)$_SESSION['branch_id'] ?? 1;
 }
 
-// Ensure doctor matches session
 if ($doctor_id !== (int)$_SESSION['user_id'] && $_SESSION['role'] !== 'admin') {
     sendResponse(false, null, 'Unauthorized - Invalid doctor ID', 403);
 }
 
-// ================================================================
-// CONNECT TO DATABASE
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     sendResponse(false, null, 'Database connection error: ' . $e->getMessage(), 500);
 }
 
-// ================================================================
-// FETCH DOCTOR STATS
-// ================================================================
 function getDoctorStats($db, $doctor_id, $branch_id) {
     $stats = [
-        // Patient stats
         'patientCount' => 0,
         'patientCountToday' => 0,
         'patientCountWeek' => 0,
         'patientCountMonth' => 0,
-        
-        // Consultation stats
         'pendingConsultations' => 0,
         'completedConsultations' => 0,
         'cancelledConsultations' => 0,
         'totalConsultations' => 0,
         'consultationsToday' => 0,
         'consultationsWeek' => 0,
-        
-        // Lab stats
         'labCount' => 0,
         'labCompleted' => 0,
         'labPending' => 0,
         'labInProgress' => 0,
-        
-        // Prescription stats
         'pendingPrescriptions' => 0,
         'dispensedPrescriptions' => 0,
         'totalPrescriptions' => 0,
-        
-        // Appointment stats
         'appointmentCount' => 0,
         'appointmentsToday' => 0,
         'appointmentsWeek' => 0,
-        
-        // Referral stats
+        // ================================================================
+        // REFERRAL STATS - FIXED: includes 'referred' status
+        // ================================================================
         'referralCount' => 0,
         'referralsPending' => 0,
+        'referralsReferred' => 0,
+        'referralsProcessed' => 0,
         'referralsCompleted' => 0,
-        
-        // Services stats
         'proceduresCount' => 0,
         'labTestsCount' => 0,
         'totalServices' => 0,
-        
-        // Inventory alerts
         'expiringMedicines' => 0,
         'lowStockMedicines' => 0,
         'expiringEquipment' => 0,
-        
-        // Doctor info
         'doctorName' => '',
         'doctorStatus' => 'offline',
         'doctorSpecialty' => '',
         'doctorBranch' => '',
-        
-        // Activity
         'lastActivity' => null,
         'todayDate' => date('Y-m-d'),
         'currentTime' => date('H:i:s'),
-        
-        // Hash for change detection
         '_hash' => ''
     ];
     
     try {
-        // ================================================================
         // 1. DOCTOR INFO
-        // ================================================================
         $stmt = $db->prepare("
             SELECT 
                 u.full_name, 
@@ -182,55 +137,24 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
             $stats['lastActivity'] = $doctor['last_online'] ?? null;
         }
         
-        // ================================================================
         // 2. PATIENT STATS
-        // ================================================================
-        
-        // Total distinct patients
-        $stmt = $db->prepare("
-            SELECT COUNT(DISTINCT patient_id) as count 
-            FROM visits 
-            WHERE doctor_id = ?
-        ");
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?");
         $stmt->execute([$doctor_id]);
         $stats['patientCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Patients today
-        $stmt = $db->prepare("
-            SELECT COUNT(DISTINCT patient_id) as count 
-            FROM visits 
-            WHERE doctor_id = ? 
-            AND DATE(visit_date) = CURDATE()
-        ");
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ? AND DATE(visit_date) = CURDATE()");
         $stmt->execute([$doctor_id]);
         $stats['patientCountToday'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Patients this week
-        $stmt = $db->prepare("
-            SELECT COUNT(DISTINCT patient_id) as count 
-            FROM visits 
-            WHERE doctor_id = ? 
-            AND YEARWEEK(visit_date) = YEARWEEK(CURDATE())
-        ");
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ? AND YEARWEEK(visit_date) = YEARWEEK(CURDATE())");
         $stmt->execute([$doctor_id]);
         $stats['patientCountWeek'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Patients this month
-        $stmt = $db->prepare("
-            SELECT COUNT(DISTINCT patient_id) as count 
-            FROM visits 
-            WHERE doctor_id = ? 
-            AND MONTH(visit_date) = MONTH(CURDATE())
-            AND YEAR(visit_date) = YEAR(CURDATE())
-        ");
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ? AND MONTH(visit_date) = MONTH(CURDATE()) AND YEAR(visit_date) = YEAR(CURDATE())");
         $stmt->execute([$doctor_id]);
         $stats['patientCountMonth'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ================================================================
-        // 3. CONSULTATION STATS - FIXED: includes 'prescribed' status
-        // ================================================================
-        
-        // Pending consultations (including prescribed)
+        // 3. CONSULTATION STATS
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -241,7 +165,6 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         $stmt->execute([$doctor_id]);
         $stats['pendingConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Completed consultations
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -252,7 +175,6 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         $stmt->execute([$doctor_id]);
         $stats['completedConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Cancelled consultations
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -262,12 +184,8 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         $stmt->execute([$doctor_id]);
         $stats['cancelledConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Total consultations
-        $stats['totalConsultations'] = $stats['pendingConsultations'] + 
-                                       $stats['completedConsultations'] + 
-                                       $stats['cancelledConsultations'];
+        $stats['totalConsultations'] = $stats['pendingConsultations'] + $stats['completedConsultations'] + $stats['cancelledConsultations'];
         
-        // Consultations today
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -278,7 +196,6 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         $stmt->execute([$doctor_id]);
         $stats['consultationsToday'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Consultations this week
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -289,9 +206,7 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         $stmt->execute([$doctor_id]);
         $stats['consultationsWeek'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // ================================================================
         // 4. LAB STATS
-        // ================================================================
         try {
             $stmt = $db->prepare("
                 SELECT 
@@ -314,9 +229,7 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
             // Table might not exist
         }
         
-        // ================================================================
         // 5. PRESCRIPTION STATS
-        // ================================================================
         try {
             $stmt = $db->prepare("
                 SELECT 
@@ -336,9 +249,7 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
             // Table might not exist
         }
         
-        // ================================================================
         // 6. APPOINTMENT STATS
-        // ================================================================
         try {
             $stmt = $db->prepare("
                 SELECT 
@@ -360,13 +271,15 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         }
         
         // ================================================================
-        // 7. REFERRAL STATS
+        // 7. REFERRAL STATS - FIXED: includes 'referred' status
         // ================================================================
         try {
             $stmt = $db->prepare("
                 SELECT 
                     COUNT(*) as total,
                     SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                    SUM(CASE WHEN status = 'referred' THEN 1 ELSE 0 END) as referred,
+                    SUM(CASE WHEN status IN ('accepted', 'rejected') THEN 1 ELSE 0 END) as processed,
                     SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
                 FROM referrals 
                 WHERE from_doctor_id = ?
@@ -374,23 +287,23 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
             $stmt->execute([$doctor_id]);
             $ref = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            $stats['referralCount'] = (int)($ref['pending'] ?? 0);
+            // Show referrals with status 'referred' AND 'pending'
+            $stats['referralCount'] = (int)($ref['referred'] ?? 0) + (int)($ref['pending'] ?? 0);
             $stats['referralsPending'] = (int)($ref['pending'] ?? 0);
+            $stats['referralsReferred'] = (int)($ref['referred'] ?? 0);
+            $stats['referralsProcessed'] = (int)($ref['processed'] ?? 0);
             $stats['referralsCompleted'] = (int)($ref['completed'] ?? 0);
         } catch (Exception $e) {
-            // Table might not exist
+            $stats['referralCount'] = 0;
+            $stats['referralsPending'] = 0;
+            $stats['referralsReferred'] = 0;
+            $stats['referralsProcessed'] = 0;
+            $stats['referralsCompleted'] = 0;
         }
         
-        // ================================================================
         // 8. SERVICES STATS
-        // ================================================================
         try {
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM procedures_catalog 
-                WHERE (branch_id IS NULL OR branch_id = ?) 
-                AND is_active = 1
-            ");
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM procedures_catalog WHERE (branch_id IS NULL OR branch_id = ?) AND is_active = 1");
             $stmt->execute([$branch_id]);
             $stats['proceduresCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         } catch (Exception $e) {
@@ -398,12 +311,7 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         }
         
         try {
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM lab_tests_catalog 
-                WHERE (branch_id IS NULL OR branch_id = ?) 
-                AND is_active = 1
-            ");
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests_catalog WHERE (branch_id IS NULL OR branch_id = ?) AND is_active = 1");
             $stmt->execute([$branch_id]);
             $stats['labTestsCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         } catch (Exception $e) {
@@ -412,11 +320,8 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         
         $stats['totalServices'] = $stats['proceduresCount'] + $stats['labTestsCount'];
         
-        // ================================================================
         // 9. INVENTORY ALERTS
-        // ================================================================
         try {
-            // Expiring medicines (next 30 days)
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM medications_inventory 
@@ -433,7 +338,6 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         }
         
         try {
-            // Low stock medicines
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM medications_inventory 
@@ -449,7 +353,6 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
         }
         
         try {
-            // Expiring equipment
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM medical_equipment 
@@ -465,9 +368,7 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
             $stats['expiringEquipment'] = 0;
         }
         
-        // ================================================================
         // 10. GENERATE HASH FOR CHANGE DETECTION
-        // ================================================================
         $hash_data = [
             'patientCount' => $stats['patientCount'],
             'pendingConsultations' => $stats['pendingConsultations'],
@@ -495,14 +396,9 @@ function getDoctorStats($db, $doctor_id, $branch_id) {
     return $stats;
 }
 
-// ================================================================
-// PROCESS REQUEST
-// ================================================================
 try {
-    // Get stats
     $stats = getDoctorStats($db, $doctor_id, $branch_id);
     
-    // Check if data has changed
     $has_changed = false;
     $data_to_send = null;
     
@@ -513,7 +409,6 @@ try {
         $has_changed = true;
         $data_to_send = $stats;
     } else if (empty($client_hash)) {
-        // First request - send all data
         $has_changed = true;
         $data_to_send = $stats;
     }
@@ -527,7 +422,6 @@ try {
         'timestamp_iso' => date('c')
     ];
     
-    // Add summary for quick view
     if ($has_changed && $data_to_send) {
         $response['summary'] = [
             'patients' => $data_to_send['patientCount'],
@@ -540,7 +434,6 @@ try {
         ];
     }
     
-    // Update doctor online status
     try {
         $stmt = $db->prepare("UPDATE users SET last_online = NOW(), is_online = 1 WHERE id = ?");
         $stmt->execute([$doctor_id]);
