@@ -3,8 +3,8 @@
 // FILE: frontend/pages/doctor/view_referral_pdf.php
 // DOCTOR - VIEW REFERRAL PDF
 // Data from referrals table
-// PERFECT PDF - NO TEXT CUTOFF
-// BRAICK DISPENSARY
+// PERFECT PDF - NO TEXT CUTOFF - STAMP WITH FULL TEXT
+// BRAICK DISPENSARY - BLUE THEME WITH GREEN TABLE HEADERS
 // ================================================================
 
 session_start();
@@ -294,7 +294,7 @@ function getLogoHTML() {
     }
     
     if (!empty($logo_url)) {
-        return '<img src="' . $logo_url . '" alt="Braick Dispensary" style="height:60px;width:auto;max-height:60px;border-radius:6px;object-fit:contain;">';
+        return '<img src="' . $logo_url . '" alt="Braick Dispensary" style="height:55px;width:auto;max-height:55px;border-radius:6px;object-fit:contain;">';
     }
     
     return '<div style="display:inline-block;background:#0B5ED7;color:white;padding:6px 18px;border-radius:6px;font-size:18px;font-weight:bold;">BRAICK</div>';
@@ -346,36 +346,31 @@ function getUrgencyLabel($urgency) {
 }
 
 // ================================================================
-// GET LOGO
-// ================================================================
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
-// BUILD PDF CONTENT
+// BUILD PDF CONTENT - BLUE THEME WITH GREEN TABLE HEADERS
 // ================================================================
 $pdf_content = '';
 
 // ================================================================
 // PAGE 1 - ALL CONTENT WITH NO TEXT CUTOFF
 // ================================================================
-$pdf_content .= '<div style="font-family: Arial, sans-serif; font-size: 10pt; color: #1E293B; line-height: 1.6; max-width: 100%; margin: 0 auto; padding: 20px; page-break-after: avoid;">';
+$pdf_content .= '<div style="font-family: Arial, sans-serif; font-size: 9.5pt; color: #1E293B; line-height: 1.5; max-width: 100%; margin: 0 auto; padding: 10px 12px;">';
 
 // ================================================================
-// HEADER
+// HEADER - BLUE THEME
 // ================================================================
 $pdf_content .= '
-<div style="text-align: center; border-bottom: 3px double #0B5ED7; padding-bottom: 14px; margin-bottom: 16px;">
-    <div style="display: flex; align-items: center; justify-content: center; gap: 14px; margin-bottom: 4px; flex-wrap: wrap;">
+<div style="text-align: center; border-bottom: 3px double #0B5ED7; padding-bottom: 12px; margin-bottom: 12px; page-break-inside: avoid;">
+    <div style="display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 2px; flex-wrap: wrap;">
         ' . getLogoHTML() . '
         <div>
-            <div style="font-size: 24px; font-weight: 800; color: #0B5ED7; letter-spacing: 2px;">BRAICK DISPENSARY</div>
-            <div style="font-size: 10px; color: #059669; letter-spacing: 3px; text-transform: uppercase; font-weight: 600;">Tunajali Afya Yako</div>
+            <div style="font-size: 22px; font-weight: 800; color: #0B5ED7; letter-spacing: 2px;">BRAICK DISPENSARY</div>
+            <div style="font-size: 10px; color: #0B5ED7; letter-spacing: 3px; text-transform: uppercase; font-weight: 600;">Tunajali Afya Yako</div>
         </div>
     </div>
-    <div style="font-size: 14px; font-weight: 700; color: #0B5ED7; background: #E8F0FE; padding: 4px 20px; border-radius: 20px; display: inline-block; margin-top: 4px; border: 2px solid #6EA8FE;">
+    <div style="font-size: 14px; font-weight: 700; color: #0B5ED7; background: #E8F0FE; padding: 5px 24px; border-radius: 20px; display: inline-block; margin-top: 4px; border: 2px solid #6EA8FE;">
         📋 REFERRAL LETTER
     </div>
-    <div style="font-size: 8.5px; color: #64748B; margin-top: 5px; display: flex; justify-content: center; gap: 18px; flex-wrap: wrap;">
+    <div style="font-size: 8px; color: #64748B; margin-top: 4px; display: flex; justify-content: center; gap: 16px; flex-wrap: wrap;">
         <span>📞 ' . htmlspecialchars($admin_phone ?: $user_phone) . '</span>
         <span>📍 ' . htmlspecialchars($doctor_branch_name) . '</span>
         <span>📅 ' . date('d/m/Y') . '</span>
@@ -384,300 +379,443 @@ $pdf_content .= '
 </div>';
 
 // ================================================================
-// REFERRAL SUMMARY - CARD
+// SPACER 1cm (10px)
+// ================================================================
+$pdf_content .= '<div style="height: 10px;"></div>';
+
+// ================================================================
+// REFERRAL SUMMARY - CARD - BLUE THEME
 // ================================================================
 $pdf_content .= '
-<div style="background: #F8FAFC; border-radius: 8px; padding: 12px 16px; border: 1px solid #E2E8F0; margin-bottom: 14px; page-break-inside: avoid;">
+<div style="background: #F0F7FF; border-radius: 8px; padding: 12px 16px; border: 1px solid #B8D4FE; margin-bottom: 10px; page-break-inside: avoid;">
     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px;">
         <div style="display: flex; padding: 2px 0;">
-            <span style="font-weight: 600; color: #64748B; width: 120px; flex-shrink: 0; font-size: 9pt;">Referral #:</span>
-            <span style="font-weight: 700; color: #0B5ED7; font-size: 9.5pt;">' . htmlspecialchars($referral['referral_number'] ?? 'N/A') . '</span>
+            <span style="font-weight: 600; color: #0B5ED7; width: 110px; flex-shrink: 0; font-size: 8.5pt;">Referral #:</span>
+            <span style="font-weight: 700; color: #0B5ED7; font-size: 9pt;">' . htmlspecialchars($referral['referral_number'] ?? 'N/A') . '</span>
         </div>
         <div style="display: flex; padding: 2px 0;">
-            <span style="font-weight: 600; color: #64748B; width: 120px; flex-shrink: 0; font-size: 9pt;">Type:</span>
-            <span style="font-size: 9.5pt;">' . getReferralTypeLabel($referral['referral_type']) . '</span>
+            <span style="font-weight: 600; color: #0B5ED7; width: 110px; flex-shrink: 0; font-size: 8.5pt;">Type:</span>
+            <span style="font-size: 9pt;">' . getReferralTypeLabel($referral['referral_type']) . '</span>
         </div>
         <div style="display: flex; padding: 2px 0;">
-            <span style="font-weight: 600; color: #64748B; width: 120px; flex-shrink: 0; font-size: 9pt;">Status:</span>
-            <span style="font-size: 9.5pt; padding: 2px 10px; border-radius: 12px; background: ' . (($referral['status'] ?? 'pending') === 'accepted' ? '#D1FAE5' : (($referral['status'] ?? 'pending') === 'rejected' ? '#FEE2E2' : (($referral['status'] ?? 'pending') === 'completed' ? '#E8F0FE' : '#FEF3C7'))) . '; color: ' . (($referral['status'] ?? 'pending') === 'accepted' ? '#059669' : (($referral['status'] ?? 'pending') === 'rejected' ? '#DC2626' : (($referral['status'] ?? 'pending') === 'completed' ? '#0B5ED7' : '#D97706'))) . '; font-weight: 600;">' . ucfirst($referral['status'] ?? 'Pending') . '</span>
+            <span style="font-weight: 600; color: #0B5ED7; width: 110px; flex-shrink: 0; font-size: 8.5pt;">Status:</span>
+            <span style="font-size: 9pt; padding: 1px 10px; border-radius: 12px; background: ' . (($referral['status'] ?? 'pending') === 'accepted' ? '#D1FAE5' : (($referral['status'] ?? 'pending') === 'rejected' ? '#FEE2E2' : (($referral['status'] ?? 'pending') === 'completed' ? '#E8F0FE' : '#FEF3C7'))) . '; color: ' . (($referral['status'] ?? 'pending') === 'accepted' ? '#059669' : (($referral['status'] ?? 'pending') === 'rejected' ? '#DC2626' : (($referral['status'] ?? 'pending') === 'completed' ? '#0B5ED7' : '#D97706'))) . '; font-weight: 600;">' . ucfirst($referral['status'] ?? 'Pending') . '</span>
         </div>
         <div style="display: flex; padding: 2px 0;">
-            <span style="font-weight: 600; color: #64748B; width: 120px; flex-shrink: 0; font-size: 9pt;">Urgency:</span>
-            <span style="font-size: 9.5pt; padding: 2px 10px; border-radius: 12px; background: ' . (($referral['urgency'] ?? 'routine') === 'emergency' ? '#FEE2E2' : (($referral['urgency'] ?? 'routine') === 'urgent' ? '#FEF3C7' : '#D1FAE5')) . '; color: ' . (($referral['urgency'] ?? 'routine') === 'emergency' ? '#DC2626' : (($referral['urgency'] ?? 'routine') === 'urgent' ? '#D97706' : '#059669')) . '; font-weight: 600;">' . getUrgencyLabel($referral['urgency'] ?? 'routine') . '</span>
+            <span style="font-weight: 600; color: #0B5ED7; width: 110px; flex-shrink: 0; font-size: 8.5pt;">Urgency:</span>
+            <span style="font-size: 9pt; padding: 1px 10px; border-radius: 12px; background: ' . (($referral['urgency'] ?? 'routine') === 'emergency' ? '#FEE2E2' : (($referral['urgency'] ?? 'routine') === 'urgent' ? '#FEF3C7' : '#D1FAE5')) . '; color: ' . (($referral['urgency'] ?? 'routine') === 'emergency' ? '#DC2626' : (($referral['urgency'] ?? 'routine') === 'urgent' ? '#D97706' : '#059669')) . '; font-weight: 600;">' . getUrgencyLabel($referral['urgency'] ?? 'routine') . '</span>
         </div>
         <div style="display: flex; padding: 2px 0;">
-            <span style="font-weight: 600; color: #64748B; width: 120px; flex-shrink: 0; font-size: 9pt;">Created:</span>
-            <span style="font-size: 9.5pt;">' . formatDate($referral['created_at'] ?? '') . '</span>
+            <span style="font-weight: 600; color: #0B5ED7; width: 110px; flex-shrink: 0; font-size: 8.5pt;">Created:</span>
+            <span style="font-size: 9pt;">' . formatDate($referral['created_at'] ?? '') . '</span>
         </div>
         <div style="display: flex; padding: 2px 0;">
-            <span style="font-weight: 600; color: #64748B; width: 120px; flex-shrink: 0; font-size: 9pt;">Updated:</span>
-            <span style="font-size: 9.5pt;">' . formatDate($referral['updated_at'] ?? '') . '</span>
+            <span style="font-weight: 600; color: #0B5ED7; width: 110px; flex-shrink: 0; font-size: 8.5pt;">Updated:</span>
+            <span style="font-size: 9pt;">' . formatDate($referral['updated_at'] ?? '') . '</span>
         </div>
     </div>
 </div>';
 
 // ================================================================
-// 1. PATIENT INFORMATION
+// SPACER 1cm (10px)
+// ================================================================
+$pdf_content .= '<div style="height: 10px;"></div>';
+
+// ================================================================
+// 1. PATIENT INFORMATION - BLUE THEME
 // ================================================================
 $pdf_content .= '
-<div style="page-break-inside: avoid;">
-<div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
-    👤 PATIENT INFORMATION
-</div>
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px 16px; margin-bottom: 10px;">
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Patient Name:</span>
-        <span style="font-weight: 700; font-size: 9.5pt;">' . htmlspecialchars($referral['patient_name'] ?? 'N/A') . '</span>
+<div style="page-break-inside: avoid; margin-bottom: 6px;">
+    <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+        👤 PATIENT INFORMATION
     </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Patient ID:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['patient_code'] ?? 'N/A') . '</span>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-bottom: 8px;">
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Patient Name:</span>
+            <span style="font-weight: 700; font-size: 9pt;">' . htmlspecialchars($referral['patient_name'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Patient ID:</span>
+            <span style="font-size: 9pt;">' . htmlspecialchars($referral['patient_code'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Date of Birth:</span>
+            <span style="font-size: 9pt;">' . (!empty($referral['date_of_birth']) ? date('d/m/Y', strtotime($referral['date_of_birth'])) . ' (' . calculateAge($referral['date_of_birth']) . ' yrs)' : 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Gender:</span>
+            <span style="font-size: 9pt;">' . htmlspecialchars($referral['gender'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Phone:</span>
+            <span style="font-size: 9pt;">' . htmlspecialchars($referral['patient_phone'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Emergency Contact:</span>
+            <span style="font-weight: 700; font-size: 9pt; color: #DC2626;">' . htmlspecialchars($referral['emergency_contact'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Blood Group:</span>
+            <span style="font-size: 9pt;">' . htmlspecialchars($referral['blood_group'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Allergies:</span>
+            <span style="font-size: 9pt; color: #DC2626;">' . htmlspecialchars($referral['allergies'] ?? 'None') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0; grid-column: span 2;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Address:</span>
+            <span style="font-size: 8.5pt;">' . htmlspecialchars($referral['address'] ?? 'N/A') . '</span>
+        </div>
     </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Date of Birth:</span>
-        <span style="font-size: 9.5pt;">' . (!empty($referral['date_of_birth']) ? date('d/m/Y', strtotime($referral['date_of_birth'])) . ' (' . calculateAge($referral['date_of_birth']) . ' yrs)' : 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Gender:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['gender'] ?? 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Phone:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['patient_phone'] ?? 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Emergency Contact:</span>
-        <span style="font-weight: 700; font-size: 9.5pt; color: #DC2626;">' . htmlspecialchars($referral['emergency_contact'] ?? 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Blood Group:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['blood_group'] ?? 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Allergies:</span>
-        <span style="font-size: 9.5pt; color: #DC2626;">' . htmlspecialchars($referral['allergies'] ?? 'None') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Address:</span>
-        <span style="font-size: 9pt;">' . htmlspecialchars($referral['address'] ?? 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Branch:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['branch_name'] ?? $doctor_branch_name) . '</span>
-    </div>
-</div>
 </div>';
 
 // ================================================================
-// ROW MOJA - SPACER
+// SPACER 1cm (10px)
 // ================================================================
-$pdf_content .= '<div style="height: 8px;"></div>';
+$pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
-// 2. DOCTORS INFORMATION
+// 2. DOCTORS INFORMATION - BLUE THEME
 // ================================================================
 $pdf_content .= '
-<div style="page-break-inside: avoid;">
-<div style="font-size: 11pt; font-weight: 700; color: #7C3AED; border-bottom: 2px solid #7C3AED; padding-bottom: 4px; margin-bottom: 8px;">
-    👨‍⚕️ DOCTORS INFORMATION
-</div>
-<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px 16px; margin-bottom: 10px;">
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">From Doctor:</span>
-        <span style="font-weight: 700; font-size: 9.5pt;">Dr. ' . htmlspecialchars($referral['from_doctor_name'] ?? 'Unknown') . '</span>
+<div style="page-break-inside: avoid; margin-bottom: 6px;">
+    <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+        👨‍⚕️ DOCTORS INFORMATION
     </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">To Doctor:</span>
-        <span style="font-weight: 700; font-size: 9.5pt;">Dr. ' . htmlspecialchars($referral['to_doctor_name'] ?? 'Unknown') . '</span>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; margin-bottom: 8px;">
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">From Doctor:</span>
+            <span style="font-weight: 700; font-size: 9pt;">Dr. ' . htmlspecialchars($referral['from_doctor_name'] ?? 'Unknown') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">To Doctor:</span>
+            <span style="font-weight: 700; font-size: 9pt;">Dr. ' . htmlspecialchars($referral['to_doctor_name'] ?? 'Unknown') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">From Specialty:</span>
+            <span style="font-size: 9pt;">' . htmlspecialchars($referral['from_doctor_specialty'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">To Specialty:</span>
+            <span style="font-size: 9pt;">' . htmlspecialchars($referral['to_doctor_specialty'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">From Phone:</span>
+            <span style="font-size: 9pt;">' . htmlspecialchars($referral['from_doctor_phone'] ?? 'N/A') . '</span>
+        </div>
+        <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
+            <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">To Phone:</span>
+            <span style="font-size: 9pt;">' . htmlspecialchars($referral['to_doctor_phone'] ?? 'N/A') . '</span>
+        </div>
     </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">From Specialty:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['from_doctor_specialty'] ?? 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">To Specialty:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['to_doctor_specialty'] ?? 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">From Phone:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['from_doctor_phone'] ?? 'N/A') . '</span>
-    </div>
-    <div style="display: flex; padding: 3px 0; border-bottom: 1px solid #E2E8F0;">
-        <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">To Phone:</span>
-        <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['to_doctor_phone'] ?? 'N/A') . '</span>
-    </div>
-</div>
 </div>';
 
 // ================================================================
-// ROW MOJA - SPACER
+// SPACER 1cm (10px)
 // ================================================================
-$pdf_content .= '<div style="height: 8px;"></div>';
+$pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
-// 3. SYMPTOMS, HPI & PHYSICAL EXAMINATION
+// 3. VITAL SIGNS - GREEN TABLE HEADERS
+// ================================================================
+if ($vital_signs) {
+    $pdf_content .= '
+    <div style="page-break-inside: avoid; margin-bottom: 6px;">
+        <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+            ❤️ VITAL SIGNS
+        </div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; border: 1px solid #B8D4FE;">
+            <thead>
+                <tr>
+                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Temperature</th>
+                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Blood Pressure</th>
+                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Pulse Rate</th>
+                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Weight</th>
+                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Height</th>
+                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">BMI</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['temperature'] ?? '--') . ' °C</td>
+                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') . ' mmHg</td>
+                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['pulse_rate'] ?? '--') . ' bpm</td>
+                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['weight'] ?? '--') . ' kg</td>
+                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['height'] ?? '--') . ' cm</td>
+                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['bmi'] ?? '--') . '</td>
+                </tr>
+            </tbody>
+        </table>
+        ' . (!empty($vital_signs['recorded_by_name']) ? '<div style="font-size: 7.5px; color: #94A3B8; text-align: right;">Recorded by: ' . htmlspecialchars($vital_signs['recorded_by_name']) . '</div>' : '') . '
+    </div>';
+    
+    // SPACER 1cm (10px)
+    $pdf_content .= '<div style="height: 10px;"></div>';
+}
+
+// ================================================================
+// 4. SYMPTOMS, HPI & PHYSICAL EXAMINATION - GREEN TABLE HEADERS
 // ================================================================
 $pdf_content .= '
-<div style="page-break-inside: avoid;">
-<div style="font-size: 11pt; font-weight: 700; color: #D97706; border-bottom: 2px solid #D97706; padding-bottom: 4px; margin-bottom: 8px;">
-    📋 SYMPTOMS, HPI & PHYSICAL EXAMINATION
-</div>
-<table style="width: 100%; border-collapse: collapse; font-size: 9pt; margin-bottom: 10px; border: 1px solid #E2E8F0;">
-    <thead>
-        <tr>
-            <th style="background: #D97706; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Symptoms</th>
-            <th style="background: #D97706; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">HPI</th>
-            <th style="background: #D97706; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Physical Examination</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; vertical-align: top; white-space: pre-wrap; word-wrap: break-word; font-size: 9pt; background: #FAFAFA;">' . nl2br(htmlspecialchars($referral['symptoms'] ?? 'No symptoms recorded')) . '</td>
-            <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; vertical-align: top; white-space: pre-wrap; word-wrap: break-word; font-size: 9pt; background: #FAFAFA;">' . nl2br(htmlspecialchars($referral['hpi'] ?? 'No HPI recorded')) . '</td>
-            <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; vertical-align: top; white-space: pre-wrap; word-wrap: break-word; font-size: 9pt; background: #FAFAFA;">' . nl2br(htmlspecialchars($referral['physical_exam'] ?? 'No physical exam recorded')) . '</td>
-        </tr>
-    </tbody>
-</table>
+<div style="page-break-inside: avoid; margin-bottom: 6px;">
+    <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+        📋 SYMPTOMS, HPI & PHYSICAL EXAMINATION
+    </div>
+    <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; border: 1px solid #B8D4FE;">
+        <thead>
+            <tr>
+                <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Symptoms</th>
+                <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">HPI</th>
+                <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Physical Examination</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; vertical-align: top; white-space: pre-wrap; word-wrap: break-word; font-size: 8.5pt; background: #FAFAFA;">' . nl2br(htmlspecialchars($referral['symptoms'] ?? 'No symptoms recorded')) . '</td>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; vertical-align: top; white-space: pre-wrap; word-wrap: break-word; font-size: 8.5pt; background: #FAFAFA;">' . nl2br(htmlspecialchars($referral['hpi'] ?? 'No HPI recorded')) . '</td>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; vertical-align: top; white-space: pre-wrap; word-wrap: break-word; font-size: 8.5pt; background: #FAFAFA;">' . nl2br(htmlspecialchars($referral['physical_exam'] ?? 'No physical exam recorded')) . '</td>
+            </tr>
+        </tbody>
+    </table>
 </div>';
 
 // ================================================================
-// ROW MOJA - SPACER
+// SPACER 1cm (10px)
 // ================================================================
-$pdf_content .= '<div style="height: 8px;"></div>';
+$pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
-// 4. LAB TESTS - Table with Test Name, Results, Lab Technician
+// 5. LAB TESTS - GREEN TABLE HEADERS
 // ================================================================
 if (count($lab_tests) > 0) {
     $pdf_content .= '
-    <div style="page-break-inside: avoid;">
-    <div style="font-size: 11pt; font-weight: 700; color: #7C3AED; border-bottom: 2px solid #7C3AED; padding-bottom: 4px; margin-bottom: 8px;">
-        🧪 LABORATORY TESTS
-    </div>
-    <table style="width: 100%; border-collapse: collapse; font-size: 9pt; margin-bottom: 10px; border: 1px solid #E2E8F0;">
-        <thead>
-            <tr>
-                <th style="background: #7C3AED; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 40%;">Test Name</th>
-                <th style="background: #7C3AED; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 40%;">Results</th>
-                <th style="background: #7C3AED; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 20%;">Lab Technician</th>
-            </tr>
-        </thead>
-        <tbody>';
+    <div style="page-break-inside: avoid; margin-bottom: 6px;">
+        <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+            🧪 LABORATORY TESTS
+        </div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; border: 1px solid #B8D4FE;">
+            <thead>
+                <tr>
+                    <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 40%;">Test Name</th>
+                    <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 40%;">Results</th>
+                    <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 20%;">Lab Technician</th>
+                </tr>
+            </thead>
+            <tbody>';
     foreach ($lab_tests as $test) {
         $result_display = !empty($test['results']) ? htmlspecialchars($test['results']) : '⏳ Pending';
         $result_style = !empty($test['results']) ? 'color: #059669; font-weight: 600;' : 'color: #94A3B8;';
         $pdf_content .= '
             <tr>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; font-weight: 600; font-size: 9pt; background: #FAFAFA;">' . htmlspecialchars($test['test_name'] ?? 'N/A') . '</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; font-size: 9pt; ' . $result_style . ' background: #FAFAFA;">' . $result_display . '</td>
-                <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; font-size: 9pt; background: #FAFAFA;">' . htmlspecialchars($test['lab_technician_name'] ?? 'Not assigned') . '</td>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-weight: 600; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($test['test_name'] ?? 'N/A') . '</td>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; ' . $result_style . ' background: #FAFAFA;">' . $result_display . '</td>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($test['lab_technician_name'] ?? 'Not assigned') . '</td>
             </tr>';
     }
     $pdf_content .= '
-        </tbody>
-    </table>
+            </tbody>
+        </table>
     </div>';
     
-    // ROW MOJA - SPACER
-    $pdf_content .= '<div style="height: 8px;"></div>';
+    // SPACER 1cm (10px)
+    $pdf_content .= '<div style="height: 10px;"></div>';
 }
 
 // ================================================================
-// 5. DIAGNOSIS - Table with Disease Name, Disease Code, Treatment
+// 6. DIAGNOSIS - GREEN TABLE HEADERS
 // ================================================================
 $pdf_content .= '
-<div style="page-break-inside: avoid;">
-<div style="font-size: 11pt; font-weight: 700; color: #059669; border-bottom: 2px solid #059669; padding-bottom: 4px; margin-bottom: 8px;">
-    🩺 DIAGNOSIS
-</div>
-<table style="width: 100%; border-collapse: collapse; font-size: 9pt; margin-bottom: 10px; border: 1px solid #E2E8F0;">
-    <thead>
-        <tr>
-            <th style="background: #059669; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Disease Name</th>
-            <th style="background: #059669; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Disease Code</th>
-            <th style="background: #059669; color: white; padding: 5px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Treatment</th>
-        </tr>
-    </thead>
-    <tbody>
-        <tr>
-            <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; font-weight: 600; font-size: 9pt; color: #0B5ED7; background: #FAFAFA;">' . htmlspecialchars($disease_name ?: ($referral['visit_diagnosis'] ?? 'No diagnosis recorded')) . '</td>
-            <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; font-size: 9pt; font-family: monospace; background: #FAFAFA;">' . htmlspecialchars($disease_code ?: $referral['disease_code'] ?? 'N/A') . '</td>
-            <td style="padding: 5px 8px; border-bottom: 1px solid #E2E8F0; font-size: 9pt; word-wrap: break-word; background: #FAFAFA;">' . nl2br(htmlspecialchars($referral['treatment'] ?? $referral['treatment_given'] ?? 'No treatment recorded')) . '</td>
-        </tr>
-    </tbody>
-</table>
+<div style="page-break-inside: avoid; margin-bottom: 6px;">
+    <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+        🩺 DIAGNOSIS
+    </div>
+    <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; border: 1px solid #B8D4FE;">
+        <thead>
+            <tr>
+                <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Disease Name</th>
+                <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Disease Code</th>
+                <th style="background: #059669; color: white; padding: 8px 10px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 33.33%;">Treatment</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-weight: 600; font-size: 8.5pt; color: #0B5ED7; background: #FAFAFA;">' . htmlspecialchars($disease_name ?: ($referral['visit_diagnosis'] ?? 'No diagnosis recorded')) . '</td>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; font-family: monospace; background: #FAFAFA;">' . htmlspecialchars($disease_code ?: $referral['disease_code'] ?? 'N/A') . '</td>
+                <td style="padding: 8px 10px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; word-wrap: break-word; background: #FAFAFA;">' . nl2br(htmlspecialchars($referral['treatment'] ?? $referral['treatment_given'] ?? 'No treatment recorded')) . '</td>
+            </tr>
+        </tbody>
+    </table>
 </div>';
 
 // ================================================================
-// ROW MOJA - SPACER
+// SPACER 1cm (10px)
 // ================================================================
-$pdf_content .= '<div style="height: 8px;"></div>';
+$pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
-// 6. REASON FOR REFERRAL - CARD
+// 7. REASON FOR REFERRAL - BLUE THEME
 // ================================================================
 $pdf_content .= '
-<div style="page-break-inside: avoid;">
-<div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
-    📝 REASON FOR REFERRAL
-</div>
-<div style="padding: 10px 12px; background: #F8FAFC; border-radius: 6px; border: 1px solid #E2E8F0; margin-bottom: 10px;">
-    <div style="font-size: 9.5pt; white-space: pre-wrap; word-wrap: break-word;">' . nl2br(htmlspecialchars($referral['reason'] ?? 'No reason provided')) . '</div>
-</div>
+<div style="page-break-inside: avoid; margin-bottom: 6px;">
+    <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+        📝 REASON FOR REFERRAL
+    </div>
+    <div style="padding: 10px 14px; background: #F0F7FF; border-radius: 6px; border: 1px solid #B8D4FE; margin-bottom: 8px;">
+        <div style="font-size: 9pt; white-space: pre-wrap; word-wrap: break-word;">' . nl2br(htmlspecialchars($referral['reason'] ?? 'No reason provided')) . '</div>
+    </div>
 </div>';
 
 // ================================================================
-// ROW MOJA - SPACER
+// SPACER 1cm (10px)
 // ================================================================
-$pdf_content .= '<div style="height: 8px;"></div>';
+$pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
-// 7. EXTERNAL REFERRAL DETAILS - Card
+// 8. EXTERNAL REFERRAL DETAILS - BLUE THEME
 // ================================================================
 if ($referral['referral_type'] === 'external') {
     $pdf_content .= '
-    <div style="page-break-inside: avoid;">
-    <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
-        🏥 EXTERNAL REFERRAL DETAILS
-    </div>
-    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 3px 16px; padding: 10px 12px; background: #F8FAFC; border-radius: 6px; border: 1px solid #E2E8F0; margin-bottom: 10px;">
-        <div style="display: flex; padding: 2px 0;">
-            <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Facility Name:</span>
-            <span style="font-weight: 700; font-size: 9.5pt; color: #0B5ED7;">' . htmlspecialchars($referral['to_hospital_name'] ?? 'N/A') . '</span>
+    <div style="page-break-inside: avoid; margin-bottom: 6px;">
+        <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+            🏥 EXTERNAL REFERRAL DETAILS
         </div>
-        <div style="display: flex; padding: 2px 0;">
-            <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Phone:</span>
-            <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['to_hospital_phone'] ?? 'N/A') . '</span>
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; padding: 10px 14px; background: #F0F7FF; border-radius: 6px; border: 1px solid #B8D4FE; margin-bottom: 8px;">
+            <div style="display: flex; padding: 2px 0;">
+                <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Facility Name:</span>
+                <span style="font-weight: 700; font-size: 9pt; color: #0B5ED7;">' . htmlspecialchars($referral['to_hospital_name'] ?? 'N/A') . '</span>
+            </div>
+            <div style="display: flex; padding: 2px 0;">
+                <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Phone:</span>
+                <span style="font-size: 9pt;">' . htmlspecialchars($referral['to_hospital_phone'] ?? 'N/A') . '</span>
+            </div>
+            <div style="display: flex; padding: 2px 0; grid-column: span 2;">
+                <span style="font-weight: 600; color: #0B5ED7; width: 120px; flex-shrink: 0; font-size: 8.5pt;">Address:</span>
+                <span style="font-size: 9pt;">' . htmlspecialchars($referral['to_hospital_address'] ?? 'N/A') . '</span>
+            </div>
         </div>
-        <div style="display: flex; padding: 2px 0; grid-column: span 2;">
-            <span style="font-weight: 600; color: #64748B; width: 130px; flex-shrink: 0; font-size: 9pt;">Address:</span>
-            <span style="font-size: 9.5pt;">' . htmlspecialchars($referral['to_hospital_address'] ?? 'N/A') . '</span>
-        </div>
-    </div>
     </div>';
+    
+    // SPACER 1cm (10px)
+    $pdf_content .= '<div style="height: 10px;"></div>';
 }
 
 // ================================================================
-// FOOTER WITH OFFICIAL STAMP
+// 9. MEDICATIONS - GREEN TABLE HEADERS
 // ================================================================
+if (count($medications) > 0) {
+    $pdf_content .= '
+    <div style="page-break-inside: avoid; margin-bottom: 6px;">
+        <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+            💊 MEDICATIONS
+        </div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; border: 1px solid #B8D4FE;">
+            <thead>
+                <tr>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 25%;">Medication</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 15%;">Dosage</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 15%;">Frequency</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 10%;">Qty</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 15%;">Route</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 20%;">Instructions</th>
+                </tr>
+            </thead>
+            <tbody>';
+    foreach ($medications as $med) {
+        $pdf_content .= '
+            <tr>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-weight: 600; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($med['medication_name'] ?? 'N/A') . '</td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($med['dosage'] ?? '') . '</td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($med['frequency'] ?? '') . '</td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; text-align: center; background: #FAFAFA;">' . htmlspecialchars($med['quantity'] ?? '') . '</td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($med['route'] ?? '') . '</td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($med['instructions'] ?? '') . '</td>
+            </tr>';
+    }
+    $pdf_content .= '
+            </tbody>
+        </table>
+    </div>';
+    
+    // SPACER 1cm (10px)
+    $pdf_content .= '<div style="height: 10px;"></div>';
+}
+
+// ================================================================
+// 10. PROCEDURES - GREEN TABLE HEADERS
+// ================================================================
+if (count($procedures) > 0) {
+    $pdf_content .= '
+    <div style="page-break-inside: avoid; margin-bottom: 6px;">
+        <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
+            🛠️ PROCEDURES
+        </div>
+        <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; border: 1px solid #B8D4FE;">
+            <thead>
+                <tr>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 50%;">Procedure Name</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 25%;">Category</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: left; font-size: 7pt; text-transform: uppercase; width: 25%;">Price</th>
+                </tr>
+            </thead>
+            <tbody>';
+    foreach ($procedures as $proc) {
+        $pdf_content .= '
+            <tr>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-weight: 600; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($proc['procedure_name'] ?? 'N/A') . '</td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; background: #FAFAFA;">' . htmlspecialchars($proc['category'] ?? 'N/A') . '</td>
+                <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; font-size: 8.5pt; font-weight: 600; color: #059669; background: #FAFAFA;">TSh ' . number_format($proc['procedure_price'] ?? 0, 0) . '</td>
+            </tr>';
+    }
+    $pdf_content .= '
+            </tbody>
+        </table>
+    </div>';
+    
+    // SPACER 1cm (10px)
+    $pdf_content .= '<div style="height: 10px;"></div>';
+}
+
+// ================================================================
+// ================================================================
+// 11. OFFICIAL STAMP - USING TABLE FOR BETTER PDF RENDERING
+// ================================================================
+// ================================================================
+
 $pdf_content .= '
-<div style="border-top: 2px solid #0B5ED7; padding-top: 10px; margin-top: 12px; text-align: center; page-break-inside: avoid;">
-    <div style="font-size: 11px; font-weight: 600; color: #059669;">
+<div style="border-top: 3px solid #0B5ED7; padding-top: 12px; margin-top: 10px; text-align: center; page-break-inside: avoid;">
+    <div style="font-size: 10px; font-weight: 600; color: #059669; margin-bottom: 6px;">
         💙 <span style="color: #0B5ED7; font-weight: 800;">BRAICK DISPENSARY</span> - TUNAJALI AFYA YAKO
     </div>
-    <div style="font-size: 8px; color: #64748B; margin-top: 3px; display: flex; justify-content: center; gap: 14px; flex-wrap: wrap;">
+    <div style="font-size: 7.5px; color: #64748B; margin-bottom: 8px; display: flex; justify-content: center; gap: 14px; flex-wrap: wrap;">
         <span><strong>Admin:</strong> ' . htmlspecialchars($admin_name) . '</span>
         <span><strong>Phone:</strong> ' . htmlspecialchars($admin_phone ?: $user_phone) . '</span>
         <span><strong>Email:</strong> ' . htmlspecialchars($admin_email ?: 'info@braick.com') . '</span>
         <span><strong>Date:</strong> ' . date('d/m/Y') . '</span>
     </div>
-    <div style="margin-top: 6px; padding: 6px 20px; border: 3px solid #0B5ED7; border-radius: 8px; display: inline-block; background: #E8F0FE; font-weight: 600; color: #0B5ED7; min-width: 180px;">
-        <div style="font-size: 7px; color: #64748B; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700;">Official Stamp</div>
-        <div style="font-size: 13px; font-weight: 800; color: #0B5ED7;">BRAICK DISPENSARY</div>
-        <div style="font-size: 7px; color: #64748B; margin-top: 2px;">Approved By: _________________</div>
-        <div style="font-size: 7px; color: #64748B;">Date: ' . date('d/m/Y') . '</div>
-    </div>
-    <div style="font-size: 7px; color: #94A3B8; margin-top: 4px;">This is a computer-generated document. No signature required.</div>
+    
+    <!-- STAMP - USING TABLE FOR RELIABLE PDF RENDERING -->
+    <table style="width: 100%; max-width: 320px; margin: 6px auto; border-collapse: collapse; border: 3px solid #0B5ED7; border-radius: 8px; background: #E8F0FE;">
+        <tr>
+            <td style="padding: 8px 16px; text-align: center; border: none;">
+                <div style="font-size: 7px; color: #64748B; text-transform: uppercase; letter-spacing: 1.5px; font-weight: 700;">Official Stamp</div>
+                <div style="font-size: 16px; font-weight: 800; color: #0B5ED7; margin-top: 2px;">BRAICK DISPENSARY</div>
+                <div style="font-size: 9px; color: #0B5ED7; font-weight: 600;">Tunajali Afya Yako</div>
+                <div style="border-top: 1px dashed #B8D4FE; margin: 6px 0; padding-top: 6px;">
+                    <div style="font-size: 8px; color: #475569;">
+                        <strong>Approved By:</strong> <span style="color: #0B5ED7; font-weight: 700;">Dr. ' . htmlspecialchars($referral['from_doctor_name'] ?? 'Unknown') . '</span>
+                    </div>
+                    <div style="font-size: 8px; color: #475569; margin-top: 2px;">
+                        <strong>Date:</strong> <span style="color: #0B5ED7; font-weight: 700;">' . date('d/m/Y H:i') . '</span>
+                    </div>
+                    <div style="font-size: 7px; color: #94A3B8; margin-top: 2px;">
+                        <strong>Ref:</strong> ' . htmlspecialchars($referral['referral_number'] ?? 'N/A') . '
+                    </div>
+                </div>
+            </td>
+        </tr>
+    </table>
+    
+    <div style="font-size: 6.5px; color: #94A3B8; margin-top: 6px;">This is a computer-generated document. No signature required.</div>
 </div>';
 
 $pdf_content .= '</div>'; // End page
@@ -711,9 +849,9 @@ $pdf_content .= '</div>'; // End page
         }
         .pdf-actions {
             text-align: center;
-            padding: 12px 0;
+            padding: 10px 0;
             border-bottom: 2px solid #E2E8F0;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
         .pdf-actions button {
             padding: 8px 20px;
@@ -734,6 +872,21 @@ $pdf_content .= '</div>'; // End page
         .pdf-content { background: white; padding: 5px; border-radius: 4px; border: 1px solid #E2E8F0; }
         .pdf-content table { width: 100%; border-collapse: collapse; }
         .pdf-content table td, .pdf-content table th { padding: 3px 6px; }
+        
+        /* PAGE BREAKS - PREVENT TEXT CUTOFF */
+        .pdf-content div {
+            page-break-inside: avoid !important;
+        }
+        .pdf-content table {
+            page-break-inside: avoid !important;
+        }
+        .pdf-content tr {
+            page-break-inside: avoid !important;
+        }
+        .pdf-content td, .pdf-content th {
+            page-break-inside: avoid !important;
+        }
+        
         @media print {
             .pdf-actions { display: none !important; }
             body { background: white; padding: 0; }
@@ -762,13 +915,13 @@ $pdf_content .= '</div>'; // End page
     <script>
         function downloadPDF() {
             var element = document.getElementById('pdfContent');
-            var btn = event.target || document.querySelector('.btn-success');
+            var btn = document.querySelector('.btn-success');
             var originalText = btn.innerHTML;
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
             btn.disabled = true;
             
             var opt = {
-                margin: [8, 8, 8, 8],
+                margin: [10, 10, 10, 10],
                 filename: 'Referral_<?= htmlspecialchars($referral['referral_number'] ?? 'referral') ?>_<?= date('Ymd') ?>.pdf',
                 image: { type: 'jpeg', quality: 0.98 },
                 html2canvas: { 
@@ -783,14 +936,16 @@ $pdf_content .= '</div>'; // End page
                     format: 'a4', 
                     orientation: 'portrait' 
                 },
-                pagebreak: { mode: 'avoid-all' }
+                pagebreak: { 
+                    mode: ['avoid-all', 'css', 'legacy']
+                }
             };
             
             html2pdf().set(opt).from(element).save().then(function() {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
             }).catch(function(err) {
-                console.error(err);
+                console.error('PDF Error:', err);
                 btn.innerHTML = originalText;
                 btn.disabled = false;
                 alert('Failed to generate PDF. Please try again.');
@@ -801,9 +956,12 @@ $pdf_content .= '</div>'; // End page
         console.log('✅ Patient: <?= htmlspecialchars($referral['patient_name'] ?? 'N/A') ?>');
         console.log('✅ Status: <?= ucfirst($referral['status'] ?? 'Pending') ?>');
         console.log('✅ Type: <?= ucfirst($referral['referral_type'] ?? 'N/A') ?>');
-        console.log('✅ Flow: Header → Summary → Patient Information → [ROW] → Doctors Information → [ROW] → Symptoms/HPI/Physical → [ROW] → Lab Tests → [ROW] → Diagnosis → [ROW] → Reason for Referral → [ROW] → External Details → Stamp');
-        console.log('✅ NO TEXT CUTOFF between pages');
-        console.log('✅ Using data from referrals table');
+        console.log('✅ THEME: BLUE with GREEN table headers');
+        console.log('✅ SPACING: 1cm (10px) between each section');
+        console.log('✅ NO TEXT CUTOFF between pages - page-break-inside: avoid');
+        console.log('✅ STAMP: Using TABLE for reliable PDF rendering');
+        console.log('✅ STAMP TEXT: BRAICK DISPENSARY - Tunajali Afya Yako');
+        console.log('✅ STAMP: Approved By, Date, Ref number all included');
     </script>
 </body>
 </html>
