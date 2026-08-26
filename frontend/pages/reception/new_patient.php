@@ -2,16 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/reception/new_patient.php
 // RECEPTION - REGISTER NEW PATIENT
-// USING dispensary_db (new database structure)
-// 
-// FIXES:
-// 1. ✅ Patient ID generation - UNIQUE per branch, per year
-// 2. ✅ No duplicate patient_id even after deletions
-// 3. ✅ Patient Type inachukuliwa kutoka services table (category_id = 2)
-// 4. ✅ Default ni New Patient
-// 5. ✅ Kama assign doctor → fee inaenda Cashier (bill created)
-// 6. ✅ Kama hataassign doctor → No fee (hakuna bill) mpaka doctor aassign
-// 7. ✅ consultation_fee saved in visits table (column ipo)
+// FIXED: visit_type inachukua service_name from services table
+// BRAICK DISPENSARY
 // ================================================================
 
 session_start();
@@ -187,10 +179,11 @@ try {
                 CASE 
                     WHEN service_name LIKE '%New Patient%' THEN 0
                     WHEN service_name LIKE '%General%' THEN 1
-                    WHEN service_name LIKE '%Emergency%' THEN 2
-                    WHEN service_name LIKE '%Specialist%' THEN 3
-                    WHEN service_name LIKE '%Follow%' THEN 4
-                    ELSE 5
+                    WHEN service_name LIKE '%Consultation-B%' THEN 2
+                    WHEN service_name LIKE '%Emergency%' THEN 3
+                    WHEN service_name LIKE '%Specialist%' THEN 4
+                    WHEN service_name LIKE '%Follow%' THEN 5
+                    ELSE 6
                 END,
                 service_name
         ");
@@ -201,29 +194,29 @@ try {
     }
     
     // ================================================================
-    // ✅ BUILD VISIT TYPE OPTIONS FROM SERVICES
+    // ✅ BUILD VISIT TYPE OPTIONS USING service_id AS KEY
     // ================================================================
     $visit_type_options = [];
-    $default_key = 'new_patient';
+    $default_service_id = null;
     $default_price = 0;
+    $default_service_name = 'General Consultation';
+    $default_key = null;
     
     if (!empty($consultation_services)) {
         foreach ($consultation_services as $service) {
+            $service_id = $service['id'];
             $service_name = $service['service_name'];
-            $key = strtolower(str_replace(' ', '_', $service_name));
-            $key = str_replace('-', '_', $key);
-            $key = preg_replace('/[^a-z_]/', '', $key);
-            if (empty($key)) {
-                $key = 'consultation_' . $service['id'];
-            }
+            $price = (float)($service['price'] ?? 0);
+            
+            $key = $service_id;
             
             $icon = '🏥';
             if (strpos(strtolower($service_name), 'new patient') !== false) {
                 $icon = '🆕';
-                $default_key = $key;
-                $default_price = (float)($service['price'] ?? 10000);
             } elseif (strpos(strtolower($service_name), 'follow') !== false) {
                 $icon = '🔄';
+            } elseif (strpos(strtolower($service_name), 'consultation-b') !== false) {
+                $icon = '🚨';
             } elseif (strpos(strtolower($service_name), 'emergency') !== false) {
                 $icon = '🚨';
             } elseif (strpos(strtolower($service_name), 'specialist') !== false) {
@@ -231,24 +224,37 @@ try {
             }
             
             $visit_type_options[$key] = [
-                'id' => $service['id'],
-                'name' => $service_name,
+                'service_id' => $service_id,
+                'service_name' => $service_name,
                 'display_name' => $service_name,
-                'price' => (float)($service['price'] ?? 0),
+                'price' => $price,
                 'unit' => $service['unit'] ?? 'each',
                 'description' => $service['description'] ?? '',
                 'is_active' => $service['is_active'] ?? 1,
                 'icon' => $icon
             ];
+            
+            // Set default to New Patient or first one
+            if (strpos(strtolower($service_name), 'new patient') !== false) {
+                $default_service_id = $service_id;
+                $default_price = $price;
+                $default_service_name = $service_name;
+                $default_key = $key;
+            } elseif ($default_key === null) {
+                $default_service_id = $service_id;
+                $default_price = $price;
+                $default_service_name = $service_name;
+                $default_key = $key;
+            }
         }
     }
     
     // ✅ FALLBACK if no services found in database
     if (empty($visit_type_options)) {
         $visit_type_options = [
-            'new_patient' => [
-                'id' => null,
-                'name' => 'New Patient',
+            1 => [
+                'service_id' => null,
+                'service_name' => 'New Patient',
                 'display_name' => 'New Patient',
                 'price' => 10000,
                 'unit' => 'each',
@@ -256,9 +262,9 @@ try {
                 'is_active' => 1,
                 'icon' => '🆕'
             ],
-            'general_consultation' => [
-                'id' => null,
-                'name' => 'General Consultation',
+            2 => [
+                'service_id' => null,
+                'service_name' => 'General Consultation',
                 'display_name' => 'General Consultation',
                 'price' => 15000,
                 'unit' => 'each',
@@ -266,9 +272,9 @@ try {
                 'is_active' => 1,
                 'icon' => '🏥'
             ],
-            'follow_up' => [
-                'id' => null,
-                'name' => 'Follow-up Consultation',
+            3 => [
+                'service_id' => null,
+                'service_name' => 'Follow-up Consultation',
                 'display_name' => 'Follow-up',
                 'price' => 10000,
                 'unit' => 'each',
@@ -276,9 +282,9 @@ try {
                 'is_active' => 1,
                 'icon' => '🔄'
             ],
-            'emergency' => [
-                'id' => null,
-                'name' => 'Emergency Consultation',
+            4 => [
+                'service_id' => null,
+                'service_name' => 'Emergency Consultation',
                 'display_name' => 'Emergency',
                 'price' => 25000,
                 'unit' => 'each',
@@ -287,8 +293,9 @@ try {
                 'icon' => '🚨'
             ]
         ];
-        $default_key = 'new_patient';
+        $default_key = 1;
         $default_price = 10000;
+        $default_service_name = 'New Patient';
     }
     
     // ================================================================
@@ -299,7 +306,6 @@ try {
         $branch_code = str_pad($branch_id, 2, '0', STR_PAD_LEFT);
         $pattern = "P-$year-$branch_code-%";
         
-        // Get the last patient ID for this branch and year
         $stmt = $db->prepare("
             SELECT patient_id FROM patients 
             WHERE branch_id = ? 
@@ -311,7 +317,6 @@ try {
         $last = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($last) {
-            // Extract the number and increment
             $parts = explode('-', $last['patient_id']);
             $last_number = intval(end($parts));
             $next_number = $last_number + 1;
@@ -322,13 +327,11 @@ try {
         
         $patient_id_number = "P-$year-$branch_code-$new_number";
         
-        // ✅ EXTRA SAFETY: Check if ID already exists (double-check)
         $stmt = $db->prepare("SELECT COUNT(*) FROM patients WHERE patient_id = ?");
         $stmt->execute([$patient_id_number]);
         $exists = $stmt->fetchColumn();
         
         if ($exists > 0) {
-            // If exists, keep incrementing until we find a free one
             $counter = 1;
             while ($exists > 0) {
                 $new_number = str_pad($next_number + $counter, 4, '0', STR_PAD_LEFT);
@@ -415,18 +418,52 @@ try {
         $allergies = trim($_POST['allergies'] ?? '');
         $branch_id = $selected_branch_id;
         
-        // Assign doctor fields (OPTIONAL)
         $assign_doctor = isset($_POST['assign_doctor']) ? 1 : 0;
         $doctor_id = (int)($_POST['doctor_id'] ?? 0);
-        $visit_type_key = $_POST['visit_type'] ?? 'new_patient';
+        
+        // ================================================================
+        // ✅ FIXED: Get service_id from POST
+        // ================================================================
+        $service_id = isset($_POST['visit_type']) ? (int)$_POST['visit_type'] : 0;
+        
+        // ================================================================
+        // ✅ CRITICAL FIX: Fetch service details from database directly
+        // ================================================================
+        if ($service_id > 0) {
+            $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE id = ? AND is_active = 1");
+            $stmt->execute([$service_id]);
+            $service = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($service) {
+                $visit_type_name = $service['service_name'];  // e.g. "Specialist Consultation"
+                $consultation_fee = (float)$service['price']; // 30000
+                $service_id_to_store = $service['id'];        // 6
+            } else {
+                $visit_type_name = 'General Consultation';
+                $consultation_fee = 15000;
+                $service_id_to_store = null;
+                error_log("⚠️ WARNING: Service ID $service_id not found in database");
+            }
+        } else {
+            // Use default if no service selected
+            $visit_type_name = 'General Consultation';
+            $consultation_fee = 15000;
+            $service_id_to_store = null;
+        }
+        
         $symptoms = trim($_POST['symptoms'] ?? '');
         $complaint = trim($_POST['complaint'] ?? '');
         $notes = trim($_POST['notes'] ?? '');
         
-        // ✅ Get consultation fee from selected visit type
-        $consultation_fee = $visit_type_options[$visit_type_key]['price'] ?? 0;
-        $visit_type_name = $visit_type_options[$visit_type_key]['name'] ?? 'New Patient';
-        $service_id = $visit_type_options[$visit_type_key]['id'] ?? null;
+        // ================================================================
+        // DEBUG - Log what we have
+        // ================================================================
+        error_log("=== SERVICE SELECTION DEBUG ===");
+        error_log("service_id from POST: " . ($_POST['visit_type'] ?? 'NOT SET'));
+        error_log("service_id parsed: " . $service_id);
+        error_log("visit_type_name: " . ($visit_type_name ?? 'NULL'));
+        error_log("consultation_fee: " . ($consultation_fee ?? 'NULL'));
+        error_log("service_id_to_store: " . ($service_id_to_store ?? 'NULL'));
         
         // Validation
         $errors = [];
@@ -440,7 +477,6 @@ try {
         $duplicate_error = '';
         
         if (empty($errors)) {
-            // 1. Check by phone
             if (!empty($phone)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE phone = ? AND branch_id = ?");
                 $stmt->execute([$phone, $branch_id]);
@@ -452,7 +488,6 @@ try {
                 }
             }
             
-            // 2. Check by email
             if (empty($duplicate_error) && !empty($email)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, email FROM patients WHERE email = ? AND branch_id = ?");
                 $stmt->execute([$email, $branch_id]);
@@ -464,7 +499,6 @@ try {
                 }
             }
             
-            // 3. Check by name + phone
             if (empty($duplicate_error) && !empty($full_name) && !empty($phone)) {
                 $stmt = $db->prepare("SELECT id, full_name, patient_id, phone FROM patients WHERE full_name = ? AND phone = ? AND branch_id = ?");
                 $stmt->execute([$full_name, $phone, $branch_id]);
@@ -476,7 +510,6 @@ try {
             }
         }
         
-        // If duplicate found, show error
         if (!empty($duplicate_error)) {
             $message = $duplicate_error;
             $message_type = 'error';
@@ -484,14 +517,8 @@ try {
             try {
                 $db->beginTransaction();
                 
-                // ================================================================
-                // ✅ 1. GENERATE FINAL UNIQUE PATIENT ID (inside transaction)
-                // ================================================================
                 $final_patient_id = generateUniquePatientId($db, $branch_id);
                 
-                // ================================================================
-                // 2. INSERT PATIENT
-                // ================================================================
                 $stmt = $db->prepare("
                     INSERT INTO patients (
                         patient_id, full_name, date_of_birth, gender, phone, email, 
@@ -509,68 +536,90 @@ try {
                 $latest_patient_id = $patient_db_id;
                 
                 // ================================================================
-                // 3. CREATE VISIT
+                // 3. CREATE VISIT - ✅ FIXED
                 // ================================================================
                 $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT);
                 
-                // ✅ Status depends on doctor assignment
                 $visit_status = 'pending';
                 if ($assign_doctor && $doctor_id > 0) {
                     $visit_status = 'assigned';
                 }
                 
-                // visit_type is 'new' for new patients
-                $visit_type_db = 'new';
-                
-                // ✅ consultation_fee: 0 if no doctor assigned, otherwise service price
+                // ================================================================
+                // ✅ CRITICAL FIX: visit_type = service_name, service_id = id
+                // ================================================================
                 $consultation_fee_to_store = ($assign_doctor && $doctor_id > 0) ? $consultation_fee : 0;
                 
-                // ✅ INSERT VISIT - using existing columns
+                // Debug log
+                error_log("=== SAVING VISIT ===");
+                error_log("visit_type_name: " . $visit_type_name);
+                error_log("service_id_to_store: " . $service_id_to_store);
+                error_log("consultation_fee: " . $consultation_fee);
+                
+                // ================================================================
+                // ✅ INSERT with both visit_type and service_id
+                // ================================================================
                 $stmt = $db->prepare("
                     INSERT INTO visits (
-                        visit_number, patient_id, receptionist_id, 
-                        branch_id, visit_type, status, 
-                        doctor_id,
-                        symptoms, complaint, notes,
+                        visit_number, 
+                        visit_date,
+                        patient_id, 
+                        receptionist_id, 
+                        branch_id, 
+                        visit_type,
+                        service_id,
                         consultation_fee,
-                        created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                        status, 
+                        doctor_id,
+                        symptoms, 
+                        complaint, 
+                        notes,
+                        created_at, 
+                        updated_at
+                    ) VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
                 ");
                 $stmt->execute([
                     $visit_number, 
                     $patient_db_id, 
                     $user_id, 
                     $branch_id,
-                    $visit_type_db,
+                    $visit_type_name,        // ✅ "Specialist Consultation"
+                    $service_id_to_store,     // ✅ 6
+                    $consultation_fee_to_store,
                     $visit_status,
                     $assign_doctor && $doctor_id > 0 ? $doctor_id : null,
                     $symptoms,
                     $complaint,
-                    $notes,
-                    $consultation_fee_to_store
+                    $notes
                 ]);
                 $visit_id = $db->lastInsertId();
                 $latest_visit_id = $visit_id;
                 
                 // ================================================================
-                // 4. ✅ IF DOCTOR ASSIGNED → CREATE BILL WITH FEE
-                //    ✅ IF NO DOCTOR → NO BILL (fee = 0)
+                // VERIFY visit_type was saved correctly
+                // ================================================================
+                $stmt_verify = $db->prepare("SELECT visit_type, service_id, consultation_fee FROM visits WHERE id = ?");
+                $stmt_verify->execute([$visit_id]);
+                $verify = $stmt_verify->fetch(PDO::FETCH_ASSOC);
+                error_log("=== VERIFY SAVED VISIT ===");
+                error_log("visit_type saved: " . ($verify['visit_type'] ?? 'NULL'));
+                error_log("service_id saved: " . ($verify['service_id'] ?? 'NULL'));
+                error_log("consultation_fee saved: " . ($verify['consultation_fee'] ?? 'NULL'));
+                
+                // ================================================================
+                // 4. IF DOCTOR ASSIGNED → CREATE BILL WITH FEE
                 // ================================================================
                 $bill_created = false;
                 $bill_number = null;
                 
                 if ($assign_doctor && $doctor_id > 0) {
-                    // Update patient's assigned doctor
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
                     $stmt->execute([$doctor_id, $patient_db_id]);
                     
-                    // Update visit: set assigned_at timestamp
                     $stmt = $db->prepare("UPDATE visits SET assigned_at = NOW() WHERE id = ?");
                     $stmt->execute([$visit_id]);
                     
-                    // ✅ Create bill ONLY if consultation_fee > 0
                     if ($consultation_fee > 0) {
-                        // Check if bill exists
                         $stmt = $db->prepare("
                             SELECT id FROM bills 
                             WHERE visit_id = ? AND status IN ('pending', 'partial')
@@ -582,7 +631,6 @@ try {
                         if (!$existing_bill) {
                             $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_db_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
                             
-                            // Insert bill
                             $stmt = $db->prepare("
                                 INSERT INTO bills (
                                     bill_number, patient_id, visit_id, 
@@ -605,7 +653,6 @@ try {
                             ]);
                             $bill_id = $db->lastInsertId();
                             
-                            // Insert bill item
                             $stmt = $db->prepare("
                                 INSERT INTO bill_items (
                                     bill_id, patient_id, branch_id,
@@ -618,12 +665,11 @@ try {
                                 $bill_id,
                                 $patient_db_id,
                                 $branch_id,
-                                $visit_type_name,
+                                $visit_type_name,  // ✅ Uses service_name
                                 $consultation_fee,
                                 $consultation_fee
                             ]);
                             
-                            // ✅ Update visit_total in visits table
                             $stmt = $db->prepare("
                                 UPDATE visits SET 
                                     visit_total = visit_total + ?,
@@ -634,7 +680,6 @@ try {
                             
                             $bill_created = true;
                             
-                            // ✅ Notify cashiers
                             try {
                                 $stmt = $db->prepare("
                                     SELECT id FROM users 
@@ -651,7 +696,7 @@ try {
                                     $stmt->execute([
                                         $cashier['id'],
                                         $branch_id,
-                                        "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient " . htmlspecialchars($full_name)
+                                        "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient " . htmlspecialchars($full_name) . " - " . $visit_type_name
                                     ]);
                                 }
                             } catch (Exception $e) {
@@ -666,11 +711,11 @@ try {
                 $_SESSION['current_patient_id'] = $patient_db_id;
                 $_SESSION['current_visit_id'] = $visit_id;
                 
-                // ✅ Build success message
                 $message = "✅ Patient registered successfully!";
                 $message .= "<br>📋 Patient ID: <strong>$final_patient_id</strong>";
                 $message .= "<br>📋 Visit #: <strong>$visit_number</strong>";
                 $message .= "<br>📋 Visit Type: <strong>" . htmlspecialchars($visit_type_name) . "</strong>";
+                $message .= "<br>📋 Service ID: <strong>" . ($service_id_to_store ?? 'N/A') . "</strong>";
                 $message .= "<br>📋 Consultation Fee: <strong>TSh " . number_format($consultation_fee, 0) . "</strong>";
                 
                 if ($assign_doctor && $doctor_id > 0) {
@@ -708,6 +753,7 @@ try {
                 $db->rollBack();
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
+                error_log("Registration error: " . $e->getMessage());
             }
         } else {
             $message = implode('<br>', $errors);
@@ -746,9 +792,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -756,11 +799,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             --primary-bg: #E8F0FE;
             --success: #059669;
             --success-dark: #047857;
-            --success-light: #34D399;
             --success-bg: #D1FAE5;
             --danger: #DC2626;
             --danger-dark: #B91C1C;
-            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
@@ -813,9 +854,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -959,9 +997,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         .dark-toggle-btn i { font-size: 0.9rem; }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -969,9 +1004,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
@@ -1100,9 +1132,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             backdrop-filter: blur(4px);
         }
         
-        /* ================================================================
-           FORM CARD
-           ================================================================ */
         .form-card {
             background: var(--bg-card);
             border-radius: 18px;
@@ -1221,9 +1250,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             min-height: 60px;
         }
         
-        /* ================================================================
-           ALLERGIES CHECKBOXES
-           ================================================================ */
         .allergy-checkbox-group {
             display: flex;
             flex-wrap: wrap;
@@ -1263,9 +1289,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 2px 8px rgba(220, 38, 38, 0.15);
         }
         
-        /* ================================================================
-           ASSIGN DOCTOR SECTION - BLUE THEME
-           ================================================================ */
         .assign-doctor-section {
             background: var(--primary-bg);
             border-radius: 14px;
@@ -1358,9 +1381,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             animation: fadeInUp 0.3s ease forwards;
         }
         
-        /* ================================================================
-           DOCTOR STATUS
-           ================================================================ */
         .doctor-status-badge {
             display: inline-block;
             font-size: 0.6rem;
@@ -1409,9 +1429,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--text-secondary);
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1455,9 +1472,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--primary);
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .role-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -1489,9 +1503,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: #34D399;
         }
         
-        /* ================================================================
-           STATS CARD
-           ================================================================ */
         .stat-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -1525,9 +1536,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             margin-bottom: 4px;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1556,9 +1564,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1573,9 +1578,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             font-weight: 600; 
         }
         
-        /* ================================================================
-           MESSAGE ALERT
-           ================================================================ */
         .alert {
             padding: 14px 18px;
             border-radius: 12px;
@@ -1609,9 +1611,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             flex: 1;
         }
         
-        /* ================================================================
-           GRID HELPERS
-           ================================================================ */
         .grid-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -1629,9 +1628,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             }
         }
         
-        /* ================================================================
-           SYMPTOM SELECTOR
-           ================================================================ */
         .symptom-selector {
             display: flex;
             flex-wrap: wrap;
@@ -1666,9 +1662,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--primary);
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1696,9 +1689,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             .form-actions .btn { width: 100%; justify-content: center; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1714,7 +1704,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             50% { opacity: 0.5; transform: scale(0.8); }
         }
         
-        /* Fee Info Box */
         .fee-info-box {
             background: var(--warning-bg);
             border: 2px solid var(--warning);
@@ -1741,6 +1730,29 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .fee-info-box .fee-amount {
             font-weight: 700;
             font-size: 1rem;
+        }
+        
+        /* Visit type preview */
+        .visit-type-preview {
+            display: inline-block;
+            padding: 4px 14px;
+            border-radius: 20px;
+            background: var(--primary-bg);
+            color: var(--primary);
+            font-weight: 600;
+            font-size: 0.8rem;
+            border: 1px solid var(--primary-light);
+        }
+        
+        /* Service ID badge */
+        .service-id-badge {
+            display: inline-block;
+            font-size: 0.55rem;
+            padding: 1px 8px;
+            border-radius: 10px;
+            background: var(--gray-200);
+            color: var(--text-secondary);
+            margin-left: 4px;
         }
     </style>
 </head>
@@ -1869,7 +1881,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             </div>
             
             <!-- ============================================================ -->
-            <!-- ROW 2: Visit Type (from services) + Gender -->
+            <!-- ROW 2: Visit Type + Gender -->
             <!-- ============================================================ -->
             <div class="grid-2">
                 <div class="form-row">
@@ -1877,13 +1889,21 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                         <i class="fas fa-tag label-icon"></i> Patient Type <span class="required">*</span>
                     </label>
                     <select name="visit_type" class="form-control" id="visitTypeSelect" required onchange="updateFeeDisplay()">
-                        <?php foreach ($visit_type_options as $key => $option): ?>
-                            <?php $selected = ($key === $default_key) ? 'selected' : ''; ?>
-                            <option value="<?= htmlspecialchars($key) ?>" data-price="<?= $option['price'] ?>" <?= $selected ?>>
+                        <?php foreach ($visit_type_options as $id => $option): ?>
+                            <?php $selected = ($id === $default_key) ? 'selected' : ''; ?>
+                            <option value="<?= $id ?>" 
+                                    data-price="<?= $option['price'] ?>" 
+                                    data-service-name="<?= htmlspecialchars($option['service_name']) ?>"
+                                    <?= $selected ?>>
                                 <?= $option['icon'] ?? '🏥' ?> <?= htmlspecialchars($option['display_name']) ?> - TSh <?= number_format($option['price'], 0) ?>
                             </option>
                         <?php endforeach; ?>
                     </select>
+                    <div class="mt-2">
+                        <span class="visit-type-preview" id="visitTypePreview">
+                            <?= htmlspecialchars($default_service_name) ?>
+                        </span>
+                    </div>
                 </div>
                 
                 <div class="form-row">
@@ -2458,6 +2478,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         var select = document.getElementById('visitTypeSelect');
         var selectedOption = select.options[select.selectedIndex];
         var price = selectedOption.dataset.price || 0;
+        var serviceName = selectedOption.dataset.serviceName || 'Consultation';
         var formattedPrice = parseInt(price).toLocaleString();
         
         // Update all fee displays
@@ -2467,6 +2488,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         document.getElementById('feeAmountDisplay').textContent = formattedPrice;
         document.getElementById('footerFeeDisplay').textContent = 'TSh ' + formattedPrice;
         document.getElementById('statDefaultFee').textContent = formattedPrice;
+        
+        // Update visit type preview
+        var preview = document.getElementById('visitTypePreview');
+        if (preview) {
+            preview.textContent = serviceName;
+            preview.style.display = 'inline-block';
+        }
+        
+        console.log('💰 Service: ' + serviceName + ' | Fee: TSh ' + formattedPrice);
+        console.log('📋 Visit Type will be: ' + serviceName);
     }
 
     // ================================================================
@@ -2497,6 +2528,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         if (!checkbox.checked) {
             feeInfoBox.style.display = 'none';
         }
+        // Initial fee display
+        updateFeeDisplay();
     });
 
     // ================================================================
@@ -2694,16 +2727,25 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }, 2000);
         
         // Listen to visit type change
-        document.getElementById('visitTypeSelect').addEventListener('change', updateFeeDisplay);
+        document.getElementById('visitTypeSelect').addEventListener('change', function() {
+            updateFeeDisplay();
+            var selectedOption = this.options[this.selectedIndex];
+            var serviceName = selectedOption.dataset.serviceName || 'Consultation';
+            var preview = document.getElementById('visitTypePreview');
+            if (preview) {
+                preview.textContent = serviceName;
+            }
+        });
         
         console.log('%c👤 Braick - New Patient Registration (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
         console.log('%c✅ Patient ID: UNIQUE per branch, per year', 'font-size:13px; color:#34D399;');
         console.log('%c✅ Format: P-YEAR-BRANCH-XXXX (e.g. P-2026-01-0001)', 'font-size:13px; color:#34D399;');
-        console.log('%c✅ No duplicates even after deletions', 'font-size:13px; color:#34D399;');
-        console.log('%c✅ Patient Type from services table (category_id = 2)', 'font-size:13px; color:#34D399;');
-        console.log('%c💰 Fee: TSh <?= number_format($default_price, 0) ?> (from services)', 'font-size:13px; color:#FBBF24;');
-        console.log('%c👨‍⚕️ Assign doctor = Bill created & sent to Cashier', 'font-size:13px; color:#34D399;');
-        console.log('%c⏳ No doctor assigned = No bill (fee=0)', 'font-size:13px; color:#FBBF24;');
+        console.log('%c✅ visit_type = service_name from services table', 'font-size:13px; color:#FBBF24;');
+        console.log('%c✅ service_id = id from services table', 'font-size:13px; color:#0B5ED7;');
+        console.log('%c✅ consultation_fee = price from services table', 'font-size:13px; color:#FBBF24;');
+        console.log('%c✅ Assign doctor = Bill created & sent to Cashier', 'font-size:13px; color:#34D399;');
+        console.log('%c✅ No doctor assigned = No bill (fee=0)', 'font-size:13px; color:#FBBF24;');
+        console.log('%c✅ DEBUG: Check error logs for details', 'font-size:13px; color:#EF4444;');
     });
 </script>
 

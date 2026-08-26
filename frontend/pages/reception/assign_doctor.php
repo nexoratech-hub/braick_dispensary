@@ -12,6 +12,12 @@
 // 7. Lab tests have their own card with VIEW button WORKING
 // 8. View button links to lab_tests.php?id=LAB_TEST_ID
 // 9. Using NEW DATABASE: dispensary_db (bills, bill_items)
+// 10. FIXED: Visit type uses service_id from services table
+// 11. FIXED: Consultation fee fetched from services.price
+// 12. FIXED: visit_type stores service_name from services table
+// 13. FIXED: service_id stored in visits table
+// 14. FIXED: visit_type inajaza vizuri (service_name)
+// 15. FIXED: Debug logging added
 // ================================================================
 
 // ================================================================
@@ -104,7 +110,7 @@ try {
     }
     
     // ================================================================
-    // GET CONSULTATION SERVICES
+    // GET CONSULTATION SERVICES - USING SERVICE ID
     // ================================================================
     $stmt = $db->prepare("
         SELECT id, service_name, description, price, unit, is_active
@@ -127,19 +133,15 @@ try {
     $stmt->execute([$selected_branch_id]);
     $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Build visit type options
+    // Build visit type options using service_id
     $visit_type_options = [];
-    $default_key = 'general_consultation';
+    $default_service_id = null;
     
     if (!empty($consultation_services)) {
         foreach ($consultation_services as $service) {
+            $service_id = $service['id'];
             $service_name = $service['service_name'];
-            $key = strtolower(str_replace(' ', '_', $service_name));
-            $key = str_replace('-', '_', $key);
-            $key = preg_replace('/[^a-z_]/', '', $key);
-            if (empty($key)) {
-                $key = 'consultation_' . $service['id'];
-            }
+            $price = (float)$service['price'];
             
             $icon = '🏥';
             if (strpos(strtolower($service_name), 'new') !== false) $icon = '🆕';
@@ -148,37 +150,28 @@ try {
             elseif (strpos(strtolower($service_name), 'specialist') !== false) $icon = '👨‍⚕️';
             elseif (strpos(strtolower($service_name), 'general') !== false) $icon = '🏥';
             
-            $visit_type_options[$key] = [
-                'id' => $service['id'],
-                'name' => $service_name,
-                'display_name' => $service_name,
-                'price' => (float)$service['price'],
+            $visit_type_options[$service_id] = [
+                'id' => $service_id,
+                'service_name' => $service_name,
+                'price' => $price,
                 'unit' => $service['unit'] ?? 'each',
                 'description' => $service['description'] ?? '',
                 'is_active' => $service['is_active'],
                 'icon' => $icon
             ];
             
+            // Set default - New Patient or first General Consultation
             if (strpos(strtolower($service_name), 'new') !== false) {
-                $default_key = $key;
-            } elseif (strpos(strtolower($service_name), 'general') !== false && $default_key === 'general_consultation') {
-                $default_key = $key;
+                $default_service_id = $service_id;
+            } elseif (strpos(strtolower($service_name), 'general') !== false && $default_service_id === null) {
+                $default_service_id = $service_id;
             }
         }
     }
     
-    if (empty($visit_type_options)) {
-        $visit_type_options['no_visit'] = [
-            'id' => null,
-            'name' => 'No Visit Type Available',
-            'display_name' => 'No Visit Type',
-            'price' => 0,
-            'unit' => 'each',
-            'description' => 'No consultation services available for this branch.',
-            'is_active' => 1,
-            'icon' => '❌'
-        ];
-        $default_key = 'no_visit';
+    // If no default found, use first service
+    if ($default_service_id === null && !empty($visit_type_options)) {
+        $default_service_id = array_key_first($visit_type_options);
     }
     
     // ================================================================
@@ -214,6 +207,7 @@ try {
             v.status as visit_status,
             v.visit_number,
             v.visit_type,
+            v.service_id,
             v.consultation_fee,
             v.lab_fees_total,
             v.pharmacy_fees_total,
@@ -355,7 +349,7 @@ try {
     // ================================================================
     // FUNCTION: CREATE VISIT BILL
     // ================================================================
-    function createVisitBill($db, $patient_id, $visit_id, $visit_type, $consultation_fee, $user_id, $branch_id) {
+    function createVisitBill($db, $patient_id, $visit_id, $service_name, $consultation_fee, $user_id, $branch_id) {
         $stmt = $db->prepare("
             SELECT id, bill_number, status 
             FROM bills 
@@ -386,7 +380,7 @@ try {
                 SET unit_price = ?, total_price = ?, item_name = ?
                 WHERE bill_id = ? AND item_type = 'consultation'
             ");
-            $item_name = 'Consultation (' . ucfirst(str_replace('_', ' ', $visit_type)) . ')';
+            $item_name = 'Consultation: ' . $service_name;
             $stmt->execute([$consultation_fee, $consultation_fee, $item_name, $existing_bill['id']]);
             
             $stmt = $db->prepare("UPDATE visits SET consultation_fee = ? WHERE id = ?");
@@ -422,7 +416,7 @@ try {
         ]);
         $bill_id = $db->lastInsertId();
         
-        $item_name = 'Consultation (' . ucfirst(str_replace('_', ' ', $visit_type)) . ')';
+        $item_name = 'Consultation: ' . $service_name;
         
         $stmt = $db->prepare("
             INSERT INTO bill_items (
@@ -449,7 +443,7 @@ try {
                 $stmt->execute([
                     $cashier['id'],
                     $branch_id,
-                    "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient ID #$patient_id",
+                    "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient ID #$patient_id - $service_name",
                     "cashier_dashboard.php"
                 ]);
             }
@@ -492,6 +486,8 @@ try {
                         v.status as visit_status,
                         v.visit_number,
                         v.consultation_fee,
+                        v.service_id,
+                        v.visit_type,
                         v.lab_fees_total,
                         v.pharmacy_fees_total,
                         v.other_fees_total,
@@ -500,7 +496,6 @@ try {
                         v.total_discount,
                         v.discount_percent,
                         v.doctor_id as visit_doctor_id,
-                        v.visit_type,
                         v.created_at as visit_created_at,
                         DATEDIFF(NOW(), p.created_at) as patient_days
                     FROM patients p
@@ -549,19 +544,15 @@ try {
                 $stmt->execute([$selected_branch_id]);
                 $updated_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
-                // Build visit type options HTML
+                // Build visit type options HTML using service_id
                 $visit_type_options_html = '';
                 if (empty($updated_services)) {
-                    $visit_type_options_html .= '<option value="no_visit" data-price="0" selected disabled>❌ No Visit Type Available</option>';
+                    $visit_type_options_html .= '<option value="" data-price="0" selected disabled>❌ No Visit Type Available</option>';
                 } else {
                     foreach ($updated_services as $service) {
+                        $service_id = $service['id'];
                         $service_name = $service['service_name'];
-                        $key = strtolower(str_replace(' ', '_', $service_name));
-                        $key = str_replace('-', '_', $key);
-                        $key = preg_replace('/[^a-z_]/', '', $key);
-                        if (empty($key)) {
-                            $key = 'consultation_' . ($service['id'] ?? rand(100, 999));
-                        }
+                        $price = $service['price'] ?? 0;
                         
                         $icon = '🏥';
                         if (strpos(strtolower($service_name), 'new') !== false) $icon = '🆕';
@@ -570,12 +561,11 @@ try {
                         elseif (strpos(strtolower($service_name), 'specialist') !== false) $icon = '👨‍⚕️';
                         elseif (strpos(strtolower($service_name), 'general') !== false) $icon = '🏥';
                         
-                        $price = $service['price'] ?? 0;
                         $selected = (strpos(strtolower($service_name), 'new') !== false || 
                                     strpos(strtolower($service_name), 'general') !== false) ? 'selected' : '';
                         
                         $visit_type_options_html .= '
-                            <option value="' . htmlspecialchars($key) . '" data-price="' . $price . '" data-id="' . ($service['id'] ?? '') . '" ' . $selected . '>
+                            <option value="' . $service_id . '" data-price="' . $price . '" data-service-name="' . htmlspecialchars($service_name) . '" ' . $selected . '>
                                 ' . $icon . ' ' . htmlspecialchars($service_name) . ' - TSh ' . number_format($price, 0) . '
                             </option>
                         ';
@@ -677,6 +667,7 @@ try {
                             <td style="padding:10px 12px;font-weight:500;">
                                 ' . htmlspecialchars($p['full_name']) . '
                                 ' . $assigned_days_text . '
+                                <span class="text-xs text-gray-400 block">' . htmlspecialchars($p['visit_type'] ?? 'Consultation') . '</span>
                             </td>
                             <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;">' . htmlspecialchars($p['patient_id'] ?? 'N/A') . '</td>
                             <td style="padding:10px 12px;">
@@ -709,9 +700,7 @@ try {
                     ';
                 }
                 
-                // ================================================================
-                // LAB ONLY PATIENTS LIST - FIXED VIEW LINK
-                // ================================================================
+                // LAB ONLY PATIENTS LIST
                 $lab_only_html = '';
                 $lab_only_count_list = 0;
                 foreach ($updated_patients as $p) {
@@ -721,7 +710,6 @@ try {
                     
                     $lab_only_count_list++;
                     
-                    // ✅ GET LAB TEST ID
                     $lab_test_id = 0;
                     $lab_test_name = '';
                     $stmt2 = $db->prepare("SELECT id, test_name FROM lab_tests WHERE patient_id = ? AND status = 'pending' ORDER BY id DESC LIMIT 1");
@@ -741,7 +729,6 @@ try {
                     $lab_status_text = '🧪 Pending';
                     $lab_status_class = 'lab_only';
                     
-                    // ✅ FIXED VIEW LINK
                     if ($lab_test_id > 0) {
                         $view_link = '<a href="lab_tests.php?id=' . $lab_test_id . '" class="btn-modern btn-modern-purple btn-modern-sm" style="padding:4px 12px;font-size:0.7rem;background:var(--purple);color:white;border-radius:6px;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
                             <i class="fas fa-eye"></i> View
@@ -889,6 +876,8 @@ try {
                             v.status as visit_status, 
                             v.visit_number,
                             v.consultation_fee,
+                            v.service_id,
+                            v.visit_type,
                             v.lab_fees_total,
                             v.pharmacy_fees_total,
                             v.other_fees_total,
@@ -897,7 +886,6 @@ try {
                             v.total_discount,
                             v.discount_percent,
                             v.doctor_id as visit_doctor_id,
-                            v.visit_type,
                             v.created_at as visit_date,
                             DATEDIFF(NOW(), p.created_at) as patient_days,
                             DATEDIFF(NOW(), v.created_at) as visit_days
@@ -921,7 +909,8 @@ try {
                             'assigned_doctor_id' => $patient['assigned_doctor_id'] ?? null,
                             'is_lab_only' => ($patient['visit_status'] === 'lab_test' && empty($patient['visit_doctor_id'])),
                             'consultation_fee' => $consultation_fee,
-                            'visit_type' => $patient['visit_type'] ?? 'general_consultation',
+                            'service_id' => $patient['service_id'] ?? null,
+                            'visit_type' => $patient['visit_type'] ?? '',
                             'patient_days' => $patient['patient_days'] ?? 0,
                             'visit_days' => $patient['visit_days'] ?? 0,
                             'lab_fees_total' => $patient['lab_fees_total'] ?? 0,
@@ -943,14 +932,13 @@ try {
         }
         
         // ================================================================
-        // AJAX: CHANGE DOCTOR WITH LAB TESTS
+        // AJAX: CHANGE DOCTOR WITH LAB TESTS - FIXED visit_type
         // ================================================================
         if ($action === 'change_doctor') {
             header('Content-Type: application/json');
             
             $patient_id = (int)($_POST['patient_id'] ?? 0);
             $doctor_id = (int)($_POST['doctor_id'] ?? 0);
-            $visit_type_key = $_POST['visit_type'] ?? 'general_consultation';
             $service_id = (int)($_POST['service_id'] ?? 0);
             $symptoms = trim($_POST['symptoms'] ?? '');
             $complaint = trim($_POST['complaint'] ?? '');
@@ -981,6 +969,54 @@ try {
             try {
                 $db->beginTransaction();
                 
+                // ================================================================
+                // STEP 1: GET SERVICE DETAILS - HAKIKISHA service_name inapatikana
+                // ================================================================
+                $service_name = 'General Consultation'; // DEFAULT
+                $consultation_fee = 0;
+                
+                // Enable error logging for debugging
+                error_log("=== CHANGE DOCTOR DEBUG ===");
+                error_log("Service ID received: " . $service_id);
+                error_log("Patient ID: " . $patient_id);
+                error_log("Doctor ID: " . $doctor_id);
+                error_log("Is lab only: " . ($is_lab_only ? 'YES' : 'NO'));
+                
+                if ($service_id > 0 && !$is_lab_only) {
+                    $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE id = ? AND is_active = 1");
+                    $stmt->execute([$service_id]);
+                    $service = $stmt->fetch(PDO::FETCH_ASSOC);
+                    
+                    if ($service) {
+                        $service_name = $service['service_name'];
+                        $consultation_fee = (float)$service['price'];
+                        error_log("Service FOUND: " . $service_name . " - Price: " . $consultation_fee . " - ID: " . $service['id']);
+                    } else {
+                        error_log("Service NOT FOUND for ID: " . $service_id);
+                        // Try to get any active consultation service as fallback
+                        $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL) LIMIT 1");
+                        $stmt->execute([$selected_branch_id]);
+                        $fallback_service = $stmt->fetch(PDO::FETCH_ASSOC);
+                        if ($fallback_service) {
+                            $service_name = $fallback_service['service_name'];
+                            $consultation_fee = (float)$fallback_service['price'];
+                            error_log("Fallback service used: " . $service_name . " - ID: " . $fallback_service['id']);
+                        } else {
+                            error_log("NO fallback service found!");
+                        }
+                    }
+                } else if ($is_lab_only) {
+                    $service_name = 'Lab Only';
+                    $consultation_fee = 0;
+                    error_log("Lab only mode - service_name set to: " . $service_name);
+                } else {
+                    error_log("No service_id provided or service_id <= 0");
+                }
+                
+                error_log("Final service_name: " . $service_name);
+                error_log("Final consultation_fee: " . $consultation_fee);
+                
+                // GET DOCTOR INFO
                 $doctor_name = 'No Doctor Assigned';
                 $doctor_online = 0;
                 if ($doctor_id > 0) {
@@ -990,16 +1026,13 @@ try {
                     if ($doctor) {
                         $doctor_name = $doctor['full_name'];
                         $doctor_online = $doctor['is_online'] ?? 0;
+                        error_log("Doctor found: " . $doctor_name . " - Online: " . $doctor_online);
                     }
                 }
                 
-                $consultation_fee = 0;
-                if (!$is_lab_only && $doctor_id > 0) {
-                    $consultation_fee = $visit_type_options[$visit_type_key]['price'] ?? 0;
-                }
-                
+                // CHECK IF VISIT EXISTS
                 $stmt = $db->prepare("
-                    SELECT id, status, doctor_id, visit_number, visit_type
+                    SELECT id, status, doctor_id, visit_number, visit_type, service_id
                     FROM visits 
                     WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
                     AND branch_id = ?
@@ -1012,17 +1045,31 @@ try {
                 $visit_number = '';
                 $bill_result = null;
                 
+                // ================================================================
+                // STEP 2: SET visit_type = service_name, store service_id
+                // ================================================================
+                $visit_type_to_store = $is_lab_only ? 'Lab Only' : $service_name;
+                $service_id_to_store = $is_lab_only ? null : ($service_id > 0 ? $service_id : null);
+                
+                error_log("visit_type to store: " . $visit_type_to_store);
+                error_log("service_id to store: " . ($service_id_to_store ?? 'NULL'));
+                error_log("consultation_fee to store: " . $consultation_fee);
+                
                 if ($existing_visit) {
                     $visit_id = $existing_visit['id'];
                     $visit_number = $existing_visit['visit_number'];
                     
-                    $visit_type_to_store = $is_lab_only ? 'lab_only' : $visit_type_key;
+                    $visit_status = ($is_lab_only && !empty($lab_test_ids)) ? 'lab_test' : 
+                                    ($is_lab_only ? 'pending' : 'assigned');
+                    
+                    $doctor_id_to_store = ($is_lab_only) ? null : ($doctor_id > 0 ? $doctor_id : null);
                     
                     $stmt = $db->prepare("
                         UPDATE visits 
                         SET doctor_id = ?, 
                             status = ?,
                             visit_type = ?,
+                            service_id = ?,
                             symptoms = ?,
                             complaint = ?,
                             notes = ?,
@@ -1031,15 +1078,11 @@ try {
                         WHERE id = ?
                     ");
                     
-                    $visit_status = ($is_lab_only && !empty($lab_test_ids)) ? 'lab_test' : 
-                                    ($is_lab_only ? 'pending' : 'assigned');
-                    
-                    $doctor_id_to_store = ($is_lab_only) ? null : ($doctor_id > 0 ? $doctor_id : null);
-                    
                     $stmt->execute([
                         $doctor_id_to_store,
                         $visit_status,
-                        $visit_type_to_store,
+                        $visit_type_to_store,      // <-- service_name
+                        $service_id_to_store,      // <-- service_id
                         $symptoms,
                         $complaint,
                         $notes,
@@ -1047,10 +1090,10 @@ try {
                         $visit_id
                     ]);
                     
+                    error_log("Visit UPDATED - ID: " . $visit_id . ", visit_type: " . $visit_type_to_store . ", service_id: " . ($service_id_to_store ?? 'NULL'));
+                    
                 } else {
                     $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                    
-                    $visit_type_to_store = $is_lab_only ? 'lab_only' : $visit_type_key;
                     
                     $visit_status = ($is_lab_only && !empty($lab_test_ids)) ? 'lab_test' : 
                                     ($is_lab_only ? 'pending' : 'assigned');
@@ -1060,16 +1103,17 @@ try {
                     $stmt = $db->prepare("
                         INSERT INTO visits (
                             visit_number, patient_id, doctor_id, branch_id, 
-                            visit_type, status, symptoms, complaint, notes, 
+                            visit_type, service_id, status, symptoms, complaint, notes, 
                             created_at, updated_at, consultation_fee, receptionist_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?)
                     ");
                     $stmt->execute([
                         $visit_number, 
                         $patient_id, 
                         $doctor_id_to_store, 
                         $selected_branch_id, 
-                        $visit_type_to_store, 
+                        $visit_type_to_store,      // <-- service_name
+                        $service_id_to_store,      // <-- service_id
                         $visit_status, 
                         $symptoms, 
                         $complaint, 
@@ -1078,25 +1122,33 @@ try {
                         $user_id
                     ]);
                     $visit_id = $db->lastInsertId();
+                    
+                    error_log("Visit INSERTED - ID: " . $visit_id . ", visit_type: " . $visit_type_to_store . ", service_id: " . ($service_id_to_store ?? 'NULL'));
                 }
                 
+                // UPDATE PATIENT ASSIGNED DOCTOR
                 if ($doctor_id > 0 && !$is_lab_only) {
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
                     $stmt->execute([$doctor_id, $patient_id]);
+                    error_log("Patient assigned_doctor_id updated to: " . $doctor_id);
                 } elseif ($is_lab_only) {
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
                     $stmt->execute([$patient_id]);
+                    error_log("Patient assigned_doctor_id set to NULL (lab only)");
                 }
                 
+                // CREATE BILL
                 $bill_result = null;
                 $bill_created = false;
                 if (!$is_lab_only && $consultation_fee > 0 && $doctor_id > 0) {
-                    $bill_result = createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consultation_fee, $user_id, $selected_branch_id);
+                    $bill_result = createVisitBill($db, $patient_id, $visit_id, $service_name, $consultation_fee, $user_id, $selected_branch_id);
                     if ($bill_result && $bill_result['status'] === 'created') {
                         $bill_created = true;
+                        error_log("Bill created: " . $bill_result['bill_number']);
                     }
                 }
                 
+                // CREATE LAB TESTS
                 $lab_created = false;
                 $total_lab_fee = 0;
                 $lab_test_ids_created = [];
@@ -1136,9 +1188,11 @@ try {
                         WHERE id = ?
                     ");
                     $stmt->execute([$total_lab_fee, $total_lab_fee, $visit_id]);
+                    
+                    error_log("Lab tests created: " . count($lab_test_ids) . " tests, total fee: " . $total_lab_fee);
                 }
                 
-                // Save vital signs
+                // SAVE VITAL SIGNS
                 $temperature = $_POST['temperature'] ?? null;
                 $bp_systolic = $_POST['bp_systolic'] ?? null;
                 $bp_diastolic = $_POST['bp_diastolic'] ?? null;
@@ -1182,10 +1236,13 @@ try {
                         $bmi,
                         $vital_notes ?: null
                     ]);
+                    error_log("Vital signs saved for patient: " . $patient_id);
                 }
                 
                 $db->commit();
+                error_log("=== TRANSACTION COMMITTED SUCCESSFULLY ===");
                 
+                // BUILD RESPONSE
                 $fee_text = '';
                 if (!$is_lab_only && $consultation_fee > 0 && $doctor_id > 0) {
                     $fee_text = ' - Fee: TSh ' . number_format($consultation_fee);
@@ -1206,7 +1263,7 @@ try {
                 $doctor_text = '';
                 if ($doctor_id > 0 && !$is_lab_only) {
                     $online_text = $doctor_online == 1 ? '🟢 Online' : '⚪ Offline';
-                    $doctor_text = "Doctor <strong>$doctor_name</strong> ($online_text) assigned";
+                    $doctor_text = "Doctor <strong>$doctor_name</strong> ($online_text) assigned - $service_name";
                 } else {
                     $doctor_text = "🧪 Lab tests requested - No doctor assigned";
                 }
@@ -1217,7 +1274,8 @@ try {
                 $response['doctor_name'] = $doctor_name;
                 $response['patient_id'] = $patient_id;
                 $response['bill'] = $bill_result;
-                $response['visit_type'] = $visit_type_to_store;
+                $response['service_name'] = $service_name;
+                $response['service_id'] = $service_id;
                 $response['doctor_online'] = $doctor_online;
                 $response['bill_sent_to_cashier'] = $bill_created;
                 $response['lab_tests_added'] = $lab_created;
@@ -1225,10 +1283,13 @@ try {
                 $response['has_doctor'] = ($doctor_id > 0 && !$is_lab_only);
                 $response['total_lab_fee'] = $total_lab_fee;
                 $response['lab_test_ids'] = $lab_test_ids_created;
+                $response['visit_type'] = $visit_type_to_store;
                 
             } catch (Exception $e) {
                 $db->rollBack();
                 $response['message'] = '❌ Error: ' . $e->getMessage();
+                error_log("ERROR in change_doctor: " . $e->getMessage());
+                error_log("Stack trace: " . $e->getTraceAsString());
             }
             
             echo json_encode($response);
@@ -2160,7 +2221,6 @@ include_once '../../components/reception_sidebar.php';
             border: 1px solid var(--purple);
         }
         
-        /* No Doctor Required Message */
         .no-doctor-required {
             background: var(--purple-bg);
             border: 2px solid var(--purple);
@@ -2343,7 +2403,7 @@ include_once '../../components/reception_sidebar.php';
                     <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
                         <thead>
                             <tr style="border-bottom:2px solid var(--border-color);">
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient / Days</th>
+                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient / Service</th>
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Patient ID</th>
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Assigned Doctor</th>
                                 <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
@@ -2362,6 +2422,7 @@ include_once '../../components/reception_sidebar.php';
                                     <td style="padding:10px 12px;font-weight:500;">
                                         <?= htmlspecialchars($patient['full_name']) ?>
                                         <?= $days_text ?>
+                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($patient['visit_type'] ?? 'Consultation') ?></span>
                                     </td>
                                     <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
                                     <td style="padding:10px 12px;">
@@ -2402,7 +2463,7 @@ include_once '../../components/reception_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- LAB TESTS CARD - FIXED VIEW BUTTON -->
+    <!-- LAB TESTS CARD -->
     <!-- ================================================================ -->
     <div class="modern-card animate-fade-in-up" style="animation-delay:0.15s;border-color:var(--purple);">
         <div class="card-header">
@@ -2440,7 +2501,6 @@ include_once '../../components/reception_sidebar.php';
                                 }
                                 $days_text = $lab_days > 0 ? '<span class="assigned-days-badge-blue">' . $lab_days . ' days</span>' : '<span class="assigned-days-badge-blue new">Just requested</span>';
                                 
-                                // ✅ GET LAB TEST ID
                                 $lab_test_id = 0;
                                 $lab_test_name = '';
                                 try {
@@ -2456,7 +2516,6 @@ include_once '../../components/reception_sidebar.php';
                                 $status_label = '🧪 Pending';
                                 $status_class = 'lab_only';
                                 
-                                // ✅ FIXED VIEW LINK
                                 if ($lab_test_id > 0) {
                                     $view_link = '<a href="lab_tests.php?id=' . $lab_test_id . '" class="btn-modern btn-modern-purple btn-modern-sm" style="padding:4px 12px;font-size:0.7rem;background:var(--purple);color:white;border-radius:6px;text-decoration:none;display:inline-flex;align-items:center;gap:4px;">
                                         <i class="fas fa-eye"></i> View
@@ -2642,6 +2701,9 @@ include_once '../../components/reception_sidebar.php';
                                 <?php else: ?>
                                     <span class="text-gray-400 text-xs">No doctor assigned</span>
                                 <?php endif; ?>
+                                <?php if (!empty($selected_patient_data['visit_type'])): ?>
+                                    <span class="text-xs text-primary">📋 <?= htmlspecialchars($selected_patient_data['visit_type']) ?></span>
+                                <?php endif; ?>
                                 <?php if ($change_mode): ?>
                                     <span class="text-xs text-yellow-500 font-bold" style="background:var(--warning-bg);padding:2px 8px;border-radius:12px;">
                                         🔄 Change Mode
@@ -2664,7 +2726,7 @@ include_once '../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- ROW 2: DOCTOR & VISIT TYPE -->
+            <!-- ROW 2: DOCTOR & VISIT TYPE (SERVICE ID) -->
             <div class="grid-2-modern" id="doctorSection">
                 <div class="form-row-modern" id="doctorSelectCard">
                     <label class="form-label">
@@ -2726,11 +2788,11 @@ include_once '../../components/reception_sidebar.php';
                 
                 <div class="form-row-modern" id="visitTypeSection">
                     <label class="form-label">
-                        <i class="fas fa-tag label-icon"></i> Visit Type <span class="required">*</span>
+                        <i class="fas fa-tag label-icon"></i> Visit Type (Service) <span class="required">*</span>
                         <span class="label-badge" id="visitTypePrice">
                             <?php 
-                            if (isset($visit_type_options[$default_key])) {
-                                echo 'Fee: TSh ' . number_format($visit_type_options[$default_key]['price'] ?? 0, 0);
+                            if (isset($visit_type_options[$default_service_id])) {
+                                echo 'Fee: TSh ' . number_format($visit_type_options[$default_service_id]['price'] ?? 0, 0);
                             } else {
                                 echo 'Fee: TSh 0';
                             }
@@ -2738,33 +2800,26 @@ include_once '../../components/reception_sidebar.php';
                         </span>
                         <span id="consultationFeeDisplay" style="font-size:0.7rem;color:var(--text-secondary);margin-left:8px;"></span>
                     </label>
-                    <select name="visit_type" class="form-control-modern" id="visitTypeSelect" onchange="updateVisitTypePrice()">
+                    <select name="service_id" class="form-control-modern" id="visitTypeSelect" onchange="updateVisitTypePrice()">
                         <?php if (!empty($visit_type_options) && is_array($visit_type_options)): ?>
-                            <?php foreach ($visit_type_options as $key => $option): 
-                                $is_default = ($key === $default_key);
-                                $selected = $is_default ? 'selected' : '';
+                            <?php foreach ($visit_type_options as $service_id => $option): 
                                 $price = $option['price'] ?? 0;
                                 $icon = $option['icon'] ?? '🏥';
-                                $display_name = $option['display_name'] ?? $option['name'] ?? 'Consultation';
-                                $disabled = ($key === 'no_visit') ? 'disabled' : '';
+                                $service_name = $option['service_name'] ?? 'Consultation';
+                                $selected = ($service_id === $default_service_id) ? 'selected' : '';
                             ?>
-                                <option value="<?= htmlspecialchars($key) ?>" data-price="<?= $price ?>" data-id="<?= $option['id'] ?? '' ?>" <?= $selected ?> <?= $disabled ?>>
-                                    <?= $icon ?> <?= htmlspecialchars($display_name) ?> 
-                                    <?php if ($price > 0): ?>
-                                        - TSh <?= number_format($price, 0) ?>
-                                    <?php else: ?>
-                                        (No services available)
-                                    <?php endif; ?>
+                                <option value="<?= $service_id ?>" data-price="<?= $price ?>" data-service-name="<?= htmlspecialchars($service_name) ?>" <?= $selected ?>>
+                                    <?= $icon ?> <?= htmlspecialchars($service_name) ?> - TSh <?= number_format($price, 0) ?>
                                 </option>
                             <?php endforeach; ?>
                         <?php else: ?>
-                            <option value="no_visit" data-price="0" selected disabled>❌ No Visit Type Available</option>
+                            <option value="" data-price="0" selected disabled>❌ No Visit Type Available</option>
                         <?php endif; ?>
                     </select>
                     <p class="text-xs text-gray-400 mt-1" id="visitTypeDescription">
                         <i class="fas fa-info-circle mr-1"></i> 
-                        <?php if (isset($visit_type_options[$default_key])): ?>
-                            <?= $visit_type_options[$default_key]['description'] ?? 'Select a visit type' ?>
+                        <?php if (isset($visit_type_options[$default_service_id])): ?>
+                            <?= $visit_type_options[$default_service_id]['description'] ?? 'Select a visit type' ?>
                         <?php else: ?>
                             No consultation services available for this branch
                         <?php endif; ?>
@@ -2979,7 +3034,7 @@ include_once '../../components/reception_sidebar.php';
             
             <div class="mt-4 pt-3 text-xs text-gray-400 text-center border-t border-gray-200 dark:border-gray-700">
                 <i class="fas fa-info-circle mr-1"></i>
-                <strong>Visit Type Change:</strong> If visit type changes, old bill is canceled and new bill created.
+                <strong>Visit Type:</strong> Uses Service ID from services table. Fee from services.price.
                 <span class="mx-2">|</span>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
                 <span class="mx-2">|</span>
@@ -3421,15 +3476,31 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // VISIT TYPE PRICE
+    // VISIT TYPE PRICE - FIXED FOR SERVICE ID
     // ================================================================
     function updateVisitTypePrice() {
         var select = document.getElementById('visitTypeSelect');
         var priceDisplay = document.getElementById('visitTypePrice');
-        if (!select || !priceDisplay) return;
+        var feeDisplay = document.getElementById('consultationFeeDisplay');
+        var descriptionEl = document.getElementById('visitTypeDescription');
+        
+        if (!select) return;
+        
         var selectedOption = select.options[select.selectedIndex];
         var price = selectedOption.dataset.price || 0;
-        priceDisplay.textContent = 'Fee: TSh ' + parseInt(price).toLocaleString();
+        var serviceName = selectedOption.dataset.serviceName || 'Consultation';
+        
+        if (priceDisplay) {
+            priceDisplay.textContent = 'Fee: TSh ' + parseInt(price).toLocaleString();
+        }
+        
+        if (feeDisplay) {
+            feeDisplay.textContent = '💵 ' + serviceName + ' - TSh ' + parseInt(price).toLocaleString();
+        }
+        
+        if (descriptionEl) {
+            descriptionEl.textContent = '📋 ' + serviceName + ' | Fee: TSh ' + parseInt(price).toLocaleString();
+        }
     }
 
     // ================================================================
@@ -3484,6 +3555,11 @@ include_once '../../components/reception_sidebar.php';
                             visitDaysHtml = '<span class="assigned-days-badge-blue">Assigned: ' + data.visit_days + ' days ago</span>';
                         }
                         
+                        var visitTypeHtml = '';
+                        if (data.visit_type) {
+                            visitTypeHtml = '<span class="text-xs text-primary">📋 ' + escapeHtml(data.visit_type) + '</span>';
+                        }
+                        
                         var changeModeHtml = '';
                         if (<?= $change_mode ? 'true' : 'false' ?>) {
                             changeModeHtml = '<span class="text-xs text-yellow-500 font-bold" style="background:var(--warning-bg);padding:2px 8px;border-radius:12px;">🔄 Change Mode</span>';
@@ -3497,6 +3573,7 @@ include_once '../../components/reception_sidebar.php';
                                 <span>${escapeHtml(data.patient.patient_id || '')}</span>
                                 ${daysHtml}
                                 ${visitDaysHtml}
+                                ${visitTypeHtml}
                                 ${doctorHtml}
                                 ${changeModeHtml}
                             </div>
@@ -3690,7 +3767,7 @@ include_once '../../components/reception_sidebar.php';
     });
 
     // ================================================================
-    // FORM SUBMIT HANDLER
+    // FORM SUBMIT HANDLER - FIXED FOR SERVICE ID
     // ================================================================
     document.getElementById('assignForm')?.addEventListener('submit', function(e) {
         e.preventDefault();
@@ -3698,21 +3775,20 @@ include_once '../../components/reception_sidebar.php';
         var formData = new FormData(this);
         formData.append('action', 'change_doctor');
         
+        // Get service_id from visit type select
+        var visitTypeSelect = document.getElementById('visitTypeSelect');
+        if (visitTypeSelect) {
+            var serviceId = visitTypeSelect.value;
+            formData.append('service_id', serviceId);
+            console.log('Submitting service_id:', serviceId);
+        }
+        
         var hiddenInput = document.getElementById('selectedLabTestsInput');
         if (hiddenInput && hiddenInput.value) {
             var ids = hiddenInput.value.split(',');
             ids.forEach(function(id) {
                 if (id) formData.append('lab_test_ids[]', id);
             });
-        }
-        
-        var visitTypeSelect = document.getElementById('visitTypeSelect');
-        if (visitTypeSelect) {
-            var visitType = visitTypeSelect.value;
-            formData.append('visit_type', visitType);
-            var selectedOption = visitTypeSelect.options[visitTypeSelect.selectedIndex];
-            var serviceId = selectedOption.dataset.id || '';
-            formData.append('service_id', serviceId);
         }
         
         var btn = document.getElementById('assignBtn');
@@ -3760,6 +3836,11 @@ include_once '../../components/reception_sidebar.php';
                         }
                     }
                     
+                    var serviceMessage = '';
+                    if (data.service_name && !data.is_lab_only) {
+                        serviceMessage = ' 📋 ' + data.service_name;
+                    }
+                    
                     var doctorMessage = '';
                     if (data.has_doctor) {
                         doctorMessage = ' ✅ Doctor assigned';
@@ -3767,7 +3848,7 @@ include_once '../../components/reception_sidebar.php';
                         doctorMessage = ' 🧪 No doctor assigned (Lab only)';
                     }
                     
-                    showToast('✅ Success', data.message + billMessage + labMessage + doctorMessage, 'success');
+                    showToast('✅ Success', data.message + billMessage + labMessage + serviceMessage + doctorMessage, 'success');
                     
                     if (data.patient_id) {
                         setTimeout(function() {
@@ -3825,11 +3906,11 @@ include_once '../../components/reception_sidebar.php';
         }
     });
 
-    console.log('%c👨‍⚕️ Braick - Assign / Change Doctor (FIXED - View Button Working)', 'font-size:18px; font-weight:bold; color:#2563EB;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ View button links to lab_tests.php?id=LAB_TEST_ID', 'font-size:13px; color:#34D399;');
-    console.log('%c🧪 Lab only mode: No doctor required', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ No consultation fee for lab only', 'font-size:13px; color:#34D399;');
+    console.log('%c👨‍⚕️ Braick - Assign / Change Doctor (FULLY FIXED)', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c✅ visit_type = service_name from services table', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ service_id stored in visits table', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Consultation fee from services.price', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Debug logging enabled - check error logs', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
