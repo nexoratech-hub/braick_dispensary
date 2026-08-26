@@ -5,6 +5,7 @@
 // WITH GLOBAL STATS AUTO-UPDATE (3 SECONDS)
 // FIXED: Using NEW DATABASE (dispensary_db)
 // BRAICK DISPENSARY
+// UPDATED: Removed Complete button, kept only View button
 // ================================================================
 
 // ================================================================
@@ -711,7 +712,7 @@ include_once '../../components/reception_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.82rem;
-            min-width: 900px;
+            min-width: 850px;
         }
         
         .data-table thead th {
@@ -1094,7 +1095,7 @@ include_once '../../components/reception_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .data-table { font-size: 0.7rem; min-width: 750px; }
+            .data-table { font-size: 0.7rem; min-width: 700px; }
             .data-table th, .data-table td { padding: 6px 8px; }
             .filter-group { flex-direction: column; align-items: stretch; }
             .filter-group-item { width: 100%; }
@@ -1105,7 +1106,7 @@ include_once '../../components/reception_sidebar.php';
             .main-content { padding: 10px; }
             .top-nav .search-wrapper { max-width: 120px; }
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .data-table { font-size: 0.6rem; min-width: 650px; }
+            .data-table { font-size: 0.6rem; min-width: 600px; }
             .data-table th, .data-table td { padding: 4px 6px; }
             .btn-sm { padding: 2px 6px; font-size: 0.55rem; }
             .table-card .table-header { flex-direction: column; align-items: stretch; text-align: center; }
@@ -1279,7 +1280,7 @@ include_once '../../components/reception_sidebar.php';
                         <th>Type</th>
                         <th>Status</th>
                         <th>Date</th>
-                        <th style="text-align:center;">Actions</th>
+                        <th style="text-align:center;">Action</th>
                     </tr>
                 </thead>
                 <tbody id="visitsTableBody">
@@ -1319,18 +1320,11 @@ include_once '../../components/reception_sidebar.php';
                                 </td>
                                 <td>
                                     <div class="flex gap-1 justify-center">
-                                        <!-- VIEW Button Only -->
+                                        <!-- VIEW Button Only - Removed Complete button -->
                                         <a href="visit_details.php?id=<?= $visit['id'] ?>" 
-                                           class="btn btn-blue btn-sm" title="View Visit">
-                                            <i class="fas fa-eye"></i>
+                                           class="btn btn-blue btn-sm" title="View Visit Details">
+                                            <i class="fas fa-eye"></i> View
                                         </a>
-                                        <!-- COMPLETE Button - only if not completed or cancelled -->
-                                        <?php if ($visit['status'] !== 'completed' && $visit['status'] !== 'cancelled'): ?>
-                                            <a href="visit_status.php?id=<?= $visit['id'] ?>&status=completed&redirect=visits.php" 
-                                               class="btn btn-success btn-sm" title="Complete Visit">
-                                                <i class="fas fa-check"></i>
-                                            </a>
-                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -1658,17 +1652,16 @@ include_once '../../components/reception_sidebar.php';
     // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c🏥 Braick - Visits List (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick - Visits List (View Only)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Total Visits: <?= count($visits) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📆 Period: <?= $period_filter ?: 'All' ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔄 Auto-update: Every 3 seconds (Online doctors count)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Removed Complete button - View Only', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Black text in table', 'font-size:13px; color:#1A202C;');
     console.log('%c✅ Small Visit # badge with gray background', 'font-size:13px; color:#4A5568;');
-    console.log('%c✅ Removed View Patient button, kept View and Complete', 'font-size:13px; color:#059669;');
-    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
