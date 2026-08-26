@@ -3,7 +3,7 @@
 // FILE: frontend/pages/doctor/profile.php
 // DOCTOR - MY PROFILE (BEAUTIFUL CSS)
 // Session-based login (NO BYPASS)
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING dispensary_db
 // ================================================================
 
 session_start();
@@ -31,14 +31,9 @@ $is_online = $_SESSION['is_online'] ?? 0;
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - USING dispensary_db
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found at: " . $db_path);
-}
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -102,13 +97,38 @@ try {
 }
 
 // ================================================================
+// GET BRANCH LOCATION AND PHONE
+// ================================================================
+$branch_location = '';
+$branch_phone = '';
+try {
+    $stmt = $db->prepare("SELECT location, phone FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([$doctor_branch_id]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $branch_location = $branch['location'] ?? '';
+        $branch_phone = $branch['phone'] ?? '';
+    }
+} catch (Exception $e) {}
+
+// ================================================================
 // GET PROFILE PICTURE
 // ================================================================
 $profile_pic_path = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
 if (!empty($profile_pic)) {
-    $file_path = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
-    if (file_exists($file_path)) {
-        $profile_pic_path = '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
+    $possible_paths = [
+        $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic,
+        $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/assets/uploads/profiles/' . $profile_pic,
+        __DIR__ . '/../../assets/uploads/profiles/' . $profile_pic,
+        __DIR__ . '/../../../assets/uploads/profiles/' . $profile_pic
+    ];
+    
+    foreach ($possible_paths as $path) {
+        if (file_exists($path)) {
+            $profile_pic_path = '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic;
+            break;
+        }
     }
 }
 
@@ -123,12 +143,15 @@ if (!empty($last_online_db)) {
 }
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS FROM dispensary_db
 // ================================================================
 $patients_count = 0;
 $visits_count = 0;
 $prescriptions_count = 0;
 $appointments_count = 0;
+$lab_tests_count = 0;
+$bills_count = 0;
+$total_revenue = 0;
 
 try {
     $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as patients FROM visits WHERE doctor_id = ?");
@@ -154,6 +177,43 @@ try {
     $appointments_count = $stmt->fetch(PDO::FETCH_ASSOC)['appointments'] ?? 0;
 } catch (Exception $e) {}
 
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as lab_tests FROM lab_tests WHERE doctor_id = ?");
+    $stmt->execute([$doctor_id]);
+    $lab_tests_count = $stmt->fetch(PDO::FETCH_ASSOC)['lab_tests'] ?? 0;
+} catch (Exception $e) {}
+
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as bills FROM bills WHERE created_by = ?");
+    $stmt->execute([$doctor_id]);
+    $bills_count = $stmt->fetch(PDO::FETCH_ASSOC)['bills'] ?? 0;
+} catch (Exception $e) {}
+
+try {
+    $stmt = $db->prepare("SELECT COALESCE(SUM(total_amount), 0) as total FROM bills WHERE created_by = ? AND status = 'paid'");
+    $stmt->execute([$doctor_id]);
+    $total_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {}
+
+// ================================================================
+// GET TODAY'S ACTIVITY
+// ================================================================
+$today = date('Y-m-d');
+$today_visits = 0;
+$today_patients = 0;
+
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as visits FROM visits WHERE doctor_id = ? AND DATE(created_at) = ?");
+    $stmt->execute([$doctor_id, $today]);
+    $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['visits'] ?? 0;
+} catch (Exception $e) {}
+
+try {
+    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as patients FROM visits WHERE doctor_id = ? AND DATE(created_at) = ?");
+    $stmt->execute([$doctor_id, $today]);
+    $today_patients = $stmt->fetch(PDO::FETCH_ASSOC)['patients'] ?? 0;
+} catch (Exception $e) {}
+
 // ================================================================
 // MEMBER SINCE
 // ================================================================
@@ -175,8 +235,8 @@ $selected_branch_id = $doctor_branch_id;
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -217,11 +277,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     $initial = strtoupper(substr($doctor_name, 0, 1));
                     $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
                     $color = $colors[abs(crc32($doctor_name)) % count($colors)];
+                    
+                    $file_exists = false;
+                    if (!empty($profile_pic)) {
+                        $check_path = $_SERVER['DOCUMENT_ROOT'] . $profile_pic_path;
+                        if (file_exists($check_path)) {
+                            $file_exists = true;
+                        }
+                    }
                 ?>
-                <?php if (file_exists($_SERVER['DOCUMENT_ROOT'] . $profile_pic_path) && !empty($profile_pic)): ?>
+                <?php if ($file_exists): ?>
                     <img src="<?= $profile_pic_path ?>" alt="Profile Picture" class="profile-picture">
                 <?php else: ?>
-                    <div class="profile-avatar" style="background: <?= $color ?>; width: 120px; height: 120px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 3rem; font-weight: 700; color: white;">
+                    <div class="profile-avatar" style="background: <?= $color ?>;">
                         <?= $initial ?>
                     </div>
                 <?php endif; ?>
@@ -261,6 +329,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <span class="detail-value"><?= htmlspecialchars($doctor_branch_name) ?></span>
             </div>
             <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-map-marker-alt"></i> Location</span>
+                <span class="detail-value"><?= htmlspecialchars($branch_location ?: 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
                 <span class="detail-label"><i class="fas fa-stethoscope"></i> Specialty</span>
                 <span class="detail-value"><?= htmlspecialchars($doctor_specialty) ?></span>
             </div>
@@ -275,6 +347,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             <div class="detail-item">
                 <span class="detail-label"><i class="fas fa-calendar-plus"></i> Member Since</span>
                 <span class="detail-value"><?= $member_since ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label"><i class="fas fa-phone-alt"></i> Branch Phone</span>
+                <span class="detail-value"><?= htmlspecialchars($branch_phone ?: 'N/A') ?></span>
             </div>
         </div>
     </div>
@@ -317,6 +393,42 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 <p>Appointments</p>
             </div>
         </div>
+        <div class="stat-box">
+            <div class="stat-icon purple">
+                <i class="fas fa-flask"></i>
+            </div>
+            <div class="stat-content">
+                <h3><?= number_format($lab_tests_count) ?></h3>
+                <p>Lab Tests</p>
+            </div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-icon blue">
+                <i class="fas fa-file-invoice"></i>
+            </div>
+            <div class="stat-content">
+                <h3><?= number_format($bills_count) ?></h3>
+                <p>Bills</p>
+            </div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-icon green">
+                <i class="fas fa-money-bill-wave"></i>
+            </div>
+            <div class="stat-content">
+                <h3>TSh <?= number_format($total_revenue, 0) ?></h3>
+                <p>Total Revenue</p>
+            </div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-icon orange">
+                <i class="fas fa-calendar-day"></i>
+            </div>
+            <div class="stat-content">
+                <h3><?= number_format($today_visits) ?></h3>
+                <p>Today's Visits</p>
+            </div>
+        </div>
     </div>
 
     <!-- Footer -->
@@ -327,6 +439,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             My Profile
             <span class="text-gray-300 mx-2">|</span>
             <?= htmlspecialchars($doctor_name) ?>
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -488,7 +602,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border: 2px solid var(--border-color);
         box-shadow: 0 2px 8px rgba(0,0,0,0.04);
         transition: all 0.3s ease;
-        max-width: 48rem;
+        max-width: 56rem;
         margin: 0 auto;
     }
     
@@ -532,6 +646,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         width: 100%;
         height: 100%;
         object-fit: cover;
+    }
+    
+    .profile-avatar {
+        width: 120px;
+        height: 120px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 3rem;
+        font-weight: 700;
+        color: white;
+        flex-shrink: 0;
     }
     
     .profile-info {
@@ -635,8 +762,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
        ================================================================ */
     .profile-details {
         display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 16px 24px;
+        grid-template-columns: 1fr 1fr 1fr;
+        gap: 12px 20px;
     }
     
     .detail-item {
@@ -654,7 +781,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .detail-label {
-        font-size: 0.7rem;
+        font-size: 0.65rem;
         font-weight: 600;
         color: var(--text-secondary);
         text-transform: uppercase;
@@ -663,12 +790,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     
     .detail-label i {
         margin-right: 4px;
-        width: 16px;
+        width: 14px;
         color: var(--primary);
     }
     
     .detail-value {
-        font-size: 0.95rem;
+        font-size: 0.9rem;
         font-weight: 500;
         color: var(--text-primary);
     }
@@ -687,7 +814,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         display: grid;
         grid-template-columns: repeat(4, 1fr);
         gap: 16px;
-        max-width: 48rem;
+        max-width: 56rem;
         margin: 24px auto 0;
     }
     
@@ -826,6 +953,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
        ================================================================ */
     @media (max-width: 1024px) {
         .main-content { padding: 16px; }
+        .profile-details { grid-template-columns: 1fr 1fr; }
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
     }
     
     @media (max-width: 768px) {
@@ -880,6 +1009,18 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
 
     // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
+    var sidebar = document.getElementById('sidebar');
+    var sidebarToggle = document.getElementById('sidebarToggle');
+    
+    if (sidebarToggle) {
+        sidebarToggle.addEventListener('click', function() {
+            if (sidebar) sidebar.classList.toggle('open');
+        });
+    }
+
+    // ================================================================
     // DATE & TIME
     // ================================================================
     function updateDateTime() {
@@ -890,9 +1031,15 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
+        
+        var clockDisplay = document.getElementById('clockDisplay');
+        if (clockDisplay) {
+            clockDisplay.textContent = dateStr + ' • ' + timeStr;
+        }
+        
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
         }
     }
     updateDateTime();
@@ -902,7 +1049,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c📊 Patients: <?= $patients_count ?> | Visits: <?= $visits_count ?>', 'font-size:12px; color:#059669;');
     console.log('%c💊 Prescriptions: <?= $prescriptions_count ?> | Appointments: <?= $appointments_count ?>', 'font-size:12px; color:#64748B;');
+    console.log('%c🧪 Lab Tests: <?= $lab_tests_count ?> | Bills: <?= $bills_count ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c💰 Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:12px; color:#D97706;');
     console.log('%c📋 Doctor ID: #<?= $doctor_id ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c💾 Database: dispensary_db', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

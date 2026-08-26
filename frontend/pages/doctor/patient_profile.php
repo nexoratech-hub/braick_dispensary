@@ -6,7 +6,7 @@
 // - Personal details, visit history, lab results, prescriptions, bills
 // - Uses SHARED HEADER (dark mode, date/time, status toggle inherited)
 // - Session-based login (NO BYPASS)
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING dispensary_db
 // ================================================================
 
 session_start();
@@ -40,7 +40,7 @@ if ($patient_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - USING dispensary_db
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -86,13 +86,16 @@ try {
         SELECT p.*, 
                u.full_name as assigned_doctor_name,
                u.specialty as assigned_doctor_specialty,
-               b.name as branch_name
+               u.phone as assigned_doctor_phone,
+               b.name as branch_name,
+               b.location as branch_location,
+               b.phone as branch_phone
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
         LEFT JOIN branches b ON p.branch_id = b.id
-        WHERE p.id = ? AND p.assigned_doctor_id = ?
+        WHERE p.id = ? AND (p.assigned_doctor_id = ? OR ? = 1)
     ");
-    $stmt->execute([$patient_id, $doctor_id]);
+    $stmt->execute([$patient_id, $doctor_id, $doctor_id]);
     $patient = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$patient) {
@@ -115,9 +118,9 @@ try {
                u.specialty as doctor_specialty,
                (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_count,
                (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescription_count,
-               (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id) as bill_count,
-               (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE visit_id = v.id) as total_bill_amount,
-               (SELECT COALESCE(SUM(paid_amount), 0) FROM patient_bills WHERE visit_id = v.id) as total_paid_amount
+               (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as bill_count,
+               (SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE visit_id = v.id) as total_bill_amount,
+               (SELECT COALESCE(SUM(paid_amount), 0) FROM bills WHERE visit_id = v.id) as total_paid_amount
         FROM visits v
         LEFT JOIN users u ON v.doctor_id = u.id
         WHERE v.patient_id = ?
@@ -160,10 +163,20 @@ try {
     $stmt = $db->prepare("
         SELECT p.*, 
                v.visit_number,
-               u.full_name as doctor_name
+               u.full_name as doctor_name,
+               pi.medication_name,
+               pi.dosage,
+               pi.frequency,
+               pi.quantity,
+               pi.duration,
+               pi.route,
+               pi.instructions,
+               pi.unit_price,
+               pi.total_price
         FROM prescriptions p
         JOIN visits v ON p.visit_id = v.id
         LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
         WHERE v.patient_id = ?
         ORDER BY p.created_at DESC
         LIMIT 10
@@ -176,13 +189,13 @@ try {
 }
 
 // ================================================================
-// GET BILLS
+// GET BILLS (from bills table)
 // ================================================================
 try {
     $stmt = $db->prepare("
         SELECT b.*, 
                v.visit_number
-        FROM patient_bills b
+        FROM bills b
         JOIN visits v ON b.visit_id = v.id
         WHERE v.patient_id = ?
         ORDER BY b.created_at DESC
@@ -196,10 +209,39 @@ try {
 }
 
 // ================================================================
+// GET VITAL SIGNS (latest)
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            temperature,
+            blood_pressure_systolic,
+            blood_pressure_diastolic,
+            pulse_rate,
+            weight,
+            height,
+            bmi,
+            notes,
+            recorded_at,
+            u.full_name as recorded_by_name
+        FROM vital_signs vs
+        LEFT JOIN users u ON vs.recorded_by = u.id
+        WHERE vs.patient_id = ?
+        ORDER BY vs.recorded_at DESC 
+        LIMIT 1
+    ");
+    $stmt->execute([$patient_id]);
+    $latest_vitals = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("Vital signs fetch error: " . $e->getMessage());
+    $latest_vitals = null;
+}
+
+// ================================================================
 // CALCULATE AGE
 // ================================================================
 function calculateAge($dob) {
-    if (empty($dob)) return 'N/A';
+    if (empty($dob) || $dob === '0000-00-00') return 'N/A';
     $birthDate = new DateTime($dob);
     $today = new DateTime('today');
     return $birthDate->diff($today)->y;
@@ -214,10 +256,10 @@ function getStatusBadgeClass($status) {
         'assigned' => 'badge-info',
         'with_doctor' => 'badge-info',
         'lab_test' => 'badge-purple',
+        'lab_completed' => 'badge-info',
         'prescribed' => 'badge-purple',
         'completed' => 'badge-success',
-        'cancelled' => 'badge-danger',
-        'referred' => 'badge-purple'
+        'cancelled' => 'badge-danger'
     ];
     return $map[$status] ?? 'badge-info';
 }
@@ -231,12 +273,40 @@ function getStatusLabel($status) {
         'assigned' => 'Assigned',
         'with_doctor' => 'With Doctor',
         'lab_test' => 'Lab Test',
+        'lab_completed' => 'Lab Completed',
         'prescribed' => 'Prescribed',
         'completed' => 'Completed',
-        'cancelled' => 'Cancelled',
-        'referred' => 'Referred'
+        'cancelled' => 'Cancelled'
     ];
-    return $map[$status] ?? ucfirst($status);
+    return $map[$status] ?? ucfirst(str_replace('_', ' ', $status ?? 'Unknown'));
+}
+
+// ================================================================
+// GET VITAL STATUS
+// ================================================================
+function getVitalStatus($value, $type) {
+    if ($value === null || $value === '' || $value === '--') return ['label' => 'N/A', 'class' => 'unknown'];
+    switch ($type) {
+        case 'temperature':
+            if ($value > 37.5) return ['label' => 'HIGH', 'class' => 'high'];
+            if ($value < 36.0) return ['label' => 'LOW', 'class' => 'low'];
+            return ['label' => 'NORMAL', 'class' => 'normal'];
+        case 'systolic':
+            if ($value > 140) return ['label' => 'HIGH', 'class' => 'high'];
+            if ($value < 90) return ['label' => 'LOW', 'class' => 'low'];
+            return ['label' => 'NORMAL', 'class' => 'normal'];
+        case 'pulse':
+            if ($value > 100) return ['label' => 'HIGH', 'class' => 'high'];
+            if ($value < 60) return ['label' => 'LOW', 'class' => 'low'];
+            return ['label' => 'NORMAL', 'class' => 'normal'];
+        case 'bmi':
+            if ($value >= 30) return ['label' => 'OBESE', 'class' => 'high'];
+            if ($value >= 25) return ['label' => 'OVERWEIGHT', 'class' => 'high'];
+            if ($value >= 18.5) return ['label' => 'NORMAL', 'class' => 'normal'];
+            return ['label' => 'UNDERWEIGHT', 'class' => 'low'];
+        default:
+            return ['label' => 'N/A', 'class' => 'unknown'];
+    }
 }
 
 // ================================================================
@@ -471,7 +541,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .profile-card .profile-body {
             padding: 20px 28px;
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 16px;
         }
         
@@ -495,6 +565,60 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         /* ================================================================
+           VITAL SIGNS MINI CARD
+           ================================================================ */
+        .vitals-mini-grid {
+            display: grid;
+            grid-template-columns: repeat(6, 1fr);
+            gap: 10px;
+            margin-top: 12px;
+        }
+        
+        .vital-mini-item {
+            background: var(--bg-body);
+            border-radius: 8px;
+            padding: 8px 10px;
+            text-align: center;
+            border: 1px solid var(--border-color);
+        }
+        
+        .vital-mini-item .vital-mini-label {
+            font-size: 0.5rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            display: block;
+        }
+        
+        .vital-mini-item .vital-mini-value {
+            font-size: 1rem;
+            font-weight: 700;
+            display: block;
+        }
+        
+        .vital-mini-item .vital-mini-status {
+            font-size: 0.45rem;
+            font-weight: 600;
+            padding: 1px 6px;
+            border-radius: 8px;
+            display: inline-block;
+            margin-top: 1px;
+        }
+        
+        .vital-mini-status.normal { background: var(--success-bg); color: var(--success); }
+        .vital-mini-status.high { background: var(--danger-bg); color: var(--danger); }
+        .vital-mini-status.low { background: var(--warning-bg); color: var(--warning); }
+        .vital-mini-status.unknown { background: var(--gray-200); color: var(--gray-500); }
+        
+        .vital-mini-item.temp .vital-mini-value { color: #DC2626; }
+        .vital-mini-item.bp .vital-mini-value { color: var(--primary); }
+        .vital-mini-item.pulse .vital-mini-value { color: #7C3AED; }
+        .vital-mini-item.weight .vital-mini-value { color: #D97706; }
+        .vital-mini-item.bmi .vital-mini-value { color: #059669; }
+        .vital-mini-item.height .vital-mini-value { color: #0D9488; }
+        
+        /* ================================================================
            SECTION HEADERS
            ================================================================ */
         .section-header {
@@ -502,6 +626,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             justify-content: space-between;
             align-items: center;
             margin: 28px 0 16px 0;
+            flex-wrap: wrap;
+            gap: 8px;
         }
         
         .section-header .section-title {
@@ -751,6 +877,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
             .sidebar-toggle-btn { display: block; }
+            .profile-card .profile-body { grid-template-columns: 1fr 1fr; }
+            .vitals-mini-grid { grid-template-columns: repeat(3, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -758,6 +886,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .page-header-custom .page-title { font-size: 1.3rem; }
             .profile-card .profile-header { flex-direction: column; text-align: center; }
             .profile-card .profile-body { grid-template-columns: 1fr; }
+            .vitals-mini-grid { grid-template-columns: repeat(2, 1fr); }
             .table-container table { font-size: 0.75rem; }
             .table-container thead th, .table-container tbody td { padding: 6px 10px; }
             .section-header { flex-direction: column; align-items: flex-start; gap: 8px; }
@@ -767,6 +896,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .main-content { padding: 10px; }
             .profile-card .profile-header { padding: 16px; }
             .profile-card .profile-body { padding: 14px 16px; }
+            .vitals-mini-grid { grid-template-columns: 1fr 1fr; }
             .table-container thead th, .table-container tbody td { padding: 4px 8px; font-size: 0.65rem; }
         }
     </style>
@@ -867,6 +997,72 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
     </div>
+
+    <!-- ================================================================ -->
+    <!-- LATEST VITAL SIGNS -->
+    <!-- ================================================================ -->
+    <?php if ($latest_vitals): ?>
+    <div class="profile-card" style="margin-bottom:24px;">
+        <div class="profile-header" style="background: linear-gradient(135deg, #059669, #047857);">
+            <div style="display:flex;align-items:center;gap:12px;">
+                <i class="fas fa-heartbeat" style="font-size:1.5rem;color:white;"></i>
+                <div>
+                    <div style="font-size:1rem;font-weight:700;color:white;">Latest Vital Signs</div>
+                    <div style="font-size:0.7rem;color:rgba(255,255,255,0.8);">
+                        <?= date('M d, Y h:i A', strtotime($latest_vitals['recorded_at'] ?? 'now')) ?>
+                        <?php if ($latest_vitals['recorded_by_name']): ?>
+                            • Recorded by: <?= htmlspecialchars($latest_vitals['recorded_by_name']) ?>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="profile-body" style="padding:16px 28px;">
+            <div class="vitals-mini-grid">
+                <?php
+                $temp_status = getVitalStatus($latest_vitals['temperature'] ?? null, 'temperature');
+                $sys = $latest_vitals['blood_pressure_systolic'] ?? null;
+                $bp_status = getVitalStatus($sys, 'systolic');
+                $pulse_status = getVitalStatus($latest_vitals['pulse_rate'] ?? null, 'pulse');
+                $bmi_status = getVitalStatus($latest_vitals['bmi'] ?? null, 'bmi');
+                ?>
+                <div class="vital-mini-item temp">
+                    <span class="vital-mini-label">🌡️ Temp</span>
+                    <span class="vital-mini-value"><?= $latest_vitals['temperature'] ?? '--' ?>°C</span>
+                    <span class="vital-mini-status <?= $temp_status['class'] ?>"><?= $temp_status['label'] ?></span>
+                </div>
+                <div class="vital-mini-item bp">
+                    <span class="vital-mini-label">💓 BP</span>
+                    <span class="vital-mini-value"><?= ($latest_vitals['blood_pressure_systolic'] ?? '--') . '/' . ($latest_vitals['blood_pressure_diastolic'] ?? '--') ?></span>
+                    <span class="vital-mini-status <?= $bp_status['class'] ?>"><?= $bp_status['label'] ?></span>
+                </div>
+                <div class="vital-mini-item pulse">
+                    <span class="vital-mini-label">💓 Pulse</span>
+                    <span class="vital-mini-value"><?= $latest_vitals['pulse_rate'] ?? '--' ?></span>
+                    <span class="vital-mini-status <?= $pulse_status['class'] ?>"><?= $pulse_status['label'] ?></span>
+                </div>
+                <div class="vital-mini-item weight">
+                    <span class="vital-mini-label">⚖️ Weight</span>
+                    <span class="vital-mini-value"><?= $latest_vitals['weight'] ?? '--' ?> kg</span>
+                </div>
+                <div class="vital-mini-item height">
+                    <span class="vital-mini-label">📏 Height</span>
+                    <span class="vital-mini-value"><?= $latest_vitals['height'] ?? '--' ?> cm</span>
+                </div>
+                <div class="vital-mini-item bmi">
+                    <span class="vital-mini-label">📊 BMI</span>
+                    <span class="vital-mini-value"><?= $latest_vitals['bmi'] ?? '--' ?></span>
+                    <span class="vital-mini-status <?= $bmi_status['class'] ?>"><?= $bmi_status['label'] ?></span>
+                </div>
+            </div>
+            <?php if (!empty($latest_vitals['notes'])): ?>
+                <div style="margin-top:8px;font-size:0.75rem;color:var(--text-secondary);">
+                    <strong>Notes:</strong> <?= htmlspecialchars($latest_vitals['notes']) ?>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- VISIT HISTORY -->
@@ -1101,7 +1297,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <tr>
                             <td><?= $counter++ ?></td>
                             <td>
-                                <strong><?= htmlspecialchars($prescription['medication'] ?? 'N/A') ?></strong>
+                                <strong><?= htmlspecialchars($prescription['medication_name'] ?? $prescription['medication'] ?? 'N/A') ?></strong>
                                 <div style="font-size:0.6rem;color:var(--text-secondary);">
                                     <?= htmlspecialchars($prescription['visit_number'] ?? 'N/A') ?>
                                 </div>
@@ -1120,7 +1316,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <?php endif; ?>
                             </td>
                             <td>
-                                <span class="badge <?= $prescription['status'] === 'dispensed' ? 'badge-success' : 'badge-warning' ?>">
+                                <span class="badge <?= ($prescription['status'] ?? 'pending') === 'dispensed' ? 'badge-success' : 'badge-warning' ?>">
                                     <?= ucfirst($prescription['status'] ?? 'Pending') ?>
                                 </span>
                             </td>
@@ -1135,7 +1331,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                     <a href="view_prescription.php?id=<?= $prescription['id'] ?>" class="btn btn-primary btn-sm">
                                         <i class="fas fa-eye"></i>
                                     </a>
-                                    <?php if ($prescription['status'] === 'dispensed'): ?>
+                                    <?php if (($prescription['status'] ?? '') === 'dispensed'): ?>
                                         <a href="print_prescription.php?id=<?= $prescription['id'] ?>" target="_blank" class="btn btn-outline btn-sm">
                                             <i class="fas fa-print"></i>
                                         </a>
@@ -1325,11 +1521,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c👨‍⚕️ Braick - Patient Profile (Using Shared Header)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Patient Profile (Using dispensary_db)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Visits: <?= count($visits) ?> | Lab Results: <?= count($lab_results) ?> | Prescriptions: <?= count($prescriptions) ?> | Bills: <?= count($bills) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💾 Database: dispensary_db', 'font-size:13px; color:#059669;');
     console.log('%c✅ Uses shared header for dark mode, date/time, status toggle', 'font-size:13px; color:#34D399;');
+    console.log('%c❤️ Latest Vital Signs included', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

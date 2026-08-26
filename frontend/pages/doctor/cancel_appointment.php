@@ -2,10 +2,16 @@
 // ================================================================
 // FILE: frontend/pages/doctor/cancel_appointment.php
 // DOCTOR - CANCEL APPOINTMENT
+// ✅ FIXED: Using NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
-session_start();
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
 // LOGIN PROTECTION
@@ -15,6 +21,9 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     exit;
 }
 
+// ================================================================
+// CHECK IF USER IS DOCTOR OR ADMIN
+// ================================================================
 if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -41,12 +50,12 @@ $is_admin = ($_SESSION['role'] === 'admin');
 $appointment_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 
 if ($appointment_id <= 0) {
-    header('Location: appointments.php?error=invalid_id');
+    header('Location: appointment.php?error=invalid_id');
     exit;
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - Using NEW DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -57,21 +66,23 @@ try {
 }
 
 // ================================================================
-// CHECK IF APPOINTMENT EXISTS AND CAN BE CANCELLED
+// CHECK IF APPOINTMENT EXISTS
 // ================================================================
 if ($is_admin) {
     $stmt = $db->prepare("
-        SELECT a.*, p.full_name as patient_name 
+        SELECT a.*, p.full_name as patient_name, p.patient_id as patient_code, u.full_name as doctor_name 
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
+        LEFT JOIN users u ON a.doctor_id = u.id
         WHERE a.id = ? AND a.status IN ('scheduled', 'pending', 'confirmed')
     ");
     $stmt->execute([$appointment_id]);
 } else {
     $stmt = $db->prepare("
-        SELECT a.*, p.full_name as patient_name 
+        SELECT a.*, p.full_name as patient_name, p.patient_id as patient_code, u.full_name as doctor_name 
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
+        LEFT JOIN users u ON a.doctor_id = u.id
         WHERE a.id = ? AND a.doctor_id = ? AND a.status IN ('scheduled', 'pending', 'confirmed')
     ");
     $stmt->execute([$appointment_id, $doctor_id]);
@@ -80,8 +91,16 @@ if ($is_admin) {
 $appointment = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$appointment) {
-    header('Location: appointments.php?error=not_found_or_already_processed');
+    header('Location: appointment.php?error=not_found_or_already_processed');
     exit;
+}
+
+// ================================================================
+// GET REASON FOR CANCELLATION
+// ================================================================
+$reason = isset($_POST['reason']) ? trim($_POST['reason']) : '';
+if (empty($reason)) {
+    $reason = 'Cancelled by ' . ($is_admin ? 'admin' : 'doctor');
 }
 
 // ================================================================
@@ -90,38 +109,55 @@ if (!$appointment) {
 try {
     $db->beginTransaction();
 
-    $stmt = $db->prepare("
-        UPDATE appointments 
-        SET status = 'cancelled', 
-            notes = CONCAT(IFNULL(notes, ''), ' [CANCELLED: ', NOW(), ']'),
-            updated_at = NOW()
-        WHERE id = ?
-    ");
-    $stmt->execute([$appointment_id]);
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            UPDATE appointments 
+            SET status = 'cancelled', 
+                cancelled_at = NOW(),
+                notes = CONCAT(IFNULL(notes, ''), ' [CANCELLED: ', ?, ']'),
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$reason, $appointment_id]);
+    } else {
+        $stmt = $db->prepare("
+            UPDATE appointments 
+            SET status = 'cancelled', 
+                cancelled_at = NOW(),
+                notes = CONCAT(IFNULL(notes, ''), ' [CANCELLED: ', ?, ']'),
+                updated_at = NOW()
+            WHERE id = ? AND doctor_id = ?
+        ");
+        $stmt->execute([$reason, $appointment_id, $doctor_id]);
+    }
 
     $db->commit();
 
     // ================================================================
-    // LOG ACTIVITY
+    // LOG ACTIVITY - Using new database structure
     // ================================================================
     try {
         $stmt = $db->prepare("
-            INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-            VALUES (?, ?, 'appointment_cancelled', ?, NOW())
+            INSERT INTO activity_logs (user_id, branch_id, patient_id, action, details, created_at) 
+            VALUES (?, ?, ?, 'appointment_cancelled', ?, NOW())
         ");
         $stmt->execute([
             $doctor_id,
             $doctor_branch_id,
-            "Appointment #$appointment_id cancelled for patient: " . $appointment['patient_name']
+            $appointment['patient_id'],
+            "Appointment #$appointment_id cancelled for patient: " . $appointment['patient_name'] . 
+            " (ID: " . ($appointment['patient_code'] ?? 'N/A') . ")" .
+            " | Doctor: " . ($appointment['doctor_name'] ?? $doctor_name) . 
+            " | Reason: " . $reason
         ]);
     } catch (Exception $e) {
-        // Silent fail
+        error_log("Activity log error: " . $e->getMessage());
     }
 
     // ================================================================
-    // REDIRECT WITH SUCCESS
+    // REDIRECT TO APPOINTMENTS PAGE
     // ================================================================
-    $redirect_url = 'appointments.php?cancelled=1&appointment=' . $appointment_id;
+    $redirect_url = 'appointment.php?cancelled=1&appointment=' . $appointment_id;
     if ($is_admin) {
         $redirect_url .= '&admin=1';
     }
@@ -133,7 +169,7 @@ try {
         $db->rollBack();
     }
     error_log("Cancel appointment error: " . $e->getMessage());
-    header('Location: appointments.php?error=cancel_failed');
+    header('Location: appointment.php?error=cancel_failed');
     exit;
 }
 ?>

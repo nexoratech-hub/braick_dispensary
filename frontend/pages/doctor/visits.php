@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/visits.php
 // DOCTOR - VISITS LIST (FILTERED BY STATUS)
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING ACTUAL DATABASE
 // ================================================================
 
 // Start session
@@ -60,12 +60,40 @@ function time_ago($timestamp) {
 }
 
 function getUserColor($name) {
-    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
+    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777', '#2563EB', '#0891B2'];
     $index = 0;
     for ($i = 0; $i < strlen($name); $i++) {
         $index = ($index + ord($name[$i])) % count($colors);
     }
     return $colors[$index];
+}
+
+function getStatusBadgeClass($status) {
+    $map = [
+        'pending' => 'badge-warning',
+        'assigned' => 'badge-info',
+        'with_doctor' => 'badge-warning',
+        'lab_test' => 'badge-warning',
+        'lab_completed' => 'badge-info',
+        'prescribed' => 'badge-purple',
+        'completed' => 'badge-success',
+        'cancelled' => 'badge-danger'
+    ];
+    return $map[$status] ?? 'badge-info';
+}
+
+function getStatusLabel($status) {
+    $map = [
+        'pending' => '⏳ Pending',
+        'assigned' => '👨‍⚕️ Assigned',
+        'with_doctor' => '🩺 With Doctor',
+        'lab_test' => '🧪 Lab Test',
+        'lab_completed' => '✅ Lab Done',
+        'prescribed' => '💊 Prescribed',
+        'completed' => '✅ Completed',
+        'cancelled' => '❌ Cancelled'
+    ];
+    return $map[$status] ?? ucfirst(str_replace('_', ' ', $status));
 }
 
 // ================================================================
@@ -87,39 +115,93 @@ $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ================================================================
-// BUILD QUERY
+// BUILD QUERY - USING ACTUAL DATABASE COLUMNS
 // ================================================================
 if ($is_admin) {
     // Admin can see all visits
     $sql = "
-        SELECT v.*, 
-               p.full_name as patient_name, 
-               p.patient_id, 
-               p.phone,
-               p.gender,
-               p.date_of_birth,
-               u.full_name as doctor_name,
-               u.specialty
+        SELECT 
+            v.id,
+            v.visit_number,
+            v.visit_date,
+            v.patient_id,
+            v.doctor_id,
+            v.receptionist_id,
+            v.branch_id,
+            v.visit_type,
+            v.consultation_fee,
+            v.status,
+            v.symptoms,
+            v.hpi,
+            v.physical_exam,
+            v.complaint,
+            v.diagnosis,
+            v.disease_id,
+            v.disease_code,
+            v.treatment,
+            v.notes,
+            v.created_at,
+            v.updated_at,
+            v.is_completed,
+            v.completed_at,
+            p.full_name as patient_name, 
+            p.patient_id as patient_code, 
+            p.phone,
+            p.gender,
+            p.date_of_birth,
+            p.blood_group,
+            p.address,
+            u.full_name as doctor_name,
+            u.specialty,
+            b.name as branch_name
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN branches b ON v.branch_id = b.id
         WHERE 1=1
     ";
     $params = [];
 } else {
     // Doctor can only see their own visits
     $sql = "
-        SELECT v.*, 
-               p.full_name as patient_name, 
-               p.patient_id, 
-               p.phone,
-               p.gender,
-               p.date_of_birth,
-               u.full_name as doctor_name,
-               u.specialty
+        SELECT 
+            v.id,
+            v.visit_number,
+            v.visit_date,
+            v.patient_id,
+            v.doctor_id,
+            v.receptionist_id,
+            v.branch_id,
+            v.visit_type,
+            v.consultation_fee,
+            v.status,
+            v.symptoms,
+            v.hpi,
+            v.physical_exam,
+            v.complaint,
+            v.diagnosis,
+            v.disease_id,
+            v.disease_code,
+            v.treatment,
+            v.notes,
+            v.created_at,
+            v.updated_at,
+            v.is_completed,
+            v.completed_at,
+            p.full_name as patient_name, 
+            p.patient_id as patient_code, 
+            p.phone,
+            p.gender,
+            p.date_of_birth,
+            p.blood_group,
+            p.address,
+            u.full_name as doctor_name,
+            u.specialty,
+            b.name as branch_name
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN branches b ON v.branch_id = b.id
         WHERE v.doctor_id = ?
     ";
     $params = [$doctor_id];
@@ -138,7 +220,7 @@ if ($filter === 'today') {
 
 // Filter: Pending (all pending statuses)
 if ($filter === 'pending') {
-    $sql .= " AND v.status IN ('pending', 'assigned', 'with_doctor')";
+    $sql .= " AND v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test')";
 }
 
 // Filter: Completed
@@ -146,9 +228,15 @@ if ($filter === 'completed') {
     $sql .= " AND v.status = 'completed'";
 }
 
+// Filter: All (no date filter)
+if ($filter === 'all') {
+    // No date filter - show all
+}
+
 // Search
 if (!empty($search)) {
-    $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
+    $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ? OR v.visit_number LIKE ?)";
+    $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -161,10 +249,10 @@ $stmt->execute($params);
 $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATUS COUNTS
+// GET STATUS COUNTS - USING ACTUAL DATABASE
 // ================================================================
 $status_counts = [];
-$statuses = ['pending', 'assigned', 'with_doctor', 'completed', 'cancelled'];
+$statuses = ['pending', 'assigned', 'with_doctor', 'lab_test', 'lab_completed', 'prescribed', 'completed', 'cancelled'];
 
 if ($is_admin) {
     // Admin counts - all visits
@@ -180,7 +268,7 @@ if ($is_admin) {
     $today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
     // Pending count (all pending statuses)
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status IN ('pending', 'assigned', 'with_doctor')");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status IN ('pending', 'assigned', 'with_doctor', 'lab_test')");
     $stmt->execute();
     $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
@@ -202,7 +290,7 @@ if ($is_admin) {
     $today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
     // Pending count (all pending statuses)
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')");
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test')");
     $stmt->execute([$doctor_id]);
     $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
@@ -243,563 +331,695 @@ include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
-<style>
-    /* ================================================================
-       VISITS PAGE STYLES
-       ================================================================ */
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visits - Braick Dispensary</title>
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 16px;
-        margin-bottom: 24px;
-    }
-    
-    .stat-card {
-        background: var(--bg-card);
-        border-radius: 14px;
-        padding: 18px 20px;
-        border: 2px solid var(--border-color);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        cursor: pointer;
-    }
-    
-    .stat-card:hover {
-        border-color: var(--primary);
-        transform: translateY(-3px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.08);
-    }
-    
-    .stat-card .stat-icon {
-        width: 44px;
-        height: 44px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.1rem;
-        color: white;
-        flex-shrink: 0;
-    }
-    
-    .stat-card.blue .stat-icon { background: var(--primary); }
-    .stat-card.yellow .stat-icon { background: #D97706; }
-    .stat-card.green .stat-icon { background: #059669; }
-    .stat-card.purple .stat-icon { background: #7C3AED; }
-    .stat-card.red .stat-icon { background: #DC2626; }
-    
-    .stat-card .stat-number {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        line-height: 1.2;
-    }
-    
-    .stat-card .stat-label {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        margin-top: 2px;
-    }
-    
-    .stat-card.active {
-        border-color: var(--primary);
-        background: var(--primary-bg);
-    }
-    
-    [data-theme="dark"] .stat-card.active {
-        background: #1E3A5F;
-        border-color: #6EA8FE;
-    }
-    
-    /* ===== FILTER CARD ===== */
-    .filter-card {
-        background: var(--bg-card);
-        border-radius: 14px;
-        padding: 16px 20px;
-        border: 2px solid var(--border-color);
-        margin-bottom: 24px;
-        transition: all 0.3s ease;
-    }
-    
-    .filter-card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
-    }
-    
-    .filter-form {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .filter-group {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 10px;
-        width: 100%;
-    }
-    
-    .filter-search {
-        display: flex;
-        align-items: center;
-        flex: 1;
-        min-width: 200px;
-        background: var(--bg-body);
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        transition: all 0.3s;
-        padding: 0 12px;
-    }
-    
-    .filter-search:focus-within {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
-    }
-    
-    .filter-search .fa-search {
-        color: var(--text-secondary);
-        font-size: 0.85rem;
-        opacity: 0.5;
-    }
-    
-    .filter-input {
-        border: none;
-        background: transparent;
-        padding: 10px 12px;
-        width: 100%;
-        font-size: 0.85rem;
-        outline: none;
-        color: var(--text-primary);
-    }
-    
-    .filter-input::placeholder {
-        color: var(--text-secondary);
-        opacity: 0.5;
-    }
-    
-    .filter-select {
-        padding: 10px 14px;
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        font-size: 0.85rem;
-        background: var(--bg-body);
-        color: var(--text-primary);
-        outline: none;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        min-width: 140px;
-    }
-    
-    .filter-select:focus {
-        border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
-    }
-    
-    [data-theme="dark"] .filter-card {
-        background: #1E293B;
-        border-color: #334155;
-    }
-    [data-theme="dark"] .filter-search {
-        background: #0F172A;
-        border-color: #334155;
-    }
-    [data-theme="dark"] .filter-select {
-        background: #0F172A;
-        border-color: #334155;
-        color: #F1F5F9;
-    }
-    
-    /* ===== TABLE ===== */
-    .table-card {
-        background: var(--bg-card);
-        border-radius: 14px;
-        border: 2px solid var(--border-color);
-        overflow: hidden;
-        transition: all 0.3s ease;
-    }
-    
-    .table-card:hover {
-        border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
-    }
-    
-    [data-theme="dark"] .table-card {
-        background: #1E293B;
-        border-color: #334155;
-    }
-    
-    .table-wrap {
-        overflow-x: auto;
-        padding: 0;
-    }
-    
-    .data-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.82rem;
-        min-width: 700px;
-    }
-    
-    .data-table thead th {
-        text-align: left;
-        padding: 10px 14px;
-        font-weight: 700;
-        font-size: 0.65rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #fff;
-        background: var(--primary);
-        border-bottom: 3px solid var(--primary-dark);
-        white-space: nowrap;
-        position: sticky;
-        top: 0;
-        z-index: 10;
-    }
-    
-    .data-table tbody tr {
-        transition: background 0.2s ease;
-    }
-    
-    .data-table tbody tr:nth-child(even) {
-        background: #F8FAFC;
-    }
-    .data-table tbody tr:nth-child(odd) {
-        background: #fff;
-    }
-    .data-table tbody tr:hover {
-        background: #D1FAE5;
-    }
-    
-    [data-theme="dark"] .data-table tbody tr:nth-child(even) {
-        background: #1E293B;
-    }
-    [data-theme="dark"] .data-table tbody tr:nth-child(odd) {
-        background: #0F172A;
-    }
-    [data-theme="dark"] .data-table tbody tr:hover {
-        background: #1A3A2A;
-    }
-    
-    .data-table td {
-        padding: 10px 14px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-        vertical-align: middle;
-    }
-    
-    /* ===== STATUS BADGES ===== */
-    .status-badge {
-        font-size: 0.6rem;
-        font-weight: 600;
-        padding: 2px 12px;
-        border-radius: 12px;
-        display: inline-block;
-    }
-    
-    .status-badge.pending { background: #FEF3C7; color: #D97706; }
-    .status-badge.assigned { background: #E8F0FE; color: #0B5ED7; }
-    .status-badge.with_doctor { background: #FEF3C7; color: #D97706; }
-    .status-badge.completed { background: #D1FAE5; color: #059669; }
-    .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
-    
-    [data-theme="dark"] .status-badge.pending { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .status-badge.assigned { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .status-badge.with_doctor { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .status-badge.completed { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .status-badge.cancelled { background: #3A1A1A; color: #F87171; }
-    
-    /* ===== AVATAR ===== */
-    .avatar-sm {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 0.85rem;
-        font-weight: 700;
-        color: #fff;
-        flex-shrink: 0;
-    }
-    
-    /* ===== BADGES ===== */
-    .badge {
-        padding: 2px 10px;
-        border-radius: 20px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        color: #fff;
-        border: none;
-    }
-    
-    .badge-success { background: #059669; }
-    .badge-warning { background: #D97706; }
-    .badge-info { background: #0B5ED7; }
-    .badge-primary { background: #0B5ED7; }
-    
-    /* ===== BUTTONS ===== */
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 6px 14px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.7rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-        white-space: nowrap;
-    }
-    
-    .btn-blue {
-        background: #0B5ED7;
-        color: #fff;
-    }
-    .btn-blue:hover {
-        background: #0A4CA8;
-        transform: scale(1.05);
-    }
-    
-    .btn-consult {
-        background: #7C3AED;
-        color: #fff;
-    }
-    .btn-consult:hover {
-        background: #6D28D9;
-        transform: scale(1.05);
-    }
-    
-    .btn-green {
-        background: #059669;
-        color: #fff;
-    }
-    .btn-green:hover {
-        background: #047857;
-        transform: scale(1.05);
-    }
-    
-    .btn-view {
-        background: #0B5ED7;
-        color: #fff;
-    }
-    .btn-view:hover {
-        background: #0A4CA8;
-        transform: scale(1.05);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-        transform: scale(1.05);
-    }
-    
-    .btn-sm {
-        padding: 4px 10px;
-        font-size: 0.65rem;
-        border-radius: 6px;
-    }
-    
-    .action-buttons {
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex-wrap: nowrap;
-        justify-content: center;
-    }
-    
-    /* ===== EMPTY STATE ===== */
-    .empty-state {
-        text-align: center;
-        padding: 40px 20px;
-        color: var(--text-secondary);
-    }
-    
-    .empty-state i {
-        font-size: 3rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 12px;
-    }
-    
-    .empty-state h4 {
-        font-size: 1.1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin-bottom: 4px;
-    }
-    
-    .empty-state p {
-        font-size: 0.85rem;
-    }
-    
-    /* ===== PAGE HEADER ===== */
-    .page-header {
-        border-bottom: 3px solid #0B5ED7;
-        padding-bottom: 12px;
-    }
-    
-    .page-header .page-title {
-        color: #0B3D8A;
-        font-size: 1.6rem;
-        font-weight: 700;
-    }
-    
-    [data-theme="dark"] .page-header .page-title {
-        color: #6EA8FE;
-    }
-    
-    .page-header .page-subtitle {
-        color: var(--text-secondary);
-        font-size: 0.85rem;
-    }
-    
-    .branch-tag {
-        background: #059669;
-        color: #fff;
-        padding: 3px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    /* ===== FOOTER ===== */
-    .footer {
-        padding: 14px 0;
-        border-top: 2px solid var(--border-color);
-        margin-top: 20px;
-        text-align: center;
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    
-    .footer .footer-brand {
-        color: #0B5ED7;
-        font-weight: 600;
-    }
-    
-    /* ===== UTILITIES ===== */
-    .font-medium { font-weight: 500; }
-    .font-mono { font-family: monospace; }
-    .text-xs { font-size: 0.75rem; }
-    .text-sm { font-size: 0.85rem; }
-    .text-muted { color: var(--text-secondary); }
-    .mt-2 { margin-top: 0.5rem; }
-    .mb-3 { margin-bottom: 0.75rem; }
-    .mb-5 { margin-bottom: 1.25rem; }
-    .ml-2 { margin-left: 0.5rem; }
-    .mr-1 { margin-right: 0.25rem; }
-    .mr-2 { margin-right: 0.5rem; }
-    .flex { display: flex; }
-    .flex-wrap { flex-wrap: wrap; }
-    .items-center { align-items: center; }
-    .justify-between { justify-content: space-between; }
-    .gap-2 { gap: 0.5rem; }
-    .gap-3 { gap: 0.75rem; }
-    .gap-4 { gap: 1rem; }
-    
-    /* ===== RESPONSIVE ===== */
-    @media (max-width: 1024px) {
-        .stats-grid {
-            grid-template-columns: repeat(2, 1fr);
+    <style>
+        /* ================================================================
+           ROOT VARIABLES - BLUE THEME
+           ================================================================ */
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-dark: #047857;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --radius: 10px;
+            --radius-lg: 14px;
+            --transition: all 0.3s ease;
+            --bg-body: #F1F5F9;
+            --bg-card: #ffffff;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+            --shadow: 0 1px 3px rgba(0,0,0,0.06);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 30px rgba(0,0,0,0.1);
         }
-        .data-table {
-            font-size: 0.75rem;
-            min-width: 600px;
+        
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+            --shadow: 0 1px 3px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+            --shadow-lg: 0 10px 30px rgba(0,0,0,0.4);
         }
-    }
-    
-    @media (max-width: 768px) {
-        .stats-grid {
-            grid-template-columns: 1fr 1fr;
+        
+        * { box-sizing: border-box; }
+        
+        body {
+            background: var(--bg-body);
+            color: var(--text-primary);
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            transition: background 0.3s ease, color 0.3s ease;
         }
-        .filter-group {
-            flex-direction: column;
-            align-items: stretch;
+        
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
         }
-        .filter-search {
-            min-width: 100%;
+        
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            gap: 16px;
+            margin-bottom: 24px;
+            padding: 20px 24px;
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border-bottom: 3px solid var(--primary);
+            box-shadow: var(--shadow);
         }
-        .filter-select {
-            width: 100%;
-        }
-        .filter-form .btn {
-            width: 100%;
-            justify-content: center;
-        }
-        .data-table {
-            font-size: 0.7rem;
-            min-width: 500px;
-        }
-        .data-table th,
-        .data-table td {
-            padding: 6px 10px;
-        }
-        .action-buttons {
+        
+        .page-title {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 12px;
             flex-wrap: wrap;
         }
-        .action-buttons .btn {
-            flex: 1;
-            justify-content: center;
-        }
-        .btn-sm {
-            padding: 3px 8px;
-            font-size: 0.6rem;
-        }
-        .avatar-sm {
-            width: 28px;
-            height: 28px;
+        .page-title i { color: var(--primary); }
+        .page-badge {
             font-size: 0.7rem;
+            font-weight: 600;
+            background: var(--primary-bg);
+            color: var(--primary);
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-family: monospace;
         }
-        .page-header .page-title {
-            font-size: 1.2rem;
+        .page-badge.admin { background: #DC2626; color: white; }
+        .page-subtitle {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 6px;
         }
-        .stat-card .stat-number {
-            font-size: 1.2rem;
+        
+        .branch-tag {
+            background: var(--success);
+            color: #fff;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
-    }
-    
-    @media (max-width: 480px) {
+        
+        .admin-tag {
+            background: #DC2626;
+            color: #fff;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        /* ================================================================
+           STATS CARDS
+           ================================================================ */
         .stats-grid {
-            grid-template-columns: 1fr;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
         }
-        .data-table {
-            font-size: 0.65rem;
-            min-width: 420px;
+        
+        .stat-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 18px 20px;
+            border: 2px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            cursor: pointer;
         }
-        .data-table th,
-        .data-table td {
-            padding: 4px 8px;
+        
+        .stat-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
         }
-        .action-buttons {
-            flex-direction: column;
-            gap: 2px;
+        
+        .stat-card .stat-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+            color: white;
+            flex-shrink: 0;
         }
-        .action-buttons .btn {
+        
+        .stat-card.blue .stat-icon { background: var(--primary); }
+        .stat-card.yellow .stat-icon { background: var(--warning); }
+        .stat-card.green .stat-icon { background: var(--success); }
+        .stat-card.purple .stat-icon { background: var(--purple); }
+        .stat-card.red .stat-icon { background: var(--danger); }
+        
+        .stat-card .stat-number {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.2;
+        }
+        
+        .stat-card .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-top: 2px;
+        }
+        
+        .stat-card.active {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+        }
+        
+        [data-theme="dark"] .stat-card.active {
+            background: #1E3A5F;
+            border-color: #6EA8FE;
+        }
+        
+        /* ================================================================
+           FILTER CARD
+           ================================================================ */
+        .filter-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 16px 20px;
+            border: 2px solid var(--border-color);
+            margin-bottom: 24px;
+            transition: all 0.3s ease;
+        }
+        
+        .filter-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .filter-form {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .filter-group {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
             width: 100%;
         }
-    }
-</style>
+        
+        .filter-search {
+            display: flex;
+            align-items: center;
+            flex: 1;
+            min-width: 200px;
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            transition: all 0.3s;
+            padding: 0 12px;
+        }
+        
+        .filter-search:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+        }
+        
+        .filter-search .fa-search {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            opacity: 0.5;
+        }
+        
+        .filter-input {
+            border: none;
+            background: transparent;
+            padding: 10px 12px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .filter-input::placeholder {
+            color: var(--text-secondary);
+            opacity: 0.5;
+        }
+        
+        .filter-select {
+            padding: 10px 14px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 0.85rem;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            outline: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            min-width: 140px;
+        }
+        
+        .filter-select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+        }
+        
+        /* ================================================================
+           TABLE
+           ================================================================ */
+        .table-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            border: 2px solid var(--border-color);
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .table-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .table-wrap {
+            overflow-x: auto;
+            padding: 0;
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.82rem;
+            min-width: 700px;
+        }
+        
+        .data-table thead th {
+            text-align: left;
+            padding: 10px 14px;
+            font-weight: 700;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #fff;
+            background: var(--primary);
+            border-bottom: 3px solid var(--primary-dark);
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+        
+        .data-table thead th:first-child {
+            border-radius: 8px 0 0 0;
+        }
+        
+        .data-table thead th:last-child {
+            border-radius: 0 8px 0 0;
+        }
+        
+        .data-table tbody tr {
+            transition: background 0.2s ease;
+        }
+        
+        .data-table tbody tr:nth-child(even) {
+            background: var(--gray-50);
+        }
+        .data-table tbody tr:nth-child(odd) {
+            background: var(--bg-card);
+        }
+        .data-table tbody tr:hover {
+            background: var(--primary-bg);
+        }
+        
+        [data-theme="dark"] .data-table tbody tr:nth-child(even) {
+            background: #1E293B;
+        }
+        [data-theme="dark"] .data-table tbody tr:nth-child(odd) {
+            background: #0F172A;
+        }
+        [data-theme="dark"] .data-table tbody tr:hover {
+            background: #1A3A5F;
+        }
+        
+        .data-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        
+        /* ================================================================
+           STATUS BADGES
+           ================================================================ */
+        .badge-status {
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 3px 12px;
+            border-radius: 12px;
+            display: inline-block;
+        }
+        
+        .badge-status.badge-warning { background: var(--warning-bg); color: var(--warning); }
+        .badge-status.badge-info { background: var(--primary-bg); color: var(--primary); }
+        .badge-status.badge-success { background: var(--success-bg); color: var(--success); }
+        .badge-status.badge-danger { background: var(--danger-bg); color: var(--danger); }
+        .badge-status.badge-purple { background: var(--purple-bg); color: var(--purple); }
+        
+        /* ================================================================
+           AVATAR
+           ================================================================ */
+        .avatar-sm {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #fff;
+            flex-shrink: 0;
+        }
+        
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.7rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        
+        .btn-blue {
+            background: var(--primary);
+            color: #fff;
+        }
+        .btn-blue:hover {
+            background: var(--primary-dark);
+            transform: scale(1.05);
+        }
+        
+        .btn-consult {
+            background: var(--purple);
+            color: #fff;
+        }
+        .btn-consult:hover {
+            background: #6D28D9;
+            transform: scale(1.05);
+        }
+        
+        .btn-green {
+            background: var(--success);
+            color: #fff;
+        }
+        .btn-green:hover {
+            background: var(--success-dark);
+            transform: scale(1.05);
+        }
+        
+        .btn-view {
+            background: var(--primary);
+            color: #fff;
+        }
+        .btn-view:hover {
+            background: var(--primary-dark);
+            transform: scale(1.05);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+            transform: scale(1.05);
+        }
+        
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 0.65rem;
+            border-radius: 6px;
+        }
+        
+        .action-buttons {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: nowrap;
+            justify-content: center;
+        }
+        
+        /* ================================================================
+           EMPTY STATE
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            color: var(--border-color);
+            display: block;
+            margin-bottom: 12px;
+        }
+        
+        .empty-state h4 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .empty-state p {
+            font-size: 0.85rem;
+        }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand {
+            color: var(--primary);
+            font-weight: 600;
+        }
+        
+        .text-gray-300 { color: var(--gray-300); }
+        .text-gray-400 { color: var(--gray-400); }
+        .text-muted { color: var(--text-secondary); }
+        .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
+        .ml-2 { margin-left: 0.5rem; }
+        .mr-1 { margin-right: 0.25rem; }
+        .mr-2 { margin-right: 0.5rem; }
+        .mt-2 { margin-top: 0.5rem; }
+        .mb-3 { margin-bottom: 0.75rem; }
+        .mb-5 { margin-bottom: 1.25rem; }
+        .text-xs { font-size: 0.75rem; }
+        .text-sm { font-size: 0.85rem; }
+        .text-center { text-align: center; }
+        .font-medium { font-weight: 500; }
+        .font-mono { font-family: monospace; }
+        .capitalize { text-transform: capitalize; }
+        .block { display: block; }
+        .flex { display: flex; }
+        .flex-wrap { flex-wrap: wrap; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .gap-2 { gap: 0.5rem; }
+        .gap-3 { gap: 0.75rem; }
+        .gap-4 { gap: 1rem; }
+        .py-8 { padding-top: 2rem; padding-bottom: 2rem; }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            padding: 14px 22px;
+            border-radius: 10px;
+            z-index: 9999;
+            max-width: 380px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s ease;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #ffffff;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        }
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .stats-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            .data-table {
+                font-size: 0.75rem;
+                min-width: 600px;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .main-content { margin-left: 0; padding: 16px; }
+            .stats-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+            .filter-group {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            .filter-search {
+                min-width: 100%;
+            }
+            .filter-select {
+                width: 100%;
+            }
+            .filter-form .btn {
+                width: 100%;
+                justify-content: center;
+            }
+            .data-table {
+                font-size: 0.7rem;
+                min-width: 500px;
+            }
+            .data-table th,
+            .data-table td {
+                padding: 6px 10px;
+            }
+            .action-buttons {
+                flex-wrap: wrap;
+            }
+            .action-buttons .btn {
+                flex: 1;
+                justify-content: center;
+            }
+            .btn-sm {
+                padding: 3px 8px;
+                font-size: 0.6rem;
+            }
+            .avatar-sm {
+                width: 28px;
+                height: 28px;
+                font-size: 0.7rem;
+            }
+            .page-title {
+                font-size: 1.2rem;
+            }
+            .stat-card .stat-number {
+                font-size: 1.2rem;
+            }
+            .page-header {
+                flex-direction: column;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 12px; }
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+            .data-table {
+                font-size: 0.65rem;
+                min-width: 420px;
+            }
+            .data-table th,
+            .data-table td {
+                padding: 4px 8px;
+            }
+            .action-buttons {
+                flex-direction: column;
+                gap: 2px;
+            }
+            .action-buttons .btn {
+                width: 100%;
+            }
+        }
+    </style>
+</head>
+<body>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -807,12 +1027,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-clinic-medical mr-2" style="color: #0B5ED7;"></i> Visits
+                <i class="fas fa-clinic-medical"></i> Visits
                 <?php if ($is_admin): ?>
-                    <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
+                    <span class="page-badge admin">👑 Admin Mode</span>
                 <?php endif; ?>
             </h1>
             <p class="page-subtitle">
@@ -824,7 +1044,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <i class="fas fa-list mr-1"></i> <?= count($visits) ?> visits
                 </span>
                 <?php if ($is_admin): ?>
-                    <span class="ml-2 inline-flex bg-red-100 text-red-700 px-3 py-1 rounded-full text-xs border border-red-200">
+                    <span class="ml-2 admin-tag">
                         <i class="fas fa-user-shield mr-1"></i> Admin View
                     </span>
                 <?php endif; ?>
@@ -879,28 +1099,31 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- ================================================================ -->
     <div class="filter-card">
         <form method="GET" class="filter-form">
-            <input type="hidden" name="filter" value="<?= $filter ?>">
+            <input type="hidden" name="filter" value="<?= htmlspecialchars($filter) ?>">
             
             <div class="filter-group">
                 <div class="filter-search">
                     <i class="fas fa-search"></i>
-                    <input type="text" name="search" class="filter-input" placeholder="Search by patient name, ID or phone..." value="<?= htmlspecialchars($search) ?>">
+                    <input type="text" name="search" class="filter-input" placeholder="Search by patient name, ID, phone or visit number..." value="<?= htmlspecialchars($search) ?>">
                 </div>
                 
                 <select name="status" class="filter-select" onchange="this.form.submit()">
                     <option value="">All Status</option>
-                    <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>Pending</option>
-                    <option value="assigned" <?= $status_filter === 'assigned' ? 'selected' : '' ?>>Assigned</option>
-                    <option value="with_doctor" <?= $status_filter === 'with_doctor' ? 'selected' : '' ?>>With Doctor</option>
-                    <option value="completed" <?= $status_filter === 'completed' ? 'selected' : '' ?>>Completed</option>
-                    <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>Cancelled</option>
+                    <option value="pending" <?= $status_filter === 'pending' ? 'selected' : '' ?>>⏳ Pending</option>
+                    <option value="assigned" <?= $status_filter === 'assigned' ? 'selected' : '' ?>>👨‍⚕️ Assigned</option>
+                    <option value="with_doctor" <?= $status_filter === 'with_doctor' ? 'selected' : '' ?>>🩺 With Doctor</option>
+                    <option value="lab_test" <?= $status_filter === 'lab_test' ? 'selected' : '' ?>>🧪 Lab Test</option>
+                    <option value="lab_completed" <?= $status_filter === 'lab_completed' ? 'selected' : '' ?>>✅ Lab Done</option>
+                    <option value="prescribed" <?= $status_filter === 'prescribed' ? 'selected' : '' ?>>💊 Prescribed</option>
+                    <option value="completed" <?= $status_filter === 'completed' ? 'selected' : '' ?>>✅ Completed</option>
+                    <option value="cancelled" <?= $status_filter === 'cancelled' ? 'selected' : '' ?>>❌ Cancelled</option>
                 </select>
                 
                 <button type="submit" class="btn btn-blue">
                     <i class="fas fa-search"></i> Search
                 </button>
-                <?php if ($search || $status_filter): ?>
-                    <a href="?filter=<?= $filter ?>" class="btn btn-outline">
+                <?php if (!empty($search) || !empty($status_filter)): ?>
+                    <a href="?filter=<?= htmlspecialchars($filter) ?>" class="btn btn-outline">
                         <i class="fas fa-times"></i> Clear
                     </a>
                 <?php endif; ?>
@@ -916,7 +1139,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th style="border-radius: 8px 0 0 0; width:50px;">#</th>
+                        <th>#</th>
                         <th>Patient</th>
                         <th>Patient ID</th>
                         <th>Phone</th>
@@ -924,7 +1147,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <th>Visit Type</th>
                         <th>Status</th>
                         <th>Date</th>
-                        <th style="border-radius: 0 8px 0 0; text-align:center;">Actions</th>
+                        <th style="text-align:center;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -943,7 +1166,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         </div>
                                     </div>
                                 </td>
-                                <td><span class="font-mono"><?= htmlspecialchars($visit['patient_id'] ?? 'N/A') ?></span></td>
+                                <td><span class="font-mono"><?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?></span></td>
                                 <td><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></td>
                                 <td>
                                     <?php if ($visit['doctor_name']): ?>
@@ -953,13 +1176,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <span class="text-xs text-muted">Not assigned</span>
                                     <?php endif; ?>
                                 </td>
-                                <td><span class="text-xs capitalize"><?= htmlspecialchars($visit['visit_type'] ?? 'N/A') ?></span></td>
                                 <td>
-                                    <span class="status-badge <?= $visit['status'] ?>">
-                                        <?= ucfirst(str_replace('_', ' ', $visit['status'])) ?>
+                                    <span class="text-xs capitalize">
+                                        <?= ucfirst($visit['visit_type'] ?? 'N/A') ?>
+                                    </span>
+                                    <?php if (!empty($visit['consultation_fee']) && $visit['consultation_fee'] > 0): ?>
+                                        <div class="text-xs text-muted">TSh <?= number_format($visit['consultation_fee'], 0) ?></div>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="badge-status <?= getStatusBadgeClass($visit['status']) ?>">
+                                        <?= getStatusLabel($visit['status'] ?? 'pending') ?>
                                     </span>
                                 </td>
-                                <td class="text-xs"><?= isset($visit['created_at']) ? date('M d, Y h:i A', strtotime($visit['created_at'])) : 'N/A' ?></td>
+                                <td class="text-xs">
+                                    <?= isset($visit['created_at']) ? date('M d, Y h:i A', strtotime($visit['created_at'])) : 'N/A' ?>
+                                    <?php if (!empty($visit['completed_at'])): ?>
+                                        <div class="text-xs text-muted">Completed: <?= date('M d, Y', strtotime($visit['completed_at'])) ?></div>
+                                    <?php endif; ?>
+                                </td>
                                 <td>
                                     <div class="action-buttons">
                                         <a href="view_visit.php?id=<?= $visit['id'] ?>" class="btn btn-view btn-sm" title="View Visit">
@@ -979,19 +1214,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="9" class="text-center py-8 text-muted">
-                                <i class="fas fa-clinic-medical text-3xl block mb-2"></i>
-                                <?php if ($search): ?>
-                                    No visits found matching "<strong><?= htmlspecialchars($search) ?></strong>"
-                                <?php elseif ($filter === 'today'): ?>
-                                    No visits for today
-                                <?php elseif ($filter === 'pending'): ?>
-                                    No pending visits
-                                <?php elseif ($filter === 'completed'): ?>
-                                    No completed visits
-                                <?php else: ?>
-                                    No visits recorded yet
-                                <?php endif; ?>
+                            <td colspan="9" class="text-center py-8">
+                                <div class="empty-state">
+                                    <i class="fas fa-clinic-medical"></i>
+                                    <h4>No visits found</h4>
+                                    <p>
+                                        <?php if (!empty($search)): ?>
+                                            No results for "<strong><?= htmlspecialchars($search) ?></strong>"
+                                        <?php elseif ($filter === 'today'): ?>
+                                            No visits for today
+                                        <?php elseif ($filter === 'pending'): ?>
+                                            No pending visits
+                                        <?php elseif ($filter === 'completed'): ?>
+                                            No completed visits
+                                        <?php else: ?>
+                                            No visits recorded yet
+                                        <?php endif; ?>
+                                    </p>
+                                </div>
                             </td>
                         </tr>
                     <?php endif; ?>
@@ -1024,11 +1264,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <!-- ================================================================ -->
 <!-- TOAST -->
 <!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
+<div id="toast" class="toast-custom">
     <i class="fas fa-info-circle"></i>
     <div>
-        <p id="toastTitle">Notification</p>
-        <p id="toastMessage"></p>
+        <p id="toastTitle" style="font-weight:600;font-size:0.85rem;margin:0;">Notification</p>
+        <p id="toastMessage" style="font-size:0.75rem;opacity:0.9;margin:0;"></p>
     </div>
 </div>
 
@@ -1039,32 +1279,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     // ================================================================
     // DARK MODE
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
+    if (localStorage.getItem('darkMode') === 'true') {
+        document.documentElement.setAttribute('data-theme', 'dark');
     }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-        }
-    });
 
     // ================================================================
     // TOAST
@@ -1073,20 +1290,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
+        if (!toast) return;
+        toast.className = 'toast-custom';
+        if (type === 'success') { toast.style.background = '#059669'; }
+        else if (type === 'error') { toast.style.background = '#DC2626'; }
+        else { toast.style.background = '#0B5ED7'; }
         toastTitle.textContent = title;
         toastMessage.textContent = message;
         toast.style.display = 'flex';
-        
-        toast.classList.add('show');
+        setTimeout(function() { toast.classList.add('show'); }, 50);
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
+        }, 4000);
     }
 
     console.log('%c🏥 Braick - Visits List', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
@@ -1096,6 +1313,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <?php endif; ?>
     console.log('%c📊 Total Visits: <?= count($visits) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📋 Using Actual Database: visits, patients, users, branches', 'font-size:12px; color:#7C3AED;');
 </script>
 
 </body>

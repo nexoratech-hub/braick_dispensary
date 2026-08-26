@@ -3,8 +3,8 @@
 // FILE: frontend/pages/doctor/dashboard.php
 // DOCTOR DASHBOARD - FULL VERSION WITH AUTO-UPDATE
 // 8 CLICKABLE CARDS - SMART AUTO-UPDATE (5 SECONDS)
+// USING NEW DATABASE: dispensary_db
 // FIXED: Using visit_date instead of created_at
-// FIXED: Data persists after auto-update
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -48,7 +48,7 @@ $doctor_branch_name = 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE - USING NEW DATABASE (dispensary_db)
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -120,14 +120,14 @@ try {
 $today = date('Y-m-d');
 
 // ================================================================
-// GET INITIAL STATISTICS FOR RENDERING - FIXED: using visit_date
+// GET INITIAL STATISTICS FOR RENDERING - Using new database
 // ================================================================
 
 // 1. Today's Patients - FIXED: use visit_date
 $stmt = $db->prepare("
     SELECT 
-        COUNT(DISTINCT CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN patient_id END) as pending,
-        COUNT(DISTINCT CASE WHEN status IN ('completed', 'prescribed') THEN patient_id END) as completed
+        COUNT(DISTINCT CASE WHEN status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed') THEN patient_id END) as pending,
+        COUNT(DISTINCT CASE WHEN status IN ('completed') THEN patient_id END) as completed
     FROM visits 
     WHERE doctor_id = ? AND DATE(visit_date) = ?
 ");
@@ -140,8 +140,8 @@ $today_patients_total = $today_patients_pending + $today_patients_completed;
 // 2. Today's Visits - FIXED: use visit_date
 $stmt = $db->prepare("
     SELECT 
-        COUNT(CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN 1 END) as pending,
-        COUNT(CASE WHEN status IN ('completed', 'prescribed') THEN 1 END) as completed
+        COUNT(CASE WHEN status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed') THEN 1 END) as pending,
+        COUNT(CASE WHEN status IN ('completed') THEN 1 END) as completed
     FROM visits 
     WHERE doctor_id = ? AND DATE(visit_date) = ?
 ");
@@ -205,7 +205,7 @@ $stmt = $db->prepare("
     SELECT COUNT(*) as count 
     FROM visits 
     WHERE doctor_id = ? 
-    AND status IN ('pending', 'assigned', 'with_doctor') 
+    AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed') 
     AND DATE(visit_date) = ?
 ");
 $stmt->execute([$doctor_id, $today]);
@@ -231,7 +231,7 @@ $stmt = $db->prepare("
     FROM visits v
     JOIN patients p ON v.patient_id = p.id
     WHERE v.doctor_id = ? 
-    AND v.status IN ('pending', 'assigned', 'with_doctor') 
+    AND v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed') 
     AND DATE(v.visit_date) = ?
     ORDER BY v.created_at ASC
     LIMIT 10
@@ -702,7 +702,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                     <span class="activity-time">• <?= time_ago($activity['created_at'] ?? '') ?></span>
                                 </div>
                             </div>
-                            <?php if ($activity['action_type'] === 'visit' && ($activity['status'] ?? '') === 'pending'): ?>
+                            <?php if ($activity['action_type'] === 'visit' && in_array($activity['status'] ?? '', ['pending', 'assigned', 'with_doctor'])): ?>
                                 <a href="consultation.php?visit_id=<?= $activity['id'] ?>" class="btn-consult-sm">Consult</a>
                             <?php elseif ($activity['action_type'] === 'appointment'): ?>
                                 <a href="appointment_details.php?id=<?= $activity['id'] ?>" class="btn-view-sm">View</a>
@@ -791,10 +791,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
        ROOT VARIABLES - LIGHT & DARK MODE
        ================================================================ */
     :root {
-        --primary: #0B5ED7;
-        --primary-dark: #0A4CA8;
-        --primary-light: #6EA8FE;
-        --primary-bg: #E8F0FE;
+        --primary: #2563EB;
+        --primary-dark: #1D4ED8;
+        --primary-light: #60A5FA;
+        --primary-bg: #EFF6FF;
         --success: #059669;
         --success-dark: #047857;
         --success-light: #34D399;
@@ -880,7 +880,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
        WELCOME HERO
        ================================================================ */
     .welcome-hero {
-        background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
+        background: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
         border-radius: 20px;
         padding: 28px 32px;
         margin-bottom: 28px;
@@ -1147,8 +1147,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         flex-shrink: 0;
     }
     
-    .stat-card-blue .stat-card-icon { background: linear-gradient(135deg, #0B5ED7, #1A73E8); }
-    .stat-card-green .stat-card-icon { background: linear-gradient(135deg, #059669, #0AA84F); }
+    .stat-card-blue .stat-card-icon { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
+    .stat-card-green .stat-card-icon { background: linear-gradient(135deg, #059669, #047857); }
     
     .stat-card-info {
         display: flex;
@@ -1214,7 +1214,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-size: 0.65rem;
         font-weight: 700;
         color: white;
-        background: #0B5ED7;
+        background: #2563EB;
         padding: 2px 12px;
         border-radius: 20px;
         min-width: 24px;
@@ -1233,7 +1233,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     
     .stat-card-progress {
         height: 3px;
-        background: #0B5ED7;
+        background: #2563EB;
         border-radius: 0 0 16px 16px;
         position: absolute;
         bottom: 0;
@@ -1278,7 +1278,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         gap: 8px;
     }
     
-    .title-blue { color: #0B5ED7; }
+    .title-blue { color: #2563EB; }
     .title-green { color: #059669; }
     .title-orange { color: #D97706; }
     .title-yellow { color: #D97706; }
@@ -1291,14 +1291,14 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .card-link {
-        color: #0B5ED7;
+        color: #2563EB;
         font-size: 0.85rem;
         text-decoration: none;
         font-weight: 500;
         transition: color 0.3s;
     }
     
-    .card-link:hover { text-decoration: underline; color: #0A4CA8; }
+    .card-link:hover { text-decoration: underline; color: #1D4ED8; }
     
     /* ================================================================
        CHART
@@ -1361,7 +1361,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         white-space: nowrap;
     }
     
-    .appointment-status.scheduled { background: #EFF6FF; color: #0B5ED7; }
+    .appointment-status.scheduled { background: #EFF6FF; color: #2563EB; }
     .appointment-status.confirmed { background: #ECFDF5; color: #059669; }
     .appointment-status.completed { background: #ECFDF5; color: #059669; }
     .appointment-status.cancelled { background: #FEE2E2; color: #EF4444; }
@@ -1392,7 +1392,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .queue-item:hover { background: var(--gray-50); }
     .queue-item-first {
         background: var(--primary-bg);
-        border-left: 4px solid #0B5ED7;
+        border-left: 4px solid #2563EB;
         border-radius: 8px 0 0 8px;
     }
     
@@ -1446,7 +1446,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .queue-status.pending { background: #FEF3C7; color: #D97706; }
-    .queue-status.assigned { background: #EFF6FF; color: #0B5ED7; }
+    .queue-status.assigned { background: #EFF6FF; color: #2563EB; }
     .queue-status.with_doctor { background: #ECFDF5; color: #059669; }
     
     .btn-consult {
@@ -1484,7 +1484,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        background: #0B5ED7;
+        background: #2563EB;
         color: white;
         padding: 3px 10px;
         border-radius: 6px;
@@ -1494,7 +1494,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         transition: all 0.3s;
         flex-shrink: 0;
     }
-    .btn-view-sm:hover { background: #0A4CA8; transform: scale(1.05); }
+    .btn-view-sm:hover { background: #1D4ED8; transform: scale(1.05); }
     
     /* ================================================================
        ACTIVITIES
@@ -1532,7 +1532,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: white;
     }
     
-    .activity-icon-blue { background: #0B5ED7; }
+    .activity-icon-blue { background: #2563EB; }
     .activity-icon-green { background: #059669; }
     
     .activity-content { flex: 1; min-width: 0; }
@@ -1573,16 +1573,16 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     
     .quick-action:hover {
-        border-color: #0B5ED7;
+        border-color: #2563EB;
         transform: translateY(-3px);
         box-shadow: var(--shadow-lg);
     }
     
     .quick-action i { font-size: 1.3rem; }
     .quick-action span { font-size: 0.65rem; font-weight: 500; text-align: center; }
-    .quick-action-blue i { color: #0B5ED7; }
+    .quick-action-blue i { color: #2563EB; }
     .quick-action-green i { color: #059669; }
-    .quick-action-blue:hover { border-color: #0B5ED7; }
+    .quick-action-blue:hover { border-color: #2563EB; }
     .quick-action-green:hover { border-color: #059669; }
     
     /* ================================================================
@@ -1629,7 +1629,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     .toast-custom.show { transform: translateY(0); opacity: 1; }
     .toast-custom.success { background: #059669; }
     .toast-custom.error { background: #EF4444; }
-    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.info { background: #2563EB; }
     .toast-custom.warning { background: #D97706; }
     
     /* ================================================================
@@ -1643,7 +1643,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         font-size: 0.7rem;
         color: var(--text-secondary);
     }
-    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    .footer .footer-brand { color: #2563EB; font-weight: 600; }
     .text-gray-300 { color: #D1D5DB; }
     .mx-2 { margin-left: 0.5rem; margin-right: 0.5rem; }
     
@@ -1700,7 +1700,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border-color: #334155;
     }
     [data-theme="dark"] .stat-card:hover {
-        border-color: #0B5ED7;
+        border-color: #2563EB;
         box-shadow: 0 8px 25px rgba(0,0,0,0.4);
     }
     [data-theme="dark"] .stat-card-number {
@@ -1729,16 +1729,16 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         border-color: #334155;
     }
     [data-theme="dark"] .dashboard-card:hover {
-        border-color: #0B5ED7;
+        border-color: #2563EB;
     }
     [data-theme="dark"] .dashboard-card-title {
         color: #F1F5F9;
     }
-    [data-theme="dark"] .title-blue { color: #6EA8FE; }
+    [data-theme="dark"] .title-blue { color: #60A5FA; }
     [data-theme="dark"] .title-green { color: #34D399; }
     [data-theme="dark"] .title-orange { color: #FBBF24; }
     [data-theme="dark"] .title-yellow { color: #FBBF24; }
-    [data-theme="dark"] .card-link { color: #6EA8FE; }
+    [data-theme="dark"] .card-link { color: #60A5FA; }
     [data-theme="dark"] .card-link:hover { color: #93C5FD; }
     [data-theme="dark"] .appointment-item {
         border-color: #334155;
@@ -1763,7 +1763,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     [data-theme="dark"] .queue-item-first {
         background: #1E3A5F;
-        border-left-color: #6EA8FE;
+        border-left-color: #60A5FA;
     }
     [data-theme="dark"] .queue-name {
         color: #F1F5F9;
@@ -1807,10 +1807,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: #F1F5F9;
     }
     [data-theme="dark"] .quick-action:hover {
-        border-color: #0B5ED7;
+        border-color: #2563EB;
     }
     [data-theme="dark"] .quick-action i {
-        color: #6EA8FE;
+        color: #60A5FA;
     }
     [data-theme="dark"] .quick-action-green i {
         color: #34D399;
@@ -1831,7 +1831,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         color: #34D399 !important;
     }
     [data-theme="dark"] .welcome-hero {
-        background: linear-gradient(135deg, #0A4CA8, #0B5ED7);
+        background: linear-gradient(135deg, #1D4ED8, #2563EB);
     }
     [data-theme="dark"] .welcome-title .doctor-name {
         color: #93C5FD;
@@ -1874,7 +1874,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     [data-theme="dark"] .appointment-status.scheduled {
         background: #1E3A5F;
-        color: #6EA8FE;
+        color: #60A5FA;
     }
     [data-theme="dark"] .appointment-status.confirmed {
         background: #1A3A2A;
@@ -1898,7 +1898,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     }
     [data-theme="dark"] .queue-status.assigned {
         background: #1E3A5F;
-        color: #6EA8FE;
+        color: #60A5FA;
     }
     [data-theme="dark"] .queue-status.with_doctor {
         background: #1A3A2A;
@@ -1917,10 +1917,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         background: #5B21B6;
     }
     [data-theme="dark"] .btn-view-sm {
-        background: #0A4CA8;
+        background: #1D4ED8;
     }
     [data-theme="dark"] .btn-view-sm:hover {
-        background: #0B5ED7;
+        background: #2563EB;
     }
 </style>
 
@@ -1956,8 +1956,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                 datasets: [{
                     label: 'Appointments',
                     data: values,
-                    backgroundColor: isDark ? '#6EA8FE' : '#0B5ED7',
-                    borderColor: isDark ? '#0B5ED7' : '#0A4CA8',
+                    backgroundColor: isDark ? '#60A5FA' : '#2563EB',
+                    borderColor: isDark ? '#2563EB' : '#1D4ED8',
                     borderWidth: 2,
                     borderRadius: 6,
                 }]
@@ -2040,11 +2040,12 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     });
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
     
-    console.log('%c👨‍⚕️ Doctor Dashboard Initialized', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Doctor Dashboard Initialized', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
     console.log('%c📅 Today\'s visits: <?= $today_visits_total ?> (using visit_date)', 'font-size:12px; color:#059669;');
     console.log('%c🔄 Auto-update active every 5 seconds', 'font-size:12px; color:#34D399;');
-    console.log('%c🌙 Dark mode uses CSS + localStorage (syncs with header)', 'font-size:12px; color:#6EA8FE;');
+    console.log('%c🌙 Dark mode uses CSS + localStorage (syncs with header)', 'font-size:12px; color:#60A5FA;');
+    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:12px; color:#34D399;');
 </script>
 
 <!-- ================================================================ -->

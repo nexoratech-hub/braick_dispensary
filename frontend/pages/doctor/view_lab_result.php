@@ -66,7 +66,7 @@ try {
 }
 
 // ================================================================
-// FETCH LAB TEST DETAILS
+// FETCH LAB TEST DETAILS - USING ACTUAL DATABASE SCHEMA
 // ================================================================
 if ($is_admin) {
     // Admin can view any lab result
@@ -84,6 +84,10 @@ if ($is_admin) {
             lt.updated_at,
             lt.lab_technician_id,
             lt.formatted_result,
+            lt.test_price,
+            lt.test_date,
+            lt.sample_type,
+            lt.test_type,
             p.id as patient_id,
             p.patient_id as patient_code,
             p.full_name as patient_name,
@@ -102,11 +106,15 @@ if ($is_admin) {
             v.complaint,
             v.diagnosis,
             v.treatment,
-            (SELECT full_name FROM users WHERE id = lt.lab_technician_id) as technician_name
+            v.consultation_fee,
+            tech.full_name as technician_name,
+            b.name as branch_name
         FROM lab_tests lt
         JOIN visits v ON lt.visit_id = v.id
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN users tech ON lt.lab_technician_id = tech.id
+        LEFT JOIN branches b ON lt.branch_id = b.id
         WHERE lt.id = ?
     ";
     $stmt = $db->prepare($sql);
@@ -127,6 +135,10 @@ if ($is_admin) {
             lt.updated_at,
             lt.lab_technician_id,
             lt.formatted_result,
+            lt.test_price,
+            lt.test_date,
+            lt.sample_type,
+            lt.test_type,
             p.id as patient_id,
             p.patient_id as patient_code,
             p.full_name as patient_name,
@@ -145,11 +157,15 @@ if ($is_admin) {
             v.complaint,
             v.diagnosis,
             v.treatment,
-            (SELECT full_name FROM users WHERE id = lt.lab_technician_id) as technician_name
+            v.consultation_fee,
+            tech.full_name as technician_name,
+            b.name as branch_name
         FROM lab_tests lt
         JOIN visits v ON lt.visit_id = v.id
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
+        LEFT JOIN users tech ON lt.lab_technician_id = tech.id
+        LEFT JOIN branches b ON lt.branch_id = b.id
         WHERE lt.id = ? AND v.doctor_id = ?
     ";
     $stmt = $db->prepare($sql);
@@ -166,7 +182,7 @@ if (!$lab_test) {
 // CALCULATE AGE FROM DATE OF BIRTH
 // ================================================================
 $age = null;
-if (!empty($lab_test['date_of_birth'])) {
+if (!empty($lab_test['date_of_birth']) && $lab_test['date_of_birth'] !== '0000-00-00') {
     $birthDate = new DateTime($lab_test['date_of_birth']);
     $today = new DateTime('today');
     $age = $birthDate->diff($today)->y;
@@ -175,7 +191,7 @@ if (!empty($lab_test['date_of_birth'])) {
 // ================================================================
 // GET BRANCH DETAILS
 // ================================================================
-$branch_name = $doctor_branch_name;
+$branch_name = $lab_test['branch_name'] ?? $doctor_branch_name;
 $branch_phone = '+255 700 000 001';
 $branch_email = 'info@braick.com';
 $branch_address = 'Dodoma City, Tanzania';
@@ -883,6 +899,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         </span>
                     </span>
                 </div>
+                <?php if (!empty($lab_test['branch_name'])): ?>
+                <div class="info-item">
+                    <span class="label"><i class="fas fa-store-alt"></i> Branch</span>
+                    <span class="value"><?= htmlspecialchars($lab_test['branch_name']) ?></span>
+                </div>
+                <?php endif; ?>
+                <?php if (!empty($lab_test['test_price']) && $lab_test['test_price'] > 0): ?>
+                <div class="info-item">
+                    <span class="label"><i class="fas fa-money-bill-wave"></i> Test Price</span>
+                    <span class="value" style="color:var(--success);">TSh <?= number_format($lab_test['test_price'], 0) ?></span>
+                </div>
+                <?php endif; ?>
             </div>
             
             <!-- Test Results -->
@@ -901,6 +929,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <div class="label">Visit Number</div>
                         <div class="value"><?= htmlspecialchars($lab_test['visit_number'] ?? 'N/A') ?></div>
                     </div>
+                    <?php if (!empty($lab_test['sample_type'])): ?>
+                    <div class="result-item">
+                        <div class="label">Sample Type</div>
+                        <div class="value"><?= htmlspecialchars($lab_test['sample_type']) ?></div>
+                    </div>
+                    <?php endif; ?>
+                    <?php if (!empty($lab_test['test_type'])): ?>
+                    <div class="result-item">
+                        <div class="label">Test Type</div>
+                        <div class="value"><?= htmlspecialchars($lab_test['test_type']) ?></div>
+                    </div>
+                    <?php endif; ?>
                     <?php if (!empty($lab_test['technician_name'])): ?>
                     <div class="result-item">
                         <div class="label">Lab Technician</div>

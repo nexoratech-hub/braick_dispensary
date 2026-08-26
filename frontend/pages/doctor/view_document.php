@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/view_document.php
 // DOCTOR - VIEW DOCUMENT DETAILS (WITH FIXED DOWNLOAD)
+// USING dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -65,6 +66,18 @@ try {
 }
 
 // ================================================================
+// GET UNREAD NOTIFICATIONS COUNT
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$doctor_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
 // GET DOCUMENT DETAILS
 // ================================================================
 $document = null;
@@ -123,15 +136,20 @@ try {
     }
 
     // ================================================================
-    // BUILD CORRECT PATHS
+    // BUILD CORRECT PATHS - FIXED
     // ================================================================
-    // Physical paths to check
+    // Physical paths to check - MULTIPLE PATHS
     $paths_to_check = [
+        // From database path
+        $_SERVER['DOCUMENT_ROOT'] . $document['file_path'],
+        $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/documents/' . $document['file_name'],
+        $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/documents/' . str_replace('doc_', '', $document['file_name']),
+        // Direct path
         'C:/xampp/htdocs' . $document['file_path'],
         'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/' . $document['file_name'],
-        'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/documents/' . str_replace('doc_', '', $document['file_name']),
-        str_replace('\\', '/', 'C:/xampp/htdocs' . $document['file_path']),
+        // Relative from script
         __DIR__ . '/../../assets/uploads/documents/' . $document['file_name'],
+        __DIR__ . '/../../../assets/uploads/documents/' . $document['file_name'],
     ];
 
     foreach ($paths_to_check as $path) {
@@ -143,7 +161,7 @@ try {
         }
     }
 
-    // Web path for viewing
+    // Web path for viewing - FIXED
     $web_path = '/dispensary_system/frontend/assets/uploads/documents/' . $document['file_name'];
     
     // Download URL - use download_document.php handler
@@ -181,8 +199,11 @@ function getDocumentTypeLabel($type) {
         'prescription' => 'Prescription',
         'x_ray' => 'X-Ray',
         'scan' => 'Scan',
+        'ultrasound' => 'Ultrasound',
         'insurance' => 'Insurance',
         'id_document' => 'ID Document',
+        'sick_sheet' => 'Sick Sheet',
+        'consent_form' => 'Consent Form',
         'other' => 'Other'
     ];
     return $labels[$type] ?? ucfirst(str_replace('_', ' ', $type));
@@ -196,8 +217,11 @@ function getDocumentTypeBadge($type) {
         'prescription' => 'badge-orange',
         'x_ray' => 'badge-teal',
         'scan' => 'badge-indigo',
+        'ultrasound' => 'badge-pink',
         'insurance' => 'badge-pink',
         'id_document' => 'badge-gray',
+        'sick_sheet' => 'badge-orange',
+        'consent_form' => 'badge-purple',
         'other' => 'badge-gray'
     ];
     return $types[$type] ?? 'badge-gray';
@@ -217,6 +241,7 @@ function getFileIcon($file_type) {
     if (strpos($file_type, 'image') !== false || strpos($file_type, 'jpg') !== false || strpos($file_type, 'png') !== false) return 'fa-file-image';
     if (strpos($file_type, 'word') !== false || strpos($file_type, 'doc') !== false) return 'fa-file-word';
     if (strpos($file_type, 'excel') !== false || strpos($file_type, 'xls') !== false) return 'fa-file-excel';
+    if (strpos($file_type, 'text') !== false || strpos($file_type, 'html') !== false) return 'fa-file-code';
     return 'fa-file';
 }
 
@@ -288,8 +313,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <a href="<?= $web_path ?>" target="_blank" class="btn btn-primary" id="viewBtn">
                     <i class="fas fa-eye"></i> View File
                 </a>
+            <?php else: ?>
+                <span class="btn btn-danger btn-sm disabled">
+                    <i class="fas fa-exclamation-triangle"></i> File Not Found
+                </span>
             <?php endif; ?>
-            <?php if (!$document['is_verified']): ?>
+            <?php if (!$document['is_verified'] && ($is_admin || $doctor_id == $document['doctor_id'])): ?>
                 <a href="verify_document.php?id=<?= $document['id'] ?>" class="btn btn-verify" onclick="return confirm('Verify this document?')">
                     <i class="fas fa-check"></i> Verify
                 </a>
@@ -383,7 +412,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <?php if ($is_admin && !empty($document['doctor_name'])): ?>
                     <div class="info-row">
                         <span class="info-label">Uploaded By</span>
-                        <span class="info-value"><?= htmlspecialchars($document['doctor_name']) ?></span>
+                        <span class="info-value">Dr. <?= htmlspecialchars($document['doctor_name']) ?></span>
                     </div>
                 <?php endif; ?>
             </div>
@@ -410,7 +439,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <?php endif; ?>
                 <div class="info-row">
                     <span class="info-label">Doctor</span>
-                    <span class="info-value"><?= htmlspecialchars($document['doctor_name'] ?? $doctor_name) ?></span>
+                    <span class="info-value">Dr. <?= htmlspecialchars($document['doctor_name'] ?? $doctor_name) ?></span>
                 </div>
                 <?php if (!empty($document['visit_number'])): ?>
                     <div class="info-row">
@@ -470,7 +499,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span style="color:#DC2626;">👑 Admin Mode</span>
             <?php endif; ?>
             <span class="separator">|</span>
-            Logged in as: <strong><?= htmlspecialchars($doctor_name) ?></strong>
+            Logged in as: <strong>Dr. <?= htmlspecialchars($doctor_name) ?></strong>
             <span class="separator">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -930,6 +959,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         console.log('📂 File: <?= htmlspecialchars($document['file_name']) ?>');
         console.log('📁 Physical Path: <?= htmlspecialchars($physical_path) ?>');
         console.log('🔗 Download URL: <?= $download_url ?>');
+        showToast('⬇️ Downloading', 'Preparing file for download...', 'info');
+    });
+
+    document.getElementById('downloadBtn2')?.addEventListener('click', function(e) {
+        console.log('⬇️ Download button (2) clicked - ID: <?= $document['id'] ?>');
+        showToast('⬇️ Downloading', 'Preparing file for download...', 'info');
     });
 
     // ================================================================
@@ -947,11 +982,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c📁 Patient: <?= htmlspecialchars($document['patient_name']) ?>', 'font-size:12px; color:#059669;');
     console.log('%c📂 File: <?= htmlspecialchars($document['file_name']) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c📊 Size: <?= formatFileSize($document['file_size'] ?? 0) ?>', 'font-size:12px; color:#64748B;');
+    console.log('%c💾 Database: dispensary_db', 'font-size:12px; color:#34D399;');
     <?php if ($file_exists): ?>
         console.log('%c✅ File exists at: <?= htmlspecialchars($physical_path) ?>', 'font-size:12px; color:#34D399;');
         console.log('%c🔗 Download URL: <?= $download_url ?>', 'font-size:12px; color:#0B5ED7;');
     <?php else: ?>
         console.log('%c❌ File not found!', 'font-size:12px; color:#EF4444;');
+        console.log('%c🔍 Checked paths:', 'font-size:12px; color:#EF4444;');
+        <?php foreach ($paths_to_check as $path): ?>
+        console.log('%c  - <?= htmlspecialchars($path) ?>', 'font-size:11px; color:#64748B;');
+        <?php endforeach; ?>
     <?php endif; ?>
 </script>
 

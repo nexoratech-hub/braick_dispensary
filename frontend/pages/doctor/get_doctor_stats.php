@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/get_doctor_stats.php
 // DOCTOR STATS API - RETURNS JSON FOR AUTO-UPDATE
-// FIXED: Using visit_date instead of created_at
+// UPDATED FOR NEW DATABASE STRUCTURE
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -33,9 +33,9 @@ $doctor_name = $_SESSION['full_name'] ?? 'Dr. Unknown';
 $doctor_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - CORRECT PATH
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -86,14 +86,16 @@ try {
 $today = date('Y-m-d');
 
 // ================================================================
-// FETCH ALL STATISTICS FOR DOCTOR - FIXED: USING visit_date
+// FETCH ALL STATISTICS FOR DOCTOR
+// Using correct table names from dispensary_db.sql
 // ================================================================
 
-// 1. Today's Patients - FIXED: using visit_date, added 'with_doctor' and 'prescribed'
+// 1. Today's Patients - Using visit_date column from visits table
 try {
     $stmt = $db->prepare("
-        SELECT COUNT(DISTINCT CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN patient_id END) as pending,
-               COUNT(DISTINCT CASE WHEN status IN ('completed', 'prescribed') THEN patient_id END) as completed
+        SELECT 
+            COUNT(DISTINCT CASE WHEN status IN ('pending', 'assigned', 'with_doctor', 'lab_test') THEN patient_id END) as pending,
+            COUNT(DISTINCT CASE WHEN status IN ('completed', 'prescribed') THEN patient_id END) as completed
         FROM visits 
         WHERE doctor_id = ? AND DATE(visit_date) = ?
     ");
@@ -106,11 +108,11 @@ $today_patients_pending = $today_patients['pending'] ?? 0;
 $today_patients_completed = $today_patients['completed'] ?? 0;
 $today_patients_total = $today_patients_pending + $today_patients_completed;
 
-// 2. Today's Visits - FIXED: using visit_date, added 'with_doctor' and 'prescribed'
+// 2. Today's Visits - Using visit_date column
 try {
     $stmt = $db->prepare("
         SELECT 
-            COUNT(CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN 1 END) as pending,
+            COUNT(CASE WHEN status IN ('pending', 'assigned', 'with_doctor', 'lab_test') THEN 1 END) as pending,
             COUNT(CASE WHEN status IN ('completed', 'prescribed') THEN 1 END) as completed
         FROM visits 
         WHERE doctor_id = ? AND DATE(visit_date) = ?
@@ -124,7 +126,7 @@ $today_visits_pending = $today_visits['pending'] ?? 0;
 $today_visits_completed = $today_visits['completed'] ?? 0;
 $today_visits_total = $today_visits_pending + $today_visits_completed;
 
-// 3. Total Patients (all time - no date filter)
+// 3. Total Patients (all time - distinct patients)
 try {
     $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ?");
     $stmt->execute([$doctor_id]);
@@ -133,7 +135,7 @@ try {
     $total_patients = 0;
 }
 
-// 4. Total Visits (all time - no date filter)
+// 4. Total Visits (all time)
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE doctor_id = ?");
     $stmt->execute([$doctor_id]);
@@ -142,7 +144,7 @@ try {
     $total_visits = 0;
 }
 
-// 5. Today's Appointments (already using appointment_date - correct)
+// 5. Today's Appointments - Using appointment_date column
 try {
     $stmt = $db->prepare("
         SELECT 
@@ -169,7 +171,7 @@ try {
     $total_appointments = 0;
 }
 
-// 7. Total Prescriptions
+// 7. Total Prescriptions - Using prescriptions table
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE doctor_id = ?");
     $stmt->execute([$doctor_id]);
@@ -178,7 +180,24 @@ try {
     $total_prescriptions = 0;
 }
 
-// 8. Lab Tests
+// 8. Prescriptions By Status
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending,
+            COUNT(CASE WHEN status = 'confirmed' THEN 1 END) as confirmed,
+            COUNT(CASE WHEN status = 'dispensed' THEN 1 END) as dispensed,
+            COUNT(CASE WHEN status = 'cancelled' THEN 1 END) as cancelled
+        FROM prescriptions 
+        WHERE doctor_id = ?
+    ");
+    $stmt->execute([$doctor_id]);
+    $prescription_stats = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $prescription_stats = ['pending' => 0, 'confirmed' => 0, 'dispensed' => 0, 'cancelled' => 0];
+}
+
+// 9. Lab Tests - Using lab_tests table
 try {
     $stmt = $db->prepare("
         SELECT 
@@ -197,7 +216,22 @@ $lab_tests_total = $lab_tests['total'] ?? 0;
 $lab_tests_pending = $lab_tests['pending'] ?? 0;
 $lab_tests_completed = $lab_tests['completed'] ?? 0;
 
-// 9. Pending Visits (Queue) - FIXED: using visit_date
+// 10. Lab Tests Today
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            COUNT(CASE WHEN status IN ('pending', 'in_progress') THEN 1 END) as pending,
+            COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed
+        FROM lab_tests 
+        WHERE doctor_id = ? AND DATE(created_at) = ?
+    ");
+    $stmt->execute([$doctor_id, $today]);
+    $lab_tests_today = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $lab_tests_today = ['pending' => 0, 'completed' => 0];
+}
+
+// 11. Pending Visits (Queue) - Using visit_date
 try {
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
@@ -212,10 +246,10 @@ try {
     $pending_visits = 0;
 }
 
-// 10. Today's Appointments List
+// 12. Today's Appointments List
 try {
     $stmt = $db->prepare("
-        SELECT a.*, p.full_name as patient_name, p.patient_id, p.phone 
+        SELECT a.*, p.full_name as patient_name, p.patient_id as patient_code, p.phone 
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
         WHERE a.doctor_id = ? AND DATE(a.appointment_date) = ?
@@ -229,11 +263,11 @@ try {
     $today_appointments_list = [];
 }
 
-// 11. Pending Patients Queue - FIXED: using visit_date
+// 13. Pending Patients Queue - Using visit_date
 try {
     $stmt = $db->prepare("
         SELECT v.id, v.patient_id, v.status, v.created_at,
-               p.full_name as patient_name, p.patient_id as patient_number, p.phone,
+               p.full_name as patient_name, p.patient_id as patient_code, p.phone,
                TIMESTAMPDIFF(MINUTE, v.created_at, NOW()) as waiting_time
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
@@ -249,7 +283,7 @@ try {
     $pending_patients = [];
 }
 
-// 12. Weekly Appointments Chart
+// 14. Weekly Appointments Chart
 try {
     $stmt = $db->prepare("
         SELECT DATE(appointment_date) as date, COUNT(*) as count 
@@ -282,7 +316,40 @@ for ($i = 6; $i >= 0; $i--) {
     if (!$found) $chart_values[] = 0;
 }
 
-// 13. Recent Activities
+// 15. Weekly Visits Chart - Using visit_date
+try {
+    $stmt = $db->prepare("
+        SELECT DATE(visit_date) as date, COUNT(*) as count 
+        FROM visits 
+        WHERE doctor_id = ? AND visit_date >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+        AND status NOT IN ('cancelled')
+        GROUP BY DATE(visit_date)
+        ORDER BY date
+    ");
+    $stmt->execute([$doctor_id]);
+    $weekly_visits_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $weekly_visits_data = [];
+}
+
+// Build weekly visits chart data
+$visits_chart_labels = [];
+$visits_chart_values = [];
+for ($i = 6; $i >= 0; $i--) {
+    $date = date('Y-m-d', strtotime("-$i days"));
+    $visits_chart_labels[] = date('D', strtotime($date));
+    $found = false;
+    foreach ($weekly_visits_data as $data) {
+        if ($data['date'] == $date) {
+            $visits_chart_values[] = (int)$data['count'];
+            $found = true;
+            break;
+        }
+    }
+    if (!$found) $visits_chart_values[] = 0;
+}
+
+// 16. Recent Activities
 try {
     $stmt = $db->prepare("
         (SELECT 'visit' as type, v.id, v.created_at, p.full_name as patient_name, 
@@ -309,13 +376,59 @@ try {
     $recent_activities = [];
 }
 
-// 14. Unread Notifications
+// 17. Unread Notifications
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$doctor_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
+}
+
+// 18. Total Bill Amount (Revenue) - Using bills table
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            SUM(total_amount) as total_revenue,
+            SUM(paid_amount) as total_paid,
+            SUM(balance) as total_balance
+        FROM bills 
+        WHERE created_by = ? OR visit_id IN (SELECT id FROM visits WHERE doctor_id = ?)
+    ");
+    $stmt->execute([$doctor_id, $doctor_id]);
+    $revenue_data = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $revenue_data = ['total_revenue' => 0, 'total_paid' => 0, 'total_balance' => 0];
+}
+
+// 19. Today's Revenue
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            SUM(total_amount) as total_revenue,
+            SUM(paid_amount) as total_paid,
+            SUM(balance) as total_balance
+        FROM bills 
+        WHERE DATE(created_at) = ?
+        AND (created_by = ? OR visit_id IN (SELECT id FROM visits WHERE doctor_id = ?))
+    ");
+    $stmt->execute([$today, $doctor_id, $doctor_id]);
+    $today_revenue = $stmt->fetch(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $today_revenue = ['total_revenue' => 0, 'total_paid' => 0, 'total_balance' => 0];
+}
+
+// 20. Total Diseases Diagnosed
+try {
+    $stmt = $db->prepare("
+        SELECT COUNT(DISTINCT disease_id) as total 
+        FROM visits 
+        WHERE doctor_id = ? AND disease_id IS NOT NULL
+    ");
+    $stmt->execute([$doctor_id]);
+    $total_diseases = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $total_diseases = 0;
 }
 
 // ================================================================
@@ -330,7 +443,7 @@ echo json_encode([
         'today_patients_pending' => $today_patients_pending,
         'today_patients_completed' => $today_patients_completed,
         
-        // Today's Visits - FIXED
+        // Today's Visits
         'today_visits_total' => $today_visits_total,
         'today_visits_pending' => $today_visits_pending,
         'today_visits_completed' => $today_visits_completed,
@@ -347,26 +460,41 @@ echo json_encode([
         
         // Prescriptions
         'total_prescriptions' => $total_prescriptions,
+        'prescription_stats' => $prescription_stats,
         
         // Lab Tests
         'lab_tests_total' => $lab_tests_total,
         'lab_tests_pending' => $lab_tests_pending,
         'lab_tests_completed' => $lab_tests_completed,
+        'lab_tests_today' => $lab_tests_today,
         
         // Queue
         'pending_visits' => $pending_visits,
         'pending_patients' => $pending_patients,
         
-        // Chart
+        // Charts
         'chart_labels' => $chart_labels,
         'chart_values' => $chart_values,
+        'visits_chart_labels' => $visits_chart_labels,
+        'visits_chart_values' => $visits_chart_values,
+        
+        // Revenue
+        'total_revenue' => $revenue_data['total_revenue'] ?? 0,
+        'total_paid' => $revenue_data['total_paid'] ?? 0,
+        'total_balance' => $revenue_data['total_balance'] ?? 0,
+        'today_revenue' => $today_revenue['total_revenue'] ?? 0,
+        'today_paid' => $today_revenue['total_paid'] ?? 0,
+        'today_balance' => $today_revenue['total_balance'] ?? 0,
         
         // Others
+        'total_diseases' => $total_diseases,
         'recent_activities' => $recent_activities,
         'unread_notifications' => $unread_notifications,
         'doctor_is_online' => $doctor_is_online ?? 0,
         'doctor_name' => $doctor_name,
+        'doctor_branch_id' => $doctor_branch_id,
         'timestamp' => date('Y-m-d H:i:s')
     ]
 ]);
 exit;
+?>

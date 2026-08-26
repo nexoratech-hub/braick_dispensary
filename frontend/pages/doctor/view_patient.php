@@ -3,7 +3,7 @@
 // FILE: frontend/pages/doctor/view_patient.php
 // DOCTOR - VIEW PATIENT COMPLETE HISTORY
 // WITH SEPARATE CARDS: Lab Tests, Diagnosis, Prescriptions, Procedures, Tools, Bills
-// FIXED: Lab Tests now join with visits to get patient_id
+// FIXED: Using correct tables from dispensary_db
 // THEME: BLUE THEME
 // BRAICK DISPENSARY
 // ================================================================
@@ -68,21 +68,16 @@ try {
 }
 
 // ================================================================
-// GET PATIENT DETAILS - INCLUDING MARITAL STATUS
+// GET PATIENT DETAILS
 // ================================================================
 $patient = null;
 try {
     if ($is_admin) {
-        // Admin can view any patient
         $stmt = $db->prepare("
             SELECT p.*, 
                    b.name as branch_name,
                    u.full_name as doctor_name,
-                   u.specialty as doctor_specialty,
-                   (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
-                   (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
-                   (SELECT COUNT(*) FROM lab_tests lt JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests,
-                   (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id) as total_appointments
+                   u.specialty as doctor_specialty
             FROM patients p
             LEFT JOIN branches b ON p.branch_id = b.id
             LEFT JOIN users u ON p.assigned_doctor_id = u.id
@@ -90,16 +85,11 @@ try {
         ");
         $stmt->execute([$patient_id]);
     } else {
-        // Doctor can only view their own patients
         $stmt = $db->prepare("
             SELECT p.*, 
                    b.name as branch_name,
                    u.full_name as doctor_name,
-                   u.specialty as doctor_specialty,
-                   (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
-                   (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
-                   (SELECT COUNT(*) FROM lab_tests lt JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests,
-                   (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id) as total_appointments
+                   u.specialty as doctor_specialty
             FROM patients p
             LEFT JOIN branches b ON p.branch_id = b.id
             LEFT JOIN users u ON p.assigned_doctor_id = u.id
@@ -119,7 +109,46 @@ try {
 }
 
 // ================================================================
-// GET ALL VISITS WITH FULL DETAILS - ORDERED BY DATE DESC
+// GET STATISTICS
+// ================================================================
+
+// Total Visits
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?");
+$stmt->execute([$patient_id]);
+$total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// Total Prescriptions
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE patient_id = ?");
+$stmt->execute([$patient_id]);
+$total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// Total Lab Tests - FIXED: Join with visits
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total 
+    FROM lab_tests lt
+    JOIN visits v ON lt.visit_id = v.id
+    WHERE v.patient_id = ?
+");
+$stmt->execute([$patient_id]);
+$total_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// Total Appointments
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE patient_id = ?");
+$stmt->execute([$patient_id]);
+$total_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// Total Procedures
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM procedures WHERE patient_id = ?");
+$stmt->execute([$patient_id]);
+$total_procedures = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// Total Bills
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM bills WHERE patient_id = ? AND status != 'cancelled'");
+$stmt->execute([$patient_id]);
+$total_bills = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// ================================================================
+// GET ALL VISITS
 // ================================================================
 $visits = [];
 $last_visit = null;
@@ -128,9 +157,7 @@ try {
         $stmt = $db->prepare("
             SELECT v.*, 
                    u.full_name as doctor_name,
-                   u.specialty as doctor_specialty,
-                   (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
-                   (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+                   u.specialty as doctor_specialty
             FROM visits v
             LEFT JOIN users u ON v.doctor_id = u.id
             WHERE v.patient_id = ?
@@ -141,9 +168,7 @@ try {
         $stmt = $db->prepare("
             SELECT v.*, 
                    u.full_name as doctor_name,
-                   u.specialty as doctor_specialty,
-                   (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
-                   (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+                   u.specialty as doctor_specialty
             FROM visits v
             LEFT JOIN users u ON v.doctor_id = u.id
             WHERE v.patient_id = ? AND v.doctor_id = ?
@@ -153,81 +178,12 @@ try {
     }
     $visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get last visit (first one since ORDER BY DESC)
     if (count($visits) > 0) {
         $last_visit = $visits[0];
     }
 } catch (Exception $e) {
     $visits = [];
     $last_visit = null;
-}
-
-// ================================================================
-// GET VISIT ITEMS (Prescriptions, Lab Tests, Procedures per visit)
-// ================================================================
-$visit_items = [];
-foreach ($visits as $visit) {
-    $visit_id = $visit['id'];
-    
-    // Get prescriptions for this visit
-    $stmt = $db->prepare("
-        SELECT p.*, GROUP_CONCAT(DISTINCT pi.medication_name SEPARATOR ', ') as medications_list
-        FROM prescriptions p
-        LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
-        WHERE p.visit_id = ?
-        GROUP BY p.id
-    ");
-    $stmt->execute([$visit_id]);
-    $visit_items[$visit_id]['prescriptions'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Get lab tests for this visit
-    $stmt = $db->prepare("
-        SELECT * FROM lab_tests WHERE visit_id = ?
-    ");
-    $stmt->execute([$visit_id]);
-    $visit_items[$visit_id]['lab_tests'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Get procedures for this visit
-    $stmt = $db->prepare("
-        SELECT bi.* 
-        FROM bill_items bi
-        JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.visit_id = ? 
-        AND (
-            bi.item_type = 'procedure' 
-            OR bi.item_type = '' 
-            OR bi.item_name LIKE '%Biopsy%'
-            OR bi.item_name LIKE '%Casting%'
-            OR bi.item_name LIKE '%Cauterization%'
-            OR bi.item_name LIKE '%Wound Dressing%'
-            OR bi.item_name LIKE '%Injection%'
-            OR bi.item_name LIKE '%Suturing%'
-            OR bi.item_name LIKE '%POP%'
-            OR bi.item_name LIKE '%Incision%'
-            OR bi.item_name LIKE '%Catheterization%'
-            OR bi.item_name LIKE '%Chest Tube%'
-            OR bi.item_name LIKE '%Circumcision%'
-            OR bi.item_name LIKE '%Skin Grafting%'
-            OR bi.item_name LIKE '%Joint Aspiration%'
-            OR bi.item_name LIKE '%Lumbar Puncture%'
-            OR bi.item_name LIKE '%Paracentesis%'
-            OR bi.item_name LIKE '%Thoracentesis%'
-        )
-        ORDER BY bi.created_at DESC
-    ");
-    $stmt->execute([$visit_id]);
-    $visit_items[$visit_id]['procedures'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Get medications for this visit
-    $stmt = $db->prepare("
-        SELECT bi.* 
-        FROM bill_items bi
-        JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.visit_id = ? AND bi.item_type = 'medication'
-        ORDER BY bi.created_at DESC
-    ");
-    $stmt->execute([$visit_id]);
-    $visit_items[$visit_id]['medications'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
 // ================================================================
@@ -238,26 +194,26 @@ try {
     if ($is_admin) {
         $stmt = $db->prepare("
             SELECT v.id, v.visit_number, v.created_at, v.diagnosis, v.symptoms, v.treatment, 
-                   v.complaint, v.notes, v.follow_up_date,
+                   v.complaint, v.notes, v.follow_up_date, v.disease_code,
                    u.full_name as doctor_name,
-                   (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
-                   (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+                   d.disease_name
             FROM visits v
             LEFT JOIN users u ON v.doctor_id = u.id
-            WHERE v.patient_id = ? AND v.diagnosis IS NOT NULL AND v.diagnosis != ''
+            LEFT JOIN diseases d ON v.disease_id = d.id
+            WHERE v.patient_id = ? AND (v.diagnosis IS NOT NULL AND v.diagnosis != '' OR v.disease_id IS NOT NULL)
             ORDER BY v.created_at DESC
         ");
         $stmt->execute([$patient_id]);
     } else {
         $stmt = $db->prepare("
             SELECT v.id, v.visit_number, v.created_at, v.diagnosis, v.symptoms, v.treatment, 
-                   v.complaint, v.notes, v.follow_up_date,
+                   v.complaint, v.notes, v.follow_up_date, v.disease_code,
                    u.full_name as doctor_name,
-                   (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id) as prescriptions_count,
-                   (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id) as lab_tests_count
+                   d.disease_name
             FROM visits v
             LEFT JOIN users u ON v.doctor_id = u.id
-            WHERE v.patient_id = ? AND v.doctor_id = ? AND v.diagnosis IS NOT NULL AND v.diagnosis != ''
+            LEFT JOIN diseases d ON v.disease_id = d.id
+            WHERE v.patient_id = ? AND v.doctor_id = ? AND (v.diagnosis IS NOT NULL AND v.diagnosis != '' OR v.disease_id IS NOT NULL)
             ORDER BY v.created_at DESC
         ");
         $stmt->execute([$patient_id, $doctor_id]);
@@ -309,7 +265,7 @@ try {
 }
 
 // ================================================================
-// GET ALL LAB TESTS - FIXED: Join with visits to get patient_id
+// GET ALL LAB TESTS - FIXED: Join with visits
 // ================================================================
 $lab_tests = [];
 try {
@@ -317,12 +273,13 @@ try {
         $stmt = $db->prepare("
             SELECT lt.*, 
                    u.full_name as doctor_name,
-                   lab.full_name as lab_technician_name,
-                   v.patient_id
+                   tech.full_name as technician_name,
+                   v.patient_id,
+                   v.visit_number
             FROM lab_tests lt
             JOIN visits v ON lt.visit_id = v.id
             LEFT JOIN users u ON lt.doctor_id = u.id
-            LEFT JOIN users lab ON lt.lab_technician_id = lab.id
+            LEFT JOIN users tech ON lt.performed_by = tech.id
             WHERE v.patient_id = ?
             ORDER BY lt.created_at DESC
         ");
@@ -331,12 +288,13 @@ try {
         $stmt = $db->prepare("
             SELECT lt.*, 
                    u.full_name as doctor_name,
-                   lab.full_name as lab_technician_name,
-                   v.patient_id
+                   tech.full_name as technician_name,
+                   v.patient_id,
+                   v.visit_number
             FROM lab_tests lt
             JOIN visits v ON lt.visit_id = v.id
             LEFT JOIN users u ON lt.doctor_id = u.id
-            LEFT JOIN users lab ON lt.lab_technician_id = lab.id
+            LEFT JOIN users tech ON lt.performed_by = tech.id
             WHERE v.patient_id = ? AND v.doctor_id = ?
             ORDER BY lt.created_at DESC
         ");
@@ -348,81 +306,57 @@ try {
 }
 
 // ================================================================
-// GET ALL PROCEDURES
+// GET ALL PROCEDURES - FIXED: Using procedures table
 // ================================================================
 $procedures = [];
 try {
-    $stmt = $db->prepare("
-        SELECT 
-            bi.id,
-            bi.bill_id,
-            bi.item_type,
-            bi.item_name,
-            bi.quantity,
-            bi.unit_price,
-            bi.total_price,
-            bi.payment_status,
-            bi.status,
-            bi.created_at,
-            pb.patient_id,
-            pb.bill_number,
-            u.full_name as doctor_name
-        FROM bill_items bi
-        JOIN patient_bills pb ON bi.bill_id = pb.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        WHERE pb.patient_id = ? 
-        AND (
-            bi.item_type = 'procedure' 
-            OR bi.item_name LIKE '%Biopsy%'
-            OR bi.item_name LIKE '%Casting%'
-            OR bi.item_name LIKE '%Cauterization%'
-            OR bi.item_name LIKE '%Wound Dressing%'
-            OR bi.item_name LIKE '%Injection%'
-            OR bi.item_name LIKE '%Suturing%'
-            OR bi.item_name LIKE '%POP%'
-            OR bi.item_name LIKE '%Incision%'
-            OR bi.item_name LIKE '%Catheterization%'
-            OR bi.item_name LIKE '%Chest Tube%'
-            OR bi.item_name LIKE '%Circumcision%'
-            OR bi.item_name LIKE '%Skin Grafting%'
-            OR bi.item_name LIKE '%Joint Aspiration%'
-            OR bi.item_name LIKE '%Lumbar Puncture%'
-            OR bi.item_name LIKE '%Paracentesis%'
-            OR bi.item_name LIKE '%Thoracentesis%'
-        )
-        ORDER BY bi.created_at DESC
-    ");
-    $stmt->execute([$patient_id]);
+    if ($is_admin) {
+        $stmt = $db->prepare("
+            SELECT pr.*, 
+                   u.full_name as doctor_name,
+                   v.visit_number
+            FROM procedures pr
+            LEFT JOIN users u ON pr.doctor_id = u.id
+            LEFT JOIN visits v ON pr.visit_id = v.id
+            WHERE pr.patient_id = ?
+            ORDER BY pr.created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+    } else {
+        $stmt = $db->prepare("
+            SELECT pr.*, 
+                   u.full_name as doctor_name,
+                   v.visit_number
+            FROM procedures pr
+            LEFT JOIN users u ON pr.doctor_id = u.id
+            LEFT JOIN visits v ON pr.visit_id = v.id
+            WHERE pr.patient_id = ? AND pr.doctor_id = ?
+            ORDER BY pr.created_at DESC
+        ");
+        $stmt->execute([$patient_id, $doctor_id]);
+    }
     $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $procedures = [];
 }
 
 // ================================================================
-// GET ALL TOOLS
+// GET ALL TOOLS/EQUIPMENT - FIXED: From bill_items
 // ================================================================
 $tools = [];
 try {
     $stmt = $db->prepare("
-        SELECT 
-            bi.id,
-            bi.bill_id,
-            bi.item_type,
-            bi.item_name,
-            bi.quantity,
-            bi.unit_price,
-            bi.total_price,
-            bi.payment_status,
-            bi.status,
-            bi.created_at,
-            pb.patient_id,
-            pb.bill_number,
-            u.full_name as doctor_name
+        SELECT bi.id, bi.bill_id, bi.item_type, bi.item_name, bi.quantity, 
+               bi.unit_price, bi.total_price, bi.status, bi.created_at,
+               b.bill_number, b.status as bill_status,
+               u.full_name as doctor_name,
+               v.visit_number
         FROM bill_items bi
-        JOIN patient_bills pb ON bi.bill_id = pb.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        WHERE pb.patient_id = ? 
-        AND (bi.item_type = 'tool' OR bi.item_type = 'equipment' OR bi.item_type = 'instrument')
+        JOIN bills b ON bi.bill_id = b.id
+        LEFT JOIN users u ON b.created_by = u.id
+        LEFT JOIN visits v ON b.visit_id = v.id
+        WHERE b.patient_id = ? 
+        AND (bi.item_type = 'equipment' OR bi.item_type = 'tool')
         ORDER BY bi.created_at DESC
     ");
     $stmt->execute([$patient_id]);
@@ -432,29 +366,29 @@ try {
 }
 
 // ================================================================
-// GET ALL BILLS WITH THEIR ITEMS
+// GET ALL BILLS - FIXED: Using bills table
 // ================================================================
 $bills = [];
 $bill_items = [];
 try {
-    // Get all bills
     $stmt = $db->prepare("
-        SELECT pb.*, 
-               u.full_name as created_by_name
-        FROM patient_bills pb
-        LEFT JOIN users u ON pb.created_by = u.id
-        WHERE pb.patient_id = ?
-        ORDER BY pb.created_at DESC
+        SELECT b.*, 
+               u.full_name as created_by_name,
+               v.visit_number
+        FROM bills b
+        LEFT JOIN users u ON b.created_by = u.id
+        LEFT JOIN visits v ON b.visit_id = v.id
+        WHERE b.patient_id = ?
+        ORDER BY b.created_at DESC
     ");
     $stmt->execute([$patient_id]);
     $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Get all bill items for each bill
     foreach ($bills as $bill) {
         $stmt = $db->prepare("
             SELECT bi.* 
             FROM bill_items bi
-            WHERE bi.bill_id = ?
+            WHERE bi.bill_id = ? AND bi.status != 'cancelled'
             ORDER BY bi.created_at DESC
         ");
         $stmt->execute([$bill['id']]);
@@ -512,6 +446,7 @@ try {
         WHERE p.patient_id = ?
         GROUP BY pi.medication_name
         ORDER BY times_prescribed DESC
+        LIMIT 20
     ");
     $stmt->execute([$patient_id]);
     $medications_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -561,7 +496,7 @@ function getStatusBadgeClass($status) {
         'cancelled' => 'badge-danger',
         'scheduled' => 'badge-info',
         'confirmed' => 'badge-success',
-        'in-progress' => 'badge-warning',
+        'in_progress' => 'badge-warning',
         'paid' => 'badge-success',
         'partial' => 'badge-warning',
         'dispensed' => 'badge-success'
@@ -586,6 +521,17 @@ function time_ago($timestamp) {
     }
 }
 
+function getMaritalBadgeClass($status) {
+    $map = [
+        'single' => 'marital-single',
+        'married' => 'marital-married',
+        'divorced' => 'marital-divorced',
+        'widowed' => 'marital-widowed',
+        'separated' => 'marital-separated'
+    ];
+    return $map[strtolower($status ?? '')] ?? '';
+}
+
 // ================================================================
 // PROFILE PICTURE URL
 // ================================================================
@@ -596,7 +542,7 @@ $profile_pic_url = !empty($profile_pic)
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR - CORRECT PATHS
+// INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
@@ -823,7 +769,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     .tag-primary { background: #E8F0FE; color: #0B5ED7; }
     .tag-purple { background: #EDE9FE; color: #7C3AED; }
     
-    /* Stats Grid - 6 Cards - BLUE THEME */
+    /* Stats Grid */
     .stats-grid {
         display: grid;
         grid-template-columns: repeat(6, 1fr);
@@ -875,7 +821,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         letter-spacing: 0.04em;
     }
     
-    /* History Cards - BLUE THEME */
+    /* History Cards */
     .history-card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -1151,9 +1097,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <?php if ($is_admin): ?>
                     <span class="page-badge" style="background:#DC2626;color:white;font-size:0.65rem;">👑 Admin Mode</span>
                 <?php endif; ?>
-                <?php if (count($visits) > 0): ?>
+                <?php if ($last_visit): ?>
                     <span class="page-badge" style="background:#D1FAE5;color:#059669;">
-                        <i class="fas fa-clock"></i> Last Visit: <?= date('M d, Y', strtotime($visits[0]['created_at'] ?? 'now')) ?>
+                        <i class="fas fa-clock"></i> Last Visit: <?= date('M d, Y', strtotime($last_visit['created_at'] ?? 'now')) ?>
                     </span>
                 <?php endif; ?>
             </h1>
@@ -1171,17 +1117,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span class="status-badge badge-purple">
                     <i class="fas fa-clinic-medical"></i> <?= count($visits) ?> Total Visits
                 </span>
-                <?php if ($is_admin): ?>
-                    <span class="status-badge badge-danger">
-                        <i class="fas fa-user-shield"></i> Admin View
-                    </span>
-                <?php endif; ?>
             </p>
         </div>
         <div class="page-header-right no-print">
-            <button onclick="exportPDF(<?= $patient_id ?>)" class="btn btn-pdf">
-                <i class="fas fa-file-pdf"></i> Export PDF
-            </button>
+            <a href="view_patient_pdf.php?id=<?= $patient_id ?>" target="_blank" class="btn btn-pdf">
+                <i class="fas fa-file-pdf"></i> View PDF
+            </a>
             <a href="my_patients.php" class="btn btn-outline">
                 <i class="fas fa-arrow-left"></i> My Patients
             </a>
@@ -1203,13 +1144,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="patient-meta">
                 <span><i class="fas fa-id-card"></i> <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
                 <span><i class="fas fa-venus-mars"></i> <?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span>
-                <span><i class="fas fa-ring"></i> <span class="marital-badge <?= 
-                    strtolower($patient['marital_status'] ?? '') === 'single' ? 'marital-single' : 
-                    (strtolower($patient['marital_status'] ?? '') === 'married' ? 'marital-married' : 
-                    (strtolower($patient['marital_status'] ?? '') === 'divorced' ? 'marital-divorced' : 
-                    (strtolower($patient['marital_status'] ?? '') === 'widowed' ? 'marital-widowed' : 
-                    (strtolower($patient['marital_status'] ?? '') === 'separated' ? 'marital-separated' : '')))) 
-                ?>"><?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span></span>
+                <span><i class="fas fa-ring"></i> <span class="marital-badge <?= getMaritalBadgeClass($patient['marital_status'] ?? '') ?>"><?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span></span>
                 <span><i class="fas fa-birthday-cake"></i> <?= calculateAge($patient['date_of_birth'] ?? '') ?> years</span>
                 <span><i class="fas fa-phone"></i> <?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span>
                 <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span>
@@ -1284,10 +1219,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- ================================================================ -->
     <!-- LAST VISIT SUMMARY -->
     <!-- ================================================================ -->
-    <?php if ($last_visit): 
-        $last_visit_id = $last_visit['id'];
-        $last_items = $visit_items[$last_visit_id] ?? [];
-    ?>
+    <?php if ($last_visit): ?>
     <div class="history-card" style="border-color: var(--primary); background: var(--primary-bg);">
         <h3 class="card-title" style="border-bottom-color: var(--primary);">
             <i class="fas fa-star title-blue"></i> Last Visit Summary
@@ -1323,25 +1255,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <div><span class="info-label">Notes</span><div class="info-value"><?= htmlspecialchars($last_visit['notes']) ?></div></div>
             <?php endif; ?>
         </div>
-        
-        <?php if (count($last_items['prescriptions'] ?? []) > 0 || count($last_items['lab_tests'] ?? []) > 0 || count($last_items['procedures'] ?? []) > 0): ?>
-            <div style="margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color);">
-                <div style="display:flex; flex-wrap:wrap; gap: 12px;">
-                    <?php if (count($last_items['prescriptions'] ?? []) > 0): ?>
-                        <span class="badge badge-info"><i class="fas fa-prescription"></i> <?= count($last_items['prescriptions']) ?> Prescriptions</span>
-                    <?php endif; ?>
-                    <?php if (count($last_items['lab_tests'] ?? []) > 0): ?>
-                        <span class="badge badge-purple"><i class="fas fa-flask"></i> <?= count($last_items['lab_tests']) ?> Lab Tests</span>
-                    <?php endif; ?>
-                    <?php if (count($last_items['procedures'] ?? []) > 0): ?>
-                        <span class="badge badge-danger"><i class="fas fa-syringe"></i> <?= count($last_items['procedures']) ?> Procedures</span>
-                    <?php endif; ?>
-                    <?php if (count($last_items['medications'] ?? []) > 0): ?>
-                        <span class="badge badge-success"><i class="fas fa-pills"></i> <?= count($last_items['medications']) ?> Medications</span>
-                    <?php endif; ?>
-                </div>
-            </div>
-        <?php endif; ?>
     </div>
     <?php endif; ?>
 
@@ -1358,13 +1271,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="info-item"><span class="info-label">Date of Birth</span><span class="info-value"><?= !empty($patient['date_of_birth']) ? date('M d, Y', strtotime($patient['date_of_birth'])) : 'N/A' ?></span></div>
             <div class="info-item"><span class="info-label">Age</span><span class="info-value"><?= calculateAge($patient['date_of_birth'] ?? '') ?> years</span></div>
             <div class="info-item"><span class="info-label">Gender</span><span class="info-value"><?= htmlspecialchars($patient['gender'] ?? 'N/A') ?></span></div>
-            <div class="info-item"><span class="info-label">Marital Status</span><span class="info-value"><span class="marital-badge <?= 
-                strtolower($patient['marital_status'] ?? '') === 'single' ? 'marital-single' : 
-                (strtolower($patient['marital_status'] ?? '') === 'married' ? 'marital-married' : 
-                (strtolower($patient['marital_status'] ?? '') === 'divorced' ? 'marital-divorced' : 
-                (strtolower($patient['marital_status'] ?? '') === 'widowed' ? 'marital-widowed' : 
-                (strtolower($patient['marital_status'] ?? '') === 'separated' ? 'marital-separated' : '')))) 
-            ?>"><?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span></span></div>
+            <div class="info-item"><span class="info-label">Marital Status</span><span class="info-value"><span class="marital-badge <?= getMaritalBadgeClass($patient['marital_status'] ?? '') ?>"><?= htmlspecialchars($patient['marital_status'] ?? 'N/A') ?></span></span></div>
             <div class="info-item"><span class="info-label">Blood Group</span><span class="info-value"><?= htmlspecialchars($patient['blood_group'] ?? 'N/A') ?></span></div>
             <div class="info-item"><span class="info-label">Phone</span><span class="info-value"><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></span></div>
             <div class="info-item"><span class="info-label">Email</span><span class="info-value"><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></span></div>
@@ -1390,17 +1297,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php if (count($diagnoses) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>#</th><th>Visit #</th><th>Date</th><th>Diagnosis</th><th>Doctor</th><th>Treatment</th><th>Follow-up</th></tr></thead>
+                    <thead><tr><th>#</th><th>Visit #</th><th>Date</th><th>Diagnosis</th><th>Disease Code</th><th>Doctor</th><th>Treatment</th></tr></thead>
                     <tbody>
                         <?php $i = 1; foreach ($diagnoses as $diag): ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td class="font-mono"><?= htmlspecialchars($diag['visit_number'] ?? 'N/A') ?></td>
                                 <td><?= date('M d, Y', strtotime($diag['created_at'])) ?></td>
-                                <td><strong><?= htmlspecialchars($diag['diagnosis'] ?? 'N/A') ?></strong></td>
+                                <td><strong><?= htmlspecialchars($diag['disease_name'] ?? $diag['diagnosis'] ?? 'N/A') ?></strong></td>
+                                <td><span class="font-mono"><?= htmlspecialchars($diag['disease_code'] ?? 'N/A') ?></span></td>
                                 <td><?= htmlspecialchars($diag['doctor_name'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars(substr($diag['treatment'] ?? '', 0, 30)) . (strlen($diag['treatment'] ?? '') > 30 ? '...' : '') ?></td>
-                                <td><?= !empty($diag['follow_up_date']) ? date('M d, Y', strtotime($diag['follow_up_date'])) : 'N/A' ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -1416,7 +1323,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 2. LAB TEST HISTORY - FIXED: Join with visits to get patient_id -->
+    <!-- 2. LAB TEST HISTORY -->
     <!-- ================================================================ -->
     <div class="history-card">
         <h3 class="card-title">
@@ -1427,26 +1334,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php if (count($lab_tests) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>#</th><th>Test Name</th><th>Type</th><th>Date</th><th>Doctor</th><th>Sample Type</th><th>Results</th><th>Reference Range</th><th>Status</th></tr></thead>
+                    <thead><tr><th>#</th><th>Test Name</th><th>Visit</th><th>Date</th><th>Doctor</th><th>Results</th><th>Technician</th><th>Status</th></tr></thead>
                     <tbody>
                         <?php $i = 1; foreach ($lab_tests as $test): ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td><strong><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></strong></td>
-                                <td><span class="item-type-badge"><?= htmlspecialchars($test['test_type'] ?? 'General') ?></span></td>
+                                <td class="font-mono"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></td>
                                 <td><?= date('M d, Y', strtotime($test['created_at'])) ?></td>
                                 <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($test['sample_type'] ?? 'N/A') ?></td>
                                 <td>
                                     <?php if ($test['status'] === 'completed' && !empty($test['results'])): ?>
-                                        <span class="font-mono" style="color:var(--success);"><?= htmlspecialchars($test['results']) ?></span>
+                                        <span class="font-mono" style="color:var(--success);"><?= htmlspecialchars(substr($test['results'], 0, 30)) . (strlen($test['results'] ?? '') > 30 ? '...' : '') ?></span>
                                     <?php elseif ($test['status'] === 'completed'): ?>
                                         <span class="text-green-600">Results available</span>
                                     <?php else: ?>
                                         <span class="text-gray-400">Pending</span>
                                     <?php endif; ?>
                                 </td>
-                                <td><span class="text-xs text-gray-500"><?= htmlspecialchars($test['reference_range'] ?? 'N/A') ?></span></td>
+                                <td><?= htmlspecialchars($test['technician_name'] ?? 'N/A') ?></td>
                                 <td><span class="status-badge <?= $test['status'] === 'completed' ? 'badge-success' : 'badge-pending' ?>"><?= ucfirst($test['status'] ?? 'Pending') ?></span></td>
                             </tr>
                         <?php endforeach; ?>
@@ -1474,14 +1380,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php if (count($prescriptions) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>#</th><th>Prescription #</th><th>Date</th><th>Diagnosis</th><th>Doctor</th><th>Medications</th><th>Status</th></tr></thead>
+                    <thead><tr><th>#</th><th>Prescription #</th><th>Date</th><th>Doctor</th><th>Medications</th><th>Status</th></tr></thead>
                     <tbody>
                         <?php $i = 1; foreach ($prescriptions as $prescription): ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td class="font-mono"><?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?></td>
                                 <td><?= date('M d, Y', strtotime($prescription['created_at'])) ?></td>
-                                <td><?= htmlspecialchars(substr($prescription['diagnosis'] ?? '', 0, 25)) . (strlen($prescription['diagnosis'] ?? '') > 25 ? '...' : '') ?></td>
                                 <td><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></td>
                                 <td><span class="badge badge-info"><?= $prescription['medications_count'] ?? 0 ?> med(s)</span></td>
                                 <td><span class="status-badge <?= getStatusBadgeClass($prescription['status'] ?? 'pending') ?>"><?= ucfirst($prescription['status'] ?? 'Pending') ?></span></td>
@@ -1500,7 +1405,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 4. PROCEDURE HISTORY -->
+    <!-- 4. PROCEDURE HISTORY - FIXED: Using procedures table -->
     <!-- ================================================================ -->
     <div class="history-card">
         <h3 class="card-title">
@@ -1511,19 +1416,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php if (count($procedures) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>#</th><th>Procedure Name</th><th>Date</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th></tr></thead>
+                    <thead><tr><th>#</th><th>Procedure Name</th><th>Visit</th><th>Date</th><th>Price</th><th>Status</th></tr></thead>
                     <tbody>
-                        <?php $i = 1; foreach ($procedures as $proc): 
-                            $is_paid = ($proc['payment_status'] ?? 'pending') === 'paid';
-                        ?>
+                        <?php $i = 1; foreach ($procedures as $proc): ?>
                             <tr>
                                 <td><?= $i++ ?></td>
-                                <td><strong><?= htmlspecialchars($proc['item_name'] ?? 'N/A') ?></strong></td>
+                                <td><strong><?= htmlspecialchars($proc['procedure_name'] ?? 'N/A') ?></strong></td>
+                                <td class="font-mono"><?= htmlspecialchars($proc['visit_number'] ?? 'N/A') ?></td>
                                 <td><?= date('M d, Y', strtotime($proc['created_at'])) ?></td>
-                                <td><?= $proc['quantity'] ?? 1 ?></td>
-                                <td>TSh <?= number_format($proc['unit_price'] ?? 0, 0) ?></td>
-                                <td class="font-mono">TSh <?= number_format($proc['total_price'] ?? 0, 0) ?></td>
-                                <td><span class="status-badge <?= $is_paid ? 'badge-success' : 'badge-pending' ?>"><?= ucfirst($proc['payment_status'] ?? 'Pending') ?></span></td>
+                                <td><?= ($proc['procedure_price'] ?? 0) > 0 ? 'TSh ' . number_format($proc['procedure_price'], 0) : '<span class="text-green-600">FREE</span>' ?></td>
+                                <td><span class="status-badge <?= getStatusBadgeClass($proc['status'] ?? 'pending') ?>"><?= ucfirst($proc['status'] ?? 'Pending') ?></span></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -1539,31 +1441,29 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 5. TOOLS HISTORY -->
+    <!-- 5. TOOLS/EQUIPMENT HISTORY - FIXED: From bill_items -->
     <!-- ================================================================ -->
     <div class="history-card">
         <h3 class="card-title">
-            <i class="fas fa-tools title-orange"></i> Tools History
-            <span class="text-sm font-normal text-gray-400">(<?= count($tools) ?> tools)</span>
+            <i class="fas fa-tools title-orange"></i> Equipment / Tools History
+            <span class="text-sm font-normal text-gray-400">(<?= count($tools) ?> items)</span>
         </h3>
         
         <?php if (count($tools) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>#</th><th>Tool Name</th><th>Type</th><th>Date</th><th>Qty</th><th>Unit Price</th><th>Total</th><th>Status</th></tr></thead>
+                    <thead><tr><th>#</th><th>Tool Name</th><th>Type</th><th>Visit</th><th>Date</th><th>Qty</th><th>Total Price</th><th>Status</th></tr></thead>
                     <tbody>
-                        <?php $i = 1; foreach ($tools as $tool): 
-                            $is_paid = ($tool['payment_status'] ?? 'pending') === 'paid';
-                        ?>
+                        <?php $i = 1; foreach ($tools as $tool): ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td><strong><?= htmlspecialchars($tool['item_name'] ?? 'N/A') ?></strong></td>
-                                <td><span class="item-type-badge"><?= htmlspecialchars($tool['item_type'] ?? 'Tool') ?></span></td>
+                                <td><span class="item-type-badge"><?= htmlspecialchars($tool['item_type'] ?? 'Equipment') ?></span></td>
+                                <td class="font-mono"><?= htmlspecialchars($tool['visit_number'] ?? 'N/A') ?></td>
                                 <td><?= date('M d, Y', strtotime($tool['created_at'])) ?></td>
                                 <td><?= $tool['quantity'] ?? 1 ?></td>
-                                <td>TSh <?= number_format($tool['unit_price'] ?? 0, 0) ?></td>
                                 <td class="font-mono">TSh <?= number_format($tool['total_price'] ?? 0, 0) ?></td>
-                                <td><span class="status-badge <?= $is_paid ? 'badge-success' : 'badge-pending' ?>"><?= ucfirst($tool['payment_status'] ?? 'Pending') ?></span></td>
+                                <td><span class="status-badge <?= $tool['status'] === 'paid' ? 'badge-success' : 'badge-pending' ?>"><?= ucfirst($tool['status'] ?? 'Pending') ?></span></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
@@ -1572,14 +1472,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php else: ?>
             <div class="empty-state">
                 <i class="fas fa-tools"></i>
-                <p>No tools recorded</p>
-                <p class="sub-text">Tools will appear here once used</p>
+                <p>No equipment/tools recorded</p>
+                <p class="sub-text">Equipment will appear here once used</p>
             </div>
         <?php endif; ?>
     </div>
 
     <!-- ================================================================ -->
-    <!-- 6. BILL HISTORY -->
+    <!-- 6. BILL HISTORY - FIXED: Using bills table -->
     <!-- ================================================================ -->
     <div class="history-card">
         <h3 class="card-title">
@@ -1590,7 +1490,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php if (count($bills) > 0): ?>
             <div class="table-wrap">
                 <table class="data-table">
-                    <thead><tr><th>#</th><th>Bill Number</th><th>Date</th><th>Items</th><th>Total Amount</th><th>Paid</th><th>Balance</th><th>Status</th><th>Created By</th></tr></thead>
+                    <thead><tr><th>#</th><th>Bill Number</th><th>Visit</th><th>Date</th><th>Items</th><th>Total Amount</th><th>Paid</th><th>Balance</th><th>Status</th></tr></thead>
                     <tbody>
                         <?php $i = 1; foreach ($bills as $bill): 
                             $items = $bill_items[$bill['id']] ?? [];
@@ -1599,6 +1499,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td class="font-mono"><strong><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></strong></td>
+                                <td class="font-mono"><?= htmlspecialchars($bill['visit_number'] ?? 'N/A') ?></td>
                                 <td><?= date('M d, Y', strtotime($bill['created_at'])) ?></td>
                                 <td>
                                     <span class="badge badge-info"><?= $total_items ?> items</span>
@@ -1612,7 +1513,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <td class="font-mono text-green-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
                                 <td class="font-mono <?= ($bill['balance'] ?? 0) > 0 ? 'text-red-600' : 'text-green-600' ?>">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></td>
                                 <td><span class="status-badge <?= getStatusBadgeClass($bill['status'] ?? 'pending') ?>"><?= ucfirst($bill['status'] ?? 'Pending') ?></span></td>
-                                <td><?= htmlspecialchars($bill['created_by_name'] ?? 'N/A') ?></td>
                             </tr>
                             <?php if ($total_items > 0): ?>
                                 <tr id="items_<?= $bill['id'] ?>" style="display:none; background: var(--bg-body);">
@@ -1639,8 +1539,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                                         <td>TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
                                                         <td class="item-total">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
                                                         <td>
-                                                            <span class="<?= ($item['payment_status'] ?? 'pending') === 'paid' ? 'badge-item-paid' : 'badge-item-pending' ?>">
-                                                                <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
+                                                            <span class="<?= $item['status'] === 'paid' ? 'badge-item-paid' : 'badge-item-pending' ?>">
+                                                                <?= ucfirst($item['status'] ?? 'Pending') ?>
                                                             </span>
                                                         </td>
                                                     </tr>
@@ -1754,21 +1654,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
-    // PDF EXPORT
-    // ================================================================
-    function exportPDF(patientId) {
-        showToast('📄 Generating PDF', 'Please wait...', 'info');
-        var pdfWindow = window.open(
-            'export_patient_pdf.php?id=' + patientId,
-            '_blank',
-            'width=1000,height=800,scrollbars=yes,resizable=yes'
-        );
-        if (!pdfWindow) {
-            showToast('⚠️ Popup Blocked', 'Please allow popups for this site', 'warning');
-        }
-    }
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
@@ -1807,11 +1692,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c🩺 Diagnoses: <?= count($diagnoses) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c💊 Prescriptions: <?= count($prescriptions) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c🧪 Lab Tests: <?= count($lab_tests) ?> (FIXED - JOIN with visits)', 'font-size:12px; color:#D97706;');
-    console.log('%c💉 Procedures: <?= count($procedures) ?>', 'font-size:12px; color:#DC2626;');
-    console.log('%c🔧 Tools: <?= count($tools) ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c💰 Bills: <?= count($bills) ?> (Showing all items per bill)', 'font-size:12px; color:#0D9488;');
-    console.log('%c✅ Lab Tests fixed - JOIN visits ON visit_id to get patient_id', 'font-size:11px; color:#34D399;');
-    console.log('%c✅ Blue Theme applied', 'font-size:11px; color:#0B5ED7;');
+    console.log('%c💉 Procedures: <?= count($procedures) ?> (FIXED - Using procedures table)', 'font-size:12px; color:#DC2626;');
+    console.log('%c🔧 Tools: <?= count($tools) ?> (FIXED - From bill_items)', 'font-size:12px; color:#D97706;');
+    console.log('%c💰 Bills: <?= count($bills) ?> (FIXED - Using bills table)', 'font-size:12px; color:#0D9488;');
+    console.log('%c✅ All tables fixed for dispensary_db', 'font-size:11px; color:#34D399;');
 </script>
 
 </body>

@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/components/laboratory_header.php
-// LABORATORY - SHARED HEADER (FIXED - Database connection)
+// LABORATORY - SHARED HEADER (FIXED - Sidebar Toggle Working)
 // WITH LOGIN PROTECTION
-// FIXED: Date and Time now displayed correctly
+// DATE & TIME now displayed correctly
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -272,19 +272,6 @@ $dark_mode = $_SESSION['dark_mode'];
         
         .top-nav .search-wrapper .search-btn:hover {
             background: var(--primary-dark);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-            background: var(--bg-body);
-            padding: 4px 12px;
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            display: inline-block;
-            white-space: nowrap;
         }
         
         .top-nav .avatar {
@@ -697,10 +684,52 @@ $dark_mode = $_SESSION['dark_mode'];
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
+        /* ================================================================ */
+        /* SIDEBAR TOGGLE BUTTON - FIXED */
+        /* ================================================================ */
+        .sidebar-toggle-btn {
+            display: none;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-right: 8px;
+            flex-shrink: 0;
+        }
+        
+        .sidebar-toggle-btn:hover {
+            background: var(--primary-bg);
+            border-color: var(--primary);
+            color: var(--primary);
+            transform: scale(1.05);
+        }
+        
+        [data-theme="dark"] .sidebar-toggle-btn:hover {
+            background: #1E3A5F;
+            border-color: var(--primary-light);
+            color: var(--primary-light);
+        }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
+            .sidebar-toggle-btn {
+                display: flex !important;
+            }
+        }
+        
+        @media (min-width: 1025px) {
+            .sidebar-toggle-btn {
+                display: none !important;
+            }
         }
         
         @media (max-width: 768px) {
@@ -788,8 +817,11 @@ $dark_mode = $_SESSION['dark_mode'];
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
+        <!-- ================================================================ -->
+        <!-- SIDEBAR TOGGLE BUTTON - FIXED: Uses ID "sidebarToggleBtn" -->
+        <!-- ================================================================ -->
+        <button id="sidebarToggleBtn" class="sidebar-toggle-btn" aria-label="Toggle Sidebar">
+            <i class="fas fa-bars"></i>
         </button>
         
         <div class="search-wrapper">
@@ -807,7 +839,7 @@ $dark_mode = $_SESSION['dark_mode'];
         </span>
         
         <!-- ================================================================ -->
-        <!-- DATE & TIME - FIXED: Now showing correctly -->
+        <!-- DATE & TIME - Now showing correctly -->
         <!-- ================================================================ -->
         <span class="datetime-wrapper" id="datetimeWrapper">
             <i class="fas fa-calendar-alt datetime-icon"></i>
@@ -838,9 +870,137 @@ $dark_mode = $_SESSION['dark_mode'];
 </nav>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - FIXED SIDEBAR TOGGLE -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // SIDEBAR TOGGLE - FIXED: Uses ID "sidebarToggleBtn"
+    // ================================================================
+    (function() {
+        function initSidebarToggle() {
+            var sidebar = document.getElementById('sidebar');
+            var toggleBtn = document.getElementById('sidebarToggleBtn');
+            var closeBtn = document.getElementById('sidebarCloseBtn');
+            var overlay = document.getElementById('sidebarOverlay');
+            
+            if (!sidebar) {
+                console.warn('⚠️ Sidebar element not found. Retrying...');
+                setTimeout(initSidebarToggle, 500);
+                return;
+            }
+            
+            if (!toggleBtn) {
+                console.warn('⚠️ Toggle button not found. Retrying...');
+                setTimeout(initSidebarToggle, 500);
+                return;
+            }
+            
+            console.log('✅ Sidebar toggle initialization...');
+            
+            // Create overlay if not exists
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'sidebarOverlay';
+                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+                document.body.appendChild(overlay);
+            }
+            
+            function openSidebar() {
+                sidebar.classList.add('open');
+                overlay.style.display = 'block';
+                overlay.classList.add('active');
+                document.body.style.overflow = 'hidden';
+                console.log('🔓 Sidebar opened');
+            }
+            
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                overlay.style.display = 'none';
+                overlay.classList.remove('active');
+                document.body.style.overflow = '';
+                console.log('🔒 Sidebar closed');
+            }
+            
+            function toggleSidebar() {
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                } else {
+                    openSidebar();
+                }
+            }
+            
+            // Toggle button click - FIXED: No cloning needed
+            toggleBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('🔘 Sidebar toggle clicked!');
+                toggleSidebar();
+            });
+            
+            // Close button (X)
+            if (closeBtn) {
+                closeBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    closeSidebar();
+                });
+            }
+            
+            // Overlay click
+            if (overlay) {
+                overlay.addEventListener('click', function(e) {
+                    if (e.target === overlay) {
+                        closeSidebar();
+                    }
+                });
+            }
+            
+            // ESC key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            // Window resize (close on large screens)
+            window.addEventListener('resize', function() {
+                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            // Click outside on mobile
+            document.addEventListener('click', function(e) {
+                if (window.innerWidth <= 1024) {
+                    if (sidebar.classList.contains('open') && 
+                        !sidebar.contains(e.target) && 
+                        e.target !== toggleBtn) {
+                        closeSidebar();
+                    }
+                }
+            });
+            
+            console.log('✅ Sidebar toggle fully initialized!');
+            console.log('📱 Click ☰ button to toggle sidebar');
+        }
+        
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initSidebarToggle);
+        } else {
+            initSidebarToggle();
+        }
+        
+        setTimeout(function() {
+            var sidebar = document.getElementById('sidebar');
+            var toggleBtn = document.getElementById('sidebarToggleBtn');
+            if (sidebar && toggleBtn) {
+                // Already initialized
+            } else {
+                initSidebarToggle();
+            }
+        }, 1000);
+    })();
+
     // ================================================================
     // SEARCH FUNCTIONALITY
     // ================================================================
@@ -865,19 +1025,17 @@ $dark_mode = $_SESSION['dark_mode'];
     }
 
     // ================================================================
-    // DATE & TIME - FIXED: Now updates every second
+    // DATE & TIME - Updates every second
     // ================================================================
     function updateDateTime() {
         var now = new Date();
         
-        // Format Date: "Aug 15, 2026"
         var dateStr = now.toLocaleDateString('en-US', {
             month: 'short', 
             day: 'numeric', 
             year: 'numeric'
         });
         
-        // Format Time: "08:45:30 PM"
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', 
             minute: '2-digit', 
@@ -892,33 +1050,8 @@ $dark_mode = $_SESSION['dark_mode'];
         if (timeEl) timeEl.textContent = timeStr;
     }
     
-    // Update immediately and every second
     updateDateTime();
     setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // SIDEBAR TOGGLE (Mobile)
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var sidebar = document.getElementById('sidebar');
-        var sidebarToggle = document.getElementById('sidebarToggle');
-        
-        if (sidebarToggle && sidebar) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('open');
-            });
-        }
-        
-        document.addEventListener('click', function(e) {
-            if (window.innerWidth <= 1024) {
-                if (sidebar && sidebarToggle) {
-                    if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                        sidebar.classList.remove('open');
-                    }
-                }
-            }
-        });
-    });
 
     console.log('%c🔬 Braick Dispensary - Laboratory Header', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
@@ -926,9 +1059,8 @@ $dark_mode = $_SESSION['dark_mode'];
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c🌙 Dark Mode: <?= $dark_mode ?>', 'font-size:12px; color:#D97706;');
     console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c✅ Date & Time now displayed correctly with real-time updates', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Dark mode toggles via page reload (Session based)', 'font-size:12px; color:#34D399;');
-    console.log('%c🔒 Login protection: Active', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Sidebar Toggle: Click ☰ button to open/close sidebar', 'font-size:13px; font-weight:bold; color:#34D399;');
+    console.log('%c✅ Date & Time: Real-time updates every second', 'font-size:12px; color:#34D399;');
 </script>
 </body>
 </html>

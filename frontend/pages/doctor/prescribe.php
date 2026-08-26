@@ -3,8 +3,9 @@
 // FILE: frontend/pages/doctor/prescribe.php
 // DOCTOR - PRESCRIBE MEDICATIONS
 // WITH PATIENT DROPDOWN & VISIT AUTO-LOAD
-// Session-based login (NO BYPASS)
+// USING NEW DATABASE: dispensary_db
 // FULL CSS WITH DARK MODE SUPPORT
+// INSTRUCTIONS: DROPDOWN + MANUAL + QUICK BUTTONS
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -36,7 +37,7 @@ $selected_patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -131,18 +132,39 @@ if ($selected_patient_id > 0) {
 }
 
 // ================================================================
-// GET MEDICATIONS FROM INVENTORY
+// GET MEDICATIONS FROM INVENTORY - SHOW ONE BATCH PER MEDICATION (NEAREST EXPIRE OR LOWEST STOCK)
 // ================================================================
 $medications = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, medication_name, quantity, selling_price, unit 
+        SELECT 
+            id, medication_name, quantity, selling_price, unit, 
+            batch_number, expiry_date,
+            ROW_NUMBER() OVER (
+                PARTITION BY medication_name 
+                ORDER BY 
+                    CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END,
+                    expiry_date ASC,
+                    quantity ASC
+            ) as batch_rank
         FROM medications_inventory 
-        WHERE status = 'active' AND quantity > 0 AND branch_id = ?
+        WHERE status = 'active' 
+        AND quantity > 0 
+        AND branch_id = ?
+        AND (expiry_date IS NULL OR expiry_date > CURDATE())
         ORDER BY medication_name
     ");
     $stmt->execute([$doctor_branch_id]);
-    $medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $all_meds = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Filter to show only the best batch per medication
+    $seen_meds = [];
+    foreach ($all_meds as $med) {
+        if (!in_array($med['medication_name'], $seen_meds)) {
+            $seen_meds[] = $med['medication_name'];
+            $medications[] = $med;
+        }
+    }
 } catch (Exception $e) {
     $medications = [];
 }
@@ -182,24 +204,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $db->beginTransaction();
             
             // ================================================================
-            // GET OR CREATE BILL
+            // GET OR CREATE BILL - USING bills TABLE
             // ================================================================
             $bill_id = null;
-            $stmt = $db->prepare("SELECT id FROM patient_bills WHERE visit_id = ? AND status IN ('pending', 'partial')");
+            $stmt = $db->prepare("SELECT id FROM bills WHERE visit_id = ? AND status IN ('pending', 'partial')");
             $stmt->execute([$visit_id]);
             $bill = $stmt->fetch(PDO::FETCH_ASSOC);
             
             if ($bill) {
                 $bill_id = $bill['id'];
             } else {
-                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 6, '0', STR_PAD_LEFT);
+                $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
                 $stmt = $db->prepare("
-                    INSERT INTO patient_bills (
-                        bill_number, patient_id, visit_id, subtotal, total_amount, balance, 
-                        status, created_by, branch_id
-                    ) VALUES (?, ?, ?, 0, 0, 0, 'pending', ?, ?)
+                    INSERT INTO bills (
+                        bill_number, patient_id, visit_id, branch_id, created_by,
+                        subtotal, discount_percent, discount_amount, total_amount, 
+                        paid_amount, balance, status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 'pending', NOW())
                 ");
-                $stmt->execute([$bill_number, $patient_id, $visit_id, $doctor_id, $doctor_branch_id]);
+                $stmt->execute([
+                    $bill_number, $patient_id, $visit_id, $doctor_branch_id, $doctor_id
+                ]);
                 $bill_id = $db->lastInsertId();
             }
             
@@ -239,13 +264,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $route = $med['route'] ?? '';
                 $instructions = $med['instructions'] ?? '';
                 
-                // Get medication details
+                // Get medication details (with batch number)
                 $stmt = $db->prepare("
-                    SELECT medication_name, selling_price, unit, quantity as stock
+                    SELECT medication_name, selling_price, unit, quantity as stock, batch_number
                     FROM medications_inventory 
-                    WHERE id = ? AND status = 'active'
+                    WHERE id = ? AND status = 'active' AND branch_id = ?
                 ");
-                $stmt->execute([$med_id]);
+                $stmt->execute([$med_id, $doctor_branch_id]);
                 $medication = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($medication) {
@@ -267,78 +292,104 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     // Insert prescription item
                     $stmt = $db->prepare("
                         INSERT INTO prescription_items (
-                            prescription_id, medication_name, dosage, frequency, quantity, duration, instructions, 
-                            unit_price, total_price
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            prescription_id, patient_id, inventory_id, medication_name, 
+                            dosage, frequency, quantity, duration, route, instructions, 
+                            unit_price, total_price, branch_id, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
                         $prescription_id,
+                        $patient_id,
+                        $med_id,
                         $medication['medication_name'],
                         $dosage,
                         $frequency,
                         $quantity,
                         $duration,
+                        $route,
                         $full_instructions,
                         $unit_price,
-                        $total_price
+                        $total_price,
+                        $doctor_branch_id
                     ]);
                     
                     // Update stock
-                    $stmt = $db->prepare("UPDATE medications_inventory SET quantity = quantity - ? WHERE id = ?");
-                    $stmt->execute([$quantity, $med_id]);
+                    $new_stock = $medication['stock'] - $quantity;
+                    $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ?");
+                    $stmt->execute([$new_stock, $med_id]);
                     
                     // Log stock movement
                     $stmt = $db->prepare("
-                        INSERT INTO stock_movements (inventory_id, sale_type, sale_id, quantity, previous_stock, new_stock, performed_by)
-                        VALUES (?, 'prescription', ?, ?, ?, ?, ?)
+                        INSERT INTO stock_movements (
+                            inventory_id, patient_id, movement_type, quantity,
+                            previous_stock, new_stock, reference_type, reference_id,
+                            performed_by, branch_id, notes, created_at
+                        ) VALUES (?, ?, 'out', ?, ?, ?, 'prescription', ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
                         $med_id,
-                        $prescription_id,
+                        $patient_id,
                         $quantity,
                         $medication['stock'],
-                        $medication['stock'] - $quantity,
-                        $doctor_id
+                        $new_stock,
+                        $prescription_id,
+                        $doctor_id,
+                        $doctor_branch_id,
+                        'Prescription: ' . $medication['medication_name'] . ' | Batch: ' . ($medication['batch_number'] ?? 'N/A')
                     ]);
                 }
             }
             
             // ================================================================
-            // UPDATE BILL WITH MEDICATION FEES
+            // ADD MEDICATION ITEMS TO BILL
             // ================================================================
             if ($bill_id > 0 && $total_med_fees > 0) {
-                // Update patient_bills
+                // Update bill total
                 $stmt = $db->prepare("
-                    UPDATE patient_bills 
-                    SET medication_fees = medication_fees + ?,
-                        subtotal = subtotal + ?,
+                    UPDATE bills 
+                    SET subtotal = subtotal + ?,
                         total_amount = total_amount + ?,
                         balance = balance + ?
                     WHERE id = ?
                 ");
-                $stmt->execute([$total_med_fees, $total_med_fees, $total_med_fees, $total_med_fees, $bill_id]);
+                $stmt->execute([$total_med_fees, $total_med_fees, $total_med_fees, $bill_id]);
                 
-                // Add to bill_items
+                // Add each medication as bill item
                 foreach ($medications_data as $med) {
                     $med_id = (int)$med['med_id'];
                     $quantity = (int)$med['quantity'];
                     
-                    $stmt = $db->prepare("SELECT medication_name, selling_price FROM medications_inventory WHERE id = ?");
-                    $stmt->execute([$med_id]);
+                    $stmt = $db->prepare("
+                        SELECT medication_name, selling_price, batch_number 
+                        FROM medications_inventory 
+                        WHERE id = ? AND branch_id = ?
+                    ");
+                    $stmt->execute([$med_id, $doctor_branch_id]);
                     $med_info = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     if ($med_info) {
                         $total = $med_info['selling_price'] * $quantity;
+                        $item_name = $med_info['medication_name'];
+                        if (!empty($med_info['batch_number'])) {
+                            $item_name .= ' (Batch: ' . $med_info['batch_number'] . ')';
+                        }
+                        
                         $stmt = $db->prepare("
-                            INSERT INTO bill_items (bill_id, item_type, item_name, quantity, unit_price, total_price)
-                            VALUES (?, 'medication', ?, ?, ?, ?)
+                            INSERT INTO bill_items (
+                                bill_id, patient_id, branch_id, item_type, item_name,
+                                quantity, unit_price, total_price, status, 
+                                reference_id, reference_type, created_at
+                            ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())
                         ");
                         $stmt->execute([
                             $bill_id,
-                            $med_info['medication_name'],
+                            $patient_id,
+                            $doctor_branch_id,
+                            $item_name,
                             $quantity,
                             $med_info['selling_price'],
-                            $total
+                            $total,
+                            $prescription_id
                         ]);
                     }
                 }
@@ -347,18 +398,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // Update visit status to prescribed
             $stmt = $db->prepare("
                 UPDATE visits 
-                SET status = 'prescribed', updated_at = NOW()
+                SET status = 'prescribed', 
+                    pharmacy_fees_total = pharmacy_fees_total + ?,
+                    visit_total = visit_total + ?,
+                    updated_at = NOW()
                 WHERE id = ? AND doctor_id = ?
             ");
-            $stmt->execute([$visit_id, $doctor_id]);
+            $stmt->execute([$total_med_fees, $total_med_fees, $visit_id, $doctor_id]);
             
             // Log activity
             $stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, action, details, created_at) 
-                VALUES (?, 'prescription_created', ?, NOW())
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'prescription_created', ?, NOW())
             ");
             $stmt->execute([
                 $doctor_id,
+                $doctor_branch_id,
                 "Prescription #$prescription_number created for patient ID: $patient_id with " . count($medications_data) . " medications"
             ]);
             
@@ -399,8 +454,8 @@ try {
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -536,17 +591,34 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     <i class="fas fa-pills text-blue-600 mr-2"></i> Add Medications
                     <span class="required">*</span>
                 </label>
-                <p class="text-xs text-gray-400 mb-3">Select medication, fill details, then click <strong>"Add Medication"</strong> button</p>
+                <p class="text-xs text-gray-400 mb-3">
+                    Select medication, fill details, then click <strong>"Add Medication"</strong> button
+                    <span class="ml-2 text-green-600">
+                        <i class="fas fa-info-circle"></i> 
+                        Batches shown: Nearest to expire or lowest stock
+                    </span>
+                </p>
                 
                 <div class="med-grid">
                     <div>
                         <label class="form-label">Medication</label>
                         <select id="medSelect" class="form-control">
                             <option value="">Select...</option>
-                            <?php foreach ($medications as $med): ?>
+                            <?php foreach ($medications as $med): 
+                                $expiry = !empty($med['expiry_date']) ? strtotime($med['expiry_date']) : null;
+                                $expiry_warning = '';
+                                if ($expiry && $expiry < strtotime('+30 days')) {
+                                    $days = ceil(($expiry - time()) / 86400);
+                                    $expiry_warning = $days < 0 ? ' ❌ EXPIRED' : ' ⚠️ ' . $days . ' days left';
+                                }
+                            ?>
                                 <option value="<?= $med['id'] ?>" data-stock="<?= $med['quantity'] ?>">
                                     <?= htmlspecialchars($med['medication_name']) ?>
-                                    (Stock: <?= $med['quantity'] ?>)
+                                    (Stock: <?= $med['quantity'] ?>) 
+                                    <?php if (!empty($med['batch_number'])): ?>
+                                        [Batch: <?= htmlspecialchars($med['batch_number']) ?>]
+                                    <?php endif; ?>
+                                    <?= $expiry_warning ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
@@ -612,10 +684,66 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                     </div>
                 </div>
                 
+                <!-- ================================================================ -->
+                <!-- INSTRUCTIONS - DROPDOWN + MANUAL + QUICK BUTTONS -->
+                <!-- ================================================================ -->
                 <div class="mt-2">
-                    <label class="form-label" style="font-size: 0.75rem;">Instructions (for this medication)</label>
-                    <input type="text" id="medInstructions" class="form-control" placeholder="e.g. Take after meals, with plenty of water">
+                    <label class="form-label" style="font-size: 0.75rem; font-weight: 600;">
+                        <i class="fas fa-info-circle text-blue-600 mr-1"></i> 
+                        Instructions (for this medication)
+                        <span class="text-xs text-gray-400 font-normal">
+                            - Select from dropdown, type manually, or click buttons
+                        </span>
+                    </label>
+                    
+                    <!-- Dropdown for quick pick -->
+                    <select id="medInstructionsSelect" class="form-control" style="margin-bottom: 6px; font-size: 0.78rem; padding: 7px 10px;">
+                        <option value="">-- Quick Select Instruction --</option>
+                        <option value="Take after meals">Take after meals</option>
+                        <option value="Take before meals">Take before meals</option>
+                        <option value="Take with meals">Take with meals</option>
+                        <option value="Take on empty stomach">Take on empty stomach</option>
+                        <option value="Take with plenty of water">Take with plenty of water</option>
+                        <option value="Take at bedtime">Take at bedtime</option>
+                        <option value="Take in the morning">Take in the morning</option>
+                        <option value="Take at night">Take at night</option>
+                        <option value="Do not crush or chew">Do not crush or chew</option>
+                        <option value="Do not take with dairy">Do not take with dairy</option>
+                        <option value="Avoid alcohol while taking this medication">Avoid alcohol</option>
+                        <option value="Avoid driving while taking this medication">Avoid driving</option>
+                        <option value="Complete the full course of medication">Complete full course</option>
+                        <option value="Take with food if stomach upset occurs">Take with food if upset</option>
+                        <option value="Store in a cool dry place">Store in cool dry place</option>
+                        <option value="Keep out of reach of children">Keep out of reach of children</option>
+                        <option value="Shake well before use">Shake well before use</option>
+                        <option value="For external use only">For external use only</option>
+                        <option value="Do not stop abruptly">Do not stop abruptly</option>
+                        <option value="Report any side effects immediately">Report side effects</option>
+                    </select>
+                    
+                    <!-- Manual input textarea -->
+                    <textarea id="medInstructions" class="form-control" rows="2" 
+                              placeholder="Type custom instructions here... or select from dropdown above"
+                              style="font-size: 0.78rem; padding: 7px 10px; min-height: 45px;"></textarea>
+                    
+                    <!-- Quick action buttons -->
+                    <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px;">
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take after meals')" style="font-size: 0.6rem; padding: 2px 8px;">After Meals</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take before meals')" style="font-size: 0.6rem; padding: 2px 8px;">Before Meals</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take with plenty of water')" style="font-size: 0.6rem; padding: 2px 8px;">With Water</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take at bedtime')" style="font-size: 0.6rem; padding: 2px 8px;">At Bedtime</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Do not crush or chew')" style="font-size: 0.6rem; padding: 2px 8px;">Do Not Crush</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take on empty stomach')" style="font-size: 0.6rem; padding: 2px 8px;">Empty Stomach</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Avoid alcohol')" style="font-size: 0.6rem; padding: 2px 8px;">No Alcohol</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Complete the full course')" style="font-size: 0.6rem; padding: 2px 8px;">Full Course</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="clearInstructions()" style="font-size: 0.6rem; padding: 2px 8px; color: #DC2626; border-color: #FCA5A5;">
+                            <i class="fas fa-times"></i> Clear
+                        </button>
+                    </div>
                 </div>
+                <!-- ================================================================ -->
+                <!-- END INSTRUCTIONS SECTION -->
+                <!-- ================================================================ -->
             </div>
 
             <!-- SELECTED MEDICATIONS LIST -->
@@ -1331,8 +1459,63 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     var medDuration = document.getElementById('medDuration');
     var medRoute = document.getElementById('medRoute');
     var medInstructions = document.getElementById('medInstructions');
+    var medInstructionsSelect = document.getElementById('medInstructionsSelect');
     var addMedBtn = document.getElementById('addMedBtn');
 
+    // ================================================================
+    // INSTRUCTIONS - DROPDOWN + MANUAL + QUICK BUTTONS
+    // ================================================================
+    
+    // When dropdown changes, set value in textarea
+    if (medInstructionsSelect) {
+        medInstructionsSelect.addEventListener('change', function() {
+            var value = this.value;
+            if (value) {
+                var current = medInstructions.value.trim();
+                if (current) {
+                    // If textarea has content, append with comma
+                    medInstructions.value = current + ', ' + value;
+                } else {
+                    medInstructions.value = value;
+                }
+                // Reset dropdown
+                this.value = '';
+                // Focus textarea
+                medInstructions.focus();
+            }
+        });
+    }
+
+    // Add instruction from quick buttons
+    function addInstruction(text) {
+        var textarea = document.getElementById('medInstructions');
+        if (textarea) {
+            var current = textarea.value.trim();
+            if (current) {
+                // Check if instruction already exists
+                var instructions = current.split(',').map(function(s) { return s.trim(); });
+                if (!instructions.includes(text)) {
+                    textarea.value = current + ', ' + text;
+                }
+            } else {
+                textarea.value = text;
+            }
+            textarea.focus();
+        }
+    }
+
+    // Clear instructions
+    function clearInstructions() {
+        var textarea = document.getElementById('medInstructions');
+        if (textarea) {
+            textarea.value = '';
+            textarea.focus();
+        }
+    }
+
+    // ================================================================
+    // ADD MEDICATION
+    // ================================================================
     function addMedication() {
         if (!medSelect) return;
         
@@ -1384,6 +1567,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         medDuration.value = 7;
         medRoute.value = '';
         medInstructions.value = '';
+        // Reset dropdown too
+        if (medInstructionsSelect) medInstructionsSelect.value = '';
         
         renderMedications();
         showToast('Success', 'Medication added successfully!', 'success');
@@ -1447,8 +1632,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         addMedBtn.addEventListener('click', addMedication);
     }
 
-    // Enter key support
-    var medFields = [medQuantity, medDosage, medFrequency, medDuration, medRoute, medInstructions];
+    // Enter key support for medication fields
+    var medFields = [medQuantity, medDosage, medFrequency, medDuration, medRoute];
     medFields.forEach(function(field) {
         if (field) {
             field.addEventListener('keypress', function(e) {
@@ -1459,6 +1644,16 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             });
         }
     });
+
+    // Enter key support for instructions textarea (moves focus to add button)
+    if (medInstructions) {
+        medInstructions.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                addMedication();
+            }
+        });
+    }
 
     // ================================================================
     // FORM VALIDATION
@@ -1547,6 +1742,9 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     console.log('%c👤 Patient: <?= $selected_patient_id > 0 ? 'Selected' : 'Not selected' ?>', 'font-size:12px; color:#059669;');
     console.log('%c📋 Visits: <?= count($visits) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c💊 Medications available: <?= count($medications) ?>', 'font-size:12px; color:#34D399;');
+    console.log('%c📦 Using NEW DATABASE: dispensary_db', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c🏷️ Batches: Showing nearest to expire or lowest stock per medication', 'font-size:12px; color:#D97706;');
+    console.log('%c📝 Instructions: Dropdown + Manual + Quick Buttons', 'font-size:12px; color:#7C3AED;');
     console.log('%c💡 Select patient to load their visits', 'font-size:12px; color:#0B5ED7;');
 </script>
 

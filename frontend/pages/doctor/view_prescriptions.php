@@ -5,7 +5,7 @@
 // SHOWS ALL PRESCRIPTIONS FOR THE LOGGED IN DOCTOR
 // WITH FILTERS AND AUTO-UPDATE
 // Session-based login (NO BYPASS)
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING ACTUAL DATABASE
 // ================================================================
 
 session_start();
@@ -78,7 +78,7 @@ $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
-// BUILD QUERY
+// BUILD QUERY - USING ACTUAL DATABASE COLUMNS
 // ================================================================
 $conditions = ["p.doctor_id = ?"];
 $params = [$doctor_id];
@@ -89,7 +89,7 @@ if ($filter_status !== 'all') {
 }
 
 if (!empty($search)) {
-    $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR p.medication LIKE ?)";
+    $conditions[] = "(pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.prescription_number LIKE ? OR pi.medication_name LIKE ?)";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -109,24 +109,49 @@ if (!empty($date_to)) {
 $where_clause = implode(" AND ", $conditions);
 
 // ================================================================
-// GET PRESCRIPTIONS
+// GET PRESCRIPTIONS WITH ITEMS - USING ACTUAL TABLES
 // ================================================================
 $sql = "
     SELECT 
-        p.*,
+        p.id,
+        p.prescription_number,
+        p.visit_id,
+        p.patient_id,
+        p.doctor_id,
+        p.pharmacy_id,
+        p.diagnosis,
+        p.instructions,
+        p.notes,
+        p.status,
+        p.branch_id,
+        p.created_at,
+        p.dispensed_at,
+        p.updated_at,
         pat.full_name as patient_name,
         pat.patient_id as patient_code,
         pat.phone,
+        pat.gender,
+        pat.date_of_birth,
         u.full_name as doctor_name,
         ph.full_name as pharmacy_name,
         v.visit_number,
-        (SELECT COUNT(*) FROM prescription_items WHERE prescription_id = p.id) as item_count
+        v.visit_type,
+        GROUP_CONCAT(
+            CONCAT(
+                pi.medication_name, 
+                ' (', pi.dosage, ' ', pi.unit_price, 'x', pi.quantity, ')'
+            ) SEPARATOR ', '
+        ) as medication_names,
+        SUM(pi.total_price) as total_price,
+        COUNT(pi.id) as item_count
     FROM prescriptions p
     LEFT JOIN patients pat ON p.patient_id = pat.id
     LEFT JOIN users u ON p.doctor_id = u.id
     LEFT JOIN users ph ON p.pharmacy_id = ph.id
     LEFT JOIN visits v ON p.visit_id = v.id
+    LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
     WHERE $where_clause
+    GROUP BY p.id
     ORDER BY p.created_at DESC
 ";
 
@@ -140,7 +165,7 @@ try {
 }
 
 // ================================================================
-// GET STATUS COUNTS
+// GET STATUS COUNTS - USING ACTUAL TABLES
 // ================================================================
 $status_counts = ['pending' => 0, 'dispensed' => 0, 'cancelled' => 0];
 $statuses = ['pending', 'dispensed', 'cancelled'];
@@ -194,7 +219,7 @@ function getStatusBadgeClass($status) {
         'pending' => 'badge-warning',
         'dispensed' => 'badge-success',
         'cancelled' => 'badge-danger',
-        'pending_pharmacy' => 'badge-warning'
+        'confirmed' => 'badge-info'
     ];
     return $map[$status] ?? 'badge-info';
 }
@@ -204,7 +229,7 @@ function getStatusLabel($status) {
         'pending' => '⏳ Pending',
         'dispensed' => '✅ Dispensed',
         'cancelled' => '❌ Cancelled',
-        'pending_pharmacy' => '⏳ Pending Pharmacy'
+        'confirmed' => '🔄 Confirmed'
     ];
     return $map[$status] ?? ucfirst($status);
 }
@@ -212,6 +237,13 @@ function getStatusLabel($status) {
 function formatDate($datetime) {
     if (empty($datetime)) return 'N/A';
     return date('d/m/Y h:i A', strtotime($datetime));
+}
+
+function calculateAge($dob) {
+    if (empty($dob) || $dob === '0000-00-00') return 'N/A';
+    $birthDate = new DateTime($dob);
+    $today = new DateTime('today');
+    return $birthDate->diff($today)->y;
 }
 
 // ================================================================
@@ -237,7 +269,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 ?>
 
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -246,7 +278,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     
     <style>
         /* ================================================================
-           ROOT VARIABLES
+           ROOT VARIABLES - BLUE THEME
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -834,6 +866,36 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             .data-table thead th, .data-table tbody td { padding: 8px 10px; }
             .data-table thead th { font-size: 0.6rem; }
         }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            padding: 14px 22px;
+            border-radius: 10px;
+            z-index: 9999;
+            max-width: 380px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s ease;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: #ffffff;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            display: none;
+        }
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
     </style>
 </head>
 <body>
@@ -935,7 +997,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                         <th><i class="fas fa-receipt"></i> Prescription #</th>
                         <th><i class="fas fa-user"></i> Patient</th>
                         <th><i class="fas fa-pills"></i> Medication</th>
-                        <th><i class="fas fa-cubes"></i> Qty</th>
+                        <th><i class="fas fa-cubes"></i> Qty / Total</th>
                         <th><i class="fas fa-info-circle"></i> Status</th>
                         <th><i class="fas fa-calendar"></i> Date</th>
                         <th><i class="fas fa-cog"></i> Actions</th>
@@ -957,17 +1019,37 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                 <td>
                                     <div class="font-medium text-sm"><?= htmlspecialchars($pres['patient_name'] ?? 'Unknown') ?></div>
                                     <div class="text-xs text-gray-400"><?= htmlspecialchars($pres['patient_code'] ?? 'N/A') ?></div>
-                                </td>
-                                <td>
-                                    <span class="text-sm"><?= htmlspecialchars($pres['medication'] ?? 'N/A') ?></span>
-                                    <?php if (!empty($pres['dosage'])): ?>
-                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['dosage']) ?></span>
+                                    <?php if (!empty($pres['phone'])): ?>
+                                        <div class="text-xs text-gray-400"><i class="fas fa-phone"></i> <?= htmlspecialchars($pres['phone']) ?></div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($pres['date_of_birth']) && $pres['date_of_birth'] !== '0000-00-00'): ?>
+                                        <div class="text-xs text-gray-400"><i class="fas fa-calendar-alt"></i> <?= calculateAge($pres['date_of_birth']) ?> yrs</div>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="text-sm font-semibold"><?= $pres['quantity'] ?? 0 ?></span>
-                                    <?php if (!empty($pres['frequency'])): ?>
-                                        <span class="text-xs text-gray-400 block"><?= htmlspecialchars($pres['frequency']) ?></span>
+                                    <span class="text-sm">
+                                        <?php if (!empty($pres['medication_names'])): ?>
+                                            <?= htmlspecialchars(substr($pres['medication_names'], 0, 50)) . (strlen($pres['medication_names']) > 50 ? '...' : '') ?>
+                                        <?php else: ?>
+                                            <span class="text-gray-400">No items</span>
+                                        <?php endif; ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="text-sm font-semibold">
+                                        <?php 
+                                            $total_qty = 0;
+                                            if (!empty($pres['medication_names'])) {
+                                                preg_match_all('/x(\d+)/', $pres['medication_names'], $matches);
+                                                if (!empty($matches[1])) {
+                                                    $total_qty = array_sum($matches[1]);
+                                                }
+                                            }
+                                            echo $total_qty > 0 ? $total_qty : '-';
+                                        ?>
+                                    </span>
+                                    <?php if (!empty($pres['total_price']) && $pres['total_price'] > 0): ?>
+                                        <span class="text-xs text-green-600 block">TSh <?= number_format($pres['total_price'], 0) ?></span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -979,11 +1061,19 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
                                             <?= date('d/m/Y', strtotime($pres['dispensed_at'])) ?>
                                         </span>
                                     <?php endif; ?>
+                                    <?php if (!empty($pres['pharmacy_name'])): ?>
+                                        <span class="text-xs text-gray-400 block">
+                                            <i class="fas fa-store"></i> <?= htmlspecialchars($pres['pharmacy_name']) ?>
+                                        </span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <span class="text-xs"><?= formatDate($pres['created_at'] ?? '') ?></span>
                                     <?php if (!empty($pres['visit_number'])): ?>
                                         <span class="text-xs text-gray-400 block">Visit: <?= htmlspecialchars($pres['visit_number']) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($pres['visit_type'])): ?>
+                                        <span class="text-xs text-gray-400 block"><?= ucfirst($pres['visit_type']) ?></span>
                                     <?php endif; ?>
                                 </td>
                                 <td>
@@ -1053,7 +1143,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
 <!-- ================================================================ -->
 <!-- TOAST -->
 <!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="position:fixed;bottom:30px;right:30px;padding:14px 22px;border-radius:10px;z-index:9999;max-width:380px;transform:translateY(100px);opacity:0;transition:all 0.4s ease;display:flex;align-items:center;gap:12px;color:#ffffff;box-shadow:0 10px 40px rgba(0,0,0,0.15);display:none;">
+<div id="toast" class="toast-custom">
     <i class="fas fa-info-circle"></i>
     <div>
         <p id="toastTitle" style="font-weight:600;font-size:0.85rem;margin:0;">Notification</p>
@@ -1087,11 +1177,10 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         toastTitle.textContent = title;
         toastMessage.textContent = message;
         toast.style.display = 'flex';
-        setTimeout(function() { toast.style.transform = 'translateY(0)'; toast.style.opacity = '1'; }, 50);
+        setTimeout(function() { toast.classList.add('show'); }, 50);
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
-            toast.style.transform = 'translateY(100px)';
-            toast.style.opacity = '0';
+            toast.classList.remove('show');
             setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 4000);
     }
@@ -1105,6 +1194,7 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
     console.log('%c✅ Dispensed: <?= $status_counts['dispensed'] ?? 0 ?>', 'font-size:12px; color:#059669;');
     console.log('%c❌ Cancelled: <?= $status_counts['cancelled'] ?? 0 ?>', 'font-size:12px; color:#DC2626;');
     console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📦 Using Actual Database: prescriptions, prescription_items, patients, users', 'font-size:12px; color:#8B5CF6;');
 </script>
 
 </body>

@@ -1,12 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
-// PHARMACY - SHARED SIDEBAR (FIXED)
+// PHARMACY - SHARED SIDEBAR (USING API FOR REAL-TIME UPDATES)
 // ✅ TOGGLE BUTTON KWENYE HEADER (SI FLOATING)
 // ✅ BLUE COLOR THEME
 // ✅ JINA NA LOGO KUTOKA system_settings
 // ✅ FONTS ZIMEONGEZWA SIZE
 // ✅ PROFILE SECTION IMETOLEWA
+// ✅ API INTEGRATION - get_pharmacy_sidebar_stats.php
 // ================================================================
 
 // ================================================================
@@ -50,9 +51,10 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_is_online = $_SESSION['is_online'] ?? 1;
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE FOR INITIAL DATA
 // ================================================================
 require_once __DIR__ . '/../../backend/config/database.php';
 
@@ -63,7 +65,7 @@ try {
 }
 
 // ================================================================
-// ✅ GET SYSTEM SETTINGS - JINA NA LOGO LA DISPENSARY
+// GET SYSTEM SETTINGS - JINA NA LOGO LA DISPENSARY
 // ================================================================
 $site_name = 'Braick Dispensary';
 $site_logo = '';
@@ -71,7 +73,6 @@ $site_logo_path = '';
 
 if ($db !== null) {
     try {
-        // Get site name
         $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'site_name'");
         $stmt->execute();
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -79,7 +80,6 @@ if ($db !== null) {
             $site_name = $result['setting_value'];
         }
         
-        // Get site logo
         $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'site_logo'");
         $stmt->execute();
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -93,7 +93,7 @@ if ($db !== null) {
 }
 
 // ================================================================
-// ✅ SITE LOGO PATH
+// SITE LOGO PATH
 // ================================================================
 if (!empty($site_logo)) {
     $site_logo_path = '/dispensary_system/frontend/assets/uploads/settings/' . $site_logo;
@@ -102,7 +102,7 @@ if (!empty($site_logo)) {
 }
 
 // ================================================================
-// GET STATISTICS FOR BADGES
+// GET INITIAL STATISTICS FOR BADGES
 // ================================================================
 $pending_prescriptions = 0;
 $low_stock_count = 0;
@@ -151,9 +151,20 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $today_otc = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
     } catch (Exception $e) {
-        error_log("Pharmacy sidebar stats error: " . $e->getMessage());
+        error_log("Pharmacy sidebar initial stats error: " . $e->getMessage());
     }
 }
+
+// ================================================================
+// GENERATE INITIAL HASH
+// ================================================================
+$initial_hash = md5(json_encode([
+    'pending_prescriptions' => $pending_prescriptions,
+    'low_stock' => $low_stock_count,
+    'expired' => $expired_count,
+    'today_prescriptions' => $today_sales,
+    'today_otc' => $today_otc
+]));
 
 // ================================================================
 // DETECT CURRENT PAGE
@@ -169,78 +180,18 @@ function isActive($page) {
 }
 
 // ================================================================
-// HANDLE AJAX REQUEST
+// PASS DATA TO JAVASCRIPT
 // ================================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_pharmacy_sidebar_data') {
-    header('Content-Type: application/json');
-    
-    if (!isset($_SESSION['user_id'])) {
-        echo json_encode(['success' => false, 'error' => 'Not logged in']);
-        exit;
-    }
-    
-    $branch_id = (int)($_POST['branch_id'] ?? $_SESSION['branch_id'] ?? 1);
-    
-    $response = [
-        'success' => false,
-        'pending_prescriptions' => 0,
-        'low_stock' => 0,
-        'expired' => 0,
-        'today_prescriptions' => 0,
-        'today_otc' => 0
-    ];
-    
-    if ($db !== null) {
-        try {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
-            $stmt->execute([$branch_id]);
-            $response['pending_prescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM medications_inventory 
-                WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
-            ");
-            $stmt->execute([$branch_id]);
-            $response['low_stock'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM medications_inventory 
-                WHERE branch_id = ? 
-                AND expiry_date IS NOT NULL 
-                AND expiry_date < CURDATE()
-            ");
-            $stmt->execute([$branch_id]);
-            $response['expired'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM prescriptions 
-                WHERE branch_id = ? AND status = 'dispensed' AND DATE(dispensed_at) = CURDATE()
-            ");
-            $stmt->execute([$branch_id]);
-            $response['today_prescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM otc_sales 
-                WHERE branch_id = ? AND DATE(created_at) = CURDATE()
-            ");
-            $stmt->execute([$branch_id]);
-            $response['today_otc'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $response['success'] = true;
-            
-        } catch (Exception $e) {
-            $response['success'] = false;
-            $response['error'] = $e->getMessage();
-        }
-    }
-    
-    echo json_encode($response);
-    exit;
-}
+$initial_data = [
+    'pending_prescriptions' => $pending_prescriptions,
+    'low_stock' => $low_stock_count,
+    'expired' => $expired_count,
+    'today_prescriptions' => $today_sales,
+    'today_otc' => $today_otc,
+    'branch_id' => $user_branch_id,
+    'branch_name' => $user_branch_name,
+    'user_name' => $user_full_name
+];
 ?>
 
 <style>
@@ -254,7 +205,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         left: 0;
         bottom: 0;
         width: 270px;
-        background: #0B4EA8;
+        background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
         color: white;
         z-index: 9999;
         overflow-y: auto;
@@ -267,7 +218,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     [data-theme="dark"] .sidebar-modern {
-        background: #0A3D7A;
+        background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
@@ -307,14 +258,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     .sidebar-brand-modern {
         padding: 18px 18px 14px;
         border-bottom: 2px solid rgba(255,255,255,0.06);
-        background: #0B4EA8;
+        background: rgba(0,0,0,0.1);
         position: sticky;
         top: 0;
         z-index: 5;
-    }
-    
-    [data-theme="dark"] .sidebar-brand-modern {
-        background: #0A3D7A;
+        backdrop-filter: blur(10px);
     }
     
     .sidebar-brand-modern .logo-modern {
@@ -325,6 +273,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         background: white;
         padding: 4px;
         border: 1px solid rgba(255,255,255,0.08);
+        transition: transform 0.3s ease;
+    }
+    
+    .sidebar-brand-modern .logo-modern:hover {
+        transform: rotate(-5deg) scale(1.05);
     }
     
     .sidebar-brand-modern .brand-text-modern {
@@ -367,7 +320,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       ✅ PROFILE SECTION IMETOLEWA - HAKUNA USER PROFILE
+       PROFILE SECTION IMETOLEWA - HAKUNA USER PROFILE
        ================================================================ */
     
     /* ================================================================
@@ -502,6 +455,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
+       BADGE UPDATE ANIMATION
+       ================================================================ */
+    .badge-update-modern {
+        animation: badgePop-modern 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    }
+    
+    @keyframes badgePop-modern {
+        0% { transform: scale(0.3); opacity: 0; }
+        60% { transform: scale(1.3); }
+        100% { transform: scale(1); opacity: 1; }
+    }
+    
+    /* ================================================================
+       DATA CHANGED FLASH
+       ================================================================ */
+    .sidebar-data-flash-modern {
+        animation: flashBlue 0.6s ease;
+    }
+    @keyframes flashBlue {
+        0% { background: rgba(52, 211, 153, 0.15); }
+        50% { background: rgba(52, 211, 153, 0.03); }
+        100% { background: transparent; }
+    }
+    
+    /* ================================================================
        LOGOUT LINK
        ================================================================ */
     .sidebar-link-modern.logout-link-modern {
@@ -523,19 +501,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       BADGE UPDATE ANIMATION
-       ================================================================ */
-    .badge-update-modern {
-        animation: badgePop-modern 0.3s ease;
-    }
-    
-    @keyframes badgePop-modern {
-        0% { transform: scale(0.5); opacity: 0; }
-        60% { transform: scale(1.2); }
-        100% { transform: scale(1); opacity: 1; }
-    }
-    
-    /* ================================================================
        SIDEBAR STATUS FOOTER
        ================================================================ */
     .sidebar-status-modern {
@@ -544,13 +509,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         display: flex;
         align-items: center;
         gap: 10px;
-        background: #0B4EA8;
+        background: rgba(0,0,0,0.1);
         position: sticky;
         bottom: 0;
-    }
-    
-    [data-theme="dark"] .sidebar-status-modern {
-        background: #0A3D7A;
+        backdrop-filter: blur(10px);
     }
     
     .sidebar-status-modern .status-dot-modern {
@@ -563,6 +525,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     .sidebar-status-modern .status-dot-modern.online {
         background: #34D399;
         animation: pulse-dot-modern 1.5s infinite;
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+    }
+    
+    .sidebar-status-modern .status-dot-modern.offline {
+        background: #94A3B8;
     }
     
     .sidebar-status-modern .status-text-modern {
@@ -590,8 +557,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     @keyframes pulse-dot-modern {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.3; }
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.3; transform: scale(0.8); }
     }
     
     /* ================================================================
@@ -606,7 +573,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         }
         #sidebarOverlayModern { display: none !important; }
         .sidebar-close-btn-modern { display: none !important; }
-        /* ✅ NO FLOATING BUTTON ON DESKTOP */
         .sidebar-toggle-float-modern { display: none !important; }
     }
     
@@ -631,8 +597,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         .sidebar-status-modern { padding: 6px 16px; }
         .sidebar-status-modern .status-text-modern { font-size: 0.55rem; }
         .sidebar-status-modern .status-time-modern { font-size: 0.5rem; }
-        
-        /* ✅ TOGGLE BUTTON IN HEADER - HIDDEN FLOATING */
         .sidebar-toggle-float-modern { display: none !important; }
     }
     
@@ -671,6 +635,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         .sidebar-status-modern .status-dot-modern { width: 5px; height: 5px; }
         .sidebar-toggle-float-modern { display: none !important; }
     }
+    
+    /* ================================================================
+       UTILITY
+       ================================================================ */
+    .flex { display: flex; }
+    .items-center { align-items: center; }
+    .gap-2 { gap: 8px; }
+    .gap-3 { gap: 12px; }
+    .mt-2 { margin-top: 8px; }
+    .mt-1 { margin-top: 4px; }
+    .ml-auto { margin-left: auto; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 
 <!-- ================================================================ -->
@@ -679,16 +655,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 <div id="sidebarOverlayModern"></div>
 
 <!-- ================================================================ -->
-<!-- ✅ NO FLOATING TOGGLE BUTTON - IKO KWENYE HEADER -->
-<!-- ================================================================ -->
-
-<!-- ================================================================ -->
 <!-- SIDEBAR -->
 <!-- ================================================================ -->
 <aside class="sidebar-modern" id="sidebarModern">
     
     <!-- ================================================================ -->
-    <!-- ✅ BRAND / HEADER - JINA NA LOGO KUTOKA SYSTEM SETTINGS -->
+    <!-- BRAND / HEADER - JINA NA LOGO KUTOKA SYSTEM SETTINGS -->
     <!-- ================================================================ -->
     <div class="sidebar-brand-modern">
         <div class="flex items-center gap-3">
@@ -696,9 +668,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                  alt="<?= htmlspecialchars($site_name) ?>" 
                  class="logo-modern"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2234%22 height=%2234%22%3E%3Crect width=%2234%22 height=%2234%22 fill=%22%230B4EA8%22 rx=%228%22/%3E%3Ctext x=%2217%22 y=%2224%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
-            <div>
+            <div class="truncate">
                 <p class="brand-text-modern" id="sidebarSiteName"><?= htmlspecialchars($site_name) ?></p>
-                <p class="brand-sub-modern">Pharmacy Panel</p>
+                <p class="brand-sub-modern">💊 Pharmacy Panel</p>
             </div>
             <button class="sidebar-close-btn-modern" id="sidebarCloseBtnModern" aria-label="Close Sidebar">
                 <i class="fas fa-times"></i>
@@ -707,7 +679,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     </div>
     
     <!-- ================================================================ -->
-    <!-- ✅ PROFILE SECTION IMETOLEWA KABISA -->
+    <!-- PROFILE SECTION IMETOLEWA KABISA -->
     <!-- ================================================================ -->
     
     <!-- ================================================================ -->
@@ -716,14 +688,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     <nav class="sidebar-nav-modern">
         
         <!-- Pharmacy -->
-        <div class="nav-label-modern">Pharmacy</div>
+        <div class="nav-label-modern">📋 Pharmacy</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/dashboard.php" class="sidebar-link-modern <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
         <!-- Prescription Sales -->
-        <div class="nav-label-modern">Prescription Sales</div>
+        <div class="nav-label-modern">💊 Prescription Sales</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/pending_prescriptions.php" class="sidebar-link-modern <?= isActive('pending_prescriptions.php') ?>">
             <i class="fas fa-prescription"></i> Prescriptions
@@ -740,7 +712,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </a>
         
         <!-- OTC Sales -->
-        <div class="nav-label-modern">OTC Sales</div>
+        <div class="nav-label-modern">🛒 OTC Sales</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/new_otc_sale.php" class="sidebar-link-modern <?= isActive('new_otc_sale.php') ?>">
             <i class="fas fa-plus-circle"></i> New OTC Sale
@@ -752,7 +724,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </a>
         
         <!-- Medicines -->
-        <div class="nav-label-modern">Medicines</div>
+        <div class="nav-label-modern">📦 Medicines</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/inventory.php" class="sidebar-link-modern <?= isActive('inventory.php') ?>">
             <i class="fas fa-warehouse"></i> Inventory
@@ -777,7 +749,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         </a>
         
         <!-- Account -->
-        <div class="nav-label-modern">Account</div>
+        <div class="nav-label-modern">👤 Account</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/profile.php" class="sidebar-link-modern <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
@@ -803,11 +775,35 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - WITH API INTEGRATION -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // SIDEBAR TOGGLE - INAITWA KUTOKA HEADER (sidebarToggleBtn)
+    // CONFIGURATION
+    // ================================================================
+    var SIDEBAR_CONFIG = {
+        API_URL: '/dispensary_system/backend/api/get_pharmacy_sidebar_stats.php',
+        CHECK_INTERVAL: 2000,
+        FORCE_INTERVAL: 10000,
+        BRANCH_ID: <?= json_encode($user_branch_id) ?>,
+        INITIAL_HASH: '<?= $initial_hash ?>'
+    };
+    
+    // ================================================================
+    // STATE
+    // ================================================================
+    var sidebarState = {
+        dataHash: SIDEBAR_CONFIG.INITIAL_HASH,
+        isUpdating: false,
+        hasInitialData: false,
+        updateInterval: null,
+        forceInterval: null,
+        lastUpdate: null,
+        changeCount: 0
+    };
+    
+    // ================================================================
+    // SIDEBAR TOGGLE - INAITWA KUTOKA HEADER
     // ================================================================
     (function() {
         function initSidebar() {
@@ -820,7 +816,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             if (!overlay) {
                 overlay = document.createElement('div');
                 overlay.id = 'sidebarOverlayModern';
-                overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:9998;display:none;backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);';
                 document.body.appendChild(overlay);
             }
             
@@ -829,7 +824,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 overlay.style.display = 'block';
                 overlay.classList.add('active');
                 document.body.style.overflow = 'hidden';
-                // Update header toggle button if exists
                 var headerBtn = document.getElementById('sidebarToggleBtn');
                 if (headerBtn) {
                     headerBtn.innerHTML = '<i class="fas fa-times"></i><span class="toggle-label">CLOSE</span>';
@@ -841,7 +835,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 overlay.style.display = 'none';
                 overlay.classList.remove('active');
                 document.body.style.overflow = '';
-                // Update header toggle button if exists
                 var headerBtn = document.getElementById('sidebarToggleBtn');
                 if (headerBtn) {
                     headerBtn.innerHTML = '<i class="fas fa-bars"></i><span class="toggle-label">MENU</span>';
@@ -856,12 +849,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
             
-            // ✅ EXPOSE TOGGLE FUNCTION GLOBALLY - INAITWA KUTOKA HEADER
             window.togglePharmacySidebar = toggleSidebar;
             window.openPharmacySidebar = openSidebar;
             window.closePharmacySidebar = closeSidebar;
             
-            // Close button inside sidebar
             if (closeBtn) {
                 closeBtn.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -870,7 +861,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 });
             }
             
-            // Overlay click
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) {
@@ -879,21 +869,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 });
             }
             
-            // ESC key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            // Resize auto-close
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            console.log('✅ Sidebar toggle ready - controlled by header button');
+            console.log('✅ Pharmacy Sidebar toggle ready');
         }
         
         if (document.readyState === 'loading') {
@@ -906,134 +894,291 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // ================================================================
     // UPDATE BADGES
     // ================================================================
-    function updateSidebarBadgesModern(pending, lowStock, expired, todayPrescriptions, todayOtc) {
+    function updateSidebarBadges(data) {
+        if (!data) return false;
+        
+        var hasChanges = false;
+        
+        // 1. Pending Prescriptions
         var pendingBadge = document.getElementById('sidebarPendingBadgeModern');
-        if (pendingBadge) {
-            pendingBadge.textContent = pending;
-            pendingBadge.className = pending > 0 ? 'badge-modern danger' : 'badge-modern';
-            pendingBadge.classList.remove('badge-update-modern');
-            void pendingBadge.offsetWidth;
-            pendingBadge.classList.add('badge-update-modern');
+        if (pendingBadge && data.pending_prescriptions !== undefined) {
+            var oldVal = pendingBadge.textContent;
+            var newVal = data.pending_prescriptions;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                pendingBadge.textContent = newVal;
+                pendingBadge.className = parseInt(newVal) > 0 ? 'badge-modern danger' : 'badge-modern';
+                pendingBadge.classList.remove('badge-update-modern');
+                void pendingBadge.offsetWidth;
+                pendingBadge.classList.add('badge-update-modern');
+            }
         }
         
+        // 2. Low Stock
         var lowStockBadge = document.getElementById('sidebarLowStockBadgeModern');
-        if (lowStockBadge) {
-            lowStockBadge.textContent = lowStock;
-            lowStockBadge.className = lowStock > 0 ? 'badge-modern danger' : 'badge-modern';
-            lowStockBadge.classList.remove('badge-update-modern');
-            void lowStockBadge.offsetWidth;
-            lowStockBadge.classList.add('badge-update-modern');
+        if (lowStockBadge && data.low_stock !== undefined) {
+            var oldVal = lowStockBadge.textContent;
+            var newVal = data.low_stock;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                lowStockBadge.textContent = newVal;
+                lowStockBadge.className = parseInt(newVal) > 0 ? 'badge-modern danger' : 'badge-modern';
+                lowStockBadge.classList.remove('badge-update-modern');
+                void lowStockBadge.offsetWidth;
+                lowStockBadge.classList.add('badge-update-modern');
+            }
         }
         
+        // 3. Expired
         var expiredBadge = document.getElementById('sidebarExpiredBadgeModern');
-        if (expiredBadge) {
-            expiredBadge.textContent = expired;
-            expiredBadge.className = expired > 0 ? 'badge-modern red' : 'badge-modern';
-            expiredBadge.classList.remove('badge-update-modern');
-            void expiredBadge.offsetWidth;
-            expiredBadge.classList.add('badge-update-modern');
+        if (expiredBadge && data.expired !== undefined) {
+            var oldVal = expiredBadge.textContent;
+            var newVal = data.expired;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                expiredBadge.textContent = newVal;
+                expiredBadge.className = parseInt(newVal) > 0 ? 'badge-modern red' : 'badge-modern';
+                expiredBadge.classList.remove('badge-update-modern');
+                void expiredBadge.offsetWidth;
+                expiredBadge.classList.add('badge-update-modern');
+            }
         }
         
-        var todayPrescriptionsBadge = document.getElementById('sidebarTodayPrescriptionsModern');
-        if (todayPrescriptionsBadge) {
-            todayPrescriptionsBadge.textContent = todayPrescriptions;
-            todayPrescriptionsBadge.className = todayPrescriptions > 0 ? 'badge-modern green' : 'badge-modern';
-            todayPrescriptionsBadge.classList.remove('badge-update-modern');
-            void todayPrescriptionsBadge.offsetWidth;
-            todayPrescriptionsBadge.classList.add('badge-update-modern');
+        // 4. Today Prescriptions
+        var todayPrescBadge = document.getElementById('sidebarTodayPrescriptionsModern');
+        if (todayPrescBadge && data.today_prescriptions !== undefined) {
+            var oldVal = todayPrescBadge.textContent;
+            var newVal = data.today_prescriptions;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                todayPrescBadge.textContent = newVal;
+                todayPrescBadge.className = parseInt(newVal) > 0 ? 'badge-modern green' : 'badge-modern';
+                todayPrescBadge.classList.remove('badge-update-modern');
+                void todayPrescBadge.offsetWidth;
+                todayPrescBadge.classList.add('badge-update-modern');
+            }
         }
         
+        // 5. Today OTC
         var todayOtcBadge = document.getElementById('sidebarTodayOtcModern');
-        if (todayOtcBadge) {
-            todayOtcBadge.textContent = todayOtc;
-            todayOtcBadge.className = todayOtc > 0 ? 'badge-modern green' : 'badge-modern';
-            todayOtcBadge.classList.remove('badge-update-modern');
-            void todayOtcBadge.offsetWidth;
-            todayOtcBadge.classList.add('badge-update-modern');
+        if (todayOtcBadge && data.today_otc !== undefined) {
+            var oldVal = todayOtcBadge.textContent;
+            var newVal = data.today_otc;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                todayOtcBadge.textContent = newVal;
+                todayOtcBadge.className = parseInt(newVal) > 0 ? 'badge-modern green' : 'badge-modern';
+                todayOtcBadge.classList.remove('badge-update-modern');
+                void todayOtcBadge.offsetWidth;
+                todayOtcBadge.classList.add('badge-update-modern');
+            }
         }
         
+        // 6. Update timestamp
         var timeEl = document.getElementById('sidebarLiveTimeModern');
         if (timeEl) {
             var now = new Date();
-            var timeStr = now.toLocaleTimeString('en-US', { 
-                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true 
+            var timeStr = now.toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
             });
-            timeEl.textContent = timeStr;
+            if (timeEl.textContent !== timeStr) {
+                timeEl.textContent = timeStr;
+            }
         }
+        
+        // Flash sidebar if data changed
+        if (hasChanges) {
+            var sidebarEl = document.getElementById('sidebarModern');
+            if (sidebarEl) {
+                sidebarEl.classList.remove('sidebar-data-flash-modern');
+                void sidebarEl.offsetWidth;
+                sidebarEl.classList.add('sidebar-data-flash-modern');
+            }
+            sidebarState.changeCount++;
+            console.log('📊 Pharmacy sidebar updated: ' + sidebarState.changeCount + ' changes');
+        }
+        
+        return hasChanges;
     }
 
     // ================================================================
-    // AJAX AUTO-UPDATE
+    // FETCH SIDEBAR DATA FROM API
     // ================================================================
-    var sidebarUpdateIntervalModern = null;
-    var sidebarIsUpdatingModern = false;
-    var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
-
-    function fetchSidebarDataModern() {
-        if (sidebarIsUpdatingModern) return;
-        sidebarIsUpdatingModern = true;
+    function fetchSidebarData(forceUpdate) {
+        if (sidebarState.isUpdating && !forceUpdate) return;
+        if (!SIDEBAR_CONFIG.BRANCH_ID) return;
+        
+        sidebarState.isUpdating = true;
         
         var formData = new FormData();
-        formData.append('action', 'get_pharmacy_sidebar_data');
-        formData.append('branch_id', branchId);
+        formData.append('branch_id', SIDEBAR_CONFIG.BRANCH_ID);
+        formData.append('hash', sidebarState.dataHash);
+        if (forceUpdate) {
+            formData.append('force_update', '1');
+        }
         
-        fetch(window.location.href, {
+        fetch(SIDEBAR_CONFIG.API_URL, {
             method: 'POST',
-            body: formData
+            body: formData,
+            credentials: 'same-origin'
         })
-        .then(function(response) { return response.json(); })
-        .then(function(data) {
-            if (data.success) {
-                updateSidebarBadgesModern(
-                    data.pending_prescriptions || 0,
-                    data.low_stock || 0,
-                    data.expired || 0,
-                    data.today_prescriptions || 0,
-                    data.today_otc || 0
-                );
+        .then(function(response) {
+            if (!response.ok) {
+                throw new Error('Network response was not ok: ' + response.status);
             }
-            sidebarIsUpdatingModern = false;
+            return response.json();
         })
-        .catch(function() { sidebarIsUpdatingModern = false; });
+        .then(function(data) {
+            sidebarState.isUpdating = false;
+            
+            if (data.success) {
+                if (data.has_changed && data.data) {
+                    // Update UI with new data
+                    updateSidebarBadges(data.data);
+                    sidebarState.dataHash = data.hash;
+                    sidebarState.hasInitialData = true;
+                    
+                    // Dispatch custom event
+                    var event = new CustomEvent('sidebarDataUpdated', {
+                        detail: {
+                            data: data.data,
+                            summary: data.summary,
+                            timestamp: data.timestamp
+                        }
+                    });
+                    document.dispatchEvent(event);
+                    
+                } else if (data.has_changed === false) {
+                    // Just update timestamp
+                    var timeEl = document.getElementById('sidebarLiveTimeModern');
+                    if (timeEl) {
+                        var now = new Date();
+                        var timeStr = now.toLocaleTimeString('en-US', {
+                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                        });
+                        if (timeEl.textContent !== timeStr) {
+                            timeEl.textContent = timeStr;
+                        }
+                    }
+                    sidebarState.hasInitialData = true;
+                }
+            } else {
+                if (data.message && data.message.includes('Unauthorized')) {
+                    window.location.href = '/dispensary_system/frontend/pages/login.php';
+                }
+            }
+        })
+        .catch(function(error) {
+            sidebarState.isUpdating = false;
+            if (forceUpdate) {
+                console.warn('Pharmacy sidebar API error:', error.message);
+            }
+        });
     }
 
-    function startSidebarAutoUpdateModern() {
-        if (sidebarUpdateIntervalModern) clearInterval(sidebarUpdateIntervalModern);
-        setTimeout(fetchSidebarDataModern, 1000);
-        sidebarUpdateIntervalModern = setInterval(fetchSidebarDataModern, 3000);
-    }
-
-    function stopSidebarAutoUpdateModern() {
-        if (sidebarUpdateIntervalModern) {
-            clearInterval(sidebarUpdateIntervalModern);
-            sidebarUpdateIntervalModern = null;
+    // ================================================================
+    // START AUTO-UPDATE
+    // ================================================================
+    function startSidebarAutoUpdate() {
+        if (sidebarState.updateInterval) {
+            clearInterval(sidebarState.updateInterval);
         }
+        if (sidebarState.forceInterval) {
+            clearInterval(sidebarState.forceInterval);
+        }
+        
+        setTimeout(function() {
+            fetchSidebarData(true);
+        }, 500);
+        
+        sidebarState.updateInterval = setInterval(function() {
+            if (!sidebarState.isUpdating) {
+                fetchSidebarData(false);
+            }
+        }, SIDEBAR_CONFIG.CHECK_INTERVAL);
+        
+        sidebarState.forceInterval = setInterval(function() {
+            if (!sidebarState.isUpdating && sidebarState.hasInitialData) {
+                fetchSidebarData(true);
+            }
+        }, SIDEBAR_CONFIG.FORCE_INTERVAL);
+        
+        console.log('🔄 Pharmacy sidebar auto-update started (check: ' + 
+            SIDEBAR_CONFIG.CHECK_INTERVAL/1000 + 's, force: ' + 
+            SIDEBAR_CONFIG.FORCE_INTERVAL/1000 + 's)');
     }
 
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopSidebarAutoUpdateModern();
-        } else {
-            startSidebarAutoUpdateModern();
+    function stopSidebarAutoUpdate() {
+        if (sidebarState.updateInterval) {
+            clearInterval(sidebarState.updateInterval);
+            sidebarState.updateInterval = null;
         }
-    });
+        if (sidebarState.forceInterval) {
+            clearInterval(sidebarState.forceInterval);
+            sidebarState.forceInterval = null;
+        }
+        console.log('🔄 Pharmacy sidebar auto-update stopped');
+    }
 
-    document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(startSidebarAutoUpdateModern, 2000);
-    });
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    function refreshSidebarData() {
+        fetchSidebarData(true);
+        return true;
+    }
 
     // ================================================================
     // EXPOSE FUNCTIONS
     // ================================================================
-    window.updateSidebarBadgesModern = updateSidebarBadgesModern;
-    window.fetchSidebarDataModern = fetchSidebarDataModern;
-    window.startSidebarAutoUpdateModern = startSidebarAutoUpdateModern;
-    window.stopSidebarAutoUpdateModern = stopSidebarAutoUpdateModern;
+    window.refreshSidebarData = refreshSidebarData;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
+    window.getSidebarState = function() { return sidebarState; };
+    window.getSidebarHash = function() { return sidebarState.dataHash; };
 
-    console.log('%c💊 Braick Pharmacy Sidebar (Blue Theme - No Profile)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c🏥 Site: <?= htmlspecialchars($site_name) ?>', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Jina na logo kutoka system_settings', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Font sizes zimeongezwa', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Toggle button in HEADER (not floating)', 'font-size:12px; color:#34D399;');
-    console.log('%c📋 Pending: <?= $pending_prescriptions ?> | Low Stock: <?= $low_stock_count ?> | Expired: <?= $expired_count ?>', 'font-size:12px; color:#9EC5FE;');
+    // ================================================================
+    // VISIBILITY CHANGE
+    // ================================================================
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopSidebarAutoUpdate();
+        } else {
+            startSidebarAutoUpdate();
+            setTimeout(function() {
+                fetchSidebarData(true);
+            }, 500);
+        }
+    });
+
+    // ================================================================
+    // DOM READY
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            startSidebarAutoUpdate();
+        }, 1500);
+    });
+
+    // ================================================================
+    // CONSOLE LOG
+    // ================================================================
+    console.log('%c💊 Braick Pharmacy Sidebar (API Integrated)', 
+        'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Site: <?= htmlspecialchars($site_name) ?>', 
+        'font-size:12px; color:#34D399;');
+    console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
+    console.log('   Pending: <?= $pending_prescriptions ?>, Low Stock: <?= $low_stock_count ?>');
+    console.log('   Expired: <?= $expired_count ?>, Today: <?= $today_sales ?>, OTC: <?= $today_otc ?>');
+    console.log('%c⚡ Smart Updates: Every 2s (only if data changed)', 
+        'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Force refresh: Every 10s (safety net)', 
+        'font-size:13px; color:#F59E0B;');
+    console.log('%c📡 API Endpoint: ' + SIDEBAR_CONFIG.API_URL, 
+        'font-size:12px; color:#94A3B8;');
+    console.log('%c💡 Call window.refreshSidebarData() to manually update', 
+        'font-size:12px; color:#6EA8FE;');
+    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 
+        'font-size:12px; color:#34D399;');
 </script>

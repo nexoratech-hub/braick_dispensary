@@ -11,7 +11,7 @@
 // - Enhanced action buttons with better CSS
 // - Print button REMOVED
 // - Buttons size REDUCED
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING dispensary_db
 // ================================================================
 
 // Start session
@@ -66,7 +66,7 @@ if (!in_array($filter, $allowed_filters)) {
 }
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE - USING dispensary_db
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -77,7 +77,7 @@ try {
 }
 
 // ================================================================
-// GET LAB RESULTS
+// GET LAB RESULTS FROM dispensary_db
 // ================================================================
 $params = [];
 $search_condition = "";
@@ -262,12 +262,11 @@ $profile_pic_url = !empty($profile_pic)
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR - CORRECT PATHS
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -1031,7 +1030,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <a href="view_lab_result.php?id=<?= $lab['id'] ?>" class="btn btn-view">
                                             <i class="fas fa-eye"></i> View
                                         </a>
-                                        <!-- PRINT BUTTON REMOVED -->
                                     <?php elseif ($lab['status'] === 'pending'): ?>
                                         <span class="waiting-badge waiting">
                                             <i class="fas fa-clock"></i> Waiting
@@ -1327,6 +1325,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c❌ Result column removed - Use View button to see full result', 'font-size:13px; color:#DC2626;');
     console.log('%c✅ Enhanced action buttons - REDUCED SIZE', 'font-size:13px; color:#34D399;');
     console.log('%c🖨️ Print button REMOVED', 'font-size:13px; color:#DC2626;');
+    console.log('%c📂 Using dispensary_db database', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

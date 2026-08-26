@@ -153,6 +153,7 @@ try {
     $prescribed_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($prescribed_visits as $visit) {
+        // FIX: Changed 'patient_bills' to 'bills'
         $stmt = $db->prepare("
             SELECT 
                 COUNT(*) as total_bills,
@@ -160,7 +161,7 @@ try {
                 SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid_count,
                 SUM(total_amount) as total_amount,
                 SUM(paid_amount) as total_paid
-            FROM patient_bills 
+            FROM bills 
             WHERE visit_id = ?
         ");
         $stmt->execute([$visit['id']]);
@@ -185,8 +186,9 @@ try {
             ");
             $stmt->execute([$visit['id']]);
             
+            // FIX: Changed 'patient_bills' to 'bills'
             $stmt = $db->prepare("
-                UPDATE patient_bills 
+                UPDATE bills 
                 SET status = 'paid', updated_at = NOW()
                 WHERE visit_id = ? AND status IN ('pending', 'partial')
             ");
@@ -266,7 +268,7 @@ switch ($filter) {
 }
 
 // ================================================================
-// GET CONSULTATIONS
+// GET CONSULTATIONS - FIXED: changed patient_bills to bills
 // ================================================================
 $sql = "
     SELECT 
@@ -286,11 +288,12 @@ $sql = "
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status IN ('pending', 'dispensed')) as total_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status = 'pending') as pending_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status = 'dispensed') as dispensed_prescriptions,
-        (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills_count,
-        (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id AND status = 'paid') as paid_bills_count,
-        (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id) as total_bills_count,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE visit_id = v.id) as total_bill_amount,
-        (SELECT COALESCE(SUM(paid_amount), 0) FROM patient_bills WHERE visit_id = v.id) as total_paid_amount
+        -- FIX: Changed 'patient_bills' to 'bills'
+        (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills_count,
+        (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status = 'paid') as paid_bills_count,
+        (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as total_bills_count,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE visit_id = v.id) as total_bill_amount,
+        (SELECT COALESCE(SUM(paid_amount), 0) FROM bills WHERE visit_id = v.id) as total_paid_amount
     FROM visits v
     JOIN patients p ON v.patient_id = p.id
     LEFT JOIN users u ON v.doctor_id = u.id

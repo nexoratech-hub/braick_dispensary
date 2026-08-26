@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/update_doctor_status.php
 // UPDATES DOCTOR ONLINE STATUS IN DATABASE
+// USING NEW DATABASE: dispensary_db
 // Session-based login (NO BYPASS)
 // BRAICK DISPENSARY
 // ================================================================
@@ -122,19 +123,26 @@ try {
     $_SESSION['doctor_id'] = $doctor_id;
     
     // ================================================================
-    // LOG ACTIVITY
+    // LOG ACTIVITY - USING NEW DATABASE STRUCTURE
     // ================================================================
     try {
         $status_text = $status ? 'online' : 'offline';
-        $stmt = $db->prepare("INSERT INTO activity_logs (user_id, action, details, created_at) VALUES (?, 'doctor_status_changed', ?, NOW())");
-        $stmt->execute([$doctor_id, "Dr. $doctor_name changed status to: $status_text"]);
+        $stmt = $db->prepare("
+            INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+            VALUES (?, ?, 'doctor_status_changed', ?, NOW())
+        ");
+        $stmt->execute([
+            $doctor_id,
+            $doctor_branch_id,
+            "Dr. $doctor_name changed status to: $status_text"
+        ]);
         error_log("Activity logged successfully");
     } catch (Exception $e) {
         error_log("Activity log failed: " . $e->getMessage());
     }
     
     // ================================================================
-    // SEND NOTIFICATION TO RECEPTION
+    // SEND NOTIFICATION TO RECEPTION - USING NEW DATABASE STRUCTURE
     // ================================================================
     try {
         $status_text_display = $status ? '🟢 Online' : '🔴 Offline';
@@ -154,11 +162,12 @@ try {
         
         foreach ($receptionists as $receptionist) {
             $stmt = $db->prepare("
-                INSERT INTO notifications (user_id, title, message, type, link, is_read, created_at) 
-                VALUES (?, ?, ?, ?, ?, 0, NOW())
+                INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, 0, NOW())
             ");
             $stmt->execute([
                 $receptionist['id'],
+                $doctor_branch_id,
                 "Doctor Status: $status_text_display",
                 $status_message,
                 $status ? 'success' : 'warning',
@@ -177,11 +186,12 @@ try {
         
         foreach ($admins as $admin) {
             $stmt = $db->prepare("
-                INSERT INTO notifications (user_id, title, message, type, link, is_read, created_at) 
-                VALUES (?, ?, ?, ?, ?, 0, NOW())
+                INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at) 
+                VALUES (?, ?, ?, ?, ?, ?, 0, NOW())
             ");
             $stmt->execute([
                 $admin['id'],
+                $doctor_branch_id,
                 "Doctor Status: $status_text_display",
                 $status_message,
                 $status ? 'success' : 'warning',
@@ -219,3 +229,4 @@ try {
     ]);
 }
 exit;
+?>

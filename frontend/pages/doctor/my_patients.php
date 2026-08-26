@@ -2,9 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/doctor/my_patients.php
 // DOCTOR - MY PATIENTS LIST
-// FIXED: Single VIEW button only
+// FIXED: Removed patient_bills table (use bills instead)
+// FIXED: Added VISITS button to view all visits
 // FIXED: Full CSS with dark mode support
-// New Visit moved to patient_details page
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -48,7 +48,7 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -82,7 +82,6 @@ if ($error === 'invalid_patient') {
     $message_type = 'error';
 }
 
-// Show success messages
 if (isset($_GET['success']) && $_GET['success'] === 'referral') {
     $message = '✅ Patient referred successfully!';
     $message_type = 'success';
@@ -92,11 +91,9 @@ if (isset($_GET['success']) && $_GET['success'] === 'referral') {
 // GET DOCTOR'S PATIENTS
 // ================================================================
 if ($is_admin) {
-    // Admin can see all patients
     $where_clause = " WHERE 1=1";
     $params = [];
 } else {
-    // Doctor can only see their patients
     $where_clause = " WHERE p.assigned_doctor_id = ?";
     $params = [$doctor_id];
 }
@@ -111,7 +108,7 @@ if (!empty($search)) {
     $params[] = $search_param;
 }
 
-// Status filter (active patients with visits)
+// Status filter
 if (!empty($status_filter)) {
     if ($status_filter === 'active') {
         $where_clause .= " AND EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
@@ -138,8 +135,9 @@ $sql = "
            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status = 'completed') as completed_visits,
            (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
-           (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status != 'cancelled') as total_bills,
-           (SELECT MAX(created_at) FROM visits WHERE patient_id = p.id) as last_visit_date
+           (SELECT COUNT(*) FROM bills WHERE patient_id = p.id AND status != 'cancelled') as total_bills,
+           (SELECT MAX(created_at) FROM visits WHERE patient_id = p.id) as last_visit_date,
+           (SELECT COUNT(*) FROM lab_tests lt JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests
     FROM patients p
     LEFT JOIN branches b ON p.branch_id = b.id
     $where_clause
@@ -157,7 +155,6 @@ $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // ================================================================
 
 if ($is_admin) {
-    // Admin stats - all patients
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients");
     $stmt->execute();
     $total_assigned = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
@@ -183,7 +180,6 @@ if ($is_admin) {
     $stmt->execute();
     $total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } else {
-    // Doctor stats - only their patients
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM patients WHERE assigned_doctor_id = ?");
     $stmt->execute([$doctor_id]);
     $total_assigned = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
@@ -217,7 +213,7 @@ if ($is_admin) {
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR - CORRECT PATHS
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
@@ -247,6 +243,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         --warning-bg: #FEF3C7;
         --purple: #7C3AED;
         --purple-bg: #EDE9FE;
+        --teal: #0D9488;
+        --teal-bg: #CCFBF1;
         --white: #FFFFFF;
         --gray-50: #F8FAFC;
         --gray-100: #F1F5F9;
@@ -373,6 +371,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     .stat-card-mini .stat-number.orange { color: #F59E0B; }
     .stat-card-mini .stat-number.purple { color: #7B2FBE; }
     .stat-card-mini .stat-number.red { color: #EF4444; }
+    .stat-card-mini .stat-number.teal { color: #0D9488; }
     
     .stat-card-mini .stat-label {
         font-size: 0.7rem;
@@ -465,78 +464,28 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         border: none !important;
     }
     
-    .badge-success {
-        background: #D1FAE5 !important;
-        color: #059669 !important;
-    }
+    .badge-success { background: #D1FAE5 !important; color: #059669 !important; }
+    .badge-warning { background: #FEF3C7 !important; color: #D97706 !important; }
+    .badge-danger { background: #FEE2E2 !important; color: #EF4444 !important; }
+    .badge-info { background: #E8F0FE !important; color: #0B5ED7 !important; }
+    .badge-secondary { background: #E2E8F0 !important; color: #64748B !important; }
+    .badge-blue { background: #E8F0FE !important; color: #0B5ED7 !important; }
+    .badge-green { background: #D1FAE5 !important; color: #059669 !important; }
+    .badge-teal { background: #CCFBF1 !important; color: #0D9488 !important; }
+    .badge-purple { background: #EDE9FE !important; color: #7C3AED !important; }
     
-    .badge-warning {
-        background: #FEF3C7 !important;
-        color: #D97706 !important;
-    }
-    
-    .badge-danger {
-        background: #FEE2E2 !important;
-        color: #EF4444 !important;
-    }
-    
-    .badge-info {
-        background: #E8F0FE !important;
-        color: #0B5ED7 !important;
-    }
-    
-    .badge-secondary {
-        background: #E2E8F0 !important;
-        color: #64748B !important;
-    }
-    
-    .badge-blue {
-        background: #E8F0FE !important;
-        color: #0B5ED7 !important;
-    }
-    
-    .badge-green {
-        background: #D1FAE5 !important;
-        color: #059669 !important;
-    }
-    
-    [data-theme="dark"] .badge-success {
-        background: #1A3A2A !important;
-        color: #34D399 !important;
-    }
-    
-    [data-theme="dark"] .badge-warning {
-        background: #3A2A1A !important;
-        color: #FBBF24 !important;
-    }
-    
-    [data-theme="dark"] .badge-danger {
-        background: #3A1A1A !important;
-        color: #F87171 !important;
-    }
-    
-    [data-theme="dark"] .badge-info {
-        background: #1E3A5F !important;
-        color: #6EA8FE !important;
-    }
-    
-    [data-theme="dark"] .badge-secondary {
-        background: #2D3748 !important;
-        color: #94A3B8 !important;
-    }
-    
-    [data-theme="dark"] .badge-blue {
-        background: #1E3A5F !important;
-        color: #6EA8FE !important;
-    }
-    
-    [data-theme="dark"] .badge-green {
-        background: #1A3A2A !important;
-        color: #34D399 !important;
-    }
+    [data-theme="dark"] .badge-success { background: #1A3A2A !important; color: #34D399 !important; }
+    [data-theme="dark"] .badge-warning { background: #3A2A1A !important; color: #FBBF24 !important; }
+    [data-theme="dark"] .badge-danger { background: #3A1A1A !important; color: #F87171 !important; }
+    [data-theme="dark"] .badge-info { background: #1E3A5F !important; color: #6EA8FE !important; }
+    [data-theme="dark"] .badge-secondary { background: #2D3748 !important; color: #94A3B8 !important; }
+    [data-theme="dark"] .badge-blue { background: #1E3A5F !important; color: #6EA8FE !important; }
+    [data-theme="dark"] .badge-green { background: #1A3A2A !important; color: #34D399 !important; }
+    [data-theme="dark"] .badge-teal { background: #1A3A3A !important; color: #2DD4BF !important; }
+    [data-theme="dark"] .badge-purple { background: #2D1A3A !important; color: #A78BFA !important; }
     
     /* ================================================================
-       FILTER BUTTONS - DARK MODE SUPPORT
+       FILTER BUTTONS
        ================================================================ */
     .filter-btn {
         padding: 4px 14px;
@@ -600,7 +549,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     
     /* ================================================================
-       ACTION BUTTON - SINGLE VIEW BUTTON
+       ACTION BUTTONS - VIEW + VISITS
        ================================================================ */
     .btn-action {
         display: inline-flex;
@@ -614,6 +563,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         text-decoration: none;
         border: none;
         cursor: pointer;
+        white-space: nowrap;
     }
     
     .btn-action i { font-size: 0.8rem; }
@@ -630,6 +580,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         color: white;
     }
     
+    .btn-visits {
+        background: linear-gradient(135deg, #0D9488, #0F766E);
+        color: white;
+        box-shadow: 0 2px 8px rgba(13, 148, 136, 0.25);
+    }
+    
+    .btn-visits:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(13, 148, 136, 0.4);
+        color: white;
+    }
+    
     [data-theme="dark"] .btn-view {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
         color: white;
@@ -638,6 +600,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     [data-theme="dark"] .btn-view:hover {
         box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
         color: white;
+    }
+    
+    [data-theme="dark"] .btn-visits {
+        background: linear-gradient(135deg, #0D9488, #0F766E);
+        color: white;
+    }
+    
+    [data-theme="dark"] .btn-visits:hover {
+        box-shadow: 0 4px 16px rgba(13, 148, 136, 0.3);
+        color: white;
+    }
+    
+    .btn-action-group {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
     }
     
     /* ================================================================
@@ -845,21 +823,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-section .filter-label { margin-bottom: 4px; }
         .table-header-wrapper { flex-direction: column; align-items: stretch; }
         .table-header-wrapper .search-box { max-width: 100%; }
-        .btn-action { padding: 4px 12px; font-size: 0.65rem; }
+        .btn-action { padding: 4px 10px; font-size: 0.65rem; }
+        .btn-action i { font-size: 0.65rem; }
         .stat-card-mini .stat-number { font-size: 1.4rem; }
         .page-title { font-size: 1.2rem; }
+        .btn-action-group { gap: 4px; }
     }
     @media (max-width: 480px) {
         .main-content { padding: 8px; }
         .stat-card-mini .stat-number { font-size: 1.2rem; }
         .page-title { font-size: 1rem; }
-        .btn-action { padding: 3px 10px; font-size: 0.6rem; }
+        .btn-action { padding: 3px 8px; font-size: 0.6rem; }
+        .btn-action i { font-size: 0.6rem; }
         .stat-card-mini { padding: 10px 12px; }
         .card { padding: 12px 14px; }
     }
     
     /* ================================================================
-       DARK MODE OVERRIDES - FULL CSS
+       DARK MODE OVERRIDES
        ================================================================ */
     [data-theme="dark"] .stat-card-mini {
         background: #1E293B;
@@ -953,6 +934,49 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     [data-theme="dark"] .alert-error { background: #3A1A1A; color: #F87171; border-color: #F87171; }
     [data-theme="dark"] .alert-warning { background: #3D2E0A; color: #FBBF24; border-color: #FBBF24; }
     [data-theme="dark"] .alert-info { background: #1E3A5F; color: #6EA8FE; border-color: #6EA8FE; }
+    
+    /* Grid Utilities */
+    .grid { display: grid; }
+    .grid-cols-2 { grid-template-columns: repeat(2, 1fr); }
+    .sm\:grid-cols-4 { grid-template-columns: repeat(4, 1fr); }
+    .gap-3 { gap: 12px; }
+    .gap-2 { gap: 8px; }
+    .flex { display: flex; }
+    .flex-wrap { flex-wrap: wrap; }
+    .justify-between { justify-content: space-between; }
+    .items-center { align-items: center; }
+    .mb-5 { margin-bottom: 20px; }
+    .mt-4 { margin-top: 16px; }
+    .pt-3 { padding-top: 12px; }
+    .w-full { width: 100%; }
+    .overflow-x-auto { overflow-x: auto; }
+    .text-center { text-align: center; }
+    .text-sm { font-size: 0.875rem; }
+    .text-xs { font-size: 0.75rem; }
+    .text-lg { font-size: 1.125rem; }
+    .text-4xl { font-size: 2.25rem; }
+    .font-medium { font-weight: 500; }
+    .font-bold { font-weight: 700; }
+    .font-mono { font-family: monospace; }
+    .py-8 { padding-top: 2rem; padding-bottom: 2rem; }
+    .mb-3 { margin-bottom: 12px; }
+    .block { display: block; }
+    .text-gray-400 { color: #94A3B8; }
+    .text-gray-500 { color: #64748B; }
+    .text-blue-600 { color: #0B5ED7; }
+    .border-t { border-top: 1px solid; }
+    .border-gray-200 { border-color: #E2E8F0; }
+    .ml-2 { margin-left: 8px; }
+    .mr-2 { margin-right: 8px; }
+    
+    [data-theme="dark"] .border-gray-200 { border-color: #334155; }
+    [data-theme="dark"] .text-blue-600 { color: #6EA8FE; }
+    [data-theme="dark"] .text-gray-400 { color: #94A3B8; }
+    [data-theme="dark"] .text-gray-500 { color: #94A3B8; }
+    
+    .dark\:border-gray-700 { border-color: #334155; }
+    .dark\:text-blue-400 { color: #6EA8FE; }
+    .dark\:text-white { color: #F1F5F9; }
 </style>
 
 <!-- ================================================================ -->
@@ -1088,11 +1112,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <th style="width: 50px;">#</th>
                         <th style="min-width: 120px;">Patient ID</th>
                         <th style="min-width: 150px;">Patient Name</th>
-                        <th style="min-width: 120px;">Phone</th>
-                        <th style="min-width: 80px;">Visits</th>
-                        <th style="min-width: 80px;">Prescriptions</th>
+                        <th style="min-width: 100px;">Phone</th>
+                        <th style="min-width: 70px;">Visits</th>
+                        <th style="min-width: 70px;">Presc.</th>
                         <th style="min-width: 110px;">Last Visit</th>
-                        <th style="min-width: 120px;">Action</th>
+                        <th style="min-width: 180px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody">
@@ -1115,11 +1139,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                     <?= $patient['last_visit_date'] ? date('M d, Y', strtotime($patient['last_visit_date'])) : 'Never' ?>
                                 </td>
                                 <td>
-                                    <!-- SINGLE VIEW BUTTON -->
-                                    <a href="patient_details.php?id=<?= $patient['id'] ?>" 
-                                       class="btn-action btn-view" title="View Patient Details">
-                                        <i class="fas fa-eye"></i> View
-                                    </a>
+                                    <div class="btn-action-group">
+                                        <!-- VIEW PATIENT DETAILS -->
+                                        <a href="patient_details.php?id=<?= $patient['id'] ?>" 
+                                           class="btn-action btn-view" title="View Patient Details">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                        <!-- VIEW ALL VISITS -->
+                                        <a href="patient_visits.php?id=<?= $patient['id'] ?>" 
+                                           class="btn-action btn-visits" title="View All Visits (<?= $patient['total_visits'] ?? 0 ?>)">
+                                            <i class="fas fa-clinic-medical"></i> Visits <?= $patient['total_visits'] ?? 0 ?>
+                                        </a>
+                                    </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1218,7 +1249,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     // ================================================================
     // DARK MODE - SYNC WITH HEADER (localStorage)
     // ================================================================
-    // Listen for dark mode changes from header
     document.addEventListener('darkModeChanged', function(e) {
         var isDark = e.detail && e.detail.isDark;
         var html = document.documentElement;
@@ -1230,7 +1260,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
     
-    // Check initial dark mode from localStorage
     if (localStorage.getItem('darkMode') === 'true') {
         document.documentElement.setAttribute('data-theme', 'dark');
     }
@@ -1348,8 +1377,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c👤 Total Patients: <?= $total_assigned ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🟢 Active: <?= $active_patients ?> | ⏳ Pending Visits: <?= $pending_visits ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔍 Real-time table search filter enabled', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c✅ Single VIEW button - New Visit moved to patient_details page', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Two buttons: View (details) + Visits (all visits)', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Visits button shows count: <?= $patient['total_visits'] ?? 0 ?>', 'font-size:13px; color:#0D9488;');
     console.log('%c🌙 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c🔧 FIXED: Removed patient_bills table (using bills instead)', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

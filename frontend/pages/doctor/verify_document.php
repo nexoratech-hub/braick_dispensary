@@ -3,7 +3,7 @@
 // FILE: frontend/pages/doctor/verify_document.php
 // DOCTOR - VERIFY DOCUMENT
 // Session-based login (NO BYPASS)
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING dispensary_db
 // ================================================================
 
 session_start();
@@ -37,14 +37,9 @@ if ($document_id <= 0) {
 }
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - USING dispensary_db
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found");
-}
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -56,7 +51,7 @@ try {
 // VERIFY DOCTOR EXISTS AND IS ACTIVE
 // ================================================================
 try {
-    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, status FROM users WHERE id = ? AND role = 'doctor'");
+    $stmt = $db->prepare("SELECT id, full_name, branch_id, specialty, status, is_online FROM users WHERE id = ? AND role = 'doctor'");
     $stmt->execute([$doctor_id]);
     $doctor_data = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -67,10 +62,32 @@ try {
     }
     
     $doctor_name = $doctor_data['full_name'];
+    $doctor_branch_id = $doctor_data['branch_id'] ?? 1;
+    $doctor_specialty = $doctor_data['specialty'] ?? 'General Medicine';
+    $is_online = $doctor_data['is_online'] ?? 0;
+    
     $_SESSION['full_name'] = $doctor_name;
+    $_SESSION['branch_id'] = $doctor_branch_id;
+    $_SESSION['specialty'] = $doctor_specialty;
+    $_SESSION['is_online'] = $is_online;
     
 } catch (Exception $e) {
     error_log("verify_document verification error: " . $e->getMessage());
+}
+
+// ================================================================
+// GET BRANCH NAME FOR LOGGING
+// ================================================================
+$branch_name = 'Unknown';
+try {
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([$doctor_branch_id]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $branch_name = $branch['name'];
+    }
+} catch (Exception $e) {
+    $branch_name = 'Branch';
 }
 
 // ================================================================
@@ -78,9 +95,15 @@ try {
 // ================================================================
 try {
     $stmt = $db->prepare("
-        SELECT pd.*, p.full_name as patient_name, p.patient_id as patient_code
+        SELECT pd.*, 
+               p.id as patient_id,
+               p.full_name as patient_name, 
+               p.patient_id as patient_code,
+               p.phone as patient_phone,
+               u.full_name as uploaded_by_name
         FROM patient_documents pd
         JOIN patients p ON pd.patient_id = p.id
+        LEFT JOIN users u ON pd.uploaded_by = u.id
         WHERE pd.id = ? AND pd.doctor_id = ? AND pd.is_verified = 0
     ");
     $stmt->execute([$document_id, $doctor_id]);
@@ -88,7 +111,7 @@ try {
 
     if (!$document) {
         // Check if document exists but is already verified or belongs to another doctor
-        $stmt = $db->prepare("SELECT id, doctor_id, is_verified FROM patient_documents WHERE id = ?");
+        $stmt = $db->prepare("SELECT id, doctor_id, is_verified, status FROM patient_documents WHERE id = ?");
         $stmt->execute([$document_id]);
         $doc_check = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -101,6 +124,9 @@ try {
         } elseif ($doc_check['is_verified'] == 1) {
             header('Location: documents.php?error=already_verified');
             exit;
+        } elseif ($doc_check['status'] === 'deleted') {
+            header('Location: documents.php?error=deleted');
+            exit;
         }
         header('Location: documents.php?error=verification_failed');
         exit;
@@ -112,7 +138,7 @@ try {
 }
 
 // ================================================================
-// VERIFY DOCUMENT
+// VERIFY DOCUMENT - USING dispensary_db columns
 // ================================================================
 try {
     $stmt = $db->prepare("
@@ -120,13 +146,20 @@ try {
         SET is_verified = 1, 
             verified_by = ?, 
             verified_date = NOW(),
-            status = 'active'
+            status = 'active',
+            updated_at = NOW()
         WHERE id = ? AND doctor_id = ?
     ");
     $result = $stmt->execute([$doctor_id, $document_id, $doctor_id]);
     
     if (!$result) {
         header('Location: documents.php?error=update_failed');
+        exit;
+    }
+    
+    $affected_rows = $stmt->rowCount();
+    if ($affected_rows == 0) {
+        header('Location: documents.php?error=document_not_found_or_already_verified');
         exit;
     }
     
@@ -137,43 +170,61 @@ try {
 }
 
 // ================================================================
-// LOG ACTIVITY
+// LOG ACTIVITY - USING dispensary_db activity_logs
 // ================================================================
 try {
     $stmt = $db->prepare("
-        INSERT INTO activity_logs (user_id, action, details, created_at) 
-        VALUES (?, 'document_verified', ?, NOW())
+        INSERT INTO activity_logs (user_id, branch_id, patient_id, action, details, created_at) 
+        VALUES (?, ?, ?, 'document_verified', ?, NOW())
     ");
     $stmt->execute([
         $doctor_id,
+        $doctor_branch_id,
+        $document['patient_id'],
         "Document #$document_id ('" . $document['document_name'] . "') verified for patient: " . $document['patient_name'] . " (" . $document['patient_code'] . ")"
     ]);
-    error_log("Document verification activity logged");
 } catch (Exception $e) {
     error_log("Activity log failed: " . $e->getMessage());
 }
 
 // ================================================================
-// CREATE NOTIFICATION FOR PATIENT (Optional)
+// CREATE NOTIFICATION FOR DOCTOR - USING dispensary_db notifications
 // ================================================================
 try {
-    // Check if patients table has user_id or notifications system
-    // This is optional - can be removed if not needed
     $stmt = $db->prepare("
-        INSERT INTO notifications (user_id, title, message, type, link, is_read, created_at) 
-        VALUES (?, ?, ?, 'success', ?, 0, NOW())
+        INSERT INTO notifications (user_id, branch_id, patient_id, title, message, type, link, is_read, created_at) 
+        VALUES (?, ?, ?, '✅ Document Verified', ?, 'success', ?, 0, NOW())
     ");
     $stmt->execute([
         $doctor_id,
-        "✅ Document Verified",
-        "Document '" . $document['document_name'] . "' has been successfully verified.",
+        $doctor_branch_id,
+        $document['patient_id'],
+        "Document '" . $document['document_name'] . "' has been successfully verified for patient " . $document['patient_name'],
         "documents.php"
     ]);
-    error_log("Notification created for document verification");
 } catch (Exception $e) {
     // Silently fail - notifications are optional
     error_log("Notification creation failed: " . $e->getMessage());
 }
+
+// ================================================================
+// UPDATE PATIENT DOCUMENT STATUS (ensure consistency)
+// ================================================================
+try {
+    $stmt = $db->prepare("
+        UPDATE patient_documents 
+        SET updated_at = NOW()
+        WHERE id = ?
+    ");
+    $stmt->execute([$document_id]);
+} catch (Exception $e) {
+    // Silently fail - this is just a timestamp update
+}
+
+// ================================================================
+// LOG TO ERROR LOG FOR DEBUGGING
+// ================================================================
+error_log("✅ Document #$document_id verified by Doctor #$doctor_id ($doctor_name) for patient: " . $document['patient_name']);
 
 // ================================================================
 // REDIRECT WITH SUCCESS MESSAGE

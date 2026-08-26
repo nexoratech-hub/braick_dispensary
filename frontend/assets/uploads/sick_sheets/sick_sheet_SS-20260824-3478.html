@@ -1,0 +1,635 @@
+
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <title>Sick Sheet - MAGRETH MSAFIRI</title>
+        <style>
+            /* ================================================================
+               PDF STYLES - SAME AS VISIT PDF
+               ================================================================ */
+            @page {
+                margin: 15mm;
+                size: A4;
+            }
+            
+            body {
+                font-family: Arial, Helvetica, sans-serif;
+                font-size: 11px;
+                color: #1E293B;
+                line-height: 1.5;
+                background: white;
+                padding: 0;
+                margin: 0;
+            }
+            
+            /* Header - Braick Dispensary Letterhead */
+            .header {
+                text-align: center;
+                border-bottom: 3px solid #0B5ED7;
+                padding-bottom: 12px;
+                margin-bottom: 16px;
+                position: relative;
+            }
+            
+            .header .logo-title {
+                font-size: 22px;
+                font-weight: 700;
+                color: #0B5ED7;
+                letter-spacing: 1px;
+            }
+            
+            .header .logo-sub {
+                font-size: 11px;
+                color: #64748B;
+                margin-top: 2px;
+            }
+            
+            .header .branch-info {
+                font-size: 9px;
+                color: #64748B;
+                margin-top: 2px;
+            }
+            
+            .header .document-number {
+                font-size: 10px;
+                color: #64748B;
+                font-weight: 600;
+                position: absolute;
+                right: 0;
+                top: 2px;
+            }
+            
+            /* Title */
+            .page-title {
+                font-size: 18px;
+                font-weight: 700;
+                color: #0B5ED7;
+                text-align: center;
+                margin: 6px 0 2px 0;
+            }
+            
+            .page-subtitle {
+                font-size: 10px;
+                color: #64748B;
+                text-align: center;
+                margin-bottom: 10px;
+            }
+            
+            /* Section Titles */
+            .section-title {
+                font-size: 12px;
+                font-weight: 700;
+                color: #0B5ED7;
+                border-bottom: 2px solid #0B5ED7;
+                padding-bottom: 4px;
+                margin: 14px 0 10px 0;
+            }
+            
+            .section-title.green { color: #059669; border-color: #059669; }
+            .section-title.purple { color: #7C3AED; border-color: #7C3AED; }
+            .section-title.orange { color: #D97706; border-color: #D97706; }
+            .section-title.red { color: #DC2626; border-color: #DC2626; }
+            
+            /* Grids */
+            .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+            .row-3col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+            .row-4col { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
+            .row-6col { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr; gap: 8px; }
+            
+            /* Info Cards */
+            .info-card {
+                background: #F8FAFC;
+                border-radius: 6px;
+                padding: 10px 14px;
+                border: 1px solid #E2E8F0;
+            }
+            
+            .info-card .label {
+                font-size: 8px;
+                font-weight: 600;
+                color: #64748B;
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+                display: block;
+            }
+            
+            .info-card .value {
+                font-size: 11px;
+                font-weight: 600;
+                color: #1E293B;
+                display: block;
+                margin-top: 2px;
+            }
+            
+            .info-card.blue { border-left: 4px solid #0B5ED7; }
+            .info-card.green { border-left: 4px solid #059669; }
+            .info-card.purple { border-left: 4px solid #7C3AED; }
+            .info-card.orange { border-left: 4px solid #D97706; }
+            .info-card.red { border-left: 4px solid #DC2626; }
+            .info-card.teal { border-left: 4px solid #0D9488; }
+            
+            .info-card .value .external-tag {
+                font-size: 7px;
+                background: #D97706;
+                color: white;
+                padding: 1px 8px;
+                border-radius: 10px;
+                margin-left: 6px;
+                display: inline-block;
+            }
+            
+            /* Vital Signs */
+            .vital-item {
+                background: #F8FAFC;
+                border-radius: 6px;
+                padding: 8px 10px;
+                text-align: center;
+                border: 1px solid #E2E8F0;
+            }
+            
+            .vital-item .vital-label {
+                font-size: 7px;
+                font-weight: 600;
+                color: #64748B;
+                text-transform: uppercase;
+                display: block;
+            }
+            
+            .vital-item .vital-value {
+                font-size: 13px;
+                font-weight: 700;
+                display: block;
+                margin-top: 2px;
+            }
+            
+            .vital-item .vital-unit {
+                font-size: 8px;
+                font-weight: 400;
+                color: #64748B;
+            }
+            
+            .vital-item.temp .vital-value { color: #DC2626; }
+            .vital-item.bp .vital-value { color: #0B5ED7; }
+            .vital-item.pulse .vital-value { color: #7C3AED; }
+            .vital-item.weight .vital-value { color: #D97706; }
+            .vital-item.bmi .vital-value { color: #059669; }
+            
+            /* Detail Rows */
+            .detail-row {
+                display: flex;
+                padding: 6px 0;
+                border-bottom: 1px solid #E2E8F0;
+            }
+            .detail-row:last-child { border-bottom: none; }
+            
+            .detail-label {
+                font-weight: 600;
+                color: #64748B;
+                width: 120px;
+                flex-shrink: 0;
+                font-size: 10px;
+            }
+            
+            .detail-value {
+                flex: 1;
+                color: #1E293B;
+                font-size: 10px;
+            }
+            
+            /* Sick Box */
+            .sick-box {
+                background: #E8F0FE;
+                border-radius: 6px;
+                padding: 12px 16px;
+                border: 2px solid #0B5ED7;
+                margin: 8px 0;
+            }
+            
+            .sick-box .sick-grid {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr;
+                gap: 12px;
+            }
+            
+            .sick-box .sick-item .slabel {
+                font-size: 8px;
+                font-weight: 600;
+                color: #64748B;
+                text-transform: uppercase;
+                display: block;
+            }
+            
+            .sick-box .sick-item .svalue {
+                font-size: 13px;
+                font-weight: 700;
+                color: #0B5ED7;
+                display: block;
+                margin-top: 2px;
+            }
+            
+            /* Restriction Box */
+            .restriction-box {
+                background: #FEF3C7;
+                border-radius: 6px;
+                padding: 8px 14px;
+                border: 1px solid #F59E0B;
+                margin: 6px 0;
+            }
+            
+            .restriction-box .rlabel {
+                font-size: 9px;
+                font-weight: 700;
+                color: #92400E;
+            }
+            
+            .restriction-box .rvalue {
+                font-size: 10px;
+                color: #92400E;
+            }
+            
+            /* Footer with Stamp - Match Visit PDF */
+            .footer-section {
+                margin-top: 20px;
+                padding-top: 12px;
+                border-top: 2px solid #E2E8F0;
+                display: flex;
+                justify-content: space-between;
+                flex-wrap: wrap;
+                gap: 10px;
+            }
+            
+            .footer-left {
+                flex: 1;
+            }
+            
+            .footer-left .doctor-name {
+                font-size: 11px;
+                font-weight: 600;
+                color: #1E293B;
+            }
+            
+            .footer-left .doctor-details {
+                font-size: 9px;
+                color: #64748B;
+                margin-top: 2px;
+            }
+            
+            .signature-area {
+                display: flex;
+                gap: 30px;
+                margin-top: 10px;
+            }
+            
+            .signature-area .sig-item {
+                text-align: center;
+            }
+            
+            .signature-area .sig-line {
+                width: 100px;
+                border-bottom: 1px solid #1E293B;
+                height: 20px;
+                margin: 0 auto 2px auto;
+            }
+            
+            .signature-area .sig-label {
+                font-size: 8px;
+                color: #64748B;
+            }
+            
+            /* Official Stamp - Match Visit PDF */
+            .stamp-container {
+                display: flex;
+                justify-content: flex-end;
+                align-items: center;
+                min-width: 180px;
+            }
+            
+            .stamp {
+                border: 2px solid #0B5ED7;
+                border-radius: 6px;
+                padding: 8px 18px;
+                text-align: center;
+                background: #F8FAFC;
+                width: 170px;
+            }
+            
+            .stamp .stamp-title {
+                font-size: 8px;
+                font-weight: 600;
+                color: #64748B;
+                text-transform: uppercase;
+                letter-spacing: 1px;
+            }
+            
+            .stamp .stamp-name {
+                font-size: 13px;
+                font-weight: 700;
+                color: #0B5ED7;
+                margin-top: 2px;
+            }
+            
+            .stamp .stamp-line {
+                border-top: 1px dashed #CBD5E1;
+                margin: 4px 0;
+            }
+            
+            .stamp .stamp-doctor {
+                font-size: 9px;
+                color: #0B5ED7;
+                font-weight: 600;
+            }
+            
+            .stamp .stamp-signature {
+                font-size: 9px;
+                color: #1E293B;
+            }
+            
+            .stamp .stamp-date {
+                font-size: 8px;
+                color: #94A3B8;
+                margin-top: 2px;
+            }
+            
+            /* Footer Note - Match Visit PDF */
+            .footer-note {
+                text-align: center;
+                font-size: 7px;
+                color: #94A3B8;
+                margin-top: 12px;
+                padding-top: 8px;
+                border-top: 1px solid #E2E8F0;
+            }
+            
+            .footer-note .brand {
+                color: #0B5ED7;
+                font-weight: 600;
+            }
+            
+            .footer-note .slogan {
+                font-size: 9px;
+                color: #0B5ED7;
+                font-weight: 600;
+                margin-top: 3px;
+            }
+            
+            /* Badge */
+            .badge {
+                display: inline-block;
+                padding: 2px 10px;
+                border-radius: 10px;
+                font-size: 7px;
+                font-weight: 600;
+            }
+            .badge-success { background: #D1FAE5; color: #059669; }
+            .badge-warning { background: #FEF3C7; color: #D97706; }
+            .badge-info { background: #E8F0FE; color: #0B5ED7; }
+            .badge-purple { background: #EDE9FE; color: #7C3AED; }
+            .badge-red { background: #FEE2E2; color: #DC2626; }
+            
+            /* Print Optimization */
+            @media print {
+                .no-print { display: none; }
+                .page-break { page-break-before: always; }
+                body { padding: 0; }
+                .info-card { break-inside: avoid; }
+                .stamp { break-inside: avoid; }
+            }
+            
+            /* Responsive */
+            @media (max-width: 768px) {
+                .row-2col { grid-template-columns: 1fr; }
+                .row-3col { grid-template-columns: 1fr 1fr; }
+                .row-4col { grid-template-columns: 1fr 1fr; }
+                .row-6col { grid-template-columns: 1fr 1fr 1fr; }
+                .sick-box .sick-grid { grid-template-columns: 1fr; }
+                .footer-section { flex-direction: column; }
+                .stamp-container { justify-content: flex-start; }
+                .detail-row { flex-direction: column; }
+                .detail-label { width: 100%; margin-bottom: 2px; }
+                .signature-area { flex-direction: column; gap: 10px; }
+                .header .document-number { position: static; text-align: right; margin-top: 4px; }
+            }
+        </style>
+    </head>
+    <body>
+        
+        <!-- Header -->
+        <div class="header">
+            <div class="logo-title">🏥 BRAICK DISPENSARY</div>
+            <div class="logo-sub">Quality Healthcare Services</div>
+            <div class="branch-info">
+                Dodoma | 
+                Dodoma City, Tanzania | 
+                Tel: +255 700 000 001
+                | Email: dodoma@braick.com
+            </div>
+            <div class="document-number">Document #: SS-20260824-3478</div>
+        </div>
+        
+        <!-- Title -->
+        <div class="page-title">📋 MEDICAL SICK SHEET</div>
+        <div class="page-subtitle">Certificate of Sickness</div>
+        
+        <!-- Patient Information -->
+        <div class="section-title">👤 Patient Information</div>
+        <div class="row-2col">
+            <div>
+                <div class="info-card blue">
+                    <span class="label">Full Name</span>
+                    <span class="value">MAGRETH MSAFIRI
+                        
+                    </span>
+                </div>
+                <div class="info-card" style="margin-top:6px;">
+                    <span class="label">Patient ID</span>
+                    <span class="value font-mono">P-2026-01-0002</span>
+                </div>
+                <div class="info-card" style="margin-top:6px;">
+                    <span class="label">Gender</span>
+                    <span class="value">Female</span>
+                </div>
+                <div class="info-card" style="margin-top:6px;">
+                    <span class="label">Date of Birth</span>
+                    <span class="value">30 Nov -0001</span>
+                </div>
+            </div>
+            <div>
+                <div class="info-card green">
+                    <span class="label">Phone</span>
+                    <span class="value">0746526243</span>
+                </div>
+                <div class="info-card" style="margin-top:6px;">
+                    <span class="label">Blood Group</span>
+                    <span class="value"></span>
+                </div>
+                <div class="info-card" style="margin-top:6px;">
+                    <span class="label">Address</span>
+                    <span class="value" style="font-weight:400;font-size:10px;">TANZANIA</span>
+                </div>
+                <div class="info-card" style="margin-top:6px;">
+                    <span class="label">Allergies</span>
+                    <span class="value" style="font-weight:400;color:#DC2626;"></span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Doctor Information -->
+        <div class="section-title green">👨‍⚕️ Doctor Information</div>
+        <div class="row-2col">
+            <div class="info-card" style="border-left:4px solid #059669;">
+                <span class="label">Doctor Name</span>
+                <span class="value">Dr. Dr. ERICK</span>
+            </div>
+            <div class="info-card" style="border-left:4px solid #059669;">
+                <span class="label">Specialty</span>
+                <span class="value">General Medicine</span>
+            </div>
+        </div>
+        
+        <!-- Vital Signs -->
+        <div class="section-title purple">❤️ Vital Signs</div>
+        <div class="row-6col">
+            <div class="vital-item temp">
+                <span class="vital-label">🌡️ Temperature</span>
+                <span class="vital-value">30.0 <span class="vital-unit">°C</span></span>
+            </div>
+            <div class="vital-item bp">
+                <span class="vital-label">💓 Blood Pressure</span>
+                <span class="vital-value">110/79 <span class="vital-unit">mmHg</span></span>
+            </div>
+            <div class="vital-item pulse">
+                <span class="vital-label">💓 Pulse Rate</span>
+                <span class="vital-value">70 <span class="vital-unit">bpm</span></span>
+            </div>
+            <div class="vital-item weight">
+                <span class="vital-label">⚖️ Weight</span>
+                <span class="vital-value">70.00 <span class="vital-unit">kg</span></span>
+            </div>
+            <div class="vital-item" style="border-color:#E2E8F0;">
+                <span class="vital-label">📏 Height</span>
+                <span class="vital-value" style="color:#64748B;">167.40 <span class="vital-unit">cm</span></span>
+            </div>
+            <div class="vital-item bmi">
+                <span class="vital-label">📊 BMI</span>
+                <span class="vital-value">-- <span class="vital-unit">kg/m²</span></span>
+            </div>
+        </div>
+        
+        <!-- Clinical Details -->
+        <div class="section-title purple">🩺 Clinical Details</div>
+        
+        <div class="detail-row">
+            <span class="detail-label">Symptoms</span>
+            <span class="detail-value">Swelling, Abdominal Pain</span>
+        </div>
+        <div class="detail-row">
+            <span class="detail-label">Diagnosis</span>
+            <span class="detail-value"><strong>MALLARIA</strong></span>
+        </div>
+        <div class="detail-row">
+            <span class="detail-label">Treatment</span>
+            <span class="detail-value"></span>
+        </div>
+        <div class="detail-row">
+            <span class="detail-label">Instructions</span>
+            <span class="detail-value"></span>
+        </div>
+        
+        <!-- Lab Results -->
+        
+        <div class="section-title teal">🧪 Lab Results</div>
+        <div class="detail-row">
+            <span class="detail-label">Results</span>
+            <span class="detail-value">POSITIVE</span>
+        </div>
+        
+        
+        <!-- Medications -->
+        
+        
+        <!-- Procedures -->
+        
+        
+        <!-- Sick Leave Details -->
+        <div class="section-title orange">📅 Sick Leave Details</div>
+        
+        <div class="sick-box">
+            <div class="sick-grid">
+                <div class="sick-item">
+                    <span class="slabel">Sick Days</span>
+                    <span class="svalue">3 days</span>
+                </div>
+                <div class="sick-item">
+                    <span class="slabel">From</span>
+                    <span class="svalue">24 Aug 2026</span>
+                </div>
+                <div class="sick-item">
+                    <span class="slabel">To</span>
+                    <span class="svalue">27 Aug 2026</span>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Reason & Restrictions -->
+        <div class="section-title orange">📝 Reason & Recommendations</div>
+        
+        <div class="detail-row">
+            <span class="detail-label">Reason</span>
+            <span class="detail-value">Medical condition requiring rest</span>
+        </div>
+        
+        <div class="restriction-box">
+            <span class="rlabel">⚠ Restrictions:</span>
+            <span class="rvalue">No heavy lifting, complete rest</span>
+        </div>
+        
+        <!-- Footer with Stamp - Match Visit PDF -->
+        <div class="footer-section">
+            <div class="footer-left">
+                <div class="doctor-name">Dr. Dr. ERICK</div>
+                <div class="doctor-details">
+                    General Medicine<br>
+                    Tel: 
+                    
+                </div>
+                
+                <div class="signature-area">
+                    <div class="sig-item">
+                        <div class="sig-line"></div>
+                        <span class="sig-label">Doctor's Signature</span>
+                    </div>
+                    <div class="sig-item">
+                        <div class="sig-line"></div>
+                        <span class="sig-label">Date</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Official Stamp - Match Visit PDF -->
+            <div class="stamp-container">
+                <div class="stamp">
+                    <div class="stamp-title">Official Stamp</div>
+                    <div class="stamp-name">BRAICK DISPENSARY</div>
+                    <div class="stamp-line"></div>
+                    <div class="stamp-doctor">Dr. Dr. ERICK</div>
+                    <div class="stamp-signature">_________________________</div>
+                    <div class="stamp-date">Date: 24 Aug 2026</div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Footer Note - Match Visit PDF -->
+        <div class="footer-note">
+            <div>
+                <span class="brand">🏥 Braick Dispensary</span> 
+                <span style="color:#94A3B8;">|</span> 
+                SS-20260824-3478
+                <span style="color:#94A3B8;">|</span> 
+                Generated: 24 Aug 2026, 07:42 PM
+            </div>
+            <div class="slogan">⭐ Braick Dispensary - Tunajali Afya Yako ⭐</div>
+        </div>
+        
+    </body>
+    </html>

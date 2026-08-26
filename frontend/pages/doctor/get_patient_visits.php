@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/get_patient_visits.php
 // AJAX - Get visits for a specific patient (DOCTOR)
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -152,7 +153,7 @@ if ($status_filter === 'active') {
 }
 
 // ================================================================
-// GET VISITS FOR THIS PATIENT
+// GET VISITS FOR THIS PATIENT - USING NEW DATABASE
 // ================================================================
 try {
     $sql = "
@@ -164,6 +165,8 @@ try {
             v.treatment,
             v.symptoms,
             v.complaint,
+            v.hpi,
+            v.physical_exam,
             v.created_at,
             v.updated_at,
             v.status,
@@ -171,6 +174,15 @@ try {
             v.completed_at,
             v.visit_total,
             v.payment_status,
+            v.consultation_fee,
+            v.lab_fees_total,
+            v.pharmacy_fees_total,
+            v.other_fees_total,
+            v.total_discount,
+            v.discount_percent,
+            v.follow_up_date,
+            v.is_referred,
+            p.id as patient_id,
             p.full_name as patient_name,
             p.patient_id as patient_code,
             p.phone,
@@ -179,16 +191,18 @@ try {
             p.blood_group,
             p.allergies,
             u.full_name as doctor_name,
+            u.specialty as doctor_specialty,
             b.name as branch_name,
             (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id AND status IN ('pending', 'in_progress')) as pending_lab_count,
             (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id AND status = 'completed') as completed_lab_count,
             (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status = 'pending') as pending_prescriptions,
             (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status = 'dispensed') as dispensed_prescriptions,
-            (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills,
-            (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id AND status = 'paid') as paid_bills,
-            (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id) as total_bills,
-            (SELECT COALESCE(SUM(total_amount), 0) FROM patient_bills WHERE visit_id = v.id) as total_bill_amount,
-            (SELECT COALESCE(SUM(paid_amount), 0) FROM patient_bills WHERE visit_id = v.id) as total_paid_amount
+            (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills,
+            (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status = 'paid') as paid_bills,
+            (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as total_bills,
+            (SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE visit_id = v.id) as total_bill_amount,
+            (SELECT COALESCE(SUM(paid_amount), 0) FROM bills WHERE visit_id = v.id) as total_paid_amount,
+            (SELECT COALESCE(SUM(balance), 0) FROM bills WHERE visit_id = v.id) as total_balance
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
@@ -209,7 +223,7 @@ try {
     // ================================================================
     if (empty($visits)) {
         // Get patient info
-        $stmt = $db->prepare("SELECT full_name, patient_id, phone FROM patients WHERE id = ?");
+        $stmt = $db->prepare("SELECT full_name, patient_id, phone, gender, date_of_birth, blood_group, allergies FROM patients WHERE id = ?");
         $stmt->execute([$patient_id]);
         $patient_info = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -218,11 +232,31 @@ try {
             'visits' => [],
             'count' => 0,
             'patient_id' => $patient_id,
+            'patient_info' => $patient_info,
             'patient_name' => $patient_info['full_name'] ?? 'Unknown',
             'patient_code' => $patient_info['patient_id'] ?? 'N/A',
             'phone' => $patient_info['phone'] ?? 'N/A',
+            'gender' => $patient_info['gender'] ?? 'N/A',
+            'date_of_birth' => $patient_info['date_of_birth'] ?? null,
+            'blood_group' => $patient_info['blood_group'] ?? 'N/A',
+            'allergies' => $patient_info['allergies'] ?? 'None',
             'message' => 'No visits found for this patient',
-            'status_filter' => $status_filter
+            'status_filter' => $status_filter,
+            'summary' => [
+                'total_visits' => 0,
+                'pending_visits' => 0,
+                'completed_visits' => 0,
+                'cancelled_visits' => 0,
+                'lab_tests_pending' => 0,
+                'lab_tests_completed' => 0,
+                'prescriptions_pending' => 0,
+                'prescriptions_dispensed' => 0,
+                'bills_pending' => 0,
+                'bills_paid' => 0,
+                'total_bill_amount' => 0,
+                'total_paid_amount' => 0,
+                'total_balance' => 0
+            ]
         ]);
         exit;
     }
@@ -242,7 +276,8 @@ try {
         'bills_pending' => 0,
         'bills_paid' => 0,
         'total_bill_amount' => 0,
-        'total_paid_amount' => 0
+        'total_paid_amount' => 0,
+        'total_balance' => 0
     ];
     
     foreach ($visits as $visit) {
@@ -262,14 +297,23 @@ try {
         $patient_summary['bills_paid'] += (int)($visit['paid_bills'] ?? 0);
         $patient_summary['total_bill_amount'] += (float)($visit['total_bill_amount'] ?? 0);
         $patient_summary['total_paid_amount'] += (float)($visit['total_paid_amount'] ?? 0);
+        $patient_summary['total_balance'] += (float)($visit['total_balance'] ?? 0);
     }
     
     // ================================================================
     // GET PATIENT INFO
     // ================================================================
-    $stmt = $db->prepare("SELECT full_name, patient_id, phone, gender, date_of_birth, blood_group, allergies FROM patients WHERE id = ?");
+    $stmt = $db->prepare("SELECT full_name, patient_id, phone, gender, date_of_birth, blood_group, allergies, address, email FROM patients WHERE id = ?");
     $stmt->execute([$patient_id]);
     $patient_info = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Calculate age
+    $age = 'N/A';
+    if (!empty($patient_info['date_of_birth']) && $patient_info['date_of_birth'] !== '0000-00-00') {
+        $birthDate = new DateTime($patient_info['date_of_birth']);
+        $today = new DateTime('today');
+        $age = $birthDate->diff($today)->y;
+    }
     
     // ================================================================
     // RETURN JSON
@@ -283,9 +327,18 @@ try {
         'patient_name' => $patient_info['full_name'] ?? 'Unknown',
         'patient_code' => $patient_info['patient_id'] ?? 'N/A',
         'phone' => $patient_info['phone'] ?? 'N/A',
+        'gender' => $patient_info['gender'] ?? 'N/A',
+        'date_of_birth' => $patient_info['date_of_birth'] ?? null,
+        'age' => $age,
+        'blood_group' => $patient_info['blood_group'] ?? 'N/A',
+        'allergies' => $patient_info['allergies'] ?? 'None',
+        'address' => $patient_info['address'] ?? 'N/A',
+        'email' => $patient_info['email'] ?? 'N/A',
         'summary' => $patient_summary,
         'status_filter' => $status_filter,
         'doctor_name' => $doctor_name,
+        'doctor_id' => $doctor_id,
+        'branch_id' => $doctor_branch_id,
         'timestamp' => date('Y-m-d H:i:s')
     ]);
     

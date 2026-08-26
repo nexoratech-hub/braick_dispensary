@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/complete_waiting_consultations.php
 // MANUAL SCRIPT - Complete all waiting consultations with paid bills
-// RUN ONCE OR AS NEEDED
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -15,7 +15,6 @@ if (session_status() === PHP_SESSION_NONE) {
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    // User is not logged in - redirect to login
     header('Location: ../login.php');
     exit;
 }
@@ -24,7 +23,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // CHECK IF USER IS DOCTOR OR ADMIN
 // ================================================================
 if ($_SESSION['role'] !== 'doctor' && $_SESSION['role'] !== 'admin') {
-    // User is not allowed - redirect to their dashboard
     $role = $_SESSION['role'];
     switch ($role) {
         case 'reception': header('Location: ../reception/dashboard.php'); break;
@@ -45,7 +43,7 @@ $user_name = $_SESSION['full_name'] ?? 'User';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE - USING NEW DATABASE (dispensary_db)
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -61,11 +59,9 @@ try {
 if (isset($_GET['force_complete']) && is_numeric($_GET['force_complete'])) {
     $force_visit_id = (int)$_GET['force_complete'];
     
-    // Check if user is authorized to force complete
     $is_admin = ($user_role === 'admin');
     
     if ($is_admin) {
-        // Admin can force complete any visit
         $stmt = $db->prepare("
             UPDATE visits 
             SET status = 'completed', 
@@ -76,7 +72,6 @@ if (isset($_GET['force_complete']) && is_numeric($_GET['force_complete'])) {
         ");
         $stmt->execute([$force_visit_id]);
     } else {
-        // Doctor can only force complete their own visits
         $stmt = $db->prepare("
             UPDATE visits 
             SET status = 'completed', 
@@ -91,8 +86,13 @@ if (isset($_GET['force_complete']) && is_numeric($_GET['force_complete'])) {
     // Log activity
     try {
         $stmt = $db->prepare("
-            INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-            VALUES (?, ?, 'visit_force_completed', ?, NOW())
+            INSERT INTO activity_logs (
+                user_id, 
+                branch_id, 
+                action, 
+                details, 
+                created_at
+            ) VALUES (?, ?, 'visit_force_completed', ?, NOW())
         ");
         $stmt->execute([
             $user_id,
@@ -101,13 +101,12 @@ if (isset($_GET['force_complete']) && is_numeric($_GET['force_complete'])) {
         ]);
     } catch (Exception $e) {}
     
-    // Redirect to refresh
     header('Location: ' . $_SERVER['PHP_SELF'] . '?completed=1');
     exit;
 }
 
 // ================================================================
-// GET ALL WAITING VISITS
+// GET ALL WAITING VISITS - Using new database tables
 // ================================================================
 $is_admin = ($user_role === 'admin');
 
@@ -117,13 +116,13 @@ if ($is_admin) {
         SELECT v.id, v.visit_number, v.patient_id, v.status, v.is_completed, v.doctor_id,
                p.full_name as patient_name,
                u.full_name as doctor_name,
-               (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills,
-               (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id AND status = 'paid') as paid_bills,
-               (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id) as total_bills
+               (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills,
+               (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status = 'paid') as paid_bills,
+               (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as total_bills
         FROM visits v
         LEFT JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE v.status IN ('waiting', 'pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed')
+        WHERE v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed')
         AND v.is_completed = 0
         ORDER BY v.id DESC
     ");
@@ -134,13 +133,13 @@ if ($is_admin) {
         SELECT v.id, v.visit_number, v.patient_id, v.status, v.is_completed, v.doctor_id,
                p.full_name as patient_name,
                u.full_name as doctor_name,
-               (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills,
-               (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id AND status = 'paid') as paid_bills,
-               (SELECT COUNT(*) FROM patient_bills WHERE visit_id = v.id) as total_bills
+               (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills,
+               (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status = 'paid') as paid_bills,
+               (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as total_bills
         FROM visits v
         LEFT JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
-        WHERE v.status IN ('waiting', 'pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed')
+        WHERE v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed')
         AND v.is_completed = 0
         AND v.doctor_id = ?
         ORDER BY v.id DESC
@@ -189,8 +188,13 @@ foreach ($waiting_visits as $visit) {
         // Log activity
         try {
             $stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                VALUES (?, ?, 'visit_auto_completed', ?, NOW())
+                INSERT INTO activity_logs (
+                    user_id, 
+                    branch_id, 
+                    action, 
+                    details, 
+                    created_at
+                ) VALUES (?, ?, 'visit_auto_completed', ?, NOW())
             ");
             $stmt->execute([
                 $user_id,
@@ -202,7 +206,7 @@ foreach ($waiting_visits as $visit) {
 }
 
 // ================================================================
-// GET STATS FOR DOCTOR
+// GET STATS FOR DOCTOR - Using new database
 // ================================================================
 $doctor_stats = [];
 if (!$is_admin) {
@@ -210,7 +214,7 @@ if (!$is_admin) {
         $stmt = $db->prepare("
             SELECT 
                 COUNT(*) as total_patients,
-                SUM(CASE WHEN status IN ('waiting', 'pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed') AND is_completed = 0 THEN 1 ELSE 0 END) as waiting_patients,
+                SUM(CASE WHEN status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed') AND is_completed = 0 THEN 1 ELSE 0 END) as waiting_patients,
                 SUM(CASE WHEN status = 'completed' AND is_completed = 1 THEN 1 ELSE 0 END) as completed_patients
             FROM visits 
             WHERE doctor_id = ?
@@ -232,21 +236,22 @@ $message = isset($_GET['completed']) ? '✅ Visit force completed successfully!'
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
         .container { max-width: 1000px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #0B5ED7; }
+        h1 { color: #2563EB; }
         .success { color: #059669; font-weight: bold; }
         .warning { color: #D97706; }
-        .info { color: #0B5ED7; }
+        .info { color: #2563EB; }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
         th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background: #0B5ED7; color: white; }
+        th { background: #2563EB; color: white; }
         tr:hover { background: #f1f5f9; }
         .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
         .badge-completed { background: #D1FAE5; color: #059669; }
         .badge-pending { background: #FEF3C7; color: #D97706; }
         .badge-paid { background: #D1FAE5; color: #059669; }
         .badge-waiting { background: #FEE2E2; color: #DC2626; }
-        .btn { display: inline-block; padding: 10px 24px; background: #0B5ED7; color: white; text-decoration: none; border-radius: 8px; margin-top: 20px; }
-        .btn:hover { background: #0A4CA8; }
+        .badge-lab { background: #EDE9FE; color: #7C3AED; }
+        .btn { display: inline-block; padding: 10px 24px; background: #2563EB; color: white; text-decoration: none; border-radius: 8px; margin-top: 20px; border: none; cursor: pointer; }
+        .btn:hover { background: #1D4ED8; }
         .btn-success { background: #059669; }
         .btn-success:hover { background: #047857; }
         .btn-danger { background: #DC2626; }
@@ -260,12 +265,16 @@ $message = isset($_GET['completed']) ? '✅ Visit force completed successfully!'
         .stat-box .number.green { color: #059669; }
         .stat-box .number.orange { color: #D97706; }
         .stat-box .number.red { color: #DC2626; }
-        .stat-box .number.blue { color: #0B5ED7; }
+        .stat-box .number.blue { color: #2563EB; }
         .alert { padding: 12px 16px; border-radius: 8px; margin: 10px 0; }
         .alert-success { background: #D1FAE5; color: #059669; border: 1px solid #6EE7B7; }
         .alert-info { background: #DBEAFE; color: #1E40AF; border: 1px solid #93C5FD; }
         .alert-warning { background: #FEF3C7; color: #92400E; border: 1px solid #FBBF24; }
-        .user-info { background: #f8fafc; padding: 10px 16px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #0B5ED7; }
+        .user-info { background: #f8fafc; padding: 10px 16px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #2563EB; }
+        .badge-success { background: #D1FAE5; color: #059669; }
+        .badge-danger { background: #FEE2E2; color: #DC2626; }
+        .badge-warning { background: #FEF3C7; color: #D97706; }
+        .badge-info { background: #DBEAFE; color: #2563EB; }
         @media (max-width: 768px) {
             body { margin: 20px; }
             .container { padding: 15px; }
@@ -283,7 +292,7 @@ $message = isset($_GET['completed']) ? '✅ Visit force completed successfully!'
     <!-- User Info -->
     <div class="user-info">
         <strong>👤 <?= htmlspecialchars($user_name) ?></strong>
-        <span style="margin-left: 16px; background: #E8F0FE; padding: 2px 12px; border-radius: 12px; font-size: 0.75rem; color: #0B5ED7;">
+        <span style="margin-left: 16px; background: #E8F0FE; padding: 2px 12px; border-radius: 12px; font-size: 0.75rem; color: #2563EB;">
             <?= ucfirst(htmlspecialchars($user_role)) ?>
         </span>
         <?php if (!$is_admin): ?>
@@ -351,10 +360,10 @@ $message = isset($_GET['completed']) ? '✅ Visit force completed successfully!'
                         <td><?= htmlspecialchars($visit['visit_number']) ?></td>
                         <td><?= htmlspecialchars($visit['patient_name'] ?? $visit['patient_id']) ?></td>
                         <td><?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></td>
-                        <td><span class="badge badge-pending"><?= htmlspecialchars($visit['status']) ?></span></td>
+                        <td><span class="badge badge-warning"><?= htmlspecialchars($visit['status']) ?></span></td>
                         <td><?= $visit['total_bills'] ?></td>
                         <td><?= $visit['paid_bills'] ?></td>
-                        <td><span class="badge badge-completed">✅ Completed</span></td>
+                        <td><span class="badge badge-success">✅ Completed</span></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
@@ -387,7 +396,11 @@ $message = isset($_GET['completed']) ? '✅ Visit force completed successfully!'
                         <td><?= htmlspecialchars($visit['visit_number']) ?></td>
                         <td><?= htmlspecialchars($visit['patient_name'] ?? $visit['patient_id']) ?></td>
                         <td><?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></td>
-                        <td><span class="badge badge-waiting"><?= htmlspecialchars($visit['status']) ?></span></td>
+                        <td>
+                            <span class="badge <?= $visit['status'] === 'lab_test' ? 'badge-lab' : 'badge-waiting' ?>">
+                                <?= htmlspecialchars($visit['status']) ?>
+                            </span>
+                        </td>
                         <td><?= $visit['pending_bills'] ?></td>
                         <td><?= $visit['paid_bills'] ?></td>
                         <td><?= $visit['total_bills'] ?></td>

@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/save_prescription.php
 // DOCTOR - SAVE PRESCRIPTION
+// USING NEW DATABASE: dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -107,34 +108,53 @@ if (!empty($errors)) {
 }
 
 // ================================================================
-// GET MEDICATION DETAILS
+// GET MEDICATION DETAILS FROM medications_inventory
 // ================================================================
 $medication_name = '';
-$medication_strength = '';
 $medication_unit = '';
 $medication_category = '';
+$selling_price = 0;
+$stock_quantity = 0;
+$batch_number = '';
 
 $stmt = $db->prepare("
-    SELECT name, strength, unit, category 
-    FROM medications 
-    WHERE id = ? AND status = 'active'
+    SELECT 
+        medication_name, 
+        unit, 
+        category, 
+        selling_price, 
+        quantity as stock,
+        batch_number,
+        expiry_date
+    FROM medications_inventory 
+    WHERE id = ? AND status = 'active' AND branch_id = ?
 ");
-$stmt->execute([$medication_id]);
+$stmt->execute([$medication_id, $branch_id]);
 $med = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if ($med) {
-    $medication_name = $med['name'];
-    $medication_strength = $med['strength'] ?? '';
+    $medication_name = $med['medication_name'];
     $medication_unit = $med['unit'] ?? '';
     $medication_category = $med['category'] ?? '';
+    $selling_price = $med['selling_price'] ?? 0;
+    $stock_quantity = $med['stock'] ?? 0;
+    $batch_number = $med['batch_number'] ?? '';
     
-    // Build full medication name
-    $medication_full = $medication_name;
-    if (!empty($medication_strength)) {
-        $medication_full .= ' ' . $medication_strength;
+    // Check if enough stock
+    if ($stock_quantity < $quantity) {
+        $error_msg = 'Not enough stock! Available: ' . $stock_quantity . ' | Requested: ' . $quantity;
+        header('Location: prescribe.php?patient_id=' . $patient_id . '&error=' . urlencode($error_msg));
+        exit;
     }
-    if (!empty($medication_unit)) {
-        $medication_full .= ' ' . $medication_unit;
+    
+    // Check if expired
+    if (!empty($med['expiry_date'])) {
+        $expiry = strtotime($med['expiry_date']);
+        if ($expiry < time()) {
+            $error_msg = 'This medication has EXPIRED! Batch: ' . $batch_number;
+            header('Location: prescribe.php?patient_id=' . $patient_id . '&error=' . urlencode($error_msg));
+            exit;
+        }
     }
 } else {
     $error_msg = 'Medication not found or inactive';
@@ -142,18 +162,27 @@ if ($med) {
     exit;
 }
 
+// Build full medication name with batch
+$medication_full = $medication_name;
+if (!empty($batch_number)) {
+    $medication_full .= ' (Batch: ' . $batch_number . ')';
+}
+if (!empty($medication_unit)) {
+    $medication_full .= ' - ' . $medication_unit;
+}
+
 // ================================================================
 // GENERATE PRESCRIPTION NUMBER
 // ================================================================
 $year = date('Y');
 $month = date('m');
-$prescription_number = 'PRX-' . $year . $month . '-' . str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
+$prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
 
 // Ensure unique prescription number
 $stmt = $db->prepare("SELECT COUNT(*) FROM prescriptions WHERE prescription_number = ?");
 $stmt->execute([$prescription_number]);
 while ($stmt->fetchColumn() > 0) {
-    $prescription_number = 'PRX-' . $year . $month . '-' . str_pad(rand(1, 99999), 5, '0', STR_PAD_LEFT);
+    $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
     $stmt->execute([$prescription_number]);
 }
 
@@ -185,6 +214,31 @@ if (!$is_admin) {
 }
 
 // ================================================================
+// GET OR CREATE BILL
+// ================================================================
+$bill_id = null;
+$stmt = $db->prepare("SELECT id FROM bills WHERE visit_id = ? AND status IN ('pending', 'partial')");
+$stmt->execute([$visit_id]);
+$bill = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if ($bill) {
+    $bill_id = $bill['id'];
+} else {
+    $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+    $stmt = $db->prepare("
+        INSERT INTO bills (
+            bill_number, patient_id, visit_id, branch_id, created_by,
+            subtotal, discount_percent, discount_amount, total_amount, 
+            paid_amount, balance, status, created_at
+        ) VALUES (?, ?, ?, ?, ?, 0, 0, 0, 0, 0, 0, 'pending', NOW())
+    ");
+    $stmt->execute([
+        $bill_number, $patient_id, $visit_id, $branch_id, $doctor_id
+    ]);
+    $bill_id = $db->lastInsertId();
+}
+
+// ================================================================
 // INSERT PRESCRIPTION
 // ================================================================
 try {
@@ -200,11 +254,9 @@ try {
             diagnosis,
             notes,
             status,
-            is_indoor,
             branch_id,
-            created_at,
-            updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', 1, ?, NOW(), NOW())
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, NOW())
     ");
     
     $stmt->execute([
@@ -220,11 +272,19 @@ try {
     $prescription_id = $db->lastInsertId();
     
     // ================================================================
+    // CALCULATE PRICES
+    // ================================================================
+    $unit_price = $selling_price;
+    $total_price = $unit_price * $quantity;
+    
+    // ================================================================
     // INSERT PRESCRIPTION ITEMS
     // ================================================================
     $stmt = $db->prepare("
         INSERT INTO prescription_items (
             prescription_id,
+            patient_id,
+            inventory_id,
             medication_name,
             dosage,
             frequency,
@@ -234,20 +294,107 @@ try {
             instructions,
             unit_price,
             total_price,
+            branch_id,
             created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, NOW())
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
     ");
     
     $stmt->execute([
         $prescription_id,
+        $patient_id,
+        $medication_id,
         $medication_full,
         $dosage,
         $frequency,
         $quantity,
         $duration,
         $route,
-        $instructions
+        $instructions,
+        $unit_price,
+        $total_price,
+        $branch_id
     ]);
+    
+    // ================================================================
+    // UPDATE STOCK - DEDUCT QUANTITY
+    // ================================================================
+    $new_stock = $stock_quantity - $quantity;
+    $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ?");
+    $stmt->execute([$new_stock, $medication_id]);
+    
+    // ================================================================
+    // LOG STOCK MOVEMENT
+    // ================================================================
+    $stmt = $db->prepare("
+        INSERT INTO stock_movements (
+            inventory_id,
+            patient_id,
+            movement_type,
+            quantity,
+            previous_stock,
+            new_stock,
+            reference_type,
+            reference_id,
+            performed_by,
+            branch_id,
+            notes,
+            created_at
+        ) VALUES (?, ?, 'out', ?, ?, ?, 'prescription', ?, ?, ?, ?, NOW())
+    ");
+    $stmt->execute([
+        $medication_id,
+        $patient_id,
+        $quantity,
+        $stock_quantity,
+        $new_stock,
+        $prescription_id,
+        $doctor_id,
+        $branch_id,
+        'Prescription: ' . $medication_name . ' | Batch: ' . ($batch_number ?? 'N/A')
+    ]);
+    
+    // ================================================================
+    // ADD MEDICATION TO BILL
+    // ================================================================
+    if ($bill_id > 0 && $total_price > 0) {
+        // Update bill total
+        $stmt = $db->prepare("
+            UPDATE bills 
+            SET subtotal = subtotal + ?,
+                total_amount = total_amount + ?,
+                balance = balance + ?
+            WHERE id = ?
+        ");
+        $stmt->execute([$total_price, $total_price, $total_price, $bill_id]);
+        
+        // Add to bill_items
+        $stmt = $db->prepare("
+            INSERT INTO bill_items (
+                bill_id,
+                patient_id,
+                branch_id,
+                item_type,
+                item_name,
+                quantity,
+                unit_price,
+                total_price,
+                status,
+                reference_id,
+                reference_type,
+                created_at
+            ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())
+        ");
+        $stmt->execute([
+            $bill_id,
+            $patient_id,
+            $branch_id,
+            $medication_full,
+            $quantity,
+            $unit_price,
+            $total_price,
+            $prescription_id
+        ]);
+    }
     
     // ================================================================
     // UPDATE VISIT STATUS TO 'prescribed'
@@ -255,25 +402,12 @@ try {
     $stmt = $db->prepare("
         UPDATE visits 
         SET status = 'prescribed', 
+            pharmacy_fees_total = pharmacy_fees_total + ?,
+            visit_total = visit_total + ?,
             updated_at = NOW() 
         WHERE id = ?
     ");
-    $stmt->execute([$visit_id]);
-    
-    // ================================================================
-    // UPDATE PATIENT BILL IF EXISTS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT id, status FROM patient_bills 
-        WHERE visit_id = ? AND status IN ('pending', 'partial')
-    ");
-    $stmt->execute([$visit_id]);
-    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($bill) {
-        // Bill exists and is pending/partial, no action needed
-        // The bill items will be created when pharmacy dispenses
-    }
+    $stmt->execute([$total_price, $total_price, $visit_id]);
     
     // Commit transaction
     $db->commit();
@@ -291,7 +425,7 @@ try {
             $branch_id,
             "Prescription #$prescription_number created for patient ID: $patient_id" . 
             ($is_admin ? " (Admin)" : "") . 
-            " | Medication: $medication_full"
+            " | Medication: $medication_name | Qty: $quantity | Amount: TSh " . number_format($total_price, 0)
         ]);
     } catch (Exception $e) {
         // Activity log failed - continue anyway

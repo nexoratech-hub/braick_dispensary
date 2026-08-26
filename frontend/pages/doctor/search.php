@@ -3,6 +3,7 @@
 // FILE: frontend/pages/doctor/search.php
 // DOCTOR - SEARCH PATIENTS
 // SEARCH BY NAME, PATIENT ID, OR PHONE
+// USING dispensary_db
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -72,6 +73,9 @@ if (!empty($query)) {
     try {
         $search_term = "%$query%";
         
+        // ================================================================
+        // GET PATIENTS WITH THEIR LATEST VISIT INFO
+        // ================================================================
         if ($is_admin) {
             // Admin can search all patients
             $sql = "
@@ -87,6 +91,7 @@ if (!empty($query)) {
                     p.blood_group,
                     p.allergies,
                     p.created_at,
+                    p.assigned_doctor_id,
                     (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
                     (SELECT status FROM visits WHERE patient_id = p.id 
                      ORDER BY created_at DESC LIMIT 1) as last_status,
@@ -108,7 +113,7 @@ if (!empty($query)) {
                 $search_term
             ];
         } else {
-            // Doctor can only search their patients
+            // Doctor can only search their patients - using visits table
             $sql = "
                 SELECT DISTINCT 
                     p.id,
@@ -122,6 +127,7 @@ if (!empty($query)) {
                     p.blood_group,
                     p.allergies,
                     p.created_at,
+                    p.assigned_doctor_id,
                     (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND doctor_id = ?) as total_visits,
                     (SELECT status FROM visits WHERE patient_id = p.id AND doctor_id = ? 
                      ORDER BY created_at DESC LIMIT 1) as last_status,
@@ -156,12 +162,12 @@ if (!empty($query)) {
             if ($is_admin) {
                 $sql .= " AND p.id IN (
                     SELECT DISTINCT patient_id FROM visits 
-                    WHERE status IN ('pending', 'assigned', 'with_doctor')
+                    WHERE status IN ('pending', 'assigned', 'with_doctor', 'lab_test')
                 )";
             } else {
                 $sql .= " AND p.id IN (
                     SELECT DISTINCT patient_id FROM visits 
-                    WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')
+                    WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test')
                 )";
                 $params[] = $user_id;
             }
@@ -204,7 +210,7 @@ try {
         $stmt->execute();
         $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
         
-        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE status IN ('pending', 'assigned', 'with_doctor')");
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE status IN ('pending', 'assigned', 'with_doctor', 'lab_test')");
         $stmt->execute();
         $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
         
@@ -217,7 +223,7 @@ try {
         $stmt->execute([$user_id]);
         $total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
         
-        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor')");
+        $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as total FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test')");
         $stmt->execute([$user_id]);
         $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
         
@@ -240,6 +246,18 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS COUNT
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR - CORRECT PATHS
@@ -430,6 +448,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 </a>
                                 <a href="appointment.php?patient_id=<?= $patient['id'] ?>" class="btn btn-outline btn-sm">
                                     <i class="fas fa-calendar-plus"></i> Appointment
+                                </a>
+                                <a href="refer_patient.php?patient_id=<?= $patient['id'] ?>" class="btn btn-outline btn-sm">
+                                    <i class="fas fa-share-alt"></i> Refer
                                 </a>
                             </div>
                         </div>
@@ -911,12 +932,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     .status-with_doctor { background: #E8F0FE; color: #0B5ED7; }
     .status-completed { background: #D1FAE5; color: #059669; }
     .status-cancelled { background: #FEE2E2; color: #DC2626; }
+    .status-lab_test { background: #FEF3C7; color: #D97706; }
     
     [data-theme="dark"] .status-pending { background: #3D2E0A; color: #FBBF24; }
     [data-theme="dark"] .status-assigned { background: #1E3A5F; color: #6EA8FE; }
     [data-theme="dark"] .status-with_doctor { background: #1E3A5F; color: #6EA8FE; }
     [data-theme="dark"] .status-completed { background: #1A3A2A; color: #34D399; }
     [data-theme="dark"] .status-cancelled { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .status-lab_test { background: #3D2E0A; color: #FBBF24; }
     
     .result-card-body {
         margin-bottom: 12px;
@@ -994,7 +1017,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     .btn-sm { padding: 4px 12px; font-size: 0.7rem; border-radius: 6px; }
     
     /* ================================================================
-       EMPTY STATE       ================================================================ */
+       EMPTY STATE
+       ================================================================ */
     .empty-state {
         text-align: center;
         padding: 40px 20px;
@@ -1174,6 +1198,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <?php else: ?>
         console.log('%c💡 Enter a search term to find patients', 'font-size:12px; color:#64748B;');
     <?php endif; ?>
+    console.log('%c💾 Database: dispensary_db', 'font-size:12px; color:#34D399;');
+    console.log('%c🏥 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:12px; color:#0B5ED7;');
 </script>
 
 <!-- ================================================================ -->

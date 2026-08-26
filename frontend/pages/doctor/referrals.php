@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/referrals.php
-// DOCTOR - REFERRALS MANAGEMENT (FIXED QUERY)
+// DOCTOR - REFERRALS MANAGEMENT
 // Session-based login (NO BYPASS)
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING dispensary_db
 // ================================================================
 
 session_start();
@@ -27,14 +27,9 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $is_online = $_SESSION['is_online'] ?? 0;
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - USING dispensary_db
 // ================================================================
-$db_path = 'C:/xampp/htdocs/dispensary_system/backend/config/database.php';
-if (file_exists($db_path)) {
-    require_once $db_path;
-} else {
-    die("❌ Database file not found at: " . $db_path);
-}
+require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -73,7 +68,7 @@ try {
 }
 
 // ================================================================
-// GET REFERRALS FOR THIS DOCTOR - FIXED QUERY (USING CORRECT COLUMNS)
+// GET REFERRALS FOR THIS DOCTOR - USING dispensary_db
 // ================================================================
 $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $type_filter = isset($_GET['type']) ? $_GET['type'] : 'all';
@@ -85,12 +80,15 @@ $sql = "
         p.full_name as patient_name,
         p.patient_id as patient_code,
         p.phone as patient_phone,
+        p.gender as patient_gender,
+        p.date_of_birth as patient_dob,
         u_from.full_name as from_doctor_name,
         u_from.specialty as from_doctor_specialty,
         u_to.full_name as to_doctor_name,
         u_to.specialty as to_doctor_specialty,
         v.visit_number,
-        v.diagnosis as visit_diagnosis
+        v.diagnosis as visit_diagnosis,
+        v.status as visit_status
     FROM referrals r
     LEFT JOIN patients p ON r.patient_id = p.id
     LEFT JOIN visits v ON r.visit_id = v.id
@@ -208,8 +206,8 @@ function time_ago($timestamp) {
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_header.php';
-include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sidebar.php';
+include_once __DIR__ . '/../../components/doctor_header.php';
+include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
@@ -423,6 +421,8 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
             Referrals
             <span class="text-gray-300 mx-2">|</span>
             Dr. <?= htmlspecialchars($doctor_name) ?>
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1036,11 +1036,27 @@ include_once 'C:/xampp/htdocs/dispensary_system/frontend/components/doctor_sideb
         }, 3500);
     }
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
+    function updateDateTime() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var footerTimestamp = document.getElementById('footerTimestamp');
+        if (footerTimestamp) {
+            footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        }
+    }
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
+
     console.log('%c🔄 Referrals - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🔐 Session-based login active', 'font-size:12px; color:#34D399;');
-    console.log('%c📊 Total: <?= $total_referrals ?> | Pending: <?= $pending_count ?> | Accepted: <?= $accepted_count ?>', 'font-size:12px; color:#059669;');
-    console.log('%c✅ Query fixed: Uses from_doctor_id and to_doctor_id (correct schema)', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c📊 Total: <?= $total_referrals ?> | Pending: <?= $pending_count ?> | Accepted: <?= $accepted_count ?> | Completed: <?= $completed_count ?>', 'font-size:12px; color:#059669;');
+    console.log('%c✅ Using dispensary_db database', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor_name) ?>', 'font-size:12px; color:#64748B;');
     console.log('%c📋 Referral count: <?= $total_referrals ?>', 'font-size:12px; color:#64748B;');
 </script>
 

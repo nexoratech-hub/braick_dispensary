@@ -2,9 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/doctor/appointments.php
 // DOCTOR - APPOINTMENTS MANAGEMENT
-// WITH FULL AUTO-UPDATE (3 SECONDS)
+// USING NEW DATABASE: dispensary_db
+// FULL AUTO-UPDATE (3 SECONDS)
 // FIXED: Only View, Confirm, Cancel buttons
-// After Confirm/Cancel: Only View button remains
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -59,7 +59,7 @@ $message = isset($_GET['message']) ? trim($_GET['message']) : '';
 $message_type = isset($_GET['type']) ? trim($_GET['type']) : 'info';
 
 // ================================================================
-// INCLUDE DATABASE
+// INCLUDE DATABASE - USING NEW DATABASE (dispensary_db)
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -70,7 +70,7 @@ try {
 }
 
 // ================================================================
-// GET APPOINTMENTS FOR THIS DOCTOR
+// GET APPOINTMENTS FOR THIS DOCTOR - Using new database
 // ================================================================
 $appointments = [];
 $total_appointments = 0;
@@ -82,18 +82,36 @@ $cancelled_count = 0;
 try {
     $sql = "
         SELECT 
-            a.*,
+            a.id,
+            a.visit_id,
+            a.patient_id,
+            a.doctor_id,
+            a.assigned_at,
+            a.appointment_date,
+            a.purpose,
+            a.visit_type,
+            a.status,
+            a.notes,
+            a.branch_id,
+            a.created_by,
+            a.created_at,
+            a.updated_at,
+            a.confirmed_at,
+            a.completed_at,
+            a.cancelled_at,
             p.full_name as patient_name,
             p.patient_id as patient_code,
             p.phone as patient_phone,
             p.email as patient_email,
             u.full_name as doctor_name,
             u.specialty as doctor_specialty,
-            r.full_name as created_by_name
+            r.full_name as created_by_name,
+            b.name as branch_name
         FROM appointments a
         JOIN patients p ON a.patient_id = p.id
         LEFT JOIN users u ON a.doctor_id = u.id
         LEFT JOIN users r ON a.created_by = r.id
+        LEFT JOIN branches b ON a.branch_id = b.id
         WHERE a.doctor_id = ?
     ";
 
@@ -180,19 +198,6 @@ function getStatusIcon($status) {
         case 'pending': return 'fa-hourglass-half';
         default: return 'fa-clock';
     }
-}
-
-function time_ago($timestamp) {
-    if (empty($timestamp)) return 'N/A';
-    $time = strtotime($timestamp);
-    if ($time === false) return 'N/A';
-    $diff = time() - $time;
-    if ($diff < 60) return 'Just now';
-    if ($diff < 3600) return floor($diff / 60) . 'm ago';
-    if ($diff < 86400) return floor($diff / 3600) . 'h ago';
-    if ($diff < 604800) return floor($diff / 86400) . 'd ago';
-    if ($diff < 2592000) return floor($diff / 604800) . 'w ago';
-    return date('M d, Y', $time);
 }
 
 // ================================================================
@@ -445,6 +450,31 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <!-- STYLES -->
 <!-- ================================================================ -->
 <style>
+    :root {
+        --primary: #2563EB;
+        --primary-dark: #1D4ED8;
+        --primary-light: #60A5FA;
+        --primary-bg: #EFF6FF;
+        --bg-body: #F1F5F9;
+        --bg-card: #FFFFFF;
+        --text-primary: #1E293B;
+        --text-secondary: #64748B;
+        --text-muted: #94A3B8;
+        --border-color: #E2E8F0;
+    }
+    
+    [data-theme="dark"] {
+        --bg-body: #0F172A;
+        --bg-card: #1E293B;
+        --text-primary: #F1F5F9;
+        --text-secondary: #94A3B8;
+        --text-muted: #64748B;
+        --border-color: #334155;
+        --primary: #3B82F6;
+        --primary-dark: #2563EB;
+        --primary-bg: #1E3A5F;
+    }
+    
     .main-content {
         margin-left: 270px;
         margin-top: 68px;
@@ -505,7 +535,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     
     .update-badge {
-        background: rgba(11, 94, 215, 0.1);
+        background: rgba(37, 99, 235, 0.1);
         color: var(--primary);
         padding: 4px 14px;
         border-radius: 20px;
@@ -514,10 +544,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        border: 1px solid rgba(11, 94, 215, 0.15);
+        border: 1px solid rgba(37, 99, 235, 0.15);
     }
-    .update-badge .fa-spin { animation: fa-spin 2s infinite linear; }
-    @keyframes fa-spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     
     .stats-grid {
         display: grid;
@@ -583,7 +611,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     .card:hover {
         border-color: var(--primary);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
+        box-shadow: 0 4px 20px rgba(37, 99, 235, 0.08);
     }
     .mb-6 { margin-bottom: 24px; }
     
@@ -638,7 +666,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     .filter-search:focus-within {
         border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
     }
     .filter-search .fa-search { color: var(--text-muted); font-size: 0.85rem; }
     .filter-input {
@@ -666,7 +694,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     .filter-date:focus {
         border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
     }
     
     .filter-select {
@@ -683,7 +711,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     .filter-select:focus {
         border-color: var(--primary);
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+        box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
     }
     
     .btn {
@@ -706,7 +734,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     .btn-primary:hover {
         background: var(--primary-dark);
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
     }
     .btn-blue {
         background: var(--primary);
@@ -715,7 +743,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     .btn-blue:hover {
         background: var(--primary-dark);
         transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
     }
     .btn-outline {
         background: transparent;
@@ -846,16 +874,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         justify-content: center;
     }
     
-    .action-buttons .btn-confirm,
-    .action-buttons .btn-cancel {
-        transition: all 0.3s ease;
-    }
-    
-    .action-buttons .btn-confirm:hover,
-    .action-buttons .btn-cancel:hover {
-        transform: scale(1.1);
-    }
-    
     .branch-tag {
         background: #059669;
         color: white;
@@ -954,16 +972,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .action-buttons { gap: 3px; }
         .page-subtitle { flex-direction: column; align-items: flex-start; gap: 4px; }
         .separator { display: none; }
-    }
-    
-    @media print {
-        .top-nav, .sidebar, .btn, .footer { display: none !important; }
-        .main-content { margin: 0 !important; padding: 20px !important; }
-        .card { border: 1px solid #ddd !important; box-shadow: none !important; }
-        .page-header { border-bottom: 2px solid #0B5ED7 !important; }
-        .stat-card { border: 1px solid #ddd !important; }
-        .filter-form { display: none !important; }
-        .action-buttons .btn-success, .action-buttons .btn-danger { display: none !important; }
     }
 </style>
 
@@ -1072,7 +1080,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
-    // FETCH APPOINTMENTS DATA
+    // FETCH APPOINTMENTS DATA - Using new API
     // ================================================================
     var updateInterval = null;
     var isUpdating = false;
@@ -1295,19 +1303,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 1500);
     });
 
-    console.log('%c📅 Appointments - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📅 Appointments - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#2563EB;');
     console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:12px; color:#64748B;');
     console.log('%c📊 Total: <?= $total_appointments ?> | Scheduled: <?= $scheduled_count ?> | Confirmed: <?= $confirmed_count ?>', 'font-size:12px; color:#059669;');
     console.log('%c🔄 Full auto-update every 3 seconds', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Only View, Confirm, Cancel buttons | After action: Only View remains', 'font-size:12px; color:#34D399;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($doctor_branch_name) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:12px; color:#34D399;');
     console.log('%c⌨️ Shortcuts: Ctrl+K=Search | Alt+N=New Appointment | F5=Refresh | Esc=Clear search', 'font-size:12px; color:#64748B;');
 </script>
-
-<!-- ================================================================ -->
-<!-- DOCTOR GLOBAL STATS AUTO-UPDATE -->
-<!-- ================================================================ -->
-<script src="/dispensary_system/frontend/assets/js/doctor_global_stats.js"></script>
 
 </body>
 </html>
