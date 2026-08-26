@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/refer_patient.php
-// DOCTOR - REFER PATIENT (TWO-STEP)
+// DOCTOR - REFER PATIENT (TWO-STEP) 
 // WITH referrals TABLE - AUTO CREATE IF NOT EXISTS
+// STATUS: referred (FIXED - NOT NULL WITH DEFAULT)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -41,14 +42,16 @@ try {
 
 // ================================================================
 // CHECK IF referrals TABLE EXISTS - CREATE IF NOT
+// ALSO FIX STATUS COLUMN TO HAVE DEFAULT 'referred'
 // ================================================================
 try {
+    // Check if table exists
     $stmt = $db->prepare("SHOW TABLES LIKE 'referrals'");
     $stmt->execute();
     $table_exists = $stmt->rowCount() > 0;
     
     if (!$table_exists) {
-        // Create referrals table
+        // Create table with status default 'referred'
         $create_sql = "
             CREATE TABLE IF NOT EXISTS `referrals` (
               `id` int(11) NOT NULL AUTO_INCREMENT,
@@ -68,7 +71,7 @@ try {
               `treatment_given` text DEFAULT NULL,
               `expert_type` varchar(100) DEFAULT NULL,
               `urgency` enum('routine','urgent','emergency') DEFAULT 'routine',
-              `status` enum('pending','accepted','rejected','completed','cancelled') DEFAULT 'pending',
+              `status` enum('pending','referred','accepted','rejected','completed','cancelled') NOT NULL DEFAULT 'referred',
               `notes` text DEFAULT NULL,
               `internal_notes` text DEFAULT NULL,
               `external_notes` text DEFAULT NULL,
@@ -92,9 +95,47 @@ try {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         ";
         $db->exec($create_sql);
+    } else {
+        // ================================================================
+        // FIX EXISTING TABLE - ADD 'pending' TO ENUM AND SET DEFAULT
+        // ================================================================
+        try {
+            // First, check if 'pending' is already in the enum
+            $stmt = $db->prepare("SHOW COLUMNS FROM referrals LIKE 'status'");
+            $stmt->execute();
+            $column_info = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($column_info) {
+                $enum_values = $column_info['Type'] ?? '';
+                // Check if 'pending' is in the enum
+                if (strpos($enum_values, "'pending'") === false) {
+                    // Add 'pending' to enum and set default to 'referred'
+                    $alter_sql = "
+                        ALTER TABLE `referrals` 
+                        MODIFY COLUMN `status` enum('pending','referred','accepted','rejected','completed','cancelled') 
+                        NOT NULL DEFAULT 'referred'
+                    ";
+                    $db->exec($alter_sql);
+                } else {
+                    // Just set default to 'referred'
+                    $alter_sql = "
+                        ALTER TABLE `referrals` 
+                        MODIFY COLUMN `status` enum('pending','referred','accepted','rejected','completed','cancelled') 
+                        NOT NULL DEFAULT 'referred'
+                    ";
+                    $db->exec($alter_sql);
+                }
+                
+                // Update any NULL status to 'referred'
+                $update_sql = "UPDATE `referrals` SET `status` = 'referred' WHERE `status` IS NULL OR `status` = ''";
+                $db->exec($update_sql);
+            }
+        } catch (Exception $e) {
+            error_log("Status column fix error: " . $e->getMessage());
+        }
     }
 } catch (Exception $e) {
-    // Silent fail - table creation might fail but we can still use the code
+    error_log("Table check error: " . $e->getMessage());
 }
 
 // ================================================================
@@ -108,14 +149,6 @@ try {
     $stmt->execute([$user_branch_id]);
     $admin = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($admin) {
-        $admin_phone = $admin['phone'] ?? '';
-        $admin_email = $admin['email'] ?? '';
-        $admin_name = $admin['full_name'] ?? 'Admin';
-    }
-    if (empty($admin_phone)) {
-        $stmt = $db->prepare("SELECT full_name, phone, email FROM users WHERE role = 'admin' AND status = 'active' LIMIT 1");
-        $stmt->execute();
-        $admin = $stmt->fetch(PDO::FETCH_ASSOC);
         $admin_phone = $admin['phone'] ?? '';
         $admin_email = $admin['email'] ?? '';
         $admin_name = $admin['full_name'] ?? 'Admin';
@@ -357,20 +390,42 @@ if ($patient_id > 0) {
 }
 
 // ================================================================
-// GET DOCTORS LIST
+// GET DOCTORS LIST WITH PATIENT COUNTS AND PENDING VISITS
 // ================================================================
 $doctors = [];
 $online_count = 0;
 $offline_count = 0;
 try {
     $stmt = $db->prepare("
-        SELECT id, full_name, specialty, phone, email, is_online, last_online, profile_pic
-        FROM users 
-        WHERE role = 'doctor' 
-        AND id != ? 
-        AND branch_id = ?
-        AND status = 'active'
-        ORDER BY is_online DESC, full_name ASC
+        SELECT 
+            u.id, 
+            u.full_name, 
+            u.specialty, 
+            u.phone, 
+            u.email, 
+            u.is_online, 
+            u.last_online, 
+            u.profile_pic,
+            COUNT(DISTINCT p.id) as total_patients,
+            COUNT(DISTINCT CASE 
+                WHEN v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed') 
+                THEN v.patient_id 
+                ELSE NULL 
+            END) as pending_patients,
+            SUM(CASE 
+                WHEN v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test', 'prescribed') 
+                THEN 1 
+                ELSE 0 
+            END) as pending_visits
+        FROM users u
+        LEFT JOIN patients p ON p.assigned_doctor_id = u.id
+        LEFT JOIN visits v ON v.doctor_id = u.id AND v.status NOT IN ('completed', 'cancelled')
+        WHERE u.role = 'doctor' 
+        AND u.id != ? 
+        AND u.branch_id = ?
+        AND u.status = 'active'
+        GROUP BY u.id
+        ORDER BY u.is_online DESC, pending_visits ASC, u.full_name ASC
     ");
     $stmt->execute([$user_id, $user_branch_id]);
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -384,6 +439,7 @@ try {
     }
 } catch (Exception $e) {
     $doctors = [];
+    error_log("Doctor list error: " . $e->getMessage());
 }
 
 $specialties = [
@@ -513,6 +569,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $clinical_notes_final .= "\n\n--- Treatment Given ---\n" . $treatment;
                 }
                 
+                // ================================================================
+                // FORCE STATUS TO 'referred' - EXPLICITLY SET
+                // ================================================================
+                $referral_status = 'referred';
+                
                 if ($referral_type === 'internal') {
                     // Get doctor name
                     $stmt = $db->prepare("SELECT full_name, phone, specialty FROM users WHERE id = ?");
@@ -525,7 +586,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $combined_reason .= "\n\n--- Additional Notes from Referring Doctor ---\n" . $internal_notes;
                     }
                     
-                    // INSERT INTO referrals table
+                    // ================================================================
+                    // INTERNAL REFERRAL - EXPLICIT STATUS
+                    // ================================================================
                     $stmt = $db->prepare("
                         INSERT INTO referrals (
                             referral_number, visit_id, patient_id, from_doctor_id,
@@ -536,7 +599,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             ?, ?, ?, ?,
                             ?, ?,
                             ?, ?, ?, ?,
-                            ?, 'pending', NOW(), ?, ?, NOW()
+                            ?, ?, NOW(), ?, ?, NOW()
                         )
                     ");
                     
@@ -552,6 +615,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $diagnosis,
                         $treatment,
                         $urgency,
+                        $referral_status,  // EXPLICIT: 'referred'
                         $user_id,
                         $user_branch_id
                     ]);
@@ -583,6 +647,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $clinical_notes_with_expert = "Expert Type: " . $expert_type . "\n\n" . $clinical_notes_final;
                     }
                     
+                    // ================================================================
+                    // EXTERNAL REFERRAL - EXPLICIT STATUS
+                    // ================================================================
                     $stmt = $db->prepare("
                         INSERT INTO referrals (
                             referral_number, visit_id, patient_id, from_doctor_id,
@@ -593,7 +660,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             ?, ?, ?, ?,
                             ?, ?, ?, ?,
                             ?, ?, ?, ?,
-                            ?, 'pending', NOW(), ?, ?, NOW()
+                            ?, ?, NOW(), ?, ?, NOW()
                         )
                     ");
                     
@@ -611,12 +678,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $diagnosis,
                         $treatment,
                         $urgency,
+                        $referral_status,  // EXPLICIT: 'referred'
                         $user_id,
                         $user_branch_id
                     ]);
                 }
                 
                 $referral_id = $db->lastInsertId();
+                
+                // ================================================================
+                // FORCE UPDATE STATUS AGAIN - DOUBLE CHECK
+                // ================================================================
+                $stmt_force = $db->prepare("UPDATE referrals SET status = 'referred' WHERE id = ?");
+                $stmt_force->execute([$referral_id]);
+                
+                // ================================================================
+                // VERIFY STATUS WAS SAVED CORRECTLY
+                // ================================================================
+                $stmt_verify = $db->prepare("SELECT status FROM referrals WHERE id = ?");
+                $stmt_verify->execute([$referral_id]);
+                $verify = $stmt_verify->fetch(PDO::FETCH_ASSOC);
+                $saved_status = $verify['status'] ?? 'NULL';
                 
                 // Log activity
                 $stmt = $db->prepare("
@@ -627,12 +709,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user_id,
                     $user_branch_id,
                     $patient_id_post,
-                    "Patient referred: " . ($patient['full_name'] ?? '') . " (#$referral_number) - Type: $referral_type"
+                    "Patient referred: " . ($patient['full_name'] ?? '') . " (#$referral_number) - Type: $referral_type - Status: $saved_status"
                 ]);
                 
                 $db->commit();
                 
-                $message = "✅ Patient referred successfully! Referral #: " . $referral_number;
+                $message = "✅ Patient referred successfully! Referral #: " . $referral_number . " (Status: " . $saved_status . ")";
                 $message_type = 'success';
                 
                 echo '<script>
@@ -659,32 +741,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ================================================================
 // HELPER FUNCTIONS
 // ================================================================
-function getLogoHTML() {
-    $logo_paths = [
-        '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
-        '/dispensary_system/frontend/assets/uploads/profiles/logo.png',
-        '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.jpg',
-        '/dispensary_system/frontend/assets/uploads/profiles/logo.jpg',
-        '/dispensary_system/frontend/assets/img/braick_logo.png',
-        '/dispensary_system/frontend/assets/img/logo.png'
-    ];
-    
-    $logo_url = '';
-    foreach ($logo_paths as $path) {
-        $full_path = $_SERVER['DOCUMENT_ROOT'] . $path;
-        if (file_exists($full_path)) {
-            $logo_url = $path;
-            break;
-        }
-    }
-    
-    if (!empty($logo_url)) {
-        return '<img src="' . $logo_url . '" alt="Braick Dispensary" style="height:50px;width:auto;max-height:50px;border-radius:4px;object-fit:contain;">';
-    }
-    
-    return '<div style="display:inline-block;background:#0B5ED7;color:white;padding:4px 14px;border-radius:4px;font-size:16px;font-weight:bold;">BRAICK</div>';
-}
-
 function calculateAge($dob) {
     if (empty($dob)) return 'N/A';
     $birthDate = new DateTime($dob);
@@ -752,9 +808,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================ */
-        /* STYLES - Same as before */
-        /* ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -958,6 +1011,21 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .title-orange { color: #D97706; }
         .title-red { color: #DC2626; }
         
+        .status-verified {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 700;
+            background: #D1FAE5;
+            color: #059669;
+            border: 2px solid #059669;
+            margin-left: auto;
+        }
+        .status-verified i { font-size: 0.7rem; }
+        
         .form-label {
             display: block;
             font-size: 0.7rem;
@@ -1128,11 +1196,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         
         .doctor-info-text {
             display: flex;
+            flex-wrap: wrap;
             align-items: center;
             gap: 12px;
-            flex-wrap: wrap;
             margin-top: 6px;
-            padding: 6px 10px;
+            padding: 8px 12px;
             background: var(--gray-50);
             border-radius: 8px;
             border: 1px solid var(--border-color);
@@ -1217,7 +1285,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             text-transform: uppercase;
             letter-spacing: 0.04em;
             font-weight: 700;
-            border-radius: 4px;
         }
         .data-table tbody td {
             padding: 5px 10px;
@@ -1289,6 +1356,38 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
+        .queue-info-box {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 12px;
+            background: var(--bg-card);
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            margin-top: 4px;
+        }
+        .queue-info-box .queue-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .queue-info-box .queue-dot.green { background: #059669; }
+        .queue-info-box .queue-dot.yellow { background: #D97706; }
+        .queue-info-box .queue-dot.orange { background: #EA580C; }
+        .queue-info-box .queue-dot.red { background: #DC2626; }
+        .queue-badge {
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 12px;
+        }
+        .queue-badge.green { background: #D1FAE5; color: #059669; }
+        .queue-badge.yellow { background: #FEF3C7; color: #D97706; }
+        .queue-badge.orange { background: #FED7AA; color: #EA580C; }
+        .queue-badge.red { background: #FEE2E2; color: #DC2626; }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 14px; }
             .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
@@ -1330,6 +1429,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <i class="fas fa-user-md"></i>
                 Refer Patient
                 <span class="role-badge-display">DOCTOR</span>
+                <span class="status-verified">
+                    <i class="fas fa-check-circle"></i> Status: referred
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-share-alt"></i>
@@ -1653,7 +1755,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <input type="hidden" name="visit_id" value="<?= $visit_id ?>">
         
         <div class="card">
-            <h3 class="card-title"><i class="fas fa-share-alt title-purple mr-2"></i> Referral Details</h3>
+            <h3 class="card-title">
+                <i class="fas fa-share-alt title-purple mr-2"></i> 
+                Referral Details
+                <span class="status-verified" style="margin-left:auto;">
+                    <i class="fas fa-check-circle"></i> Status: referred
+                </span>
+            </h3>
             
             <div class="referral-type-selector">
                 <div class="referral-type-option active" onclick="selectReferralType('internal', this)" data-type="internal">
@@ -1670,7 +1778,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             
             <input type="hidden" name="referral_type" id="referralType" value="internal">
             
+            <!-- ============================================================ -->
             <!-- INTERNAL REFERRAL -->
+            <!-- ============================================================ -->
             <div class="internal-form active" id="internalForm">
                 <div class="grid-2">
                     <div class="form-group">
@@ -1683,10 +1793,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <optgroup label="🟢 Online Doctors (<?= $online_count ?>)">
                                             <?php foreach ($doctors as $doctor): ?>
                                                 <?php if ($doctor['is_online'] == 1): ?>
-                                                    <option value="<?= $doctor['id'] ?>" class="doctor-online">
+                                                    <option value="<?= $doctor['id'] ?>" 
+                                                            data-patients="<?= $doctor['total_patients'] ?? 0 ?>"
+                                                            data-pending="<?= $doctor['pending_patients'] ?? 0 ?>"
+                                                            data-visits="<?= $doctor['pending_visits'] ?? 0 ?>">
                                                         🟢 <?= htmlspecialchars($doctor['full_name']) ?> 
                                                         <?= !empty($doctor['specialty']) ? '(' . htmlspecialchars($doctor['specialty']) . ')' : '' ?>
-                                                        - Online
+                                                        - 👥 <?= $doctor['total_patients'] ?? 0 ?> patients
+                                                        <?php if (($doctor['pending_patients'] ?? 0) > 0): ?>
+                                                            ⏳ <?= $doctor['pending_patients'] ?? 0 ?> waiting
+                                                        <?php endif; ?>
                                                     </option>
                                                 <?php endif; ?>
                                             <?php endforeach; ?>
@@ -1696,10 +1812,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <optgroup label="⚪ Offline Doctors (<?= $offline_count ?>)">
                                             <?php foreach ($doctors as $doctor): ?>
                                                 <?php if ($doctor['is_online'] == 0): ?>
-                                                    <option value="<?= $doctor['id'] ?>" class="doctor-offline">
+                                                    <option value="<?= $doctor['id'] ?>" 
+                                                            data-patients="<?= $doctor['total_patients'] ?? 0 ?>"
+                                                            data-pending="<?= $doctor['pending_patients'] ?? 0 ?>"
+                                                            data-visits="<?= $doctor['pending_visits'] ?? 0 ?>">
                                                         ⚪ <?= htmlspecialchars($doctor['full_name']) ?> 
                                                         <?= !empty($doctor['specialty']) ? '(' . htmlspecialchars($doctor['specialty']) . ')' : '' ?>
-                                                        - Offline
+                                                        - 👥 <?= $doctor['total_patients'] ?? 0 ?> patients
+                                                        <?php if (($doctor['pending_patients'] ?? 0) > 0): ?>
+                                                            ⏳ <?= $doctor['pending_patients'] ?? 0 ?> waiting
+                                                        <?php endif; ?>
                                                     </option>
                                                 <?php endif; ?>
                                             <?php endforeach; ?>
@@ -1712,9 +1834,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         </div>
                         <div class="doctor-info-text" id="doctorInfoText">
                             <?php if (count($doctors) > 0): ?>
-                                <span class="status-item"><span class="status-dot online"></span><strong><?= $online_count ?></strong> Online</span>
-                                <span class="status-item"><span class="status-dot offline"></span><strong><?= $offline_count ?></strong> Offline</span>
-                                <span class="total-doctors"><i class="fas fa-users"></i> <strong><?= count($doctors) ?></strong> doctor(s) in <strong><?= htmlspecialchars($doctor_branch_name) ?></strong></span>
+                                <div style="display:flex;flex-wrap:wrap;gap:12px;width:100%;">
+                                    <span class="status-item"><span class="status-dot online"></span><strong><?= $online_count ?></strong> Online</span>
+                                    <span class="status-item"><span class="status-dot offline"></span><strong><?= $offline_count ?></strong> Offline</span>
+                                    <span class="status-item"><i class="fas fa-users"></i> <strong><?= count($doctors) ?></strong> doctor(s)</span>
+                                    <span class="status-item" style="margin-left:auto;font-size:0.65rem;color:var(--text-secondary);">
+                                        <i class="fas fa-info-circle"></i> Select a doctor to see patient queue
+                                    </span>
+                                </div>
+                                <div id="selectedDoctorDetails" style="display:none;margin-top:8px;padding:8px 12px;background:var(--primary-bg);border-radius:6px;border-left:3px solid var(--primary);width:100%;">
+                                    <div id="selectedDoctorInfo"></div>
+                                </div>
                             <?php else: ?>
                                 <span class="status-item" style="color:var(--danger);"><i class="fas fa-exclamation-triangle"></i> No other doctors found</span>
                             <?php endif; ?>
@@ -1741,7 +1871,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
+            <!-- ============================================================ -->
             <!-- EXTERNAL REFERRAL -->
+            <!-- ============================================================ -->
             <div class="external-form" id="externalForm">
                 <div class="grid-2">
                     <div class="form-group">
@@ -1813,12 +1945,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <textarea name="notes" class="form-control" rows="2" placeholder="Any additional general notes..."></textarea>
             </div>
             
-            <!-- View PDF Button - Links to refer_patient_pdf.php -->
+            <!-- View PDF Button -->
             <div class="mt-3 no-print">
                 <a href="refer_patient_pdf.php?patient_id=<?= $patient_id ?>" target="_blank" class="btn-view-pdf">
                     <i class="fas fa-file-pdf"></i> View PDF
                 </a>
-                <span class="text-xs text-gray-400 ml-2"><i class="fas fa-info-circle"></i> Opens in new window - Page 1: Patient Info & Vital Signs | Page 2: Clinical History, Lab Tests, Diagnosis, Medications, Procedures</span>
+                <span class="text-xs text-gray-400 ml-2"><i class="fas fa-info-circle"></i> Opens in new window</span>
             </div>
             
             <!-- Form Actions -->
@@ -1855,6 +1987,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <script>
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -1872,6 +2007,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
+    // ================================================================
+    // DATE/TIME UPDATE
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
@@ -1881,6 +2019,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
+    // ================================================================
+    // EXPERT TYPE - SHOW OTHER INPUT
+    // ================================================================
     function toggleExpertOther() {
         var select = document.getElementById('expertTypeSelect');
         var otherWrapper = document.getElementById('expertOtherWrapper');
@@ -1891,6 +2032,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     }
 
+    // ================================================================
+    // REFERRAL TYPE SELECTOR
+    // ================================================================
     function selectReferralType(type, element) {
         document.querySelectorAll('.referral-type-option').forEach(function(btn) {
             btn.classList.remove('active');
@@ -1923,9 +2067,87 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     }
 
+    // ================================================================
+    // SHOW DOCTOR QUEUE INFO ON SELECT
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        var doctorSelect = document.getElementById('doctorSelect');
+        var selectedDoctorDetails = document.getElementById('selectedDoctorDetails');
+        var selectedDoctorInfo = document.getElementById('selectedDoctorInfo');
+        
+        if (doctorSelect) {
+            doctorSelect.addEventListener('change', function() {
+                var selectedOption = this.options[this.selectedIndex];
+                if (!selectedOption || !selectedOption.value) {
+                    selectedDoctorDetails.style.display = 'none';
+                    return;
+                }
+                
+                var doctorName = selectedOption.text;
+                var totalPatients = parseInt(selectedOption.dataset.patients) || 0;
+                var pendingPatients = parseInt(selectedOption.dataset.pending) || 0;
+                var pendingVisits = parseInt(selectedOption.dataset.visits) || 0;
+                
+                doctorName = doctorName.replace(/[🟢⚪]\s*/, '')
+                    .replace(/\s*-\s*👥\s*\d+\s*patients.*/, '')
+                    .replace(/\s*⏳\s*\d+\s*waiting.*/, '')
+                    .trim();
+                
+                var queueStatus = '';
+                var queueColor = '';
+                if (pendingPatients == 0) {
+                    queueStatus = '🟢 No patients waiting - Available now!';
+                    queueColor = '#059669';
+                } else if (pendingPatients <= 3) {
+                    queueStatus = '🟡 ' + pendingPatients + ' patient(s) waiting - Short queue';
+                    queueColor = '#D97706';
+                } else if (pendingPatients <= 7) {
+                    queueStatus = '🟠 ' + pendingPatients + ' patient(s) waiting - Medium queue';
+                    queueColor = '#EA580C';
+                } else {
+                    queueStatus = '🔴 ' + pendingPatients + ' patient(s) waiting - Long queue';
+                    queueColor = '#DC2626';
+                }
+                
+                var html = `
+                    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+                        <div style="font-weight:600;font-size:0.85rem;color:var(--text-primary);">
+                            👨‍⚕️ Dr. ${doctorName}
+                        </div>
+                        <div style="font-size:0.7rem;color:var(--text-secondary);background:var(--bg-card);padding:2px 10px;border-radius:12px;border:1px solid var(--border-color);">
+                            👥 <strong>${totalPatients}</strong> total patients
+                        </div>
+                        <div style="font-size:0.7rem;color:var(--text-secondary);background:var(--bg-card);padding:2px 10px;border-radius:12px;border:1px solid var(--border-color);">
+                            📋 <strong>${pendingVisits}</strong> pending visits
+                        </div>
+                        <div style="font-size:0.7rem;font-weight:600;padding:2px 12px;border-radius:12px;background:${queueColor}20;color:${queueColor};border:1px solid ${queueColor}40;">
+                            ${queueStatus}
+                        </div>
+                    </div>
+                    <div style="font-size:0.65rem;color:var(--text-secondary);margin-top:6px;border-top:1px solid var(--border-color);padding-top:4px;display:flex;flex-wrap:wrap;gap:4px;">
+                        <span><i class="fas fa-info-circle"></i></span>
+                        <span>
+                            ${pendingPatients == 0 ? '✅ This doctor has NO pending patients. Referral will be seen immediately.' :
+                            pendingPatients <= 3 ? '✅ This doctor has a SHORT queue. Referral will be seen soon.' :
+                            pendingPatients <= 7 ? '⚠️ This doctor has a MODERATE queue. Consider urgency when referring.' :
+                            '⚠️ This doctor has a LONG queue. Only refer if URGENT.'}
+                        </span>
+                    </div>
+                `;
+                
+                selectedDoctorInfo.innerHTML = html;
+                selectedDoctorDetails.style.display = 'block';
+            });
+        }
+    });
+
+    // ================================================================
+    // RESET FORM
+    // ================================================================
     function resetForm() {
         if (!confirm('Clear all form fields?')) return;
         document.getElementById('doctorSelect').value = '';
+        document.getElementById('selectedDoctorDetails').style.display = 'none';
         document.querySelectorAll('.external-form input, .external-form textarea, .external-form select').forEach(function(el) {
             el.value = '';
         });
@@ -1937,6 +2159,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         showToast('Info', 'Form has been cleared', 'info');
     }
 
+    // ================================================================
+    // TOAST
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1954,6 +2179,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 4000);
     }
 
+    // ================================================================
+    // FORM SUBMIT VALIDATION
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         document.querySelectorAll('.internal-form .form-control[required]').forEach(function(el) {
             el.setAttribute('required', 'required');
@@ -2017,12 +2245,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
-    console.log('✅ Refer Patient - Using referrals table');
-    console.log('✅ Table created automatically if not exists');
-    console.log('✅ Internal referrals saved to referrals table');
-    console.log('✅ External referrals saved to referrals table');
-    console.log('✅ Notifications sent to receiving doctor');
-    console.log('✅ Activity logs recorded');
+    // ================================================================
+    // CONSOLE LOG
+    // ================================================================
+    console.log('✅ Refer Patient - Status: referred (FIXED)');
+    console.log('✅ status column set to: referred (NOT NULL WITH DEFAULT)');
+    console.log('✅ ALTER TABLE runs automatically to fix status column');
+    console.log('✅ UPDATE NULL status to referred runs automatically');
+    console.log('✅ Internal referrals saved with status: referred');
+    console.log('✅ External referrals saved with status: referred');
+    console.log('✅ Force update after insert to ensure status is set');
+    console.log('✅ Verification: SELECT status FROM referrals WHERE id = ?');
 </script>
 
 </body>
