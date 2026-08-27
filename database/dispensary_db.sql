@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Aug 26, 2026 at 11:12 PM
+-- Generation Time: Aug 27, 2026 at 11:33 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -177,7 +177,32 @@ INSERT INTO `activity_logs` (`id`, `user_id`, `branch_id`, `patient_id`, `action
 (130, 4, 1, 52, 'referral_created', 'Patient referred: JUDITH SOLOMONI (#REF-20260826-0052-268) - Type: internal - Status: referred', NULL, NULL, '2026-08-26 19:32:56', '2026-08-26 19:32:56'),
 (131, 4, 1, 53, 'referral_created', 'Patient referred: MAGRETH CHAKUPEWA (#REF-20260826-0053-973) - Type: internal - Status: referred', NULL, NULL, '2026-08-26 19:32:56', '2026-08-26 19:32:56'),
 (132, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-08-26 20:45:09', '2026-08-26 20:45:09'),
-(133, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 61', NULL, NULL, '2026-08-26 20:45:29', '2026-08-26 20:45:29');
+(133, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 61', NULL, NULL, '2026-08-26 20:45:29', '2026-08-26 20:45:29'),
+(134, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-08-26 21:40:42', '2026-08-26 21:40:42'),
+(135, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 62', NULL, NULL, '2026-08-26 21:40:49', '2026-08-26 21:40:49'),
+(136, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 63', NULL, NULL, '2026-08-26 21:40:52', '2026-08-26 21:40:52'),
+(137, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 59 status changed to completed', NULL, NULL, '2026-08-26 21:43:36', '2026-08-26 21:43:36'),
+(138, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 59 status changed to completed', NULL, NULL, '2026-08-26 21:43:40', '2026-08-26 21:43:40'),
+(139, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 59 status changed to completed', NULL, NULL, '2026-08-26 21:43:42', '2026-08-26 21:43:42'),
+(140, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 59 status changed to completed', NULL, NULL, '2026-08-26 21:43:45', '2026-08-26 21:43:45'),
+(141, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:30', '2026-08-26 22:40:30'),
+(142, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:34', '2026-08-26 22:40:34'),
+(143, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:35', '2026-08-26 22:40:35'),
+(144, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:38', '2026-08-26 22:40:38'),
+(145, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:41', '2026-08-26 22:40:41'),
+(146, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:45', '2026-08-26 22:40:45'),
+(147, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:47', '2026-08-26 22:40:47'),
+(148, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:51', '2026-08-26 22:40:51'),
+(149, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:40:54', '2026-08-26 22:40:54'),
+(150, 11, 1, NULL, 'visit_status_updated', 'Visit ID: 60 status changed to completed', NULL, NULL, '2026-08-26 22:42:09', '2026-08-26 22:42:09'),
+(151, 5, 1, NULL, 'user_login', 'User logged in: Dr. Grace Peter (Role: doctor)', NULL, NULL, '2026-08-27 20:25:14', '2026-08-27 20:25:14'),
+(152, 5, 1, NULL, 'user_logout', 'User logged out: Dr. Grace Peter (Role: doctor)', NULL, NULL, '2026-08-27 20:25:26', '2026-08-27 20:25:26'),
+(153, 4, 1, NULL, 'user_login', 'User logged in: Dr.ERICK JOHN (Role: doctor)', NULL, NULL, '2026-08-27 20:25:31', '2026-08-27 20:25:31'),
+(154, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-08-27 20:35:50', '2026-08-27 20:35:50'),
+(155, 9, 1, NULL, 'user_login', 'User logged in: James Mwangi (Role: pharmacy)', NULL, NULL, '2026-08-27 20:36:10', '2026-08-27 20:36:10'),
+(156, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 64', NULL, NULL, '2026-08-27 21:08:21', '2026-08-27 21:08:21'),
+(157, 13, 1, NULL, 'user_logout', 'User logged out: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-08-27 21:11:28', '2026-08-27 21:11:28'),
+(158, 10, 1, NULL, 'user_login', 'User logged in: Reception SALOME (Role: reception)', NULL, NULL, '2026-08-27 21:11:42', '2026-08-27 21:11:42');
 
 -- --------------------------------------------------------
 
@@ -248,8 +273,11 @@ INSERT INTO `bills` (`id`, `bill_number`, `patient_id`, `visit_id`, `branch_id`,
 (192, 'BILL-20260826-0059-4431', 59, NULL, 1, 11, 25000.00, 0.00, 0.00, 25000.00, 0.00, 25000.00, 'pending', 'cash', NULL, '2026-08-26 20:52:13', '2026-08-26 20:52:13'),
 (193, 'BILL-20260826-0057-1456', 57, NULL, 1, 11, 15000.00, 0.00, 0.00, 15000.00, 0.00, 15000.00, 'pending', 'cash', NULL, '2026-08-26 20:53:12', '2026-08-26 20:53:12'),
 (194, 'BILL-20260826-0060-7865', 60, NULL, 1, 11, 25000.00, 0.00, 0.00, 25000.00, 0.00, 25000.00, 'pending', 'cash', NULL, '2026-08-26 21:00:03', '2026-08-26 21:00:03'),
-(195, 'BILL-20260826-0060-8927', 60, 57, 1, 11, 100000.00, 0.00, 0.00, 100000.00, 0.00, 100000.00, 'pending', 'cash', NULL, '2026-08-26 21:09:25', '2026-08-26 21:09:25'),
-(196, 'BILL-20260826-0061-3065', 61, 58, 1, 11, 30000.00, 0.00, 0.00, 30000.00, 0.00, 30000.00, 'pending', 'cash', NULL, '2026-08-26 21:11:23', '2026-08-26 21:11:23');
+(195, 'BILL-20260826-0060-8927', 60, NULL, 1, 11, 100000.00, 0.00, 0.00, 100000.00, 0.00, 100000.00, 'pending', 'cash', NULL, '2026-08-26 21:09:25', '2026-08-26 21:09:25'),
+(196, 'BILL-20260826-0061-3065', 61, NULL, 1, 11, 30000.00, 0.00, 0.00, 30000.00, 0.00, 30000.00, 'pending', 'cash', NULL, '2026-08-26 21:11:23', '2026-08-26 21:11:23'),
+(197, 'BILL-20260826-0061-1887', 61, 59, 1, 11, 255000.00, 0.00, 0.00, 255000.00, 0.00, 255000.00, 'paid', 'cash', NULL, '2026-08-26 21:39:23', '2026-08-26 21:43:36'),
+(198, 'BILL-20260827-0055-5480', 55, 60, 1, 11, 100000.00, 0.00, 0.00, 100000.00, 0.00, 100000.00, 'paid', 'cash', NULL, '2026-08-26 22:37:54', '2026-08-26 22:40:30'),
+(199, 'BILL-20260827-0060-5575', 60, 61, 1, 11, 92000.00, 0.00, 0.00, 92000.00, 0.00, 92000.00, 'pending', 'cash', NULL, '2026-08-26 22:43:03', '2026-08-27 21:09:46');
 
 -- --------------------------------------------------------
 
@@ -304,7 +332,24 @@ INSERT INTO `bill_items` (`id`, `bill_id`, `patient_id`, `branch_id`, `item_type
 (239, 193, 57, 1, 'consultation', NULL, 'Consultation: General Consultation', NULL, NULL, 1, 15000.00, 15000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-08-26 20:53:12', '2026-08-26 20:53:12'),
 (240, 194, 60, 1, 'consultation', NULL, 'Consultation-B', NULL, NULL, 1, 25000.00, 25000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-08-26 21:00:03', '2026-08-26 21:00:03'),
 (241, 195, 60, 1, 'consultation', NULL, 'Consultation: visit_mpya', NULL, NULL, 1, 100000.00, 100000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-08-26 21:09:25', '2026-08-26 21:09:25'),
-(242, 196, 61, 1, 'consultation', NULL, 'Specialist Consultation', NULL, NULL, 1, 30000.00, 30000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-08-26 21:11:23', '2026-08-26 21:11:23');
+(242, 196, 61, 1, 'consultation', NULL, 'Specialist Consultation', NULL, NULL, 1, 30000.00, 30000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-08-26 21:11:23', '2026-08-26 21:11:23'),
+(243, 197, 61, 1, 'consultation', NULL, 'Consultation: Specialist Consultation', NULL, NULL, 1, 30000.00, 30000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-08-26 21:39:23', '2026-08-26 21:39:23'),
+(244, 197, 61, 1, 'lab_test', 62, 'Helicobacter Pylori Test', NULL, NULL, 1, 15000.00, 15000.00, 0.00, 0.00, 0.00, 62, '', 'pending', '2026-08-26 21:40:35', '2026-08-26 21:40:35'),
+(245, 197, 61, 1, 'lab_test', 63, 'Pregnancy Test (Blood - Beta HCG)', NULL, NULL, 1, 20000.00, 20000.00, 0.00, 0.00, 0.00, 63, '', 'pending', '2026-08-26 21:40:35', '2026-08-26 21:40:35'),
+(246, 197, 61, 1, 'medication', NULL, 'ALBENDAZOLE (Batch: BATCH-20260825-AEB716)', NULL, NULL, 10, 2000.00, 20000.00, 0.00, 0.00, 0.00, 49, 'prescription', 'pending', '2026-08-26 21:42:31', '2026-08-26 21:42:31'),
+(247, 197, 61, 1, 'procedure', 18, 'Cryotherapy', NULL, NULL, 1, 20000.00, 20000.00, 0.00, 0.00, 0.00, 52, 'procedure', 'pending', '2026-08-26 21:42:36', '2026-08-26 21:42:36'),
+(248, 197, 61, 1, 'procedure', 20, 'Free - Nutrition Counseling (FREE)', NULL, 'FREE - No charge', 1, 0.00, 0.00, 0.00, 0.00, 0.00, 53, 'procedure', 'pending', '2026-08-26 21:42:36', '2026-08-26 21:42:36'),
+(249, 197, 61, 1, 'equipment', 17, 'Adhesive Tape (Roll) (FREE)', NULL, 'FREE - No charge', 5, 0.00, 0.00, 0.00, 0.00, 0.00, 17, 'equipment', 'pending', '2026-08-26 21:42:59', '2026-08-26 21:42:59'),
+(250, 197, 61, 1, 'equipment', 28, 'Needle Holder (Surgical) (Batch: BATCH-NEEDLE-001)', NULL, NULL, 5, 30000.00, 150000.00, 0.00, 0.00, 0.00, 28, 'equipment', 'pending', '2026-08-26 21:42:59', '2026-08-26 21:42:59'),
+(251, 198, 55, 1, 'consultation', NULL, 'Consultation: visit_mpya', NULL, NULL, 1, 100000.00, 100000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-08-26 22:37:54', '2026-08-26 22:37:54'),
+(252, 199, 60, 1, 'consultation', NULL, 'Consultation: New Patient', NULL, NULL, 1, 10000.00, 10000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-08-26 22:43:03', '2026-08-26 22:43:03'),
+(253, 199, 60, 1, 'lab_test', 64, 'COVID-19 Rapid Antigen Test', NULL, NULL, 1, 15000.00, 15000.00, 0.00, 0.00, 0.00, 64, '', 'pending', '2026-08-27 20:34:21', '2026-08-27 20:34:21'),
+(254, 199, 60, 1, 'medication', NULL, 'ALBENDAZOLE (Batch: BATCH-20260825-AEB716)', NULL, NULL, 1, 2000.00, 2000.00, 0.00, 0.00, 0.00, 50, 'prescription', 'pending', '2026-08-27 21:09:21', '2026-08-27 21:09:21'),
+(255, 199, 60, 1, 'procedure', 18, 'Cryotherapy', NULL, NULL, 1, 20000.00, 20000.00, 0.00, 0.00, 0.00, 54, 'procedure', 'pending', '2026-08-27 21:09:33', '2026-08-27 21:09:33'),
+(256, 199, 60, 1, 'procedure', 20, 'Free - Nutrition Counseling (FREE)', NULL, 'FREE - No charge', 1, 0.00, 0.00, 0.00, 0.00, 0.00, 55, 'procedure', 'pending', '2026-08-27 21:09:33', '2026-08-27 21:09:33'),
+(257, 199, 60, 1, 'equipment', 15, 'Gauze Swabs (Sterile) (FREE)', NULL, 'FREE - No charge', 1, 0.00, 0.00, 0.00, 0.00, 0.00, 15, 'equipment', 'pending', '2026-08-27 21:09:46', '2026-08-27 21:09:46'),
+(258, 199, 60, 1, 'equipment', 27, 'Surgical Blades (Scalpel) (Batch: BATCH-BLADE-001)', NULL, NULL, 1, 15000.00, 15000.00, 0.00, 0.00, 0.00, 27, 'equipment', 'pending', '2026-08-27 21:09:46', '2026-08-27 21:09:46'),
+(259, 199, 60, 1, 'equipment', 28, 'Needle Holder (Surgical) (Batch: BATCH-NEEDLE-001)', NULL, NULL, 1, 30000.00, 30000.00, 0.00, 0.00, 0.00, 28, 'equipment', 'pending', '2026-08-27 21:09:46', '2026-08-27 21:09:46');
 
 -- --------------------------------------------------------
 
@@ -512,6 +557,15 @@ CREATE TABLE `lab_tests` (
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--
+-- Dumping data for table `lab_tests`
+--
+
+INSERT INTO `lab_tests` (`id`, `visit_id`, `patient_id`, `doctor_id`, `lab_technician_id`, `technician_id`, `test_id`, `test_name`, `test_price`, `equipment_used`, `batch_number`, `test_type`, `sample_type`, `test_date`, `results`, `formatted_result`, `reference_range`, `interpretation`, `performed_by`, `status`, `started_at`, `bill_created`, `branch_id`, `notes`, `created_at`, `completed_at`, `printed_at`, `printed_by`, `updated_at`) VALUES
+(62, 59, 61, 4, 13, NULL, 24, 'Helicobacter Pylori Test', 15000.00, NULL, NULL, NULL, NULL, NULL, 'POSITIVE', NULL, '1.2', 'Well Being', 13, 'completed', '2026-08-26 21:40:49', 0, 1, 'hana haja ya sindano', '2026-08-26 21:40:35', '2026-08-26 21:41:31', NULL, NULL, '2026-08-26 21:41:31'),
+(63, 59, 61, 4, 13, NULL, 17, 'Pregnancy Test (Blood - Beta HCG)', 20000.00, NULL, NULL, NULL, NULL, NULL, 'Positive - HCG detected', NULL, '0.5', 'HII NI MBAYA SANA', 13, 'completed', '2026-08-26 21:40:52', 0, 1, 'ANAHITAJI SINDANO ZA MASAA 6', '2026-08-26 21:40:35', '2026-08-26 21:42:02', NULL, NULL, '2026-08-26 21:42:02'),
+(64, 61, 60, 4, 13, NULL, 10, 'COVID-19 Rapid Antigen Test', 15000.00, NULL, NULL, NULL, NULL, NULL, 'Positive - SARS-CoV-2 antigen detected', NULL, '', '', 13, 'completed', '2026-08-27 21:08:21', 0, 1, '', '2026-08-27 20:34:21', '2026-08-27 21:08:30', NULL, NULL, '2026-08-27 21:08:30');
+
 -- --------------------------------------------------------
 
 --
@@ -649,9 +703,9 @@ CREATE TABLE `medical_equipment` (
 --
 
 INSERT INTO `medical_equipment` (`id`, `equipment_name`, `category`, `unit`, `quantity`, `reorder_level`, `unit_cost`, `selling_price`, `supplier`, `expiry_date`, `batch_number`, `branch_id`, `created_by`, `status`, `created_at`, `updated_at`) VALUES
-(15, 'Gauze Swabs (Sterile)', 'Consumables', 'pack', 489, 50, 0.00, 0.00, 'Medical Supplies Ltd', '2027-12-31', 'BATCH-GAUZE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 15:25:35'),
+(15, 'Gauze Swabs (Sterile)', 'Consumables', 'pack', 488, 50, 0.00, 0.00, 'Medical Supplies Ltd', '2027-12-31', 'BATCH-GAUZE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-27 21:09:46'),
 (16, 'Cotton Wool (Roll)', 'Consumables', 'roll', 200, 20, 0.00, 0.00, 'Medical Supplies Ltd', '2027-12-31', 'BATCH-COTTON-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-24 14:42:45'),
-(17, 'Adhesive Tape (Roll)', 'Consumables', 'roll', 99, 15, 0.00, 0.00, 'Healthcare Distributors', '2027-11-30', 'BATCH-TAPE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 20:46:25'),
+(17, 'Adhesive Tape (Roll)', 'Consumables', 'roll', 94, 15, 0.00, 0.00, 'Healthcare Distributors', '2027-11-30', 'BATCH-TAPE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 21:42:59'),
 (18, 'Bandage (Elastic)', 'Consumables', 'piece', 1, 20, 0.00, 0.00, 'Healthcare Distributors', '2027-10-31', 'BATCH-BANDAGE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 12:43:27'),
 (19, 'Gloves (Surgical - Sterile)', 'Consumables', 'pair', 979, 100, 0.00, 0.00, 'Medical Supplies Ltd', '2028-06-30', 'BATCH-GLOVES-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 14:36:57'),
 (20, 'Stethoscope (Basic)', 'Diagnostic', 'piece', 10, 2, 0.00, 0.00, 'Medical Equipment Co', NULL, 'BATCH-STETH-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-24 14:42:45'),
@@ -661,8 +715,8 @@ INSERT INTO `medical_equipment` (`id`, `equipment_name`, `category`, `unit`, `qu
 (24, 'Weighing Scale (Medical)', 'Diagnostic', 'piece', 4, 1, 0.00, 0.00, 'Medical Equipment Co', NULL, 'BATCH-SCALE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 15:44:39'),
 (25, 'Surgical Scissors (Mayo)', 'Surgical Instruments', 'piece', 24, 5, 15000.00, 25000.00, 'Surgical Supplies Ltd', NULL, 'BATCH-SCISSOR-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 15:44:39'),
 (26, 'Forceps (Tissue)', 'Surgical Instruments', 'piece', 10, 5, 12000.00, 20000.00, 'Surgical Supplies Ltd', NULL, 'BATCH-FORCEP-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 15:25:35'),
-(27, 'Surgical Blades (Scalpel)', 'Surgical Instruments', 'pack', 5, 10, 8000.00, 15000.00, 'Surgical Supplies Ltd', '2027-12-31', 'BATCH-BLADE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 20:46:25'),
-(28, 'Needle Holder (Surgical)', 'Surgical Instruments', 'piece', 13, 3, 18000.00, 30000.00, 'Surgical Supplies Ltd', NULL, 'BATCH-NEEDLE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 15:44:39'),
+(27, 'Surgical Blades (Scalpel)', 'Surgical Instruments', 'pack', 4, 10, 8000.00, 15000.00, 'Surgical Supplies Ltd', '2027-12-31', 'BATCH-BLADE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-27 21:09:46'),
+(28, 'Needle Holder (Surgical)', 'Surgical Instruments', 'piece', 7, 3, 18000.00, 30000.00, 'Surgical Supplies Ltd', NULL, 'BATCH-NEEDLE-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-27 21:09:46'),
 (29, 'Retractor (Surgical)', 'Surgical Instruments', 'piece', 9, 2, 25000.00, 40000.00, 'Surgical Supplies Ltd', NULL, 'BATCH-RETRACT-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-26 12:50:15'),
 (30, 'ECG Machine (12-Lead)', 'Diagnostic Equipment', 'piece', 1, 1, 350000.00, 500000.00, 'Diagnostic Systems Ltd', NULL, 'BATCH-ECG-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-25 15:03:35'),
 (31, 'Ultrasound Probe (General)', 'Diagnostic Equipment', 'piece', 5, 1, 250000.00, 350000.00, 'Ultrasound Technologies', NULL, 'BATCH-US-001', 1, 1, 'active', '2026-08-24 14:42:45', '2026-08-24 14:42:45'),
@@ -702,7 +756,7 @@ CREATE TABLE `medications_inventory` (
 INSERT INTO `medications_inventory` (`id`, `medication_name`, `category`, `unit`, `quantity`, `reorder_level`, `unit_cost`, `selling_price`, `supplier`, `expiry_date`, `batch_number`, `branch_id`, `status`, `created_at`, `updated_at`) VALUES
 (4, 'AMOXILINE', 'Antibiotics', 'bottle', 225, 50, 1000.00, 2000.00, '', '2027-01-24', 'BATCH-20260824-914E09', 1, 'active', '2026-08-24 13:57:47', '2026-08-26 15:25:18'),
 (5, 'AMOXILINE', 'Antibiotics', 'bottle', 0, 50, 1200.00, 2400.00, '', '2026-12-24', 'BATCH-20260824-F8F23A', 1, 'active', '2026-08-24 13:58:28', '2026-08-25 21:52:29'),
-(6, 'ALBENDAZOLE', 'Antibiotics', 'pcs', 170, 50, 1000.00, 2000.00, 'AVANA MEDICS', '2027-03-25', 'BATCH-20260825-AEB716', 1, 'active', '2026-08-25 08:31:29', '2026-08-26 20:46:05');
+(6, 'ALBENDAZOLE', 'Antibiotics', 'pcs', 159, 50, 1000.00, 2000.00, 'AVANA MEDICS', '2027-03-25', 'BATCH-20260825-AEB716', 1, 'active', '2026-08-25 08:31:29', '2026-08-27 21:09:21');
 
 -- --------------------------------------------------------
 
@@ -810,7 +864,10 @@ INSERT INTO `notifications` (`id`, `user_id`, `branch_id`, `patient_id`, `title`
 (89, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260826-0057-1456 (TSh 15,000) for patient ID #57 - General Consultation', '', 'cashier_dashboard.php', 0, '2026-08-26 20:53:12', '2026-08-26 20:53:12'),
 (90, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260826-0060-7865 (TSh 25,000) for patient ANDREW VICENT CHIKUPE - Consultation-B', '', 'cashier_dashboard.php', 0, '2026-08-26 21:00:03', '2026-08-26 21:00:03'),
 (91, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260826-0060-8927 (TSh 100,000) for patient ID #60 - visit_mpya', '', 'cashier_dashboard.php', 0, '2026-08-26 21:09:25', '2026-08-26 21:09:25'),
-(92, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260826-0061-3065 (TSh 30,000) for patient MUSSA MONGI MASNGI - Specialist Consultation', '', 'cashier_dashboard.php', 0, '2026-08-26 21:11:23', '2026-08-26 21:11:23');
+(92, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260826-0061-3065 (TSh 30,000) for patient MUSSA MONGI MASNGI - Specialist Consultation', '', 'cashier_dashboard.php', 0, '2026-08-26 21:11:23', '2026-08-26 21:11:23'),
+(93, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260826-0061-1887 (TSh 30,000) for patient ID #61 - Specialist Consultation', '', 'cashier_dashboard.php', 0, '2026-08-26 21:39:23', '2026-08-26 21:39:23'),
+(94, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260827-0055-5480 (TSh 100,000) for patient ID #55 - visit_mpya', '', 'cashier_dashboard.php', 0, '2026-08-26 22:37:54', '2026-08-26 22:37:54'),
+(95, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260827-0060-5575 (TSh 10,000) for patient ID #60 - New Patient', '', 'cashier_dashboard.php', 0, '2026-08-26 22:43:03', '2026-08-26 22:43:03');
 
 -- --------------------------------------------------------
 
@@ -1008,6 +1065,14 @@ CREATE TABLE `prescriptions` (
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--
+-- Dumping data for table `prescriptions`
+--
+
+INSERT INTO `prescriptions` (`id`, `prescription_number`, `visit_id`, `patient_id`, `doctor_id`, `pharmacy_id`, `diagnosis`, `instructions`, `notes`, `status`, `branch_id`, `created_at`, `dispensed_at`, `updated_at`) VALUES
+(49, 'PRES-20260826-0061-397', 59, 61, 4, NULL, NULL, NULL, NULL, 'pending', 1, '2026-08-26 21:42:31', NULL, '2026-08-26 21:42:31'),
+(50, 'PRES-20260827-0060-664', 61, 60, 4, NULL, NULL, NULL, NULL, 'pending', 1, '2026-08-27 21:09:21', NULL, '2026-08-27 21:09:21');
+
 -- --------------------------------------------------------
 
 --
@@ -1026,6 +1091,10 @@ CREATE TABLE `prescription_items` (
   `duration` varchar(50) DEFAULT NULL,
   `route` varchar(50) DEFAULT NULL,
   `instructions` text DEFAULT NULL,
+  `pharmacy_instructions` text DEFAULT NULL,
+  `pharmacy_instruction_mode` varchar(20) DEFAULT 'manual',
+  `pharmacy_instruction_updated_at` timestamp NULL DEFAULT NULL,
+  `pharmacy_instruction_updated_by` int(11) DEFAULT NULL,
   `unit_price` decimal(12,2) DEFAULT 0.00,
   `total_price` decimal(12,2) DEFAULT 0.00,
   `branch_id` int(11) DEFAULT NULL,
@@ -1033,6 +1102,14 @@ CREATE TABLE `prescription_items` (
   `dispensed_at` timestamp NULL DEFAULT NULL,
   `dispensed_by` int(11) DEFAULT NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `prescription_items`
+--
+
+INSERT INTO `prescription_items` (`id`, `prescription_id`, `patient_id`, `inventory_id`, `medication_name`, `dosage`, `frequency`, `quantity`, `duration`, `route`, `instructions`, `pharmacy_instructions`, `pharmacy_instruction_mode`, `pharmacy_instruction_updated_at`, `pharmacy_instruction_updated_by`, `unit_price`, `total_price`, `branch_id`, `created_at`, `dispensed_at`, `dispensed_by`) VALUES
+(49, 49, 61, 6, 'ALBENDAZOLE', '300', 'On Empty Stomach', 10, '7', 'IM', 'Take before meals', NULL, 'manual', NULL, NULL, 2000.00, 20000.00, 1, '2026-08-26 21:42:31', NULL, NULL),
+(50, 50, 60, 6, 'ALBENDAZOLE', '300', 'Once Daily', 1, '7', 'Injection', 'Take before meals', NULL, 'manual', NULL, NULL, 2000.00, 2000.00, 1, '2026-08-27 21:09:21', NULL, NULL);
 
 -- --------------------------------------------------------
 
@@ -1058,6 +1135,16 @@ CREATE TABLE `procedures` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `procedures`
+--
+
+INSERT INTO `procedures` (`id`, `visit_id`, `patient_id`, `doctor_id`, `procedure_id`, `procedure_name`, `procedure_category`, `category`, `procedure_code`, `procedure_price`, `status`, `branch_id`, `notes`, `performed_at`, `created_at`, `updated_at`) VALUES
+(52, 59, 61, 4, 18, 'Cryotherapy', NULL, 'Dermatology', NULL, 20000.00, 'pending', 1, NULL, NULL, '2026-08-26 21:42:36', '2026-08-26 21:42:36'),
+(53, 59, 61, 4, 20, 'Free - Nutrition Counseling', NULL, 'Nutrition', NULL, 0.00, 'pending', 1, NULL, NULL, '2026-08-26 21:42:36', '2026-08-26 21:42:36'),
+(54, 61, 60, 4, 18, 'Cryotherapy', NULL, 'Dermatology', NULL, 20000.00, 'pending', 1, NULL, NULL, '2026-08-27 21:09:33', '2026-08-27 21:09:33'),
+(55, 61, 60, 4, 20, 'Free - Nutrition Counseling', NULL, 'Nutrition', NULL, 0.00, 'pending', 1, NULL, NULL, '2026-08-27 21:09:33', '2026-08-27 21:09:33');
 
 -- --------------------------------------------------------
 
@@ -1377,7 +1464,14 @@ INSERT INTO `stock_movements` (`id`, `inventory_id`, `equipment_id`, `patient_id
 (102, NULL, 17, 50, 'out', 33, 133, 100, '', NULL, 4, 1, 'Equipment: Adhesive Tape (Roll) | Batch: BATCH-TAPE-001 | Patient: KELVIN MSAFIRI | Visit: VIS-20260826-0824', '2026-08-26 15:58:30'),
 (103, 6, NULL, 58, 'out', 1, 171, 170, 'prescription', 48, 4, 1, 'Prescription: ALBENDAZOLE | Batch: BATCH-20260825-AEB716 | Patient: AYUBU NZAL | Visit: VIS-20260826-3483', '2026-08-26 20:46:05'),
 (104, NULL, 17, 58, 'out', 1, 100, 99, '', NULL, 4, 1, 'Equipment: Adhesive Tape (Roll) | Batch: BATCH-TAPE-001 | Patient: AYUBU NZAL | Visit: VIS-20260826-3483', '2026-08-26 20:46:25'),
-(105, NULL, 27, 58, 'out', 1, 6, 5, '', NULL, 4, 1, 'Equipment: Surgical Blades (Scalpel) | Batch: BATCH-BLADE-001 | Patient: AYUBU NZAL | Visit: VIS-20260826-3483', '2026-08-26 20:46:25');
+(105, NULL, 27, 58, 'out', 1, 6, 5, '', NULL, 4, 1, 'Equipment: Surgical Blades (Scalpel) | Batch: BATCH-BLADE-001 | Patient: AYUBU NZAL | Visit: VIS-20260826-3483', '2026-08-26 20:46:25'),
+(106, 6, NULL, 61, 'out', 10, 170, 160, 'prescription', 49, 4, 1, 'Prescription: ALBENDAZOLE | Batch: BATCH-20260825-AEB716 | Patient: MUSSA MONGI MASNGI | Visit: VIS-20260826-0112', '2026-08-26 21:42:31'),
+(107, NULL, 17, 61, 'out', 5, 99, 94, '', NULL, 4, 1, 'Equipment: Adhesive Tape (Roll) | Batch: BATCH-TAPE-001 | Patient: MUSSA MONGI MASNGI | Visit: VIS-20260826-0112', '2026-08-26 21:42:59'),
+(108, NULL, 28, 61, 'out', 5, 13, 8, '', NULL, 4, 1, 'Equipment: Needle Holder (Surgical) | Batch: BATCH-NEEDLE-001 | Patient: MUSSA MONGI MASNGI | Visit: VIS-20260826-0112', '2026-08-26 21:42:59'),
+(109, 6, NULL, 60, 'out', 1, 160, 159, 'prescription', 50, 4, 1, 'Prescription: ALBENDAZOLE | Batch: BATCH-20260825-AEB716 | Patient: ANDREW VICENT CHIKUPE | Visit: VIS-20260827-3977', '2026-08-27 21:09:21'),
+(110, NULL, 15, 60, 'out', 1, 489, 488, '', NULL, 4, 1, 'Equipment: Gauze Swabs (Sterile) | Batch: BATCH-GAUZE-001 | Patient: ANDREW VICENT CHIKUPE | Visit: VIS-20260827-3977', '2026-08-27 21:09:46'),
+(111, NULL, 27, 60, 'out', 1, 5, 4, '', NULL, 4, 1, 'Equipment: Surgical Blades (Scalpel) | Batch: BATCH-BLADE-001 | Patient: ANDREW VICENT CHIKUPE | Visit: VIS-20260827-3977', '2026-08-27 21:09:46'),
+(112, NULL, 28, 60, 'out', 1, 8, 7, '', NULL, 4, 1, 'Equipment: Needle Holder (Surgical) | Batch: BATCH-NEEDLE-001 | Patient: ANDREW VICENT CHIKUPE | Visit: VIS-20260827-3977', '2026-08-27 21:09:46');
 
 -- --------------------------------------------------------
 
@@ -1437,16 +1531,16 @@ CREATE TABLE `users` (
 INSERT INTO `users` (`id`, `username`, `password`, `full_name`, `email`, `phone`, `role`, `branch_id`, `specialty`, `is_online`, `last_online`, `profile_pic`, `status`, `created_at`, `updated_at`) VALUES
 (1, 'admin1', '$2y$10$kFqjZ8k3Xx8Xx8Xx8Xx8uO8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8Xx8', 'System Admin', 'admin@braick.com', '+255 700 000 000', 'admin', 1, NULL, 0, NULL, NULL, 'active', '2026-08-23 12:26:10', '2026-08-26 14:05:20'),
 (3, 'admin2', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'BRAICK', 'braick.admin@braick.com', '+255 700 000 000', 'admin', 1, NULL, 0, '2026-08-26 14:10:40', NULL, 'active', '2026-08-23 12:41:40', '2026-08-26 14:10:40'),
-(4, 'Dr.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Dr.ERICK JOHN', 'erick.dodoma@braick.com', '+255 700 000 011', 'doctor', 1, 'General Medicine', 1, '2026-08-26 07:02:48', 'user_4_1787697956.png', 'active', '2026-08-23 12:41:40', '2026-08-26 07:02:48'),
-(5, 'Dr.Dodoma2', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Dr. Grace Peter', 'grace.dodoma@braick.com', '+255 700 000 012', 'doctor', 1, 'Pediatrics', 0, NULL, NULL, 'active', '2026-08-23 12:41:40', '2026-08-25 23:41:03'),
+(4, 'Dr.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Dr.ERICK JOHN', 'erick.dodoma@braick.com', '+255 700 000 011', 'doctor', 1, 'General Medicine', 1, '2026-08-27 20:25:31', 'user_4_1787697956.png', 'active', '2026-08-23 12:41:40', '2026-08-27 20:25:31'),
+(5, 'Dr.Dodoma2', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Dr. Grace Peter', 'grace.dodoma@braick.com', '+255 700 000 012', 'doctor', 1, 'Pediatrics', 0, '2026-08-27 20:25:26', NULL, 'active', '2026-08-23 12:41:40', '2026-08-27 20:25:26'),
 (6, 'Dr.Dodoma3', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Dr. John Mushi', 'john.dodoma@braick.com', '+255 700 000 013', 'doctor', 1, 'Cardiology', 0, NULL, NULL, 'active', '2026-08-23 12:41:40', '2026-08-25 23:41:27'),
 (7, 'Pharm.Dodoma3', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'LUCY MUSSA', 'pharm.dodoma@braick.com', '+255 700 000 014', 'pharmacy', 1, NULL, 0, '2026-08-25 08:30:19', 'user_7_1787493390.png', 'active', '2026-08-23 12:41:40', '2026-08-25 23:43:04'),
 (8, 'Pharm.Dodoma2', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Mary John', 'mary.dodoma@braick.com', '+255 700 000 015', 'pharmacy', 1, NULL, 0, NULL, NULL, 'active', '2026-08-23 12:41:40', '2026-08-25 23:42:30'),
-(9, 'Pharm.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'James Mwangi', 'james.dodoma@braick.com', '+255 700 000 016', 'pharmacy', 1, NULL, 0, '2026-08-26 13:51:11', NULL, 'active', '2026-08-23 12:41:40', '2026-08-26 13:51:11'),
-(10, 'Recpt.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Reception SALOME', 'salome.dodoma@braick.com', '+255 700 000 017', 'reception', 1, NULL, 0, '2026-08-26 12:22:37', 'reception_10_1787518197.png', 'active', '2026-08-23 12:41:40', '2026-08-26 12:22:37'),
+(9, 'Pharm.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'James Mwangi', 'james.dodoma@braick.com', '+255 700 000 016', 'pharmacy', 1, NULL, 0, '2026-08-27 20:36:10', NULL, 'active', '2026-08-23 12:41:40', '2026-08-27 20:36:10'),
+(10, 'Recpt.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Reception SALOME', 'salome.dodoma@braick.com', '+255 700 000 017', 'reception', 1, NULL, 0, '2026-08-27 21:11:42', 'reception_10_1787518197.png', 'active', '2026-08-23 12:41:40', '2026-08-27 21:11:42'),
 (11, 'Recpt.Dodoma2', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Rose Mwangi', 'rose.dodoma@braick.com', '+255 700 000 018', 'reception', 1, NULL, 0, '2026-08-26 15:13:58', NULL, 'active', '2026-08-23 12:41:40', '2026-08-26 15:13:58'),
 (12, 'Recpt.Dodoma3', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'JUDITH SOLOMONI', 'anna.dodoma@braick.com', '+255 700 000 019', 'reception', 1, NULL, 0, NULL, NULL, 'active', '2026-08-23 12:41:40', '2026-08-25 23:47:35'),
-(13, 'Lab.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ANGERITHA KIMARO', 'lab.dodoma@braick.com', '+255 700 000 020', 'laboratory', 1, NULL, 0, '2026-08-26 20:45:09', 'user_13_1787502536.png', 'active', '2026-08-23 12:41:40', '2026-08-26 20:45:09'),
+(13, 'Lab.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'ANGERITHA KIMARO', 'lab.dodoma@braick.com', '+255 700 000 020', 'laboratory', 1, NULL, 0, '2026-08-27 20:35:50', 'user_13_1787502536.png', 'active', '2026-08-23 12:41:40', '2026-08-27 20:35:50'),
 (14, 'Lab.Dodoma2', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Peter Lema', 'peter.dodoma@braick.com', '+255 700 000 021', 'laboratory', 1, NULL, 0, '2026-08-26 08:50:32', NULL, 'active', '2026-08-23 12:41:40', '2026-08-26 08:50:32'),
 (15, 'Lab.Dodoma3', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Sarah Mwamba', 'sarah.dodoma@braick.com', '+255 700 000 022', 'laboratory', 1, NULL, 0, NULL, NULL, 'active', '2026-08-23 12:41:40', '2026-08-25 23:46:17'),
 (16, 'cashier.dodoma', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', 'Cashier Dodoma', 'cashier.dodoma@braick.com', '+255 700 000 023', 'cashier', 1, NULL, 0, NULL, NULL, 'active', '2026-08-23 12:41:40', '2026-08-23 12:41:40'),
@@ -1525,8 +1619,9 @@ CREATE TABLE `visits` (
 --
 
 INSERT INTO `visits` (`id`, `visit_number`, `visit_date`, `patient_id`, `doctor_id`, `assigned_at`, `receptionist_id`, `branch_id`, `visit_type`, `service_id`, `consultation_fee`, `status`, `symptoms`, `hpi`, `physical_exam`, `complaint`, `diagnosis`, `disease_id`, `disease_code`, `treatment`, `follow_up_date`, `notes`, `is_referred`, `created_at`, `updated_at`, `is_completed`, `completed_at`, `lab_fees_total`, `pharmacy_fees_total`, `other_fees_total`, `visit_total`, `payment_status`, `total_discount`, `discount_percent`) VALUES
-(57, 'VIS-20260826-9540', '2026-08-27 00:09:25', 60, 4, NULL, 11, 1, 'visit_mpya', 21, 100000.00, 'assigned', '', NULL, NULL, '', NULL, NULL, NULL, NULL, NULL, '', 0, '2026-08-26 21:09:25', '2026-08-26 21:09:25', 0, NULL, 0.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00),
-(58, 'VIS-20260826-0061', '2026-08-27 00:11:23', 61, 4, '2026-08-26 21:11:23', 11, 1, 'Specialist Consultation', 6, 30000.00, 'assigned', '', NULL, NULL, '', NULL, NULL, NULL, NULL, NULL, '', 0, '2026-08-26 21:11:23', '2026-08-26 21:11:23', 0, NULL, 0.00, 0.00, 0.00, 30000.00, 'pending', 0.00, 0.00);
+(59, 'VIS-20260826-0112', '2026-08-27 00:39:23', 61, 4, NULL, 11, 1, 'Specialist Consultation', 6, 30000.00, 'completed', 'Dizziness, Vomiting, Body Pain', 'KICHWA NA KIZUNGUZUNGU', 'KICHWA NA KIZUNGUZUNGU', 'KICHWA NA KIZUNGUZUNGU', 'Congestive Heart Failure', 9, 'CHF-001', 'Diuretics, ACE inhibitors, Beta-blockers', NULL, 'MACHO PIA YANUUMA SANA KWENYE MWANGA', 0, '2026-08-26 21:39:23', '2026-08-26 21:43:45', 1, '2026-08-26 21:43:45', 0.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00),
+(60, 'VIS-20260827-9154', '2026-08-27 01:37:54', 55, 4, NULL, 11, 1, 'visit_mpya', 21, 100000.00, 'completed', 'Dizziness', NULL, NULL, 'KICHWA KINAUMA SANA SANA FORE HEAD', NULL, NULL, NULL, NULL, NULL, 'PIA MISHIPA YA MACHO INAUMA', 0, '2026-08-26 22:37:54', '2026-08-26 22:42:09', 1, '2026-08-26 22:42:09', 0.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00),
+(61, 'VIS-20260827-3977', '2026-08-27 01:43:03', 60, 4, NULL, 11, 1, 'New Patient', 17, 10000.00, 'prescribed', 'Swelling', 'History of Presenting Illness (HPI)', 'History of Presenting Illness (HPI)\nPhysical Examination', 'KIPANDA USO', 'Typhoid Fever', 6, 'TY-001', 'Antibiotics, Hydration', NULL, 'KIZUNGUZUNGU', 0, '2026-08-26 22:43:03', '2026-08-27 21:20:53', 0, NULL, 0.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00);
 
 -- --------------------------------------------------------
 
@@ -1596,7 +1691,10 @@ INSERT INTO `vital_signs` (`id`, `patient_id`, `visit_id`, `appointment_id`, `re
 (30, 50, NULL, NULL, 11, 1, 34.0, 123, 67, 76, NULL, NULL, NULL, 65.00, 174.00, 21.5, NULL, NULL, NULL, '2026-08-26 15:16:50', '2026-08-26 15:16:50', '2026-08-26 15:16:50'),
 (31, 49, NULL, NULL, 11, 1, 25.0, 129, 78, 87, NULL, NULL, NULL, 58.00, 168.00, 20.5, NULL, NULL, NULL, '2026-08-26 15:17:23', '2026-08-26 15:17:23', '2026-08-26 15:17:23'),
 (32, 48, NULL, NULL, 11, 1, 39.0, 123, 89, 70, NULL, NULL, NULL, 70.00, 178.00, 22.1, NULL, NULL, NULL, '2026-08-26 15:17:51', '2026-08-26 15:17:51', '2026-08-26 15:17:51'),
-(33, 47, NULL, NULL, 11, 1, 35.0, 120, 79, 67, NULL, NULL, NULL, 70.00, 170.00, 24.2, NULL, NULL, NULL, '2026-08-26 15:18:12', '2026-08-26 15:18:12', '2026-08-26 15:18:12');
+(33, 47, NULL, NULL, 11, 1, 35.0, 120, 79, 67, NULL, NULL, NULL, 70.00, 170.00, 24.2, NULL, NULL, NULL, '2026-08-26 15:18:12', '2026-08-26 15:18:12', '2026-08-26 15:18:12'),
+(34, 61, 59, NULL, 11, 1, 39.0, 125, 85, 67, NULL, NULL, NULL, 67.00, 173.80, 22.2, NULL, NULL, NULL, '2026-08-26 21:39:23', '2026-08-26 21:39:23', '2026-08-26 21:39:23'),
+(35, 55, 60, NULL, 11, 1, 35.0, 120, 80, 72, NULL, NULL, NULL, 68.00, 178.00, 21.5, NULL, NULL, NULL, '2026-08-26 22:37:54', '2026-08-26 22:37:54', '2026-08-26 22:37:54'),
+(36, 60, 61, NULL, 11, 1, 37.0, 125, 80, 70, NULL, NULL, NULL, 67.00, 178.00, 21.1, NULL, NULL, NULL, '2026-08-26 22:43:03', '2026-08-26 22:43:03', '2026-08-26 22:43:03');
 
 -- --------------------------------------------------------
 
@@ -2104,7 +2202,7 @@ ALTER TABLE `vital_signs`
 -- AUTO_INCREMENT for table `activity_logs`
 --
 ALTER TABLE `activity_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=134;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=159;
 
 --
 -- AUTO_INCREMENT for table `appointments`
@@ -2116,13 +2214,13 @@ ALTER TABLE `appointments`
 -- AUTO_INCREMENT for table `bills`
 --
 ALTER TABLE `bills`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=197;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=200;
 
 --
 -- AUTO_INCREMENT for table `bill_items`
 --
 ALTER TABLE `bill_items`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=243;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=260;
 
 --
 -- AUTO_INCREMENT for table `branches`
@@ -2158,7 +2256,7 @@ ALTER TABLE `lab_result_templates`
 -- AUTO_INCREMENT for table `lab_tests`
 --
 ALTER TABLE `lab_tests`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=65;
 
 --
 -- AUTO_INCREMENT for table `lab_tests_catalog`
@@ -2188,7 +2286,7 @@ ALTER TABLE `medications_inventory`
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=93;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=96;
 
 --
 -- AUTO_INCREMENT for table `otc_sales`
@@ -2224,19 +2322,19 @@ ALTER TABLE `payments`
 -- AUTO_INCREMENT for table `prescriptions`
 --
 ALTER TABLE `prescriptions`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=49;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=51;
 
 --
 -- AUTO_INCREMENT for table `prescription_items`
 --
 ALTER TABLE `prescription_items`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=49;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=51;
 
 --
 -- AUTO_INCREMENT for table `procedures`
 --
 ALTER TABLE `procedures`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=52;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=56;
 
 --
 -- AUTO_INCREMENT for table `procedures_catalog`
@@ -2278,7 +2376,7 @@ ALTER TABLE `service_categories`
 -- AUTO_INCREMENT for table `stock_movements`
 --
 ALTER TABLE `stock_movements`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=106;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=113;
 
 --
 -- AUTO_INCREMENT for table `system_settings`
@@ -2296,13 +2394,13 @@ ALTER TABLE `users`
 -- AUTO_INCREMENT for table `visits`
 --
 ALTER TABLE `visits`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=59;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
 
 --
 -- AUTO_INCREMENT for table `vital_signs`
 --
 ALTER TABLE `vital_signs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=34;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=37;
 
 --
 -- Constraints for dumped tables
