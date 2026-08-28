@@ -3,6 +3,7 @@
 // FILE: frontend/pages/doctor/consultations.php
 // DOCTOR - CONSULTATIONS LIST WITH AUTO-UPDATE
 // FIXED: Referred patients disappear from sender, appear for receiver
+// SHOWS: Referral reason in the referral info card
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -178,8 +179,6 @@ if ($is_admin) {
     $stmt->execute();
     $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } else {
-    // FIXED: For sender doctor: show only visits where doctor_id = current AND NOT referred
-    // For receiver doctor: show only visits where referred_to_doctor_id = current
     $stmt = $db->prepare("
         SELECT COUNT(*) as count 
         FROM visits v
@@ -246,14 +245,13 @@ if ($is_admin) {
 }
 
 // ================================================================
-// GET CONSULTATIONS WITH REFERRAL INFO - FIXED QUERY
+// GET CONSULTATIONS WITH REFERRAL INFO
 // ================================================================
 $params = [];
 $search_condition = "";
 $status_condition = "";
 $doctor_condition = "";
 
-// For pending filter, include 'assigned' status as well
 if ($filter === 'pending') {
     $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
 } else {
@@ -276,9 +274,6 @@ if ($filter === 'pending') {
     }
 }
 
-// FIXED: Doctor condition
-// For SENDER: show only NON-referred visits (is_referred = 0)
-// For RECEIVER: show visits where referred_to_doctor_id = current doctor
 if ($is_admin) {
     $doctor_condition = "";
 } else {
@@ -389,9 +384,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - DARK MODE SUPPORT
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -787,6 +779,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .consultation-card .referral-info .referral-reason {
             color: var(--text-secondary);
             font-style: italic;
+            margin-top: 2px;
+            padding: 4px 8px;
+            background: var(--bg-body);
+            border-radius: 4px;
+            border-left: 2px solid #D97706;
+        }
+        
+        [data-theme="dark"] .consultation-card .referral-info .referral-reason {
+            background: #1A1A2E;
         }
         
         .consultation-card .assigned-info {
@@ -992,6 +993,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span class="header-badge" style="background:rgba(52,211,153,0.12);border-color:rgba(52,211,153,0.2);color:#34D399;">
                     <i class="fas fa-check-circle"></i> Sender disappears, Receiver appears
                 </span>
+                
+                <span class="header-badge" style="background:rgba(251,191,36,0.12);border-color:rgba(251,191,36,0.2);color:#FBBF24;">
+                    <i class="fas fa-quote-left"></i> Shows referral reason
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1075,15 +1080,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 $is_referred_to_me = ($consultation['referred_to_doctor_id'] == $doctor_id);
                 $is_referred_by_me = ($consultation['referred_by_doctor_id'] == $doctor_id);
                 
-                // FIXED: Determine if this patient should appear
-                // For sender: show if assigned to me AND NOT referred
-                // For receiver: show if referred_to_doctor_id = me
                 $show_for_me = ($is_assigned_to_me && !$is_referred) || $is_referred_to_me;
                 
-                // Skip if not relevant
                 if (!$show_for_me && !$is_admin) continue;
                 
-                // Determine if this is a referred patient (for display)
                 $is_referred_patient = $is_referred || !empty($referred_by);
             ?>
                 <div class="consultation-card animate-fade-in-up" data-visit-id="<?= $consultation['id'] ?>" data-status="<?= $consultation['status'] ?>">
@@ -1115,7 +1115,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                     <i class="fas fa-share-alt"></i> Referred
                                 </span>
                             <?php elseif ($is_referred_patient && $is_referred_by_me): ?>
-                                <!-- This should not appear for sender, but just in case -->
                                 <span class="status-badge" style="background:#FEE2E2;color:#DC2626;border:1px solid #DC2626;">
                                     <i class="fas fa-share-alt"></i> Referred Out
                                 </span>
@@ -1140,7 +1139,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                     
                     <!-- ============================================================ -->
-                    <!-- REFERRAL INFO - If referred and receiver -->
+                    <!-- REFERRAL INFO - Shows referral reason -->
                     <!-- ============================================================ -->
                     <?php if ($is_referred_patient && $is_referred_to_me): ?>
                         <div class="referral-info">
@@ -1186,11 +1185,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                     </span>
                                 <?php endif; ?>
                                 
+                                <!-- ============================================================ -->
+                                <!-- REFERRAL REASON - NEW -->
+                                <!-- ============================================================ -->
                                 <?php if (!empty($referral_reason)): ?>
-                                    <div class="referral-reason" style="margin-top:2px;">
-                                        <i class="fas fa-quote-left" style="font-size:0.5rem;opacity:0.5;"></i>
-                                        <?= nl2br(htmlspecialchars(substr($referral_reason, 0, 200))) ?>
-                                        <?php if (strlen($referral_reason) > 200): ?>...<?php endif; ?>
+                                    <div class="referral-reason" style="margin-top:4px;padding:4px 8px;background:var(--bg-body);border-radius:4px;border-left:2px solid #D97706;">
+                                        <i class="fas fa-quote-left" style="font-size:0.5rem;opacity:0.5;color:#D97706;"></i>
+                                        <span style="font-size:0.7rem;color:var(--text-secondary);">
+                                            <?= nl2br(htmlspecialchars(substr($referral_reason, 0, 200))) ?>
+                                            <?php if (strlen($referral_reason) > 200): ?>...<?php endif; ?>
+                                        </span>
                                     </div>
                                 <?php endif; ?>
                             </div>
@@ -1345,9 +1349,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 <!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -1365,9 +1366,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateFooterTime() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
@@ -1377,15 +1375,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         if (footerTimestamp) {
             footerTimestamp.textContent = 'Last updated: ' + timeStr;
         }
-        
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = timeStr;
     }
     updateFooterTime();
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1406,9 +1400,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // AUTO-UPDATE - EVERY 3 SECONDS
-    // ================================================================
     var updateInterval = null;
     var isUpdating = false;
     var lastHash = null;
@@ -1555,10 +1546,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Consultations (FIXED - Sender disappears, Receiver appears)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 Sender doctor: Patient disappears from pending (is_referred=1)', 'font-size:13px; color:#DC2626;');
-    console.log('%c📋 Receiver doctor: Patient appears in pending (referred_to_doctor_id)', 'font-size:13px; color:#34D399;');
-    console.log('%c👤 Shows: Referred by Dr. X with reason', 'font-size:13px; color:#7C3AED;');
+    console.log('%c👨‍⚕️ Braick - Consultations (With Referral Reason)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Sender doctor: Patient disappears from pending', 'font-size:13px; color:#DC2626;');
+    console.log('%c📋 Receiver doctor: Patient appears in pending', 'font-size:13px; color:#34D399;');
+    console.log('%c📝 Shows referral reason in the referral info card', 'font-size:13px; color:#D97706;');
     console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
 </script>
 
