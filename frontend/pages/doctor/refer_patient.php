@@ -2,10 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/doctor/refer_patient.php
 // DOCTOR - REFER PATIENT (TWO-STEP)
-// INTERNAL: Multiple patients with checkboxes + Submit Internal (GREEN)
-// EXTERNAL: Single patient + Submit External (BLUE)
-// NO Clinical Summary, NO General Notes
-// Status: referred
+// FIXED: Changes assigned_doctor_id + doctor_id in visits to receiver
+// Shows: Referred by Dr. X with reasons
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -296,7 +294,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($referred_to_doctor <= 0) {
             $errors[] = "Please select a doctor";
         }
-        // Reason is OPTIONAL
         
         if (empty($errors)) {
             try {
@@ -327,27 +324,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $patients_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 foreach ($patients_data as $patient) {
-                    // Get latest visit
+                    // Get latest visit for this patient
                     $stmt_visit = $db->prepare("
                         SELECT id, visit_number, diagnosis, disease_code, treatment, symptoms, hpi, physical_exam
                         FROM visits 
-                        WHERE patient_id = ? AND doctor_id = ?
+                        WHERE patient_id = ? 
                         ORDER BY created_at DESC LIMIT 1
                     ");
-                    $stmt_visit->execute([$patient['id'], $user_id]);
+                    $stmt_visit->execute([$patient['id']]);
                     $visit_info = $stmt_visit->fetch(PDO::FETCH_ASSOC);
                     
-                    if (!$visit_info) {
-                        $stmt_visit = $db->prepare("
-                            SELECT id, visit_number, diagnosis, disease_code, treatment, symptoms, hpi, physical_exam
-                            FROM visits 
-                            WHERE patient_id = ?
-                            ORDER BY created_at DESC LIMIT 1
-                        ");
-                        $stmt_visit->execute([$patient['id']]);
-                        $visit_info = $stmt_visit->fetch(PDO::FETCH_ASSOC);
-                    }
-                    
+                    // If no visit exists, create one
                     if (!$visit_info) {
                         $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                         $stmt = $db->prepare("
@@ -388,9 +375,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             reason, clinical_notes, diagnosis, treatment_given,
                             urgency, status, referral_date, created_by, branch_id, created_at
                         ) VALUES (
-                            ?, ?, ?, ?,
-                            ?, ?,
-                            ?, ?, ?, ?,
+                            ?, ?, ?, ?, 'internal', ?,
+                            ?, ?, ?, ?, 
                             ?, ?, NOW(), ?, ?, NOW()
                         )
                     ");
@@ -400,7 +386,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $visit_id_to_use,
                         $patient['id'],
                         $user_id,
-                        'internal',
                         $referred_to_doctor,
                         $combined_reason,
                         $patient_clinical_notes,
@@ -412,22 +397,83 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $user_branch_id
                     ]);
                     
+                    $referral_id = $db->lastInsertId();
                     $referrals_created++;
                     $referral_numbers[] = $referral_number;
+                    
+                    // ================================================================
+                    // ✅ FIXED: UPDATE VISIT - Change doctor_id to receiver
+                    // ================================================================
+                    $stmt_update = $db->prepare("
+                        UPDATE visits 
+                        SET doctor_id = ?,
+                            is_referred = 1,
+                            referred_by_doctor_id = ?,
+                            referred_to_doctor_id = ?,
+                            referral_id = ?,
+                            status = 'assigned',
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt_update->execute([
+                        $referred_to_doctor,    // ✅ NEW: doctor_id becomes receiver
+                        $user_id,               // referring doctor
+                        $referred_to_doctor,    // receiving doctor
+                        $referral_id,
+                        $visit_id_to_use
+                    ]);
+                    
+                    // ================================================================
+                    // ✅ UPDATE PATIENT - Assign to referred doctor
+                    // ================================================================
+                    $stmt_update = $db->prepare("
+                        UPDATE patients 
+                        SET assigned_doctor_id = ?,
+                            updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt_update->execute([$referred_to_doctor, $patient['id']]);
+                    
+                    // ================================================================
+                    // ✅ UPDATE OTHER VISITS - Also refer other visits for this patient
+                    // ================================================================
+                    $stmt_visit_update = $db->prepare("
+                        UPDATE visits 
+                        SET doctor_id = ?,
+                            is_referred = 1,
+                            referred_by_doctor_id = ?,
+                            referred_to_doctor_id = ?,
+                            referral_id = ?,
+                            status = 'assigned',
+                            updated_at = NOW()
+                        WHERE patient_id = ? 
+                        AND doctor_id = ?
+                        AND status IN ('pending', 'assigned', 'with_doctor')
+                        AND id != ?
+                    ");
+                    $stmt_visit_update->execute([
+                        $referred_to_doctor,    // ✅ NEW: doctor_id becomes receiver
+                        $user_id,
+                        $referred_to_doctor,
+                        $referral_id,
+                        $patient['id'],
+                        $user_id,
+                        $visit_id_to_use
+                    ]);
                     
                     // Create notification for receiving doctor
                     $stmt = $db->prepare("
                         INSERT INTO notifications (user_id, branch_id, patient_id, title, message, type, link, created_at)
                         VALUES (?, ?, ?, ?, ?, 'info', ?, NOW())
                     ");
-                    $notif_message = "New referral from Dr. " . $user_full_name . " for patient " . ($patient['full_name'] ?? '');
+                    $notif_message = "New referral from Dr. " . $user_full_name . " for patient " . ($patient['full_name'] ?? '') . ". Patient has been assigned to you.";
                     $stmt->execute([
                         $referred_to_doctor,
                         $user_branch_id,
                         $patient['id'],
                         "📋 New Referral Received",
                         $notif_message,
-                        "my_patients.php"
+                        "consultations.php"
                     ]);
                     
                     // Log activity
@@ -439,20 +485,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $user_id,
                         $user_branch_id,
                         $patient['id'],
-                        "Patient referred: " . ($patient['full_name'] ?? '') . " (#$referral_number) - Type: internal - Status: referred"
+                        "Patient referred internally: " . ($patient['full_name'] ?? '') . " (#$referral_number) - From Dr. " . $user_full_name . " to Dr. " . $doctor_name . " (Status: assigned, doctor_id changed to receiver)"
                     ]);
                 }
                 
                 $db->commit();
                 
                 $referral_list = implode(', ', $referral_numbers);
-                $message = "✅ " . $referrals_created . " patient(s) referred internally successfully! Referrals: " . $referral_list . " (Status: referred)";
+                $message = "✅ " . $referrals_created . " patient(s) referred internally successfully!<br>";
+                $message .= "📋 Referrals: " . $referral_list . "<br>";
+                $message .= "👨‍⚕️ Referred by: Dr. " . $user_full_name . " → To: Dr. " . $doctor_name . "<br>";
+                $message .= "📌 Status: assigned (Patient assigned to new doctor)";
+                $message .= "<br>🔄 Doctor ID changed from " . $user_id . " to " . $referred_to_doctor;
                 $message_type = 'success';
                 
                 echo '<script>
                     setTimeout(function(){
                         window.location.href = "my_patients.php?success=referral";
-                    }, 2000);
+                    }, 3000);
                 </script>';
                 
             } catch (Exception $e) {
@@ -470,7 +520,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     
     // ================================================================
-    // SUBMIT EXTERNAL REFERRAL - COMPLETELY INDEPENDENT
+    // SUBMIT EXTERNAL REFERRAL
     // ================================================================
     if ($action === 'submit_external') {
         $patient_id_post = isset($_POST['external_patient_id']) ? (int)$_POST['external_patient_id'] : 0;
@@ -495,7 +545,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (empty($external_facility)) {
             $errors[] = "Please enter facility name";
         }
-        // Reason is OPTIONAL
         
         if (empty($errors)) {
             try {
@@ -514,22 +563,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt_visit = $db->prepare("
                     SELECT id, visit_number, diagnosis, disease_code, treatment, symptoms, hpi, physical_exam
                     FROM visits 
-                    WHERE patient_id = ? AND doctor_id = ?
+                    WHERE patient_id = ?
                     ORDER BY created_at DESC LIMIT 1
                 ");
-                $stmt_visit->execute([$patient_id_post, $user_id]);
+                $stmt_visit->execute([$patient_id_post]);
                 $visit_info = $stmt_visit->fetch(PDO::FETCH_ASSOC);
-                
-                if (!$visit_info) {
-                    $stmt_visit = $db->prepare("
-                        SELECT id, visit_number, diagnosis, disease_code, treatment, symptoms, hpi, physical_exam
-                        FROM visits 
-                        WHERE patient_id = ?
-                        ORDER BY created_at DESC LIMIT 1
-                    ");
-                    $stmt_visit->execute([$patient_id_post]);
-                    $visit_info = $stmt_visit->fetch(PDO::FETCH_ASSOC);
-                }
                 
                 if (!$visit_info) {
                     $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
@@ -573,9 +611,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 $referral_number = 'REF-' . date('Ymd') . '-' . str_pad($patient_id_post, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
                 
-                // ================================================================
-                // EXTERNAL REFERRAL - NO to_doctor_id
-                // ================================================================
+                // Insert external referral
                 $stmt = $db->prepare("
                     INSERT INTO referrals (
                         referral_number, visit_id, patient_id, from_doctor_id,
@@ -583,10 +619,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         reason, clinical_notes, diagnosis, treatment_given, expert_type,
                         urgency, status, referral_date, created_by, branch_id, created_at
                     ) VALUES (
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?,
-                        ?, ?, ?, ?, ?,
-                        ?, ?, NOW(), ?, ?, NOW()
+                        ?, ?, ?, ?, 'external', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, NOW()
                     )
                 ");
                 
@@ -595,7 +628,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $visit_id_to_use,
                     $patient_id_post,
                     $user_id,
-                    'external',
                     $external_facility,
                     $external_address,
                     $external_phone,
@@ -612,6 +644,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 $referral_id = $db->lastInsertId();
                 
+                // Update visit - mark as referred externally
+                $stmt_update = $db->prepare("
+                    UPDATE visits 
+                    SET is_referred = 1,
+                        referred_by_doctor_id = ?,
+                        referral_id = ?,
+                        status = 'referred',
+                        updated_at = NOW()
+                    WHERE id = ?
+                ");
+                $stmt_update->execute([
+                    $user_id,
+                    $referral_id,
+                    $visit_id_to_use
+                ]);
+                
                 // Log activity
                 $stmt = $db->prepare("
                     INSERT INTO activity_logs (user_id, branch_id, patient_id, action, details, created_at) 
@@ -621,18 +669,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $user_id,
                     $user_branch_id,
                     $patient_id_post,
-                    "Patient referred: " . ($patient['full_name'] ?? '') . " (#$referral_number) - Type: external - Status: referred"
+                    "Patient referred externally: " . ($patient['full_name'] ?? '') . " (#$referral_number) - To: " . $external_facility . " (Status: referred)"
                 ]);
                 
                 $db->commit();
                 
-                $message = "✅ Patient referred externally successfully! Referral: " . $referral_number . " (Status: referred)";
+                $message = "✅ Patient referred externally successfully!<br>";
+                $message .= "📋 Referral: " . $referral_number . "<br>";
+                $message .= "🏥 To: " . $external_facility . "<br>";
+                $message .= "👨‍⚕️ Referred by: Dr. " . $user_full_name . "<br>";
+                $message .= "📌 Status: referred";
                 $message_type = 'success';
                 
                 echo '<script>
                     setTimeout(function(){
                         window.location.href = "my_patients.php?success=referral";
-                    }, 2000);
+                    }, 3000);
                 </script>';
                 
             } catch (Exception $e) {
@@ -846,9 +898,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
-        /* ================================================================ */
-        /* TWO-COLUMN LAYOUT */
-        /* ================================================================ */
         .referral-columns {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -894,9 +943,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .column-external .column-title { color: var(--success); }
         .column-external .column-title i { color: var(--success); }
         
-        /* ================================================================ */
-        /* CUSTOM DROPDOWN WITH CHECKBOXES - MULTISELECT */
-        /* ================================================================ */
         .multi-select-wrapper {
             position: relative;
             width: 100%;
@@ -1052,9 +1098,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .multi-select-dropdown .dropdown-actions button.select-all { color: var(--primary); border-color: var(--primary); }
         .multi-select-dropdown .dropdown-actions button.select-all:hover { background: var(--primary); color: white; }
         
-        /* ================================================================ */
-        /* DOCTOR DROPDOWN WITH PENDING COUNTS */
-        /* ================================================================ */
         .doctor-select-wrapper select {
             width: 100%;
             padding: 8px 12px;
@@ -1292,6 +1335,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-top: 2px solid var(--border-color);
         }
         
+        .referral-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #FEF3C7;
+            color: #D97706;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            border: 1px solid #D97706;
+        }
+        [data-theme="dark"] .referral-badge {
+            background: #3D2E0A;
+            color: #FBBF24;
+            border-color: #FBBF24;
+        }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 14px; }
             .referral-columns { grid-template-columns: 1fr; }
@@ -1326,12 +1387,21 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <i class="fas fa-user-md"></i>
                 Refer Patient
                 <span class="role-badge-display">DOCTOR</span>
+                <span class="referral-badge">
+                    <i class="fas fa-exchange-alt"></i> Referral
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-share-alt"></i>
                 <span class="header-badge"><i class="fas fa-store-alt"></i> <?= htmlspecialchars($doctor_branch_name) ?></span>
                 <span class="header-badge"><i class="fas fa-user-md"></i> Dr. <?= htmlspecialchars($user_full_name) ?></span>
                 <span class="header-badge"><i class="fas fa-users"></i> <?= count($patients_list) ?> patients</span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.1);">
+                    <i class="fas fa-check-circle"></i> Status: Assigned
+                </span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.1);">
+                    <i class="fas fa-sync-alt"></i> Doctor ID changes to receiver
+                </span>
             </p>
         </div>
         <div class="no-print" style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1355,7 +1425,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <div class="referral-columns">
         
         <!-- ============================================================ -->
-        <!-- LEFT COLUMN: INTERNAL REFERRAL - GREEN BUTTON -->
+        <!-- LEFT COLUMN: INTERNAL REFERRAL -->
         <!-- ============================================================ -->
         <div class="referral-column column-internal">
             <div class="column-title">
@@ -1418,7 +1488,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 
                 <!-- Doctor Selection -->
                 <div class="form-group">
-                    <label class="form-label">Referred To Doctor <span class="text-danger">*</span></label>
+                    <label class="form-label">Refer To Doctor <span class="text-danger">*</span></label>
                     <div class="doctor-select-wrapper">
                         <select name="referred_to_doctor" class="form-control" required id="doctorSelect">
                             <option value="">-- Select Doctor --</option>
@@ -1498,12 +1568,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <button type="submit" class="btn btn-success" id="submitInternalBtn">
                         <i class="fas fa-paper-plane"></i> Submit Internal Referral
                     </button>
+                    <div style="text-align:center;margin-top:4px;font-size:0.55rem;color:var(--success);">
+                        <i class="fas fa-check-circle"></i> Patient will be <strong>assigned</strong> to the doctor
+                    </div>
+                    <div style="text-align:center;margin-top:2px;font-size:0.5rem;color:var(--primary-light);">
+                        <i class="fas fa-info-circle"></i> Doctor ID will change from <?= $user_id ?> to selected doctor
+                    </div>
                 </div>
             </form>
         </div>
         
         <!-- ============================================================ -->
-        <!-- RIGHT COLUMN: EXTERNAL REFERRAL - BLUE BUTTON -->
+        <!-- RIGHT COLUMN: EXTERNAL REFERRAL -->
         <!-- ============================================================ -->
         <div class="referral-column column-external">
             <div class="column-title">
@@ -1593,6 +1669,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <button type="submit" class="btn btn-primary" id="submitExternalBtn">
                         <i class="fas fa-paper-plane"></i> Submit External Referral
                     </button>
+                    <div style="text-align:center;margin-top:4px;font-size:0.55rem;color:var(--primary-light);">
+                        <i class="fas fa-check-circle"></i> Visit status: Referred
+                    </div>
                 </div>
             </form>
         </div>
@@ -1898,7 +1977,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             });
         }
         
-        // External form validation - COMPLETELY INDEPENDENT
+        // External form validation
         var externalForm = document.getElementById('externalForm');
         if (externalForm) {
             externalForm.addEventListener('submit', function(e) {
@@ -1932,15 +2011,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     // ================================================================
     // CONSOLE LOG
     // ================================================================
-    console.log('✅ Refer Patient - TWO COLUMN LAYOUT');
-    console.log('✅ LEFT: Internal Referral - GREEN button');
-    console.log('✅ RIGHT: External Referral - BLUE button');
-    console.log('✅ NO Clinical Summary, NO General Notes');
-    console.log('✅ External referral is COMPLETELY INDEPENDENT');
-    console.log('✅ External does NOT require doctor selection');
-    console.log('✅ Internal: Multiple patients with checkboxes');
-    console.log('✅ External: Single patient only');
-    console.log('✅ Status: referred');
+    console.log('✅ Refer Patient - FIXED: doctor_id changes to receiver');
+    console.log('✅ UPDATE visits SET doctor_id = receiver');
+    console.log('✅ Sender doctor: Patient disappears from pending');
+    console.log('✅ Receiver doctor: Patient appears in pending');
+    console.log('✅ Status: assigned');
+    console.log('✅ Referred by Dr. X with reason shown');
 </script>
 
 </body>

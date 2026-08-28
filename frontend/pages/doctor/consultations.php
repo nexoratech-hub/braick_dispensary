@@ -2,12 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/consultations.php
 // DOCTOR - CONSULTATIONS LIST WITH AUTO-UPDATE
-// - Pending: Active consultations (with_doctor, assigned, pending)
-// - Lab Test: Waiting for lab results
-// - Prescribed: Doctor saved, waiting for payment
-// - Completed: All paid and completed
-// - Auto-update every 3 seconds without refresh (AJAX)
-// - Uses SHARED HEADER (dark mode, date/time, status toggle inherited)
+// FIXED: Referred patients disappear from sender, appear for receiver
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -63,7 +58,7 @@ if (!in_array($filter, $allowed_filters)) {
 }
 
 // ================================================================
-// INCLUDE DATABASE - CORRECT PATH
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -74,11 +69,10 @@ try {
 }
 
 // ================================================================
-// AUTO-COMPLETE LOGIC - Check all prescribed visits
+// AUTO-COMPLETE LOGIC
 // ================================================================
 try {
     if ($is_admin) {
-        // Admin can auto-complete all visits
         $stmt = $db->prepare("
             SELECT v.id, v.visit_number, v.patient_id
             FROM visits v
@@ -90,16 +84,15 @@ try {
         $stmt = $db->prepare("
             SELECT v.id, v.visit_number, v.patient_id
             FROM visits v
-            WHERE v.doctor_id = ? 
+            WHERE (v.doctor_id = ? OR v.referred_to_doctor_id = ?)
             AND v.status = 'prescribed'
             AND v.is_completed = 0
         ");
-        $stmt->execute([$doctor_id]);
+        $stmt->execute([$doctor_id, $doctor_id]);
     }
     $prescribed_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($prescribed_visits as $visit) {
-        // FIX: Changed 'patient_bills' to 'bills'
         $stmt = $db->prepare("
             SELECT 
                 COUNT(*) as total_bills,
@@ -116,8 +109,6 @@ try {
         $total_bills = (int)($result['total_bills'] ?? 0);
         $pending_count = (int)($result['pending_count'] ?? 0);
         $paid_count = (int)($result['paid_count'] ?? 0);
-        $total_amount = (float)($result['total_amount'] ?? 0);
-        $total_paid = (float)($result['total_paid'] ?? 0);
         
         if ($total_bills > 0 && $pending_count == 0 && $paid_count > 0) {
             $db->beginTransaction();
@@ -132,7 +123,6 @@ try {
             ");
             $stmt->execute([$visit['id']]);
             
-            // FIX: Changed 'patient_bills' to 'bills'
             $stmt = $db->prepare("
                 UPDATE bills 
                 SET status = 'paid', updated_at = NOW()
@@ -148,7 +138,7 @@ try {
                 $stmt->execute([
                     $doctor_id,
                     $doctor_branch_id,
-                    "Consultation #" . $visit['visit_number'] . " auto-completed" . ($is_admin ? " (Admin)" : "")
+                    "Consultation #" . $visit['visit_number'] . " auto-completed"
                 ]);
             } catch (Exception $e) {}
             
@@ -160,17 +150,15 @@ try {
 }
 
 // ================================================================
-// GET COUNTS FOR BADGES
+// GET COUNTS FOR BADGES - FIXED
 // ================================================================
-$pending_count = 0;
-$lab_test_count = 0;
-$prescribed_count = 0;
-$completed_count = 0;
-$cancelled_count = 0;
-
 if ($is_admin) {
-    // Admin can see all counts
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE status IN ('pending', 'assigned', 'with_doctor') AND is_completed = 0");
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM visits v
+        WHERE v.status IN ('pending', 'assigned', 'with_doctor') 
+        AND v.is_completed = 0
+    ");
     $stmt->execute();
     $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
@@ -190,40 +178,112 @@ if ($is_admin) {
     $stmt->execute();
     $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 } else {
-    // Doctor can only see their counts
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status IN ('pending', 'assigned', 'with_doctor') AND is_completed = 0");
-    $stmt->execute([$doctor_id]);
+    // FIXED: For sender doctor: show only visits where doctor_id = current AND NOT referred
+    // For receiver doctor: show only visits where referred_to_doctor_id = current
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM visits v
+        WHERE (
+            (v.doctor_id = ? AND v.is_referred = 0)
+            OR v.referred_to_doctor_id = ?
+        )
+        AND v.status IN ('pending', 'assigned', 'with_doctor') 
+        AND v.is_completed = 0
+    ");
+    $stmt->execute([$doctor_id, $doctor_id]);
     $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'lab_test' AND is_completed = 0");
-    $stmt->execute([$doctor_id]);
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM visits v
+        WHERE (
+            (v.doctor_id = ? AND v.is_referred = 0)
+            OR v.referred_to_doctor_id = ?
+        )
+        AND v.status = 'lab_test' 
+        AND v.is_completed = 0
+    ");
+    $stmt->execute([$doctor_id, $doctor_id]);
     $lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'prescribed' AND is_completed = 0");
-    $stmt->execute([$doctor_id]);
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM visits v
+        WHERE (
+            (v.doctor_id = ? AND v.is_referred = 0)
+            OR v.referred_to_doctor_id = ?
+        )
+        AND v.status = 'prescribed' 
+        AND v.is_completed = 0
+    ");
+    $stmt->execute([$doctor_id, $doctor_id]);
     $prescribed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'completed' AND is_completed = 1");
-    $stmt->execute([$doctor_id]);
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM visits v
+        WHERE (
+            (v.doctor_id = ? AND v.is_referred = 0)
+            OR v.referred_to_doctor_id = ?
+        )
+        AND v.status = 'completed' 
+        AND v.is_completed = 1
+    ");
+    $stmt->execute([$doctor_id, $doctor_id]);
     $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND status = 'cancelled'");
-    $stmt->execute([$doctor_id]);
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count 
+        FROM visits v
+        WHERE (
+            (v.doctor_id = ? AND v.is_referred = 0)
+            OR v.referred_to_doctor_id = ?
+        )
+        AND v.status = 'cancelled'
+    ");
+    $stmt->execute([$doctor_id, $doctor_id]);
     $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
 
 // ================================================================
-// GET INITIAL CONSULTATIONS
+// GET CONSULTATIONS WITH REFERRAL INFO - FIXED QUERY
 // ================================================================
 $params = [];
 $search_condition = "";
 $status_condition = "";
 $doctor_condition = "";
 
+// For pending filter, include 'assigned' status as well
+if ($filter === 'pending') {
+    $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
+} else {
+    switch ($filter) {
+        case 'lab_test':
+            $status_condition = "AND v.status = 'lab_test' AND v.is_completed = 0";
+            break;
+        case 'prescribed':
+            $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
+            break;
+        case 'completed':
+            $status_condition = "AND v.status = 'completed' AND v.is_completed = 1";
+            break;
+        case 'cancelled':
+            $status_condition = "AND v.status = 'cancelled'";
+            break;
+        default:
+            $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
+            break;
+    }
+}
+
+// FIXED: Doctor condition
+// For SENDER: show only NON-referred visits (is_referred = 0)
+// For RECEIVER: show visits where referred_to_doctor_id = current doctor
 if ($is_admin) {
     $doctor_condition = "";
 } else {
-    $doctor_condition = "v.doctor_id = ?";
+    $doctor_condition = "((v.doctor_id = ? AND v.is_referred = 0) OR v.referred_to_doctor_id = ?)";
+    $params[] = $doctor_id;
     $params[] = $doctor_id;
 }
 
@@ -232,27 +292,6 @@ if (!empty($search)) {
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
-}
-
-switch ($filter) {
-    case 'pending':
-        $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
-        break;
-    case 'lab_test':
-        $status_condition = "AND v.status = 'lab_test' AND v.is_completed = 0";
-        break;
-    case 'prescribed':
-        $status_condition = "AND v.status = 'prescribed' AND v.is_completed = 0";
-        break;
-    case 'completed':
-        $status_condition = "AND v.status = 'completed' AND v.is_completed = 1";
-        break;
-    case 'cancelled':
-        $status_condition = "AND v.status = 'cancelled'";
-        break;
-    default:
-        $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
-        break;
 }
 
 $sql = "
@@ -268,12 +307,27 @@ $sql = "
         p.allergies,
         u.full_name as doctor_name,
         b.name as branch_name,
+        ru.full_name as referred_by_doctor_name,
+        ru.id as referred_by_doctor_id,
+        rtu.full_name as referred_to_doctor_name,
+        rtu.id as referred_to_doctor_id,
+        r.id as referral_id,
+        r.referral_number,
+        r.referral_type,
+        r.reason as referral_reason,
+        r.internal_notes,
+        r.external_notes,
+        r.urgency as referral_urgency,
+        r.status as referral_status,
+        r.referral_date,
+        r.to_hospital_name,
+        r.to_hospital_address,
+        r.to_hospital_phone,
         (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id AND status IN ('pending', 'in_progress')) as pending_lab_count,
         (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id AND status = 'completed') as completed_lab_count,
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status IN ('pending', 'dispensed')) as total_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status = 'pending') as pending_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status = 'dispensed') as dispensed_prescriptions,
-        -- FIX: Changed 'patient_bills' to 'bills'
         (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills_count,
         (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status = 'paid') as paid_bills_count,
         (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as total_bills_count,
@@ -283,11 +337,24 @@ $sql = "
     JOIN patients p ON v.patient_id = p.id
     LEFT JOIN users u ON v.doctor_id = u.id
     LEFT JOIN branches b ON v.branch_id = b.id
+    LEFT JOIN referrals r ON v.referral_id = r.id
+    LEFT JOIN users ru ON v.referred_by_doctor_id = ru.id
+    LEFT JOIN users rtu ON v.referred_to_doctor_id = rtu.id
     WHERE 1=1
     " . ($is_admin ? "" : "AND " . $doctor_condition) . "
     $status_condition
     $search_condition
-    ORDER BY v.created_at DESC
+    ORDER BY 
+        CASE 
+            WHEN v.status = 'assigned' THEN 0 
+            WHEN v.status = 'pending' THEN 1 
+            WHEN v.status = 'with_doctor' THEN 2 
+            WHEN v.status = 'lab_test' THEN 3 
+            WHEN v.status = 'prescribed' THEN 4 
+            WHEN v.status = 'completed' THEN 5 
+            ELSE 6 
+        END,
+        v.created_at DESC
 ";
 
 $stmt = $db->prepare($sql);
@@ -305,7 +372,7 @@ $profile_pic_url = !empty($profile_pic)
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR - CORRECT PATHS
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
@@ -323,8 +390,75 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     
     <style>
         /* ================================================================
-           PAGE-SPECIFIC STYLES
+           ROOT VARIABLES - DARK MODE SUPPORT
            ================================================================ */
+        :root {
+            --primary: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #6EA8FE;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
+            --gray-50: #F8FAFC;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --gray-600: #475569;
+            --gray-700: #334155;
+            --gray-800: #1E293B;
+            --gray-900: #0F172A;
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
+            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
+        }
+        
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+            --gray-50: #1A1A2E;
+            --gray-100: #1E293B;
+            --gray-200: #2D3748;
+            --gray-300: #4A5568;
+            --gray-400: #718096;
+            --gray-500: #A0AEC0;
+            --gray-600: #CBD5E1;
+            --gray-700: #E2E8F0;
+            --primary-bg: #1E3A5F;
+            --success-bg: #1A3A2A;
+            --danger-bg: #3A1A1A;
+            --warning-bg: #3A2A1A;
+            --purple-bg: #2D1B5F;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+        
+        ::-webkit-scrollbar { width: 4px; height: 4px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 8px; }
+        
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -348,6 +482,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
             position: relative;
             overflow: hidden;
+        }
+        
+        [data-theme="dark"] .page-header-custom {
+            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
         }
         
         .page-header-custom::before {
@@ -454,6 +592,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             max-width: 1200px;
             margin-left: auto;
             margin-right: auto;
+            transition: background 0.3s ease, border-color 0.3s ease;
         }
         
         .filter-tab {
@@ -494,6 +633,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-tab:not(.active) .tab-badge {
             background: var(--gray-200);
             color: var(--gray-500);
+        }
+        
+        [data-theme="dark"] .filter-tab:not(.active) .tab-badge {
+            background: var(--gray-700);
+            color: var(--gray-400);
         }
         
         .filter-tab .tab-badge.prescribed-badge { background: #7C3AED; color: white; }
@@ -573,7 +717,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-family: monospace;
         }
         
-        .consultation-card .status-badge {
+        .status-badge {
             display: inline-block;
             padding: 3px 14px;
             border-radius: 20px;
@@ -589,6 +733,75 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .status-badge.lab_test { background: #EDE9FE; color: #7C3AED; }
         .status-badge.completed { background: #D1FAE5; color: #059669; }
         .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
+        
+        [data-theme="dark"] .status-badge.prescribed { background: #2D1B5F; color: #A78BFA; }
+        [data-theme="dark"] .status-badge.pending { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .status-badge.assigned { background: #1A2A4A; color: #6EA8FE; }
+        [data-theme="dark"] .status-badge.with_doctor { background: #1A2A4A; color: #6EA8FE; }
+        [data-theme="dark"] .status-badge.lab_test { background: #2D1B5F; color: #A78BFA; }
+        [data-theme="dark"] .status-badge.completed { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .status-badge.cancelled { background: #3A1A1A; color: #F87171; }
+        
+        .referral-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #FEF3C7;
+            color: #D97706;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            border: 1px solid #D97706;
+        }
+        
+        [data-theme="dark"] .referral-badge {
+            background: #3D2E0A;
+            color: #FBBF24;
+            border-color: #FBBF24;
+        }
+        
+        .consultation-card .referral-info {
+            background: var(--gray-50);
+            border-radius: 8px;
+            padding: 8px 12px;
+            margin-top: 6px;
+            border-left: 3px solid #D97706;
+            font-size: 0.75rem;
+        }
+        
+        [data-theme="dark"] .consultation-card .referral-info {
+            background: #1A1A2E;
+        }
+        
+        .consultation-card .referral-info .referral-from {
+            font-weight: 600;
+            color: var(--primary);
+        }
+        
+        .consultation-card .referral-info .referral-to {
+            font-weight: 600;
+            color: var(--success);
+        }
+        
+        .consultation-card .referral-info .referral-reason {
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+        
+        .consultation-card .assigned-info {
+            background: var(--primary-bg);
+            border-radius: 8px;
+            padding: 6px 12px;
+            margin-top: 6px;
+            border-left: 3px solid var(--primary);
+            font-size: 0.7rem;
+            display: inline-block;
+        }
+        
+        [data-theme="dark"] .consultation-card .assigned-info {
+            background: #1A2A4A;
+        }
         
         .consultation-card .lab-indicator { font-size: 0.7rem; color: var(--purple); }
         .consultation-card .lab-indicator .pending { color: var(--warning); }
@@ -699,18 +912,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
         
-        .update-flash {
-            animation: flash-green 0.6s ease;
-        }
-        
         @keyframes flash-green {
             0%, 100% { background: transparent; }
             50% { background: rgba(5, 150, 105, 0.08); }
         }
+        .update-flash { animation: flash-green 0.6s ease; }
         
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
-            .sidebar-toggle-btn { display: block; }
         }
         
         @media (max-width: 768px) {
@@ -775,6 +984,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <i class="fas fa-user-shield"></i> Admin View - All Doctors
                     </span>
                 <?php endif; ?>
+                
+                <span class="header-badge" style="background:rgba(217,119,6,0.2);border-color:rgba(217,119,6,0.3);color:#FBBF24;">
+                    <i class="fas fa-share-alt"></i> Referred by Dr. X
+                </span>
+                
+                <span class="header-badge" style="background:rgba(52,211,153,0.12);border-color:rgba(52,211,153,0.2);color:#34D399;">
+                    <i class="fas fa-check-circle"></i> Sender disappears, Receiver appears
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -843,6 +1060,31 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 $total_paid = (float)($consultation['total_paid_amount'] ?? 0);
                 
                 $can_complete = ($pending_bills == 0 && $paid_bills > 0 && $consultation['status'] === 'prescribed');
+                
+                // Check if visit is referred
+                $is_referred = $consultation['is_referred'] == 1;
+                $referred_by = $consultation['referred_by_doctor_name'] ?? '';
+                $referred_by_id = $consultation['referred_by_doctor_id'] ?? '';
+                $referred_to = $consultation['referred_to_doctor_name'] ?? '';
+                $referral_reason = $consultation['referral_reason'] ?? '';
+                $referral_type = $consultation['referral_type'] ?? '';
+                $to_hospital = $consultation['to_hospital_name'] ?? '';
+                
+                // Check if assigned to current doctor
+                $is_assigned_to_me = ($consultation['doctor_id'] == $doctor_id);
+                $is_referred_to_me = ($consultation['referred_to_doctor_id'] == $doctor_id);
+                $is_referred_by_me = ($consultation['referred_by_doctor_id'] == $doctor_id);
+                
+                // FIXED: Determine if this patient should appear
+                // For sender: show if assigned to me AND NOT referred
+                // For receiver: show if referred_to_doctor_id = me
+                $show_for_me = ($is_assigned_to_me && !$is_referred) || $is_referred_to_me;
+                
+                // Skip if not relevant
+                if (!$show_for_me && !$is_admin) continue;
+                
+                // Determine if this is a referred patient (for display)
+                $is_referred_patient = $is_referred || !empty($referred_by);
             ?>
                 <div class="consultation-card animate-fade-in-up" data-visit-id="<?= $consultation['id'] ?>" data-status="<?= $consultation['status'] ?>">
                     <div class="card-header">
@@ -864,14 +1106,31 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         </div>
                         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                             <span class="visit-number"><?= htmlspecialchars($consultation['visit_number'] ?? 'N/A') ?></span>
-                            <span class="status-badge <?= $consultation['status'] ?? 'pending' ?>">
-                                <?= ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending')) ?>
-                            </span>
+                            
+                            <?php if ($is_referred_patient && $is_referred_to_me): ?>
+                                <span class="status-badge <?= $consultation['status'] ?? 'assigned' ?>">
+                                    <?= ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Assigned')) ?>
+                                </span>
+                                <span class="referral-badge">
+                                    <i class="fas fa-share-alt"></i> Referred
+                                </span>
+                            <?php elseif ($is_referred_patient && $is_referred_by_me): ?>
+                                <!-- This should not appear for sender, but just in case -->
+                                <span class="status-badge" style="background:#FEE2E2;color:#DC2626;border:1px solid #DC2626;">
+                                    <i class="fas fa-share-alt"></i> Referred Out
+                                </span>
+                            <?php else: ?>
+                                <span class="status-badge <?= $consultation['status'] ?? 'pending' ?>">
+                                    <?= ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending')) ?>
+                                </span>
+                            <?php endif; ?>
+                            
                             <?php if ($is_admin): ?>
                                 <span class="status-badge" style="background:#FEE2E2;color:#DC2626;font-size:0.5rem;border:1px solid #DC2626;">
                                     <i class="fas fa-user-shield"></i> Admin
                                 </span>
                             <?php endif; ?>
+                            
                             <?php if ($can_complete): ?>
                                 <span class="status-badge completed" style="background:#D1FAE5;color:#059669;">
                                     <i class="fas fa-check"></i> Auto-complete
@@ -880,8 +1139,81 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         </div>
                     </div>
                     
-                    <!-- Indicators -->
-                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">
+                    <!-- ============================================================ -->
+                    <!-- REFERRAL INFO - If referred and receiver -->
+                    <!-- ============================================================ -->
+                    <?php if ($is_referred_patient && $is_referred_to_me): ?>
+                        <div class="referral-info">
+                            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                                <span class="referral-badge">
+                                    <i class="fas fa-share-alt"></i> Referred
+                                </span>
+                                
+                                <?php if (!empty($referral_type) && $referral_type === 'external'): ?>
+                                    <span class="badge" style="background:#E8F0FE;color:#0B5ED7;padding:1px 10px;border-radius:12px;font-size:0.55rem;">
+                                        <i class="fas fa-globe-africa"></i> External
+                                    </span>
+                                    <?php if (!empty($to_hospital)): ?>
+                                        <span style="font-size:0.7rem;color:var(--text-secondary);">
+                                            <i class="fas fa-hospital"></i> <?= htmlspecialchars($to_hospital) ?>
+                                        </span>
+                                    <?php endif; ?>
+                                <?php else: ?>
+                                    <span class="badge" style="background:#D1FAE5;color:#059669;padding:1px 10px;border-radius:12px;font-size:0.55rem;">
+                                        <i class="fas fa-hospital"></i> Internal
+                                    </span>
+                                <?php endif; ?>
+                            </div>
+                            
+                            <div style="margin-top:4px;">
+                                <?php if (!empty($referred_by)): ?>
+                                    <span class="referral-from">
+                                        <i class="fas fa-user-md"></i> <strong>Referred by: Dr. <?= htmlspecialchars($referred_by) ?></strong>
+                                        <?php if (!empty($referred_to) && $referral_type === 'internal'): ?>
+                                            <span style="color:var(--text-secondary);margin:0 4px;">→</span>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php endif; ?>
+                                
+                                <?php if (!empty($referred_to) && $referral_type === 'internal'): ?>
+                                    <span class="referral-to">
+                                        To: Dr. <?= htmlspecialchars($referred_to) ?>
+                                        <?php if ($is_referred_to_me): ?>
+                                            <span style="background:#D1FAE5;color:#059669;padding:1px 8px;border-radius:10px;font-size:0.55rem;margin-left:6px;">
+                                                <i class="fas fa-check-circle"></i> You
+                                            </span>
+                                        <?php endif; ?>
+                                    </span>
+                                <?php endif; ?>
+                                
+                                <?php if (!empty($referral_reason)): ?>
+                                    <div class="referral-reason" style="margin-top:2px;">
+                                        <i class="fas fa-quote-left" style="font-size:0.5rem;opacity:0.5;"></i>
+                                        <?= nl2br(htmlspecialchars(substr($referral_reason, 0, 200))) ?>
+                                        <?php if (strlen($referral_reason) > 200): ?>...<?php endif; ?>
+                                    </div>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+                    <?php elseif ($consultation['doctor_id'] && !$is_referred): ?>
+                        <!-- ============================================================ -->
+                        <!-- ASSIGNED INFO - If not referred -->
+                        <!-- ============================================================ -->
+                        <div class="assigned-info">
+                            <i class="fas fa-user-md"></i> 
+                            Assigned to: <strong>Dr. <?= htmlspecialchars($consultation['doctor_name'] ?? 'N/A') ?></strong>
+                            <?php if ($is_assigned_to_me): ?>
+                                <span style="background:#D1FAE5;color:#059669;padding:1px 8px;border-radius:10px;font-size:0.55rem;margin-left:6px;">
+                                    <i class="fas fa-check-circle"></i> You
+                                </span>
+                            <?php endif; ?>
+                        </div>
+                    <?php endif; ?>
+                    
+                    <!-- ============================================================ -->
+                    <!-- INDICATORS -->
+                    <!-- ============================================================ -->
+                    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;">
                         <?php if ($pending_lab > 0): ?>
                             <span class="lab-indicator"><i class="fas fa-flask pending"></i> <?= $pending_lab ?> lab(s) pending</span>
                         <?php endif; ?>
@@ -902,7 +1234,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <?php endif; ?>
                     </div>
                     
-                    <!-- Footer -->
+                    <!-- ============================================================ -->
+                    <!-- FOOTER -->
+                    <!-- ============================================================ -->
                     <div class="card-footer">
                         <div class="meta">
                             <i class="far fa-calendar-alt"></i> <?= date('M d, Y', strtotime($consultation['created_at'])) ?>
@@ -916,24 +1250,37 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <span class="mx-1">•</span>
                                 <i class="fas fa-receipt"></i> Bills: <?= $paid_bills ?>/<?= $total_bills ?>
                             <?php endif; ?>
+                            <?php if ($is_referred_patient && $is_referred_to_me): ?>
+                                <span class="mx-1">•</span>
+                                <span style="color:#D97706;">
+                                    <i class="fas fa-share-alt"></i> Referred by Dr. <?= htmlspecialchars($referred_by ?: 'Unknown') ?>
+                                </span>
+                            <?php endif; ?>
                         </div>
                         <div style="display:flex;gap:6px;flex-wrap:wrap;">
-                            <?php if (in_array($filter, ['pending', 'lab_test', 'prescribed'])): ?>
+                            <?php if (in_array($filter, ['pending', 'lab_test', 'prescribed']) || ($is_referred_patient && $is_referred_to_me)): ?>
                                 <a href="consultation.php?visit_id=<?= $consultation['id'] ?>" class="btn btn-primary btn-sm">
                                     <i class="fas fa-stethoscope"></i> Continue
                                 </a>
+                            <?php elseif ($is_referred_patient): ?>
+                                <span class="btn btn-sm" style="background:#FEF3C7;color:#D97706;border:1px solid #D97706;cursor:default;">
+                                    <i class="fas fa-share-alt"></i> Referred to Dr. <?= htmlspecialchars($referred_to ?: 'External') ?>
+                                </span>
                             <?php endif; ?>
-                            <?php if (in_array($filter, ['completed', 'cancelled'])): ?>
+                            
+                            <?php if (in_array($filter, ['completed', 'cancelled']) || ($is_referred_patient && !$is_referred_to_me)): ?>
                                 <a href="consultation.php?visit_id=<?= $consultation['id'] ?>&view=1" class="btn btn-outline btn-sm">
                                     <i class="fas fa-eye"></i> View
                                 </a>
                             <?php endif; ?>
-                            <?php if ($filter === 'prescribed' && $pending_bills > 0): ?>
+                            
+                            <?php if ($filter === 'prescribed' && $pending_bills > 0 && !$is_referred_patient): ?>
                                 <span class="text-xs text-gray-400 self-center">
                                     <i class="fas fa-clock"></i> Waiting for payment...
                                 </span>
                             <?php endif; ?>
-                            <?php if ($filter === 'prescribed' && $pending_bills == 0 && $total_bills > 0): ?>
+                            
+                            <?php if ($filter === 'prescribed' && $pending_bills == 0 && $total_bills > 0 && !$is_referred_patient): ?>
                                 <span class="text-xs text-green-600 self-center animate-fade-in-up">
                                     <i class="fas fa-check-circle"></i> Auto-completing...
                                 </span>
@@ -995,11 +1342,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS (AJAX) -->
+<!-- JAVASCRIPT - AUTO-UPDATE EVERY 3 SECONDS -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // SIDEBAR TOGGLE (for responsive)
+    // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -1019,7 +1366,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     });
 
     // ================================================================
-    // DATE & TIME (for footer timestamp)
+    // DATE & TIME
     // ================================================================
     function updateFooterTime() {
         var now = new Date();
@@ -1060,7 +1407,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
-    // AUTO-UPDATE - EVERY 3 SECONDS (AJAX)
+    // AUTO-UPDATE - EVERY 3 SECONDS
     // ================================================================
     var updateInterval = null;
     var isUpdating = false;
@@ -1086,20 +1433,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             })
             .then(function(data) {
                 if (data.success) {
-                    // Check if data has changed
                     if (lastHash !== data.hash) {
                         lastHash = data.hash;
                         updateCount++;
                         updateConsultations(data);
                         updateFooterTime();
                         
-                        // Update update count badge
                         var updateCountEl = document.getElementById('updateCount');
                         if (updateCountEl) {
                             updateCountEl.textContent = updateCount;
                         }
                         
-                        // Show notification on change (after first update)
                         if (updateCount > 1) {
                             showToast('🔄 Updated', 'Consultations auto-updated at ' + data.timestamp, 'info');
                         }
@@ -1117,7 +1461,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var container = document.getElementById('consultationsContainer');
         if (!container) return;
         
-        // Update counts in filter tabs
         var badgeMap = {
             'pending': 'badgePending',
             'lab_test': 'badgeLabTest',
@@ -1133,24 +1476,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             }
         }
         
-        // Update page header total
         var totalBadge = document.getElementById('totalCount');
         if (totalBadge) {
             totalBadge.textContent = data.total;
         }
         
-        // Update consultations list with animation
         var oldContainer = container.cloneNode(true);
         container.innerHTML = data.html;
         
-        // Add flash animation to new cards
         var cards = container.querySelectorAll('.consultation-card');
         cards.forEach(function(card, index) {
             card.style.animationDelay = (index * 0.05) + 's';
             card.classList.add('animate-fade-in-up');
         });
         
-        // Update live time
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = data.timestamp;
     }
@@ -1187,9 +1526,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }, 1500);
     }
 
-    // ================================================================
-    // VISIBILITY CHANGE - PAUSE WHEN HIDDEN
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopAutoUpdate();
@@ -1198,9 +1534,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
@@ -1216,24 +1549,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
     });
 
-    // ================================================================
-    // INITIALIZE
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startAutoUpdate();
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Consultations (AJAX Auto-Update)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User ID: <?= $doctor_id ?> | Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#64748B;');
-    <?php if ($is_admin): ?>
-    console.log('%c👑 Admin Mode - Viewing All Consultations', 'font-size:13px; color:#DC2626;');
-    <?php endif; ?>
-    console.log('%c📊 Pending: <?= $pending_count ?> | Lab Test: <?= $lab_test_count ?> | Waiting: <?= $prescribed_count ?> | Completed: <?= $completed_count ?> | Cancelled: <?= $cancelled_count ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🔄 Auto-update every 3 seconds without refresh (AJAX)', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Uses shared header for dark mode, date/time, status toggle', 'font-size:13px; color:#34D399;');
+    console.log('%c👨‍⚕️ Braick - Consultations (FIXED - Sender disappears, Receiver appears)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Sender doctor: Patient disappears from pending (is_referred=1)', 'font-size:13px; color:#DC2626;');
+    console.log('%c📋 Receiver doctor: Patient appears in pending (referred_to_doctor_id)', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 Shows: Referred by Dr. X with reason', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

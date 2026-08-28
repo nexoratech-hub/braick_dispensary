@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/doctor/get_consultations.php
 // AJAX ENDPOINT - Get consultations data for auto-update
+// FIXED: Status 'assigned' remains after refresh
+// Shows referred patients for receiver doctor
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -11,7 +13,6 @@ session_start();
 // CHECK SESSION - REDIRECT TO LOGIN IF NOT DOCTOR
 // ================================================================
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'doctor') {
-    // Return JSON error for AJAX requests
     if (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
         header('Content-Type: application/json');
         echo json_encode([
@@ -90,7 +91,7 @@ try {
 }
 
 // ================================================================
-// ✅ AUTO-COMPLETE LOGIC - RUN BEFORE FETCHING DATA
+// ✅ AUTO-COMPLETE LOGIC
 // ================================================================
 try {
     // 1. Check lab_test visits that have all tests completed
@@ -105,7 +106,6 @@ try {
     $lab_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($lab_visits as $visit) {
-        // Check if all lab tests for this visit are completed
         $stmt = $db->prepare("
             SELECT 
                 COUNT(*) as total_tests,
@@ -119,10 +119,8 @@ try {
         $total_tests = (int)($lab_status['total_tests'] ?? 0);
         $completed_tests = (int)($lab_status['completed_tests'] ?? 0);
         
-        // If all tests are completed, move to prescribed status
         if ($total_tests > 0 && $completed_tests == $total_tests) {
             $db->beginTransaction();
-            
             $stmt = $db->prepare("
                 UPDATE visits 
                 SET status = 'prescribed', 
@@ -130,9 +128,7 @@ try {
                 WHERE id = ? AND status = 'lab_test'
             ");
             $stmt->execute([$visit['id']]);
-            
             $db->commit();
-            
             error_log("Visit #{$visit['visit_number']} auto-moved from lab_test to prescribed");
         }
     }
@@ -153,7 +149,6 @@ try {
     $prescribed_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     foreach ($prescribed_visits as $visit) {
-        // FIX: Changed 'patient_bills' to 'bills'
         $stmt = $db->prepare("
             SELECT 
                 COUNT(*) as total_bills,
@@ -170,8 +165,6 @@ try {
         $total_bills = (int)($result['total_bills'] ?? 0);
         $pending_count = (int)($result['pending_count'] ?? 0);
         $paid_count = (int)($result['paid_count'] ?? 0);
-        $total_amount = (float)($result['total_amount'] ?? 0);
-        $total_paid = (float)($result['total_paid'] ?? 0);
         
         if ($total_bills > 0 && $pending_count == 0 && $paid_count > 0) {
             $db->beginTransaction();
@@ -186,7 +179,6 @@ try {
             ");
             $stmt->execute([$visit['id']]);
             
-            // FIX: Changed 'patient_bills' to 'bills'
             $stmt = $db->prepare("
                 UPDATE bills 
                 SET status = 'paid', updated_at = NOW()
@@ -203,7 +195,7 @@ try {
 }
 
 // ================================================================
-// GET COUNTS FOR BADGES
+// GET COUNTS FOR BADGES - FIXED: Include 'assigned' status in pending
 // ================================================================
 $counts = [
     'pending' => 0,
@@ -213,6 +205,7 @@ $counts = [
     'cancelled' => 0
 ];
 
+// FIXED: For pending, include 'assigned' status (referred patients)
 $status_map = [
     'pending' => "status IN ('pending', 'assigned', 'with_doctor') AND is_completed = 0",
     'lab_test' => "status = 'lab_test' AND is_completed = 0",
@@ -224,8 +217,13 @@ $status_map = [
 foreach ($counts as $key => $value) {
     try {
         $condition = $status_map[$key] ?? "status = '$key'";
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE doctor_id = ? AND $condition");
-        $stmt->execute([$doctor_id]);
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM visits 
+            WHERE (doctor_id = ? OR referred_to_doctor_id = ?)
+            AND $condition
+        ");
+        $stmt->execute([$doctor_id, $doctor_id]);
         $counts[$key] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
     } catch (Exception $e) {
         $counts[$key] = 0;
@@ -233,9 +231,9 @@ foreach ($counts as $key => $value) {
 }
 
 // ================================================================
-// BUILD SEARCH AND STATUS CONDITIONS
+// BUILD SEARCH AND STATUS CONDITIONS - FIXED: Include 'assigned'
 // ================================================================
-$params = [$doctor_id];
+$params = [$doctor_id, $doctor_id]; // For doctor_id and referred_to_doctor_id
 $search_condition = "";
 $status_condition = "";
 
@@ -246,6 +244,7 @@ if (!empty($search)) {
     $params[] = "%$search%";
 }
 
+// FIXED: For pending filter, include 'assigned' status
 switch ($filter) {
     case 'pending':
         $status_condition = "AND v.status IN ('pending', 'assigned', 'with_doctor') AND v.is_completed = 0";
@@ -268,7 +267,7 @@ switch ($filter) {
 }
 
 // ================================================================
-// GET CONSULTATIONS - FIXED: changed patient_bills to bills
+// GET CONSULTATIONS - FIXED: Show referred patients for receiver
 // ================================================================
 $sql = "
     SELECT 
@@ -283,12 +282,27 @@ $sql = "
         p.allergies,
         u.full_name as doctor_name,
         b.name as branch_name,
+        ru.full_name as referred_by_doctor_name,
+        ru.id as referred_by_doctor_id,
+        rtu.full_name as referred_to_doctor_name,
+        rtu.id as referred_to_doctor_id,
+        r.id as referral_id,
+        r.referral_number,
+        r.referral_type,
+        r.reason as referral_reason,
+        r.internal_notes,
+        r.external_notes,
+        r.urgency as referral_urgency,
+        r.status as referral_status,
+        r.referral_date,
+        r.to_hospital_name,
+        r.to_hospital_address,
+        r.to_hospital_phone,
         (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id AND status IN ('pending', 'in_progress')) as pending_lab_count,
         (SELECT COUNT(*) FROM lab_tests WHERE visit_id = v.id AND status = 'completed') as completed_lab_count,
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status IN ('pending', 'dispensed')) as total_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status = 'pending') as pending_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE visit_id = v.id AND status = 'dispensed') as dispensed_prescriptions,
-        -- FIX: Changed 'patient_bills' to 'bills'
         (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status IN ('pending', 'partial')) as pending_bills_count,
         (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status = 'paid') as paid_bills_count,
         (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as total_bills_count,
@@ -298,16 +312,21 @@ $sql = "
     JOIN patients p ON v.patient_id = p.id
     LEFT JOIN users u ON v.doctor_id = u.id
     LEFT JOIN branches b ON v.branch_id = b.id
-    WHERE v.doctor_id = ? 
+    LEFT JOIN referrals r ON v.referral_id = r.id
+    LEFT JOIN users ru ON v.referred_by_doctor_id = ru.id
+    LEFT JOIN users rtu ON v.referred_to_doctor_id = rtu.id
+    WHERE (v.doctor_id = ? OR v.referred_to_doctor_id = ?)
     $status_condition
     $search_condition
     ORDER BY 
         CASE 
-            WHEN v.status IN ('pending', 'assigned', 'with_doctor') THEN 1
-            WHEN v.status = 'lab_test' THEN 2
-            WHEN v.status = 'prescribed' THEN 3
-            WHEN v.status = 'completed' THEN 4
-            ELSE 5
+            WHEN v.status = 'assigned' THEN 0
+            WHEN v.status = 'pending' THEN 1 
+            WHEN v.status = 'with_doctor' THEN 2 
+            WHEN v.status = 'lab_test' THEN 3 
+            WHEN v.status = 'prescribed' THEN 4 
+            WHEN v.status = 'completed' THEN 5 
+            ELSE 6 
         END,
         v.created_at DESC
 ";
@@ -333,6 +352,15 @@ if (count($consultations) > 0) {
         $initial = strtoupper(substr($consultation['patient_name'] ?? 'U', 0, 1));
         $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
         $color = $colors[abs(crc32($consultation['patient_name'] ?? 'U')) % count($colors)];
+        
+        // Check if visit is referred
+        $is_referred = $consultation['is_referred'] == 1;
+        $referred_by = $consultation['referred_by_doctor_name'] ?? '';
+        $referred_to = $consultation['referred_to_doctor_name'] ?? '';
+        $referral_reason = $consultation['referral_reason'] ?? '';
+        $referral_type = $consultation['referral_type'] ?? '';
+        $to_hospital = $consultation['to_hospital_name'] ?? '';
+        $is_referred_to_me = ($consultation['referred_to_doctor_id'] == $doctor_id);
         
         $status_label = ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending'));
         $status_class = $consultation['status'] ?? 'pending';
@@ -368,16 +396,42 @@ if (count($consultations) > 0) {
                     </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                    <span class="visit-number">' . htmlspecialchars($consultation['visit_number'] ?? 'N/A') . '</span>
-                    <span class="status-badge ' . $status_class . '">
-                        ' . $status_label . '
-                    </span>
+                    <span class="visit-number">' . htmlspecialchars($consultation['visit_number'] ?? 'N/A') . '</span>';
+        
+        // Show referral badge if referred
+        if ($is_referred && $is_referred_to_me) {
+            $html .= '<span class="status-badge ' . $status_class . '">' . $status_label . '</span>
+                      <span class="referral-badge"><i class="fas fa-share-alt"></i> Referred</span>';
+        } else {
+            $html .= '<span class="status-badge ' . $status_class . '">' . $status_label . '</span>';
+        }
+        
+        $html .= '
                     ' . ($can_complete ? '<span class="status-badge completed" style="background:#D1FAE5;color:#059669;"><i class="fas fa-check"></i> Auto-complete</span>' : '') . '
                 </div>
-            </div>
-            
-            <!-- Indicators -->
-            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:8px;">';
+            </div>';
+        
+        // Show referral info if referred to this doctor
+        if ($is_referred && $is_referred_to_me) {
+            $html .= '
+            <div class="referral-info" style="margin-top:6px;padding:8px 12px;background:var(--gray-50);border-radius:8px;border-left:3px solid #D97706;font-size:0.75rem;">
+                <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                    <span class="referral-badge"><i class="fas fa-share-alt"></i> Referred</span>
+                    ' . (!empty($referral_type) && $referral_type === 'external' ? 
+                        '<span class="badge" style="background:#E8F0FE;color:#0B5ED7;padding:1px 10px;border-radius:12px;font-size:0.55rem;"><i class="fas fa-globe-africa"></i> External</span>' . 
+                        (!empty($to_hospital) ? '<span style="font-size:0.7rem;color:var(--text-secondary);"><i class="fas fa-hospital"></i> ' . htmlspecialchars($to_hospital) . '</span>' : '') : 
+                        '<span class="badge" style="background:#D1FAE5;color:#059669;padding:1px 10px;border-radius:12px;font-size:0.55rem;"><i class="fas fa-hospital"></i> Internal</span>') . '
+                </div>
+                <div style="margin-top:4px;">
+                    ' . (!empty($referred_by) ? '<span style="font-weight:600;color:var(--primary);"><i class="fas fa-user-md"></i> <strong>Referred by: Dr. ' . htmlspecialchars($referred_by) . '</strong></span>' : '') . '
+                    ' . (!empty($referral_reason) ? '<div style="margin-top:2px;color:var(--text-secondary);font-style:italic;"><i class="fas fa-quote-left" style="font-size:0.5rem;opacity:0.5;"></i> ' . nl2br(htmlspecialchars(substr($referral_reason, 0, 200))) . (strlen($referral_reason) > 200 ? '...' : '') . '</div>' : '') . '
+                </div>
+            </div>';
+        }
+        
+        // Indicators
+        $html .= '
+            <div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;">';
         
         if ($pending_lab > 0) {
             $html .= '<span class="lab-indicator"><i class="fas fa-flask pending"></i> ' . $pending_lab . ' lab(s) pending</span>';
@@ -409,13 +463,14 @@ if (count($consultations) > 0) {
                     <i class="far fa-clock"></i> ' . date('h:i A', strtotime($consultation['created_at'])) . '
                     ' . (!empty($consultation['doctor_name']) ? '<span class="mx-1">•</span><i class="fas fa-user-md"></i> Dr. ' . htmlspecialchars($consultation['doctor_name']) : '') . '
                     ' . ($total_bills > 0 ? '<span class="mx-1">•</span><i class="fas fa-receipt"></i> Bills: ' . $paid_bills . '/' . $total_bills : '') . '
+                    ' . ($is_referred && $is_referred_to_me ? '<span class="mx-1">•</span><span style="color:#D97706;"><i class="fas fa-share-alt"></i> Referred by Dr. ' . htmlspecialchars($referred_by ?: 'Unknown') . '</span>' : '') . '
                 </div>
                 <div style="display:flex;gap:6px;flex-wrap:wrap;">';
         
-        if (in_array($filter, ['pending', 'lab_test', 'prescribed'])) {
+        if (in_array($filter, ['pending', 'lab_test', 'prescribed']) || ($is_referred && $is_referred_to_me)) {
             $html .= '<a href="consultation.php?visit_id=' . $consultation['id'] . '" class="btn btn-primary btn-sm"><i class="fas fa-stethoscope"></i> Continue</a>';
         }
-        if (in_array($filter, ['completed', 'cancelled'])) {
+        if (in_array($filter, ['completed', 'cancelled']) || ($is_referred && !$is_referred_to_me)) {
             $html .= '<a href="consultation.php?visit_id=' . $consultation['id'] . '&view=1" class="btn btn-outline btn-sm"><i class="fas fa-eye"></i> View</a>';
         }
         if ($filter === 'prescribed' && $pending_bills > 0) {
