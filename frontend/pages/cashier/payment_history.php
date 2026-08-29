@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/payment_history.php
-// CASHIER - PAYMENT HISTORY (GREEN THEME)
-// FIXED: Uses bills table (not patient_bills)
-// WITH PDF EXPORT - Official Stamp & Admin Numbers
+// CASHIER - PAYMENT HISTORY 
+// SHOWS: OTC Sales AND Regular Bills (with visit_id)
+// FIXED: Excludes bills without visit_id from regular bills
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -36,6 +36,7 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_phone = $_SESSION['phone'] ?? '';
 
 $is_reception = ($user_role === 'reception');
+$is_admin = ($user_role === 'admin');
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -107,30 +108,30 @@ try {
 // BUILD DATE FILTER
 // ================================================================
 $date_condition = "";
-$params = [$user_branch_id];
+$params = [];
 
 switch ($filter) {
     case 'today':
-        $date_condition = "AND DATE(p.received_at) = CURDATE()";
+        $date_condition = "AND DATE(received_at) = CURDATE()";
         break;
     case 'week':
-        $date_condition = "AND p.received_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_condition = "AND received_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         break;
     case 'month':
-        $date_condition = "AND p.received_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_condition = "AND received_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         break;
     case '3months':
-        $date_condition = "AND p.received_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_condition = "AND received_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         break;
     case '6months':
-        $date_condition = "AND p.received_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_condition = "AND received_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         break;
     case 'year':
-        $date_condition = "AND p.received_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_condition = "AND received_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         break;
     case 'custom':
         if (!empty($start_date) && !empty($end_date)) {
-            $date_condition = "AND DATE(p.received_at) BETWEEN ? AND ?";
+            $date_condition = "AND DATE(received_at) BETWEEN ? AND ?";
             $params[] = $start_date;
             $params[] = $end_date;
         }
@@ -145,7 +146,8 @@ switch ($filter) {
 // ================================================================
 $search_condition = "";
 if (!empty($search)) {
-    $search_condition = "AND (pat.full_name LIKE ? OR pat.patient_id LIKE ? OR b.bill_number LIKE ? OR p.receipt_number LIKE ?)";
+    $search_condition = "AND (customer_name LIKE ? OR sale_number LIKE ? OR customer_phone LIKE ? OR receipt_number LIKE ? OR patient_name LIKE ?)";
+    $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -153,46 +155,132 @@ if (!empty($search)) {
 }
 
 // ================================================================
-// GET PAYMENTS - FIXED: Using bills table (not patient_bills)
+// GET PAYMENTS - COMBINE OTC SALES AND REGULAR BILLS
 // ================================================================
 try {
-    $sql = "
+    $all_payments = [];
+    
+    // ================================================================
+    // 1. GET OTC SALES (paid)
+    // ================================================================
+    $otc_params = [$user_branch_id];
+    $otc_date_condition = str_replace('received_at', 'o.updated_at', $date_condition);
+    $otc_search_condition = "";
+    
+    if (!empty($search)) {
+        $otc_search_condition = "AND (o.customer_name LIKE ? OR o.sale_number LIKE ? OR o.customer_phone LIKE ?)";
+        $otc_params[] = "%$search%";
+        $otc_params[] = "%$search%";
+        $otc_params[] = "%$search%";
+    }
+    
+    $sql_otc = "
         SELECT 
-            p.id,
+            o.id as payment_id,
+            CONCAT('OTC-', o.sale_number) as receipt_number,
+            o.bill_id,
+            o.patient_id,
+            o.total_amount as amount,
+            o.payment_method,
+            NULL as reference_number,
+            o.sold_by as received_by,
+            o.updated_at as received_at,
+            o.branch_id,
+            'OTC' as payment_type,
+            COALESCE(o.customer_name, 'Walk-in Customer') as patient_name,
+            o.customer_phone as patient_phone,
+            o.sale_number as bill_number,
+            o.total_amount as bill_total,
+            o.subtotal as bill_subtotal,
+            o.discount_amount,
+            u.full_name as received_by_name,
+            NULL as patient_id_number,
+            NULL as visit_number
+        FROM otc_sales o
+        LEFT JOIN users u ON o.sold_by = u.id
+        WHERE o.branch_id = ? 
+        AND o.payment_status = 'paid'
+        $otc_date_condition
+        $otc_search_condition
+    ";
+    
+    $stmt = $db->prepare($sql_otc);
+    $stmt->execute($otc_params);
+    $otc_payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($otc_payments as $payment) {
+        $all_payments[] = $payment;
+    }
+    
+    // ================================================================
+    // 2. GET REGULAR BILL PAYMENTS (with visit_id)
+    // ================================================================
+    $regular_params = [$user_branch_id];
+    $regular_date_condition = str_replace('received_at', 'p.received_at', $date_condition);
+    $regular_search_condition = "";
+    
+    if (!empty($search)) {
+        $regular_search_condition = "AND (pat.full_name LIKE ? OR b.bill_number LIKE ? OR p.receipt_number LIKE ? OR pat.patient_id LIKE ?)";
+        $regular_params[] = "%$search%";
+        $regular_params[] = "%$search%";
+        $regular_params[] = "%$search%";
+        $regular_params[] = "%$search%";
+    }
+    
+    $sql_regular = "
+        SELECT 
+            p.id as payment_id,
             p.receipt_number,
             p.bill_id,
-            p.patient_id as payment_patient_id,
+            p.patient_id,
             p.amount,
             p.payment_method,
             p.reference_number,
             p.received_by,
             p.received_at,
-            p.branch_id as payment_branch_id,
+            p.branch_id,
+            'Regular' as payment_type,
             COALESCE(pat.full_name, 'Unknown Patient') as patient_name,
-            COALESCE(pat.patient_id, 'N/A') as patient_id_number,
-            pat.phone,
+            pat.phone as patient_phone,
             b.bill_number,
             b.total_amount as bill_total,
-            b.patient_id as bill_patient_id,
-            COALESCE(u.full_name, 'System') as received_by_name
+            b.subtotal as bill_subtotal,
+            b.discount_amount,
+            u.full_name as received_by_name,
+            pat.patient_id as patient_id_number,
+            v.visit_number
         FROM payments p
-        LEFT JOIN bills b ON p.bill_id = b.id
+        INNER JOIN bills b ON p.bill_id = b.id
         LEFT JOIN patients pat ON b.patient_id = pat.id
         LEFT JOIN users u ON p.received_by = u.id
+        LEFT JOIN visits v ON b.visit_id = v.id
         WHERE p.branch_id = ?
-        $date_condition
-        $search_condition
-        ORDER BY p.received_at DESC
+        AND b.visit_id IS NOT NULL
+        AND b.visit_id > 0
+        $regular_date_condition
+        $regular_search_condition
     ";
     
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    $total_payments = count($payments);
+    $stmt = $db->prepare($sql_regular);
+    $stmt->execute($regular_params);
+    $regular_payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    foreach ($regular_payments as $payment) {
+        $all_payments[] = $payment;
+    }
+    
+    // ================================================================
+    // SORT BY RECEIVED DATE (newest first)
+    // ================================================================
+    usort($all_payments, function($a, $b) {
+        return strtotime($b['received_at']) - strtotime($a['received_at']);
+    });
+    
+    $payments = $all_payments;
+    $total_payments = count($payments);
     $total_amount = 0;
     foreach ($payments as $payment) {
-        $total_amount += $payment['amount'] ?? 0;
+        $total_amount += (float)($payment['amount'] ?? 0);
     }
     
 } catch (Exception $e) {
@@ -204,7 +292,6 @@ try {
 }
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
@@ -266,6 +353,8 @@ include_once '../../components/cashier_sidebar.php';
             --border-color: #E2E8F0;
             --table-stripe: #E8F0FE;
             --table-hover: #D1FAE5;
+            --otc-color: #8B5CF6;
+            --otc-bg: #EDE9FE;
         }
         
         [data-theme="dark"] {
@@ -280,6 +369,7 @@ include_once '../../components/cashier_sidebar.php';
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
+            --otc-bg: #2A1A3A;
         }
 
         [data-theme="dark"] .bg-white { background-color: #1E293B !important; }
@@ -336,6 +426,8 @@ include_once '../../components/cashier_sidebar.php';
         [data-theme="dark"] .bg-red-100 { background-color: rgba(220, 38, 38, 0.15) !important; }
         [data-theme="dark"] .text-red-700 { color: #F87171 !important; }
         [data-theme="dark"] .border-red-200 { border-color: rgba(220, 38, 38, 0.3) !important; }
+        [data-theme="dark"] .payment-type-badge.otc { background: #2A1A3A; color: #A78BFA; border-color: rgba(139,92,246,0.2); }
+        [data-theme="dark"] .payment-type-badge.regular { background: #1A3A2A; color: #34D399; border-color: rgba(5,150,105,0.2); }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -613,7 +705,7 @@ include_once '../../components/cashier_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.8rem;
-            min-width: 700px;
+            min-width: 750px;
         }
         
         .data-table thead th {
@@ -673,6 +765,16 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
+        .btn-otc {
+            background: var(--otc-color);
+            color: white;
+        }
+        .btn-otc:hover {
+            background: #6D28D9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        }
+        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
@@ -716,6 +818,10 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--success);
         }
         
+        .stat-card .stat-number.purple {
+            color: var(--otc-color);
+        }
+        
         .stat-card .stat-label {
             font-size: 0.7rem;
             color: var(--text-secondary);
@@ -753,6 +859,27 @@ include_once '../../components/cashier_sidebar.php';
         .method-badge.bank {
             background: #F3E8FF;
             color: #7C3AED;
+        }
+        
+        .payment-type-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .payment-type-badge.otc {
+            background: #EDE9FE;
+            color: #6D28D9;
+            border: 1px solid rgba(139,92,246,0.2);
+        }
+        
+        .payment-type-badge.regular {
+            background: #E8F0FE;
+            color: #0B5ED7;
+            border: 1px solid rgba(11,94,215,0.2);
         }
         
         .footer {
@@ -1140,6 +1267,11 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-check-circle"></i> Full Access
                     </span>
                 <?php endif; ?>
+                <?php if ($is_admin): ?>
+                    <span class="role-badge-display" style="background:rgba(255,215,0,0.3);color:#FFD700;border-color:rgba(255,215,0,0.3);">
+                        <i class="fas fa-user-shield"></i> ADMIN
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-money-bill-wave"></i>
@@ -1150,17 +1282,16 @@ include_once '../../components/cashier_sidebar.php';
                     <?= $total_payments ?> Payments
                 </span>
                 
+                <span class="header-badge" style="background:rgba(139,92,246,0.2);border-color:rgba(139,92,246,0.2);">
+                    <i class="fas fa-shopping-cart"></i>
+                    Including OTC Sales
+                </span>
+                
                 <?php if ($filter !== 'all' && $filter !== 'custom'): ?>
                 <span class="header-badge">
                     <i class="fas fa-filter"></i>
                     <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
                 </span>
-                <?php endif; ?>
-                
-                <?php if ($is_reception): ?>
-                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);">
-                        <i class="fas fa-user-tag"></i> Reception Access
-                    </span>
                 <?php endif; ?>
             </p>
         </div>
@@ -1237,16 +1368,21 @@ include_once '../../components/cashier_sidebar.php';
         </form>
     </div>
 
-    <!-- QUICK STATS - 2 CARDS ONLY -->
-    <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
+    <!-- QUICK STATS - 3 CARDS -->
+    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
         <div class="stat-card">
             <div class="stat-icon">💰</div>
             <p class="stat-number green"><?= $total_payments ?></p>
             <p class="stat-label">Total Payments</p>
         </div>
         <div class="stat-card">
+            <div class="stat-icon">💳</div>
+            <p class="stat-number green"><?= $currency ?> <?= number_format($total_amount, 0) ?></p>
+            <p class="stat-label">Total Amount</p>
+        </div>
+        <div class="stat-card">
             <div class="stat-icon">📅</div>
-            <p class="stat-number green">
+            <p class="stat-number purple">
                 <?php 
                     if ($filter === 'today') echo 'Today';
                     elseif ($filter === 'week') echo '7 Days';
@@ -1281,12 +1417,12 @@ include_once '../../components/cashier_sidebar.php';
                 <thead>
                     <tr>
                         <th>#</th>
-                        <th>Receipt #</th>
-                        <th>Bill #</th>
-                        <th>Patient</th>
+                        <th>Type</th>
+                        <th>Receipt / Sale #</th>
+                        <th>Bill / Sale #</th>
+                        <th>Patient / Customer</th>
                         <th>Amount</th>
                         <th>Method</th>
-                        <th>Reference #</th>
                         <th>Received By</th>
                         <th>Date</th>
                         <th>Actions</th>
@@ -1294,11 +1430,24 @@ include_once '../../components/cashier_sidebar.php';
                 </thead>
                 <tbody>
                     <?php if (is_array($payments) && count($payments) > 0): ?>
-                        <?php $i = 1; foreach ($payments as $payment): ?>
+                        <?php $i = 1; foreach ($payments as $payment): 
+                            $is_otc = ($payment['payment_type'] ?? '') === 'OTC';
+                        ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td>
-                                    <span class="font-mono text-xs font-bold" style="color:#0B5ED7;">
+                                    <?php if ($is_otc): ?>
+                                        <span class="payment-type-badge otc">
+                                            <i class="fas fa-shopping-cart"></i> OTC
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="payment-type-badge regular">
+                                            <i class="fas fa-file-invoice"></i> Regular
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="font-mono text-xs font-bold <?= $is_otc ? 'text-purple-600' : 'text-blue-600' ?>" style="color:<?= $is_otc ? '#6D28D9' : '#0B5ED7' ?>;">
                                         <?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
@@ -1306,17 +1455,24 @@ include_once '../../components/cashier_sidebar.php';
                                     <span class="font-mono text-xs" style="color:var(--text-secondary);">
                                         <?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?>
                                     </span>
+                                    <?php if (!empty($payment['visit_number']) && !$is_otc): ?>
+                                        <br><span style="font-size:0.5rem;color:var(--text-secondary);">Visit: <?= htmlspecialchars($payment['visit_number']) ?></span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <div class="font-medium text-sm" style="color:var(--text-primary);">
-                                        <?= htmlspecialchars($payment['patient_name'] ?? 'Unknown Patient') ?>
+                                        <?= htmlspecialchars($payment['patient_name'] ?? 'Unknown') ?>
                                     </div>
                                     <div class="text-xs" style="color:var(--text-secondary);">
-                                        <?= htmlspecialchars($payment['patient_id_number'] ?? $payment['bill_patient_id'] ?? 'N/A') ?>
+                                        <?php if ($is_otc): ?>
+                                            📞 <?= htmlspecialchars($payment['patient_phone'] ?? 'N/A') ?>
+                                        <?php else: ?>
+                                            <?= htmlspecialchars($payment['patient_id_number'] ?? 'N/A') ?>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                                 <td>
-                                    <span class="font-semibold" style="color:var(--success);">
+                                    <span class="font-semibold <?= $is_otc ? 'text-purple-600' : 'text-green-600' ?>" style="color:<?= $is_otc ? '#6D28D9' : '#059669' ?>;">
                                         <?= $currency ?> <?= number_format($payment['amount'] ?? 0, 0) ?>
                                     </span>
                                 </td>
@@ -1330,9 +1486,6 @@ include_once '../../components/cashier_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="text-xs font-mono" style="color:var(--text-secondary);"><?= htmlspecialchars($payment['reference_number'] ?? 'N/A') ?></span>
-                                </td>
-                                <td>
                                     <span class="text-sm" style="color:var(--text-secondary);"><?= htmlspecialchars($payment['received_by_name'] ?? 'N/A') ?></span>
                                 </td>
                                 <td class="text-xs" style="color:var(--text-secondary);">
@@ -1344,12 +1497,21 @@ include_once '../../components/cashier_sidebar.php';
                                 </td>
                                 <td>
                                     <div class="flex flex-wrap gap-1">
-                                        <a href="view_bill.php?id=<?= $payment['bill_id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <a href="print_receipt.php?bill_id=<?= $payment['bill_id'] ?>&payment_id=<?= $payment['id'] ?>&print=1" class="btn btn-outline btn-sm" title="Print Receipt" target="_blank">
-                                            <i class="fas fa-print"></i>
-                                        </a>
+                                        <?php if ($is_otc): ?>
+                                            <a href="receipt.php?sale_id=<?= $payment['payment_id'] ?>" class="btn btn-otc btn-sm" title="View OTC Receipt">
+                                                <i class="fas fa-receipt"></i>
+                                            </a>
+                                            <a href="print_receipt.php?type=otc&sale_id=<?= $payment['payment_id'] ?>&print=1" class="btn btn-primary btn-sm" title="Print OTC Receipt" target="_blank">
+                                                <i class="fas fa-print"></i>
+                                            </a>
+                                        <?php else: ?>
+                                            <a href="view_bill.php?id=<?= $payment['bill_id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
+                                                <i class="fas fa-eye"></i>
+                                            </a>
+                                            <a href="print_receipt.php?bill_id=<?= $payment['bill_id'] ?>&payment_id=<?= $payment['payment_id'] ?>&print=1" class="btn btn-primary btn-sm" title="Print Receipt" target="_blank">
+                                                <i class="fas fa-print"></i>
+                                            </a>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -1385,6 +1547,10 @@ include_once '../../components/cashier_sidebar.php';
             <?php if ($is_reception): ?>
                 <span class="text-gray-300 mx-2">|</span>
                 <span style="color:#34D399;">👀 Reception Access</span>
+            <?php endif; ?>
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#FFD700;">⭐ Admin</span>
             <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
@@ -1562,19 +1728,22 @@ include_once '../../components/cashier_sidebar.php';
         var totalPayments = <?= $total_payments ?>;
         var filterLabel = '<?= $filter ?>';
         var filterDisplay = filterLabel === 'all' ? 'All Time' : filterLabel;
+        var totalAmount = <?= $total_amount ?>;
         
         var paymentsHtml = '';
         var counter = 1;
-        <?php foreach ($payments as $payment): ?>
+        <?php foreach ($payments as $payment): 
+            $is_otc = ($payment['payment_type'] ?? '') === 'OTC';
+        ?>
             paymentsHtml += `
                 <tr>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:13px;">${counter}</td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;font-weight:600;color:#0B5ED7;"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:12px;"><span style="background:<?= $is_otc ? '#EDE9FE;color:#6D28D9;' : '#E8F0FE;color:#0B5ED7;' ?>padding:2px 10px;border-radius:10px;font-weight:600;"><?= $is_otc ? 'OTC' : 'Regular' ?></span></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;font-weight:600;<?= $is_otc ? 'color:#6D28D9;' : 'color:#0B5ED7;' ?>"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><strong><?= htmlspecialchars($payment['patient_name'] ?? 'Unknown Patient') ?></strong></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-weight:600;font-size:13px;color:#059669;">${currency} <?= number_format($payment['amount'] ?? 0, 0) ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><strong><?= htmlspecialchars($payment['patient_name'] ?? 'Unknown') ?></strong></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-weight:600;font-size:13px;<?= $is_otc ? 'color:#6D28D9;' : 'color:#059669;' ?>">${currency} <?= number_format($payment['amount'] ?? 0, 0) ?></td>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;text-transform:capitalize;"><?= strtoupper(str_replace('_', ' ', $payment['payment_method'] ?? 'Cash')) ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($payment['reference_number'] ?? 'N/A') ?></td>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($payment['received_by_name'] ?? 'N/A') ?></td>
                     <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= isset($payment['received_at']) ? date('d/m/Y h:i A', strtotime($payment['received_at'])) : 'N/A' ?></td>
                 </tr>
@@ -1631,12 +1800,12 @@ include_once '../../components/cashier_sidebar.php';
                         <thead>
                             <tr>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">#</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">Type</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Receipt #</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Bill #</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Patient</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Patient / Customer</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:11px;">Amount</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Method</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Reference</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Received By</th>
                                 <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Date</th>
                             </tr>
@@ -1733,11 +1902,12 @@ include_once '../../components/cashier_sidebar.php';
     `;
     document.head.appendChild(style);
 
-    console.log('%c💳 Braick - Payment History (Fixed DB + PDF)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ FIXED: Using bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ PDF Export with Official Stamp & Admin Numbers', 'font-size:13px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c💳 Braick - Payment History', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Shows BOTH OTC Sales AND Regular Bills (with visit_id)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ OTC from otc_sales table (payment_status=paid)', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ Regular from payments + bills (visit_id IS NOT NULL)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Total Payments: <?= $total_payments ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Total Amount: <?= $currency ?> <?= number_format($total_amount, 0) ?>', 'font-size:13px; color:#34D399;');
     console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:13px; color:#D97706;');
 </script>
 
