@@ -127,10 +127,10 @@ try {
                     ");
                     $stmt->execute([$bill['id']]);
                     
-                    // Insert payment
+                    // Insert payment - FIXED: NOW() not NOW., added reference_number
                     $stmt = $db->prepare("
-                        INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, NOW., ?)
+                        INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, reference_number, received_by, branch_id, received_at, notes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?)
                     ");
                     $stmt->execute([
                         $receipt_number,
@@ -138,6 +138,7 @@ try {
                         $bill['patient_id'],
                         $remaining,
                         $payment_method,
+                        null, // reference_number - can be null
                         $user_id,
                         $user_branch_id,
                         'Final payment - Balance cleared'

@@ -1345,7 +1345,8 @@ include_once '../../components/cashier_sidebar.php';
                                         <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <a href="process_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-success btn-sm" title="Make Payment">
+                                        <!-- FIXED: Changed from process_payment.php to make_payment.php -->
+                                        <a href="make_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-success btn-sm" title="Make Payment">
                                             <i class="fas fa-money-bill-wave"></i>
                                         </a>
                                     </div>
@@ -1744,6 +1745,7 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c✅ FIXED: Using bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Shows discount amount', 'font-size:13px; color:#34D399;');
     console.log('%c✅ PDF Export with Official Stamp', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Payment button links to make_payment.php', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Partial Bills: <?= $total_partial ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:13px; color:#D97706;');
