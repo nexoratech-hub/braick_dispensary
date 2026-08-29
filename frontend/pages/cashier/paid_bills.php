@@ -1,31 +1,20 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/paid_bills.php
-// CASHIER - PAID BILLS LIST WITH FILTERS (GREEN THEME)
-// FILTERS: Today, 1 Week, 1 Month, 3 Months, 6 Months, 1 Year, All, Date Picker
-// NO TOTAL AMOUNT CARD
-// USES HEADER DARK MODE - NO DUPLICATE
-// BRAICK DISPENSARY
+// CASHIER - PAID BILLS LIST WITH PDF EXPORT
+// FIXED: Uses bills table (not patient_bills)
+// PDF: Single "ALL PAID" stamp on all bills
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// ALLOWED ROLES: Cashier, Reception, Admin
-// ================================================================
 $allowed_roles = ['cashier', 'reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
@@ -38,24 +27,16 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
     exit;
 }
 
-// ================================================================
-// GET USER DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
 $user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
 
-// ================================================================
-// CHECK IF USER IS RECEPTION
-// ================================================================
 $is_reception = ($user_role === 'reception');
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -69,6 +50,34 @@ $message_type = '';
 $currency = 'TSh';
 
 // ================================================================
+// GET ADMIN CONTACT NUMBERS
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone FROM users 
+        WHERE role = 'admin' AND branch_id = ? AND status = 'active'
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$user_branch_id]);
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+}
+
+// ================================================================
+// GET BRANCH PHONE
+// ================================================================
+$branch_phone = '';
+try {
+    $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
+    $stmt->execute([$user_branch_id]);
+    $branch_phone = $stmt->fetchColumn();
+} catch (Exception $e) {
+    $branch_phone = '';
+}
+
+// ================================================================
 // GET FILTER PARAMETERS
 // ================================================================
 $filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
@@ -76,7 +85,6 @@ $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : '';
 $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-// Initialize variables
 $paid_bills = [];
 $total_paid_amount = 0;
 $total_bills = 0;
@@ -103,33 +111,30 @@ $params = [$user_branch_id];
 
 switch ($filter) {
     case 'today':
-        $date_condition = "AND DATE(pb.updated_at) = CURDATE()";
+        $date_condition = "AND DATE(b.updated_at) = CURDATE()";
         break;
     case 'week':
-        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         break;
     case 'month':
-        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         break;
     case '3months':
-        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         break;
     case '6months':
-        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         break;
     case 'year':
-        $date_condition = "AND pb.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         break;
     case 'custom':
         if (!empty($start_date) && !empty($end_date)) {
-            $date_condition = "AND DATE(pb.updated_at) BETWEEN ? AND ?";
+            $date_condition = "AND DATE(b.updated_at) BETWEEN ? AND ?";
             $params[] = $start_date;
             $params[] = $end_date;
-        } else {
-            $date_condition = "";
         }
         break;
-    case 'all':
     default:
         $date_condition = "";
         break;
@@ -140,7 +145,7 @@ switch ($filter) {
 // ================================================================
 $search_condition = "";
 if (!empty($search)) {
-    $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR pb.bill_number LIKE ? OR p.phone LIKE ?)";
+    $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR b.bill_number LIKE ? OR p.phone LIKE ?)";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -148,37 +153,37 @@ if (!empty($search)) {
 }
 
 // ================================================================
-// GET PAID BILLS
+// GET PAID BILLS - USING bills TABLE
 // ================================================================
 try {
     $sql = "
-        SELECT pb.*, 
-               p.full_name as patient_name, 
-               p.patient_id,
-               p.phone,
-               u.full_name as cashier_name
-        FROM patient_bills pb
-        JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        WHERE pb.branch_id = ? 
-        AND pb.status = 'paid'
+        SELECT 
+            b.*,
+            p.full_name as patient_name,
+            p.patient_id as patient_id_number,
+            p.phone,
+            u.full_name as cashier_name,
+            (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_count,
+            (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication' AND status != 'cancelled') as med_count,
+            (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND item_type != 'medication' AND status != 'cancelled') as other_count
+        FROM bills b
+        JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        WHERE b.branch_id = ? 
+        AND b.status = 'paid'
         $date_condition
         $search_condition
-        ORDER BY pb.updated_at DESC
+        ORDER BY b.updated_at DESC
     ";
     
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
-    $paid_bills = $stmt->fetchAll();
+    $paid_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // ================================================================
-    // CALCULATE TOTAL PAID AMOUNT
-    // ================================================================
-    $total_paid_amount = 0;
-    foreach ($paid_bills as $bill) {
-        $total_paid_amount += $bill['total_amount'] ?? 0;
-    }
     $total_bills = count($paid_bills);
+    foreach ($paid_bills as $bill) {
+        $total_paid_amount += (float)($bill['total_amount'] ?? 0);
+    }
     
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
@@ -188,26 +193,12 @@ try {
     $total_bills = 0;
 }
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once '../../components/cashier_header.php';
-
-// ================================================================
-// SIDEBAR - CASHIER SIDEBAR (RECEPTION HAS FULL ACCESS)
-// ================================================================
 include_once '../../components/cashier_sidebar.php';
 ?>
 <!DOCTYPE html>
@@ -222,6 +213,7 @@ include_once '../../components/cashier_sidebar.php';
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
     <style>
         :root {
@@ -254,7 +246,6 @@ include_once '../../components/cashier_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
             --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -265,7 +256,6 @@ include_once '../../components/cashier_sidebar.php';
             --table-hover: #D1FAE5;
         }
         
-        /* DARK MODE - MATCH HEADER */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -291,80 +281,24 @@ include_once '../../components/cashier_sidebar.php';
         [data-theme="dark"] .shadow { box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important; }
         [data-theme="dark"] .shadow-md { box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
         [data-theme="dark"] .shadow-lg { box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important; }
-        
-        [data-theme="dark"] .filter-btn {
-            border-color: #334155;
-            color: #94A3B8;
-        }
-        [data-theme="dark"] .filter-btn:hover {
-            border-color: #34D399;
-            color: #34D399;
-            background: rgba(5, 150, 105, 0.15);
-        }
-        [data-theme="dark"] .filter-btn.active {
-            background: #059669;
-            color: white;
-            border-color: #059669;
-        }
-        [data-theme="dark"] .filter-btn.active:hover {
-            background: #047857;
-            border-color: #047857;
-        }
-        
-        [data-theme="dark"] .date-picker-group .form-control {
-            background: #1E293B;
-            color: #F1F5F9;
-            border-color: #334155;
-        }
-        [data-theme="dark"] .date-picker-group .form-control:focus {
-            border-color: #34D399;
-            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1);
-        }
-        
-        [data-theme="dark"] .data-table tbody tr:hover td {
-            background: #1A3A2A;
-        }
-        [data-theme="dark"] .data-table td {
-            border-bottom-color: #334155;
-        }
-        
-        [data-theme="dark"] .stat-card {
-            background: #1E293B;
-            border-color: #334155;
-        }
-        [data-theme="dark"] .stat-card:hover {
-            border-color: #059669;
-        }
-        
-        [data-theme="dark"] .card {
-            background: #1E293B;
-            border-color: #334155;
-        }
-        [data-theme="dark"] .card:hover {
-            border-color: #059669;
-        }
-        
-        [data-theme="dark"] .page-header {
-            background: linear-gradient(135deg, #059669, #047857) !important;
-        }
-        
-        [data-theme="dark"] .footer {
-            border-top-color: #334155;
-        }
-        
+        [data-theme="dark"] .filter-btn { border-color: #334155; color: #94A3B8; }
+        [data-theme="dark"] .filter-btn:hover { border-color: #34D399; color: #34D399; background: rgba(5, 150, 105, 0.15); }
+        [data-theme="dark"] .filter-btn.active { background: #059669; color: white; border-color: #059669; }
+        [data-theme="dark"] .filter-btn.active:hover { background: #047857; border-color: #047857; }
+        [data-theme="dark"] .date-picker-group .form-control { background: #1E293B; color: #F1F5F9; border-color: #334155; }
+        [data-theme="dark"] .date-picker-group .form-control:focus { border-color: #34D399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1); }
+        [data-theme="dark"] .data-table tbody tr:hover td { background: #1A3A2A; }
+        [data-theme="dark"] .data-table td { border-bottom-color: #334155; }
+        [data-theme="dark"] .stat-card { background: #1E293B; border-color: #334155; }
+        [data-theme="dark"] .stat-card:hover { border-color: #059669; }
+        [data-theme="dark"] .card { background: #1E293B; border-color: #334155; }
+        [data-theme="dark"] .card:hover { border-color: #059669; }
+        [data-theme="dark"] .page-header { background: linear-gradient(135deg, #059669, #047857) !important; }
+        [data-theme="dark"] .footer { border-top-color: #334155; }
         [data-theme="dark"] .toast-custom.success { background: #059669; }
         [data-theme="dark"] .toast-custom.error { background: #DC2626; }
-        
-        [data-theme="dark"] .header-badge {
-            background: rgba(255,255,255,0.1);
-            border-color: rgba(255,255,255,0.1);
-        }
-        
-        [data-theme="dark"] .status-badge.paid {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-        
+        [data-theme="dark"] .header-badge { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.1); }
+        [data-theme="dark"] .status-badge.paid { background: #1A3A2A; color: #34D399; }
         [data-theme="dark"] .text-gray-400 { color: #94A3B8 !important; }
         [data-theme="dark"] .text-gray-500 { color: #94A3B8 !important; }
         [data-theme="dark"] .text-gray-600 { color: #94A3B8 !important; }
@@ -390,7 +324,6 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* TOP NAV - already in header */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -708,7 +641,6 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--success);
             color: white;
         }
-        
         .btn-primary:hover {
             background: var(--success-dark);
             transform: translateY(-2px);
@@ -719,7 +651,6 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--success);
             color: white;
         }
-        
         .btn-success:hover {
             background: var(--success-dark);
             transform: translateY(-2px);
@@ -752,21 +683,13 @@ include_once '../../components/cashier_sidebar.php';
             font-size: 1.8rem;
             font-weight: 700;
         }
-        
-        .stat-card .stat-number.green {
-            color: var(--success);
-        }
-        
+        .stat-card .stat-number.green { color: var(--success); }
         .stat-card .stat-label {
             font-size: 0.7rem;
             color: var(--text-secondary);
             font-weight: 500;
         }
-        
-        .stat-card .stat-icon {
-            font-size: 1.4rem;
-            margin-bottom: 4px;
-        }
+        .stat-card .stat-icon { font-size: 1.4rem; margin-bottom: 4px; }
         
         .footer {
             padding: 14px 0;
@@ -776,11 +699,7 @@ include_once '../../components/cashier_sidebar.php';
             font-size: 0.7rem;
             color: var(--text-secondary);
         }
-        
-        .footer .footer-brand { 
-            color: var(--success); 
-            font-weight: 600; 
-        }
+        .footer .footer-brand { color: var(--success); font-weight: 600; }
         
         .role-badge-display {
             display: inline-block;
@@ -820,16 +739,355 @@ include_once '../../components/cashier_sidebar.php';
             color: white;
             box-shadow: var(--shadow-lg);
         }
-        
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
+        
+        /* PDF MODAL */
+        .pdf-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.6);
+            z-index: 9999;
+            backdrop-filter: blur(4px);
+            justify-content: center;
+            align-items: center;
+        }
+        .pdf-modal-overlay.active { display: flex; }
+        
+        .pdf-modal {
+            background: var(--bg-card);
+            border-radius: 16px;
+            width: 95%;
+            max-width: 1100px;
+            max-height: 95vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-lg);
+            animation: slideUp 0.3s ease;
+        }
+        
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(30px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        .pdf-modal-header {
+            padding: 14px 22px;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+            background: linear-gradient(135deg, #059669, #047857);
+            border-radius: 16px 16px 0 0;
+        }
+        
+        .pdf-modal-header .modal-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .pdf-modal-header .modal-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .pdf-modal-header .modal-actions .btn {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .pdf-modal-header .modal-actions .btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal {
+            background: rgba(220,38,38,0.3);
+            border-color: rgba(220,38,38,0.2);
+        }
+        
+        .pdf-modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 28px;
+            background: var(--bg-body);
+        }
+        
+        .pdf-modal-body .pdf-content {
+            max-width: 100%;
+            font-size: 14px;
+            background: var(--bg-card);
+            padding: 24px 28px;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+            line-height: 1.5;
+            margin-top: 0;
+            padding-top: 28px;
+        }
+        
+        /* PDF Styles */
+        .pdf-content .pdf-header {
+            text-align: center;
+            padding-bottom: 12px;
+            border-bottom: 3px solid #059669;
+            margin-bottom: 16px;
+            page-break-after: avoid;
+            break-after: avoid;
+            margin-top: 0;
+            padding-top: 0;
+        }
+        
+        .pdf-content .pdf-header .pdf-logo {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 4px;
+        }
+        
+        .pdf-content .pdf-header .pdf-logo img {
+            height: 55px;
+            width: auto;
+            object-fit: contain;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .pdf-content .pdf-header .clinic-name {
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: #059669;
+            letter-spacing: -0.5px;
+            margin-top: 4px;
+        }
+        
+        .pdf-content .pdf-header .clinic-sub {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+        
+        .pdf-content .pdf-header .doc-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #059669;
+            margin-top: 4px;
+            background: #D1FAE5;
+            padding: 4px 16px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+        
+        .pdf-content .pdf-section-title {
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: #059669;
+            border-bottom: 2px solid #34D399;
+            padding-bottom: 4px;
+            margin: 6px 0 4px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .pdf-content .pdf-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin: 4px 0;
+        }
+        
+        .pdf-content .pdf-table th {
+            background: #059669;
+            color: white;
+            padding: 4px 10px;
+            text-align: left;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            border: 1px solid #047857;
+        }
+        
+        .pdf-content .pdf-table td {
+            padding: 4px 10px;
+            border-bottom: 1px solid #E2E8F0;
+            font-size: 13px;
+            word-wrap: break-word;
+        }
+        
+        .pdf-content .pdf-table tr:nth-child(even) td {
+            background: #F8FAFC;
+        }
+        
+        .pdf-content .pdf-empty {
+            padding: 6px 0;
+            color: var(--text-secondary);
+            font-style: italic;
+            font-size: 14px;
+            text-align: center;
+            background: #F8FAFC;
+            border-radius: 4px;
+            margin: 2px 0;
+        }
+        
+        .pdf-content .pdf-footer {
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 2px solid #E2E8F0;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        
+        .pdf-content .pdf-footer .footer-stamp {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .pdf-content .pdf-footer .footer-left {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+        
+        .pdf-content .pdf-footer .stamp-box {
+            text-align: center;
+            padding: 6px 14px;
+            border: 3px solid #059669;
+            border-radius: 10px;
+            background: #D1FAE5;
+            min-width: 150px;
+            position: relative;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-title {
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-name {
+            font-size: 14px;
+            font-weight: 800;
+            color: #059669;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-line {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-date {
+            font-size: 10px;
+            color: #94A3B8;
+            margin-top: 2px;
+        }
+        
+        /* ALL PAID STAMP - Large slashed text in center */
+        .pdf-content .all-paid-stamp {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) rotate(-30deg);
+            font-size: 72px;
+            font-weight: 900;
+            color: rgba(5, 150, 105, 0.15);
+            text-transform: uppercase;
+            letter-spacing: 8px;
+            border: 8px solid rgba(5, 150, 105, 0.12);
+            padding: 20px 40px;
+            border-radius: 20px;
+            pointer-events: none;
+            text-shadow: none;
+            white-space: nowrap;
+            z-index: 10;
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .pdf-content .all-paid-stamp::before {
+            content: 'ALL PAID';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: inherit;
+            color: rgba(5, 150, 105, 0.08);
+            text-shadow: 
+                0 0 10px rgba(5, 150, 105, 0.05),
+                0 0 30px rgba(5, 150, 105, 0.03);
+        }
+        
+        .pdf-content .all-paid-stamp .slash {
+            position: absolute;
+            top: -10%;
+            left: -10%;
+            width: 120%;
+            height: 120%;
+            border: 4px solid rgba(5, 150, 105, 0.08);
+            transform: rotate(-45deg);
+            border-radius: 20px;
+            pointer-events: none;
+        }
+        
+        .pdf-content .all-paid-stamp .stamp-text {
+            position: relative;
+            z-index: 2;
+            color: rgba(5, 150, 105, 0.2);
+            text-shadow: 
+                0 0 20px rgba(5, 150, 105, 0.05),
+                0 0 60px rgba(5, 150, 105, 0.02);
+            font-size: 64px;
+        }
+        
+        .pdf-content .all-paid-stamp .stamp-text .slash-char {
+            color: rgba(220, 38, 38, 0.15);
+            font-weight: 300;
+            margin: 0 4px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .all-paid-overlay {
+            position: relative;
+        }
+        
+        .pdf-content .stamp-overlay-wrapper {
+            position: relative;
+        }
+        
+        .pdf-content .stamp-overlay-wrapper .all-paid-stamp {
+            font-size: 60px;
+            padding: 15px 30px;
+            border-width: 6px;
+        }
         
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
@@ -855,7 +1113,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     </style>
     
-    <!-- Preload dark mode from localStorage -->
     <script>
         (function() {
             var darkMode = localStorage.getItem('darkMode');
@@ -867,16 +1124,9 @@ include_once '../../components/cashier_sidebar.php';
 </head>
 <body>
 
-<!-- TOP NAV is loaded from header -->
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -905,11 +1155,6 @@ include_once '../../components/cashier_sidebar.php';
                 </span>
                 <?php endif; ?>
                 
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-sync-alt fa-fw"></i>
-                    <span id="updateCount">0</span> updates
-                </span>
-                
                 <?php if ($is_reception): ?>
                     <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);">
                         <i class="fas fa-user-tag"></i> Reception Access
@@ -924,6 +1169,9 @@ include_once '../../components/cashier_sidebar.php';
             <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
+            <button onclick="generatePDF()" class="btn-outline-light" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);">
+                <i class="fas fa-file-pdf"></i> Export PDF
+            </button>
         </div>
     </div>
 
@@ -935,9 +1183,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- FILTERS -->
-    <!-- ================================================================ -->
     <div class="filter-section">
         <div class="filter-group" style="margin-bottom:8px;">
             <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
@@ -965,9 +1211,6 @@ include_once '../../components/cashier_sidebar.php';
             </a>
         </div>
         
-        <!-- ============================================================ -->
-        <!-- DATE PICKER (Custom Range) -->
-        <!-- ============================================================ -->
         <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
             <input type="hidden" name="filter" value="custom">
             <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
@@ -992,9 +1235,7 @@ include_once '../../components/cashier_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- QUICK STATS - NO TOTAL AMOUNT CARD -->
-    <!-- ================================================================ -->
+    <!-- QUICK STATS -->
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
         <div class="stat-card">
             <div class="stat-icon">📋</div>
@@ -1019,9 +1260,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- PAID BILLS TABLE -->
-    <!-- ================================================================ -->
     <div class="card" style="max-width:1200px;margin:0 auto;">
         <div class="card-header">
             <h3 class="card-title">
@@ -1045,6 +1284,7 @@ include_once '../../components/cashier_sidebar.php';
                         <th>Patient ID</th>
                         <th>Total Amount</th>
                         <th>Paid Amount</th>
+                        <th>Items</th>
                         <th>Paid By</th>
                         <th>Status</th>
                         <th>Paid Date</th>
@@ -1066,7 +1306,7 @@ include_once '../../components/cashier_sidebar.php';
                                     <div class="text-xs text-gray-400"><?= htmlspecialchars($bill['phone'] ?? 'No phone') ?></div>
                                 </td>
                                 <td>
-                                    <span class="text-xs font-mono"><?= htmlspecialchars($bill['patient_id'] ?? 'N/A') ?></span>
+                                    <span class="text-xs font-mono"><?= htmlspecialchars($bill['patient_id_number'] ?? 'N/A') ?></span>
                                 </td>
                                 <td>
                                     <span class="font-semibold text-gray-800">
@@ -1077,6 +1317,12 @@ include_once '../../components/cashier_sidebar.php';
                                     <span class="font-semibold text-green-600">
                                         <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
                                     </span>
+                                </td>
+                                <td class="text-center">
+                                    <span class="text-xs font-semibold"><?= $bill['item_count'] ?? 0 ?></span>
+                                    <?php if (($bill['med_count'] ?? 0) > 0): ?>
+                                        <br><span style="font-size:0.55rem;color:var(--text-secondary);">💊 <?= $bill['med_count'] ?> meds</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <span class="text-sm"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></span>
@@ -1105,7 +1351,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="10" class="text-center py-8 text-gray-400">
+                            <td colspan="11" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
                                 <p class="text-lg">No paid bills found</p>
                                 <p class="text-sm">
@@ -1123,9 +1369,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1146,9 +1390,35 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
+<!-- PDF MODAL -->
+<div class="pdf-modal-overlay" id="pdfModal">
+    <div class="pdf-modal">
+        <div class="pdf-modal-header">
+            <div class="modal-title">
+                <i class="fas fa-file-pdf" style="color:rgba(255,255,255,0.8);"></i>
+                Paid Bills Report
+            </div>
+            <div class="modal-actions">
+                <button onclick="downloadPDF()" class="btn">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                <button onclick="window.print()" class="btn">
+                    <i class="fas fa-print"></i> Print
+                </button>
+                <button onclick="closePDFModal()" class="btn btn-danger-modal">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+        <div class="pdf-modal-body" id="pdfModalBody">
+            <div class="pdf-content" id="pdfContent">
+                <!-- PDF content generated by JavaScript -->
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1162,26 +1432,9 @@ include_once '../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE - SYNC WITH HEADER
+    // DARK MODE
     // ================================================================
     // Note: Dark mode is controlled by header.
-    // This page listens for changes and applies them.
-
-    // ================================================================
-    // CLOCK - UPDATE EVERY SECOND (if header clock exists)
-    // ================================================================
-    function updateClock() {
-        var now = new Date();
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.querySelector('.top-nav .time-part');
-        if (el) {
-            el.textContent = timeStr;
-        }
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1204,7 +1457,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // DATE & TIME (for footer)
+    // DATE & TIME
     // ================================================================
     function updateFooterTime() {
         var now = new Date();
@@ -1225,7 +1478,6 @@ include_once '../../components/cashier_sidebar.php';
     var searchInput = document.getElementById('searchInput');
     
     if (!searchBtn && !searchInput) {
-        // Search from header
         searchBtn = document.querySelector('.top-nav .search-btn');
         searchInput = document.querySelector('.top-nav #searchInput');
     }
@@ -1247,7 +1499,6 @@ include_once '../../components/cashier_sidebar.php';
         searchInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') performSearch();
         });
-        // Set value from PHP
         searchInput.value = '<?= htmlspecialchars($search) ?>';
     }
 
@@ -1277,8 +1528,6 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     // MANUAL REFRESH
     // ================================================================
-    var updateCount = 0;
-    
     function manualRefresh() {
         var btn = document.getElementById('refreshBtn');
         if (btn) {
@@ -1295,112 +1544,198 @@ include_once '../../components/cashier_sidebar.php';
                 btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
                 btn.disabled = false;
             }
-            showToast('✅ Refreshed', 'Page data updated manually', 'success');
+            showToast('✅ Refreshed', 'Page data updated', 'success');
         }, 2000);
     }
 
     // ================================================================
-    // AUTO-UPDATE - EVERY 3 SECONDS (VIA AJAX)
+    // PDF GENERATION - With "ALL PAID" Stamp
     // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-    var lastHash = null;
-
-    function fetchPaidBills() {
-        if (isUpdating) return;
-        isUpdating = true;
+    function generatePDF() {
+        var modal = document.getElementById('pdfModal');
+        var content = document.getElementById('pdfContent');
         
-        var filter = '<?= $filter ?>';
-        var search = '<?= addslashes($search) ?>';
-        var start_date = '<?= $start_date ?>';
-        var end_date = '<?= $end_date ?>';
+        var adminPhones = '<?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>';
+        var currency = '<?= $currency ?>';
+        var branchName = '<?= htmlspecialchars($user_branch_name) ?>';
+        var totalBills = <?= $total_bills ?>;
+        var filterLabel = '<?= $filter ?>';
+        var filterDisplay = filterLabel === 'all' ? 'All Time' : filterLabel;
         
-        var url = 'get_paid_bills.php?filter=' + encodeURIComponent(filter) + 
-                  '&search=' + encodeURIComponent(search) + 
-                  '&start_date=' + encodeURIComponent(start_date) + 
-                  '&end_date=' + encodeURIComponent(end_date) + 
-                  '&t=' + Date.now();
+        var billsHtml = '';
+        var counter = 1;
+        <?php foreach ($paid_bills as $bill): ?>
+            billsHtml += `
+                <tr>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:13px;">${counter}</td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;font-weight:600;color:#0B5ED7;"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><strong><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></strong><br><span style="font-size:12px;color:#64748B;"><?= htmlspecialchars($bill['patient_id_number'] ?? 'N/A') ?></span></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:13px;">${currency} <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:13px;color:#059669;">${currency} <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:13px;"><?= $bill['item_count'] ?? 0 ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= isset($bill['updated_at']) ? date('d/m/Y h:i A', strtotime($bill['updated_at'])) : 'N/A' ?></td>
+                </tr>
+            `;
+            counter++;
+        <?php endforeach; ?>
         
-        fetch(url)
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    if (lastHash !== data.hash) {
-                        lastHash = data.hash;
-                        updateCount++;
-                        updateUI(data);
-                        updateFooterTime();
-                        
-                        var updateCountEl = document.getElementById('updateCount');
-                        if (updateCountEl) {
-                            updateCountEl.textContent = updateCount;
-                        }
-                    }
-                }
-                isUpdating = false;
-            })
-            .catch(function(error) {
-                console.error('Update error:', error);
-                isUpdating = false;
-            });
-    }
-
-    function updateUI(data) {
-        var stats = document.querySelectorAll('.stat-card .stat-number');
-        if (stats.length >= 2) {
-            stats[0].textContent = data.total_bills;
+        if (!billsHtml) {
+            billsHtml = `<tr><td colspan="8" style="text-align:center;padding:20px;font-size:14px;color:#64748B;">No paid bills found</td></tr>`;
         }
         
-        var headerBadges = document.querySelectorAll('.page-header .header-badge');
-        if (headerBadges.length >= 1) {
-            var billBadge = headerBadges[0];
-            if (billBadge) {
-                billBadge.innerHTML = '<i class="fas fa-file-invoice"></i> ' + data.total_bills + ' Bills';
-            }
+        var html = `
+            <!-- PDF HEADER -->
+            <div class="pdf-header">
+                <div class="pdf-logo">
+                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" style="height:55px;width:auto;object-fit:contain;display:block;margin:0 auto;" onerror="this.style.display='none'">
+                    <div class="clinic-name">BRAICK DISPENSARY</div>
+                    <div class="clinic-sub">Tunajali Afya Yako</div>
+                </div>
+                <div style="display:flex;justify-content:center;gap:14px;flex-wrap:wrap;margin-top:4px;padding-top:4px;border-top:1px solid #E2E8F0;font-size:0.6rem;color:#64748B;">
+                    <span>📞 Admin Contacts: ${adminPhones}</span>
+                    <span>🏢 Branch: ${branchName}</span>
+                    <span>📅 ${new Date().toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })}</span>
+                </div>
+                <div class="doc-title">
+                    ✅ Paid Bills Report
+                </div>
+            </div>
+            
+            <!-- SUMMARY -->
+            <div style="margin-bottom:8px;">
+                <div class="pdf-section-title"><i class="fas fa-chart-bar"></i> Summary</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:4px 0;">
+                    <div style="background:#D1FAE5;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #059669;">
+                        <div style="font-size:20px;font-weight:700;color:#059669;">${totalBills}</div>
+                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">📋 Total Bills</div>
+                    </div>
+                    <div style="background:#E8F0FE;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #0B5ED7;">
+                        <div style="font-size:20px;font-weight:700;color:#0B5ED7;">${filterDisplay}</div>
+                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">📅 Date Range</div>
+                    </div>
+                    <div style="background:#D1FAE5;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #059669;">
+                        <div style="font-size:20px;font-weight:700;color:#059669;">${currency} <?= number_format($total_paid_amount, 0) ?></div>
+                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">💰 Total Paid</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- PAID BILLS TABLE -->
+            <div style="margin-bottom:8px;">
+                <div class="pdf-section-title"><i class="fas fa-list"></i> Paid Bills (${totalBills})</div>
+                <div class="pdf-table-wrap" style="position:relative;">
+                    <!-- ALL PAID STAMP - Large slashed text overlay -->
+                    <div class="all-paid-stamp" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:72px;font-weight:900;color:rgba(5,150,105,0.12);text-transform:uppercase;letter-spacing:8px;border:8px solid rgba(5,150,105,0.08);padding:20px 40px;border-radius:20px;pointer-events:none;z-index:10;font-family:'Inter',sans-serif;white-space:nowrap;">
+                        <div style="position:relative;z-index:2;color:rgba(5,150,105,0.15);font-size:64px;">
+                            ALL <span style="color:rgba(220,38,38,0.12);font-weight:300;margin:0 4px;">//</span> PAID
+                        </div>
+                        <div style="position:absolute;top:-10%;left:-10%;width:120%;height:120%;border:4px solid rgba(5,150,105,0.05);transform:rotate(-45deg);border-radius:20px;pointer-events:none;"></div>
+                    </div>
+                    <table class="pdf-table" style="font-size:13px;width:100%;border-collapse:collapse;position:relative;">
+                        <thead>
+                            <tr>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">#</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Bill #</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Patient</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:11px;">Total</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:11px;">Paid</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">Items</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Received By</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${billsHtml}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- PDF FOOTER WITH OFFICIAL STAMP -->
+            <div class="pdf-footer">
+                <div class="footer-stamp">
+                    <div class="footer-left">
+                        <span>Generated by: <?= htmlspecialchars($user_full_name) ?></span>
+                        <span style="margin-left:14px;">Date: <?= date('F d, Y') ?></span>
+                    </div>
+                    <div class="stamp-box" style="position:relative;">
+                        <div class="stamp-title">Official Stamp</div>
+                        <div class="stamp-name">BRAICK DISPENSARY</div>
+                        <div class="stamp-line">Approved By: _________________</div>
+                        <div class="stamp-date">Date: <?= date('F d, Y') ?></div>
+                        <!-- Small ALL PAID inside stamp -->
+                        <div style="margin-top:4px;padding-top:4px;border-top:2px dashed rgba(5,150,105,0.3);font-size:12px;font-weight:800;color:#059669;letter-spacing:2px;">
+                            ✅ ALL PAID
+                        </div>
+                    </div>
+                </div>
+                <div class="footer-bottom">
+                    Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?> • All rights reserved
+                </div>
+            </div>
+        `;
+        
+        content.innerHTML = html;
+        modal.classList.add('active');
+        
+        var modalBody = document.getElementById('pdfModalBody');
+        if (modalBody) {
+            modalBody.scrollTop = 0;
         }
-    }
-
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        fetchPaidBills();
-        updateInterval = setInterval(fetchPaidBills, 3000);
-        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
     
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
-        }
+    function closePDFModal() {
+        document.getElementById('pdfModal').classList.remove('active');
+    }
+    
+    function downloadPDF() {
+        var element = document.getElementById('pdfContent');
+        var opt = {
+            margin: [8, 8, 8, 8],
+            filename: 'Paid_Bills_<?= date('Y-m-d') ?>.pdf',
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                logging: false,
+                allowTaint: true
+            },
+            jsPDF: { 
+                unit: 'mm', 
+                format: 'a4', 
+                orientation: 'portrait' 
+            },
+            pagebreak: { 
+                mode: ['css', 'legacy']
+            }
+        };
+        
+        html2pdf().set(opt).from(element).save();
     }
 
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closePDFModal();
         }
     });
 
-    // ================================================================
-    // INITIALIZE
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 2000);
+    document.getElementById('pdfModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closePDFModal();
+        }
     });
 
-    console.log('%c✅ Braick - Paid Bills (Uses Header Dark Mode)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Braick - Paid Bills (With PDF Export)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ PDF includes "ALL PAID" stamp overlay', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Uses bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Paid Bills: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📅 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
-    console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>

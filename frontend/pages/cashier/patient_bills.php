@@ -2,31 +2,19 @@
 // ================================================================
 // FILE: frontend/pages/cashier/patient_bills.php
 // CASHIER - VIEW PAID BILLS FOR A SPECIFIC PATIENT
+// FIXED: Uses bills table (not patient_bills)
 // DISPLAYS ONLY PAID BILLS WITH "PAID" WATERMARK
-// FIXED: Uses shared header with clock
-// FIXED: Dark mode fully working with header
-// FIXED: Reception access allowed
-// BRAICK DISPENSARY
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// ALLOWED ROLES: Cashier, Reception, Admin
-// ================================================================
 $allowed_roles = ['cashier', 'reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
@@ -39,9 +27,6 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
     exit;
 }
 
-// ================================================================
-// GET USER DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
 $user_role = $_SESSION['role'] ?? 'cashier';
@@ -49,19 +34,9 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// CHECK IF USER IS RECEPTION
-// ================================================================
 $is_reception = ($user_role === 'reception');
-
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 $is_admin = ($user_role === 'admin');
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -113,28 +88,24 @@ try {
     }
 
     // ================================================================
-    // GET ONLY PAID BILLS FOR THIS PATIENT
+    // GET ONLY PAID BILLS FOR THIS PATIENT - USING bills TABLE
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
-            pb.*,
+            b.*,
             v.visit_number,
             v.visit_type,
             v.visit_date,
             u.full_name as doctor_name,
             u2.full_name as created_by_name,
-            (
-                SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id AND status != 'cancelled'
-            ) as item_count,
-            (
-                SELECT COALESCE(SUM(total_price), 0) FROM bill_items WHERE bill_id = pb.id AND status != 'cancelled'
-            ) as items_total
-        FROM patient_bills pb
-        LEFT JOIN visits v ON pb.visit_id = v.id
+            (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_count,
+            (SELECT COALESCE(SUM(total_price), 0) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as items_total
+        FROM bills b
+        LEFT JOIN visits v ON b.visit_id = v.id
         LEFT JOIN users u ON v.doctor_id = u.id
-        LEFT JOIN users u2 ON pb.created_by = u2.id
-        WHERE pb.patient_id = ? AND pb.branch_id = ? AND pb.status = 'paid'
-        ORDER BY pb.updated_at DESC
+        LEFT JOIN users u2 ON b.created_by = u2.id
+        WHERE b.patient_id = ? AND b.branch_id = ? AND b.status = 'paid'
+        ORDER BY b.updated_at DESC
     ");
     $stmt->execute([$patient_id, $user_branch_id]);
     $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -177,26 +148,12 @@ try {
     error_log("Patient bills error: " . $e->getMessage());
 }
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once '../../components/cashier_header.php';
-
-// ================================================================
-// SIDEBAR - CASHIER SIDEBAR (RECEPTION HAS FULL ACCESS)
-// ================================================================
 include_once '../../components/cashier_sidebar.php';
 ?>
 <!DOCTYPE html>
@@ -204,7 +161,7 @@ include_once '../../components/cashier_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Paid Bills - <?= htmlspecialchars($patient['full_name'] ?? 'Patient') ?> - Braick Dispensary</title>
+    <title>Paid Bills - <?= htmlspecialchars($patient['full_name'] ?? 'Patient') ?></title>
     
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
@@ -213,21 +170,16 @@ include_once '../../components/cashier_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - LIGHT MODE (DEFAULT)
-           ================================================================ */
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
+            --primary: #059669;
+            --primary-dark: #047857;
+            --primary-light: #34D399;
+            --primary-bg: #D1FAE5;
             --success: #059669;
             --success-dark: #047857;
-            --success-light: #34D399;
             --success-bg: #D1FAE5;
             --danger: #DC2626;
             --danger-dark: #B91C1C;
-            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
@@ -246,33 +198,23 @@ include_once '../../components/cashier_sidebar.php';
             --gray-900: #0F172A;
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
-            --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 8px 24px rgba(0,0,0,0.1);
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
-            --toast-bg: #FFFFFF;
-            --toast-text: #1E293B;
-            --input-bg: #FFFFFF;
-            --input-border: #E2E8F0;
-            --input-text: #1E293B;
-            --empty-state-color: #64748B;
-            --footer-border: #E2E8F0;
+            --table-stripe: #D1FAE5;
+            --table-hover: #A7F3D0;
             --watermark-color: rgba(5, 150, 105, 0.08);
             --watermark-border: rgba(5, 150, 105, 0.10);
-            --bill-header-bg: #F8FAFC;
-            --bill-footer-bg: #F8FAFC;
+            --page-header-bg-from: #059669;
+            --page-header-bg-to: #047857;
+            --page-header-shadow: rgba(5, 150, 105, 0.25);
         }
         
-        /* ================================================================
-           ROOT VARIABLES - DARK MODE
-           ================================================================ */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -282,30 +224,21 @@ include_once '../../components/cashier_sidebar.php';
             --border-color: #334155;
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
-            --toast-bg: #1E293B;
-            --toast-text: #F1F5F9;
-            --input-bg: #1E293B;
-            --input-border: #334155;
-            --input-text: #F1F5F9;
-            --empty-state-color: #94A3B8;
-            --footer-border: #334155;
+            --shadow-lg: 0 8px 24px rgba(0,0,0,0.4);
+            --table-stripe: #1A3A2A;
+            --table-hover: #1A4A3A;
             --watermark-color: rgba(52, 211, 153, 0.06);
             --watermark-border: rgba(52, 211, 153, 0.06);
-            --bill-header-bg: #1E293B;
-            --bill-footer-bg: #1E293B;
-            --primary-bg: #1E3A5F;
+            --primary-bg: #1A3A2A;
             --success-bg: #1A3A2A;
             --danger-bg: #3A1A1A;
             --warning-bg: #3D2E0A;
             --purple-bg: #2D1B5F;
+            --page-header-bg-from: #047857;
+            --page-header-bg-to: #065F46;
+            --page-header-shadow: rgba(5, 150, 105, 0.15);
         }
         
-        /* ================================================================
-           GLOBAL STYLES
-           ================================================================ */
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -319,9 +252,6 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* ================================================================
-           MAIN CONTENT OVERRIDE
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -330,11 +260,8 @@ include_once '../../components/cashier_sidebar.php';
             transition: background 0.3s ease;
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
         .page-header {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            background: linear-gradient(135deg, var(--page-header-bg-from), var(--page-header-bg-to));
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -343,21 +270,9 @@ include_once '../../components/cashier_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 4px 20px var(--page-header-shadow);
             position: relative;
             overflow: hidden;
-        }
-        
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
         }
         
         .page-header .page-title {
@@ -371,12 +286,7 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             z-index: 1;
         }
-        
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
-        
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
             font-size: 0.95rem;
@@ -387,12 +297,6 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             z-index: 1;
         }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        
         .page-header .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
@@ -404,7 +308,6 @@ include_once '../../components/cashier_sidebar.php';
             letter-spacing: 0.05em;
             backdrop-filter: blur(4px);
         }
-        
         .page-header .header-badge {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -418,7 +321,6 @@ include_once '../../components/cashier_sidebar.php';
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
         }
-        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -436,16 +338,12 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             z-index: 1;
         }
-        
         .page-header .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           PATIENT PROFILE CARD
-           ================================================================ */
         .patient-profile-card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -458,12 +356,10 @@ include_once '../../components/cashier_sidebar.php';
             flex-wrap: wrap;
             margin-bottom: 20px;
         }
-        
         .patient-profile-card:hover {
             border-color: var(--success);
             box-shadow: var(--shadow-md);
         }
-        
         .patient-avatar-large {
             width: 72px;
             height: 72px;
@@ -477,27 +373,23 @@ include_once '../../components/cashier_sidebar.php';
             flex-shrink: 0;
             box-shadow: 0 4px 14px rgba(0,0,0,0.15);
         }
-        
         .patient-info h2 {
             font-size: 1.4rem;
             font-weight: 700;
             color: var(--text-primary);
             margin: 0;
         }
-        
         .patient-info .patient-id {
             font-size: 0.85rem;
             color: var(--text-secondary);
             font-weight: 500;
         }
-        
         .patient-info .patient-meta {
             display: flex;
             flex-wrap: wrap;
             gap: 12px;
             margin-top: 4px;
         }
-        
         .patient-info .patient-meta span {
             font-size: 0.8rem;
             color: var(--text-secondary);
@@ -509,21 +401,14 @@ include_once '../../components/cashier_sidebar.php';
             border-radius: 20px;
             border: 1px solid var(--border-color);
         }
+        .patient-info .patient-meta span i { color: var(--success); }
         
-        .patient-info .patient-meta span i {
-            color: var(--success);
-        }
-        
-        /* ================================================================
-           SUMMARY STATS
-           ================================================================ */
         .summary-stats {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
             gap: 12px;
             margin-bottom: 24px;
         }
-        
         .summary-stat {
             background: var(--bg-card);
             border-radius: 12px;
@@ -532,23 +417,17 @@ include_once '../../components/cashier_sidebar.php';
             text-align: center;
             transition: all 0.3s ease;
         }
-        
         .summary-stat:hover {
             border-color: var(--success);
             transform: translateY(-2px);
             box-shadow: var(--shadow-md);
         }
-        
         .summary-stat .stat-number {
             font-size: 1.6rem;
             font-weight: 700;
             color: var(--success);
         }
-        
-        .summary-stat .stat-number.purple {
-            color: var(--purple);
-        }
-        
+        .summary-stat .stat-number.purple { color: var(--purple); }
         .summary-stat .stat-label {
             font-size: 0.7rem;
             color: var(--text-secondary);
@@ -556,9 +435,6 @@ include_once '../../components/cashier_sidebar.php';
             margin-top: 2px;
         }
         
-        /* ================================================================
-           BILL ROW WITH WATERMARK
-           ================================================================ */
         .bill-row {
             background: var(--bg-card);
             border-radius: 12px;
@@ -568,21 +444,17 @@ include_once '../../components/cashier_sidebar.php';
             transition: all 0.3s ease;
             position: relative;
         }
-        
         .bill-row:hover {
             border-color: var(--success);
             box-shadow: var(--shadow-md);
         }
         
-        /* ================================================================
-           "PAID" WATERMARK
-           ================================================================ */
         .bill-row .watermark {
             position: absolute;
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%) rotate(-30deg);
-            font-size: 7rem;
+            font-size: 6rem;
             font-weight: 900;
             color: var(--watermark-color);
             letter-spacing: 8px;
@@ -592,39 +464,17 @@ include_once '../../components/cashier_sidebar.php';
             white-space: nowrap;
             user-select: none;
             font-family: 'Arial Black', 'Impact', sans-serif;
-            text-shadow: 0 2px 10px rgba(5, 150, 105, 0.05);
             border: 4px solid var(--watermark-border);
-            padding: 20px 60px;
+            padding: 16px 40px;
             border-radius: 20px;
         }
         
-        .bill-row .watermark::before {
-            content: '';
-            position: absolute;
-            top: -20px;
-            left: -20px;
-            right: -20px;
-            bottom: -20px;
-            background: repeating-linear-gradient(
-                45deg,
-                transparent,
-                transparent 40px,
-                rgba(5, 150, 105, 0.02) 40px,
-                rgba(5, 150, 105, 0.02) 41px
-            );
-            border-radius: 20px;
-            pointer-events: none;
-        }
-        
-        /* ================================================================
-           BILL ROW HEADER
-           ================================================================ */
         .bill-row-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 14px 20px;
-            background: var(--bill-header-bg);
+            background: var(--gray-50);
             border-bottom: 2px solid var(--border-color);
             cursor: pointer;
             transition: background 0.2s ease;
@@ -633,18 +483,18 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             z-index: 2;
         }
-        
+        [data-theme="dark"] .bill-row-header {
+            background: var(--gray-700);
+        }
         .bill-row-header:hover {
             background: var(--table-hover);
         }
-        
         .bill-row-header .bill-number {
             font-weight: 700;
             font-size: 0.95rem;
             color: var(--success);
             font-family: monospace;
         }
-        
         .bill-row-header .bill-status {
             font-size: 0.7rem;
             font-weight: 600;
@@ -656,13 +506,11 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--success-bg);
             color: var(--success);
         }
-        
         .bill-row-header .bill-amount {
             font-weight: 700;
             font-size: 1.1rem;
             color: var(--text-primary);
         }
-        
         .bill-row-header .bill-amount .amount-paid {
             color: var(--success);
         }
@@ -673,10 +521,7 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             z-index: 2;
         }
-        
-        .bill-row-body.collapsed {
-            display: none;
-        }
+        .bill-row-body.collapsed { display: none; }
         
         .bill-row-body .bill-details-grid {
             display: grid;
@@ -684,12 +529,10 @@ include_once '../../components/cashier_sidebar.php';
             gap: 8px 16px;
             margin-bottom: 12px;
         }
-        
         .bill-row-body .bill-detail-item {
             display: flex;
             flex-direction: column;
         }
-        
         .bill-row-body .bill-detail-item .label {
             font-size: 0.65rem;
             color: var(--text-secondary);
@@ -697,27 +540,19 @@ include_once '../../components/cashier_sidebar.php';
             text-transform: uppercase;
             letter-spacing: 0.04em;
         }
-        
         .bill-row-body .bill-detail-item .value {
             font-size: 0.85rem;
             font-weight: 500;
             color: var(--text-primary);
         }
+        .bill-row-body .bill-detail-item .value.doctor { color: var(--primary); }
         
-        .bill-row-body .bill-detail-item .value.doctor {
-            color: var(--primary);
-        }
-        
-        /* ================================================================
-           BILL ITEMS TABLE
-           ================================================================ */
         .bill-items-table {
             width: 100%;
             border-collapse: collapse;
             margin-top: 12px;
             font-size: 0.82rem;
         }
-        
         .bill-items-table thead th {
             text-align: left;
             padding: 6px 10px;
@@ -728,67 +563,47 @@ include_once '../../components/cashier_sidebar.php';
             border-bottom: 2px solid var(--border-color);
             background: var(--bg-body);
         }
-        
         .bill-items-table tbody td {
             padding: 6px 10px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
         }
+        .bill-items-table tbody tr:last-child td { border-bottom: none; }
+        .bill-items-table tbody tr:hover { background: var(--table-hover); }
+        .bill-items-table .item-total { font-weight: 600; color: var(--text-primary); }
         
-        .bill-items-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        .bill-items-table tbody tr:hover {
-            background: var(--table-hover);
-        }
-        
-        .bill-items-table .item-total {
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        /* ================================================================
-           BILL ROW FOOTER
-           ================================================================ */
         .bill-row-footer {
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 12px 20px;
             border-top: 2px solid var(--border-color);
-            background: var(--bill-footer-bg);
+            background: var(--gray-50);
             border-radius: 0 0 12px 12px;
             flex-wrap: wrap;
             gap: 8px;
             position: relative;
             z-index: 2;
         }
-        
+        [data-theme="dark"] .bill-row-footer {
+            background: var(--gray-700);
+        }
         .bill-row-footer .total-summary {
             display: flex;
             gap: 20px;
             flex-wrap: wrap;
         }
-        
         .bill-row-footer .total-summary span {
             font-size: 0.85rem;
             font-weight: 500;
             color: var(--text-secondary);
         }
-        
         .bill-row-footer .total-summary .strong {
             font-weight: 700;
             color: var(--text-primary);
         }
+        .bill-row-footer .total-summary .paid { color: var(--success); }
         
-        .bill-row-footer .total-summary .paid {
-            color: var(--success);
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -802,7 +617,6 @@ include_once '../../components/cashier_sidebar.php';
             border: none;
             text-decoration: none;
         }
-        
         .btn-primary {
             background: var(--primary);
             color: white;
@@ -810,9 +624,8 @@ include_once '../../components/cashier_sidebar.php';
         .btn-primary:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
-        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
@@ -823,26 +636,8 @@ include_once '../../components/cashier_sidebar.php';
             border-color: var(--success);
             color: var(--success);
         }
+        .btn-sm { padding: 4px 10px; font-size: 0.65rem; border-radius: 6px; }
         
-        .btn-sm {
-            padding: 4px 10px;
-            font-size: 0.65rem;
-            border-radius: 6px;
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        /* ================================================================
-           TOGGLE ICON
-           ================================================================ */
         .toggle-icon {
             transition: transform 0.3s ease;
         }
@@ -850,9 +645,6 @@ include_once '../../components/cashier_sidebar.php';
             transform: rotate(180deg);
         }
         
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -860,40 +652,16 @@ include_once '../../components/cashier_sidebar.php';
             border-radius: 16px;
             border: 2px solid var(--border-color);
         }
+        .empty-state i { font-size: 4rem; color: var(--border-color); display: block; margin-bottom: 16px; }
+        .empty-state h3 { font-size: 1.2rem; color: var(--text-primary); margin-bottom: 8px; }
+        .empty-state p { color: var(--text-secondary); }
         
-        .empty-state i {
-            font-size: 4rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 16px;
-        }
-        
-        .empty-state h3 {
-            font-size: 1.2rem;
-            color: var(--text-primary);
-            margin-bottom: 8px;
-        }
-        
-        .empty-state p {
-            color: var(--text-secondary);
-        }
-        
-        .empty-state .sub {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-        
-        /* ================================================================
-           MESSAGE BOX
-           ================================================================ */
         .message-box {
             max-width: 1400px;
             margin: 0 auto 16px;
             padding: 12px 16px;
             border-radius: 12px;
             border: 2px solid transparent;
-            transition: all 0.3s ease;
         }
         .message-box.success {
             background: var(--success-bg);
@@ -907,9 +675,6 @@ include_once '../../components/cashier_sidebar.php';
         }
         .message-box i { margin-right: 8px; }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -927,90 +692,72 @@ include_once '../../components/cashier_sidebar.php';
             color: white;
             box-shadow: var(--shadow-lg);
         }
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
-            border-top: 1px solid var(--footer-border);
+            border-top: 1px solid var(--border-color);
             margin-top: 24px;
             text-align: center;
             font-size: 0.7rem;
             color: var(--text-secondary);
-            transition: border-color 0.3s ease;
         }
-        .footer .footer-brand { 
-            color: var(--success); 
-            font-weight: 600; 
+        .footer .footer-brand { color: var(--success); font-weight: 600; }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(16px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up {
+            animation: fadeInUp 0.4s ease forwards;
+            opacity: 0;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
         }
-        
         @media (max-width: 768px) {
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .patient-profile-card { padding: 16px 18px; }
+            .patient-profile-card { padding: 16px 18px; flex-direction: column; text-align: center; }
             .patient-avatar-large { width: 56px; height: 56px; font-size: 1.4rem; }
             .patient-info h2 { font-size: 1.1rem; }
-            .bill-row-header { padding: 10px 14px; }
-            .bill-row-body { padding: 12px 14px; }
-            .bill-row-footer { flex-direction: column; align-items: stretch; gap: 10px; }
-            .bill-row-footer .action-buttons { justify-content: center; }
+            .patient-info .patient-meta { justify-content: center; }
             .summary-stats { grid-template-columns: repeat(2, 1fr); }
+            .bill-row-header { padding: 10px 14px; flex-direction: column; align-items: stretch; }
+            .bill-row-body { padding: 12px 14px; }
+            .bill-row-footer { flex-direction: column; align-items: stretch; }
             .bill-items-table { font-size: 0.7rem; }
-            .bill-items-table thead th,
-            .bill-items-table tbody td { padding: 4px 6px; }
-            .bill-row .watermark { font-size: 4rem; padding: 15px 30px; }
+            .bill-items-table thead th, .bill-items-table tbody td { padding: 4px 6px; }
+            .bill-row .watermark { font-size: 3.5rem; padding: 12px 24px; }
+            .bill-details-grid { grid-template-columns: 1fr 1fr !important; }
+            .bill-row-footer .total-summary { flex-direction: column; gap: 4px; }
+            .bill-row-footer .action-buttons { display: flex; gap: 6px; flex-wrap: wrap; }
+            .bill-row-footer .action-buttons .btn { flex: 1; justify-content: center; }
         }
-        
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .summary-stats { grid-template-columns: 1fr; }
-            .bill-details-grid { grid-template-columns: 1fr 1fr !important; }
-            .bill-row-footer .total-summary { flex-direction: column; gap: 4px; }
-            .bill-row-footer .action-buttons .btn { width: 100%; justify-content: center; }
-            .bill-row .watermark { font-size: 2.5rem; padding: 10px 20px; transform: translate(-50%, -50%) rotate(-25deg); }
-            .patient-profile-card { flex-direction: column; text-align: center; }
-            .patient-info .patient-meta { justify-content: center; }
+            .bill-row .watermark { font-size: 2.5rem; padding: 8px 16px; transform: translate(-50%, -50%) rotate(-25deg); }
         }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION - FROM HEADER (Already included) -->
-<!-- ================================================================ -->
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-file-invoice-dollar"></i>
                 Paid Bills
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
+                <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
                 <?php if ($is_reception): ?>
-                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);">
+                    <span class="header-badge" style="background:rgba(52,211,153,0.3);color:#34D399;border-color:rgba(52,211,153,0.3);">
                         <i class="fas fa-check-circle"></i> Full Access
                     </span>
                 <?php endif; ?>
@@ -1034,15 +781,9 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-check-circle"></i>
                     <?= $total_bills ?> paid bill(s)
                 </span>
-                
-                <?php if ($is_reception): ?>
-                    <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;border-color:rgba(52,211,153,0.2);">
-                        <i class="fas fa-user-tag"></i> Reception Access
-                    </span>
-                <?php endif; ?>
             </p>
         </div>
-        <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="patients.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Patients
             </a>
@@ -1060,9 +801,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- PATIENT PROFILE -->
-    <!-- ================================================================ -->
     <div class="patient-profile-card">
         <div class="patient-avatar-large" style="background: <?= '#' . substr(md5($patient['full_name'] ?? 'Unknown'), 0, 6) ?>;">
             <?= strtoupper(substr($patient['full_name'] ?? 'U', 0, 1)) ?>
@@ -1079,9 +818,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- SUMMARY STATISTICS -->
-    <!-- ================================================================ -->
     <div class="summary-stats">
         <div class="summary-stat">
             <p class="stat-number"><?= $total_bills ?></p>
@@ -1101,11 +838,8 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- BILLS LIST - ONLY PAID BILLS WITH WATERMARK -->
-    <!-- ================================================================ -->
+    <!-- BILLS LIST -->
     <?php if (count($bills) > 0): ?>
-        
         <?php foreach ($bills as $bill): 
             $items = $bill_items[$bill['id']] ?? [];
         ?>
@@ -1113,7 +847,7 @@ include_once '../../components/cashier_sidebar.php';
             <!-- PAID WATERMARK -->
             <div class="watermark">✅ PAID</div>
             
-            <!-- Bill Header - Click to toggle details -->
+            <!-- Bill Header -->
             <div class="bill-row-header" onclick="toggleBill(<?= $bill['id'] ?>)">
                 <div class="flex items-center gap-3 flex-wrap">
                     <span class="bill-number">#<?= htmlspecialchars($bill['bill_number']) ?></span>
@@ -1136,9 +870,8 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- Bill Body - Collapsible -->
+            <!-- Bill Body -->
             <div class="bill-row-body collapsed" id="billBody_<?= $bill['id'] ?>">
-                <!-- Bill Details -->
                 <div class="bill-details-grid">
                     <div class="bill-detail-item">
                         <span class="label">Visit Number</span>
@@ -1166,7 +899,7 @@ include_once '../../components/cashier_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- Bill Items Table -->
+                <!-- Bill Items -->
                 <?php if (count($items) > 0): ?>
                     <table class="bill-items-table">
                         <thead>
@@ -1213,29 +946,26 @@ include_once '../../components/cashier_sidebar.php';
                     <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-primary btn-sm">
                         <i class="fas fa-eye"></i> View
                     </a>
-                    <a href="print_receipt.php?bill_id=<?= $bill['id'] ?>" class="btn btn-outline btn-sm">
+                    <a href="print_receipt.php?bill_id=<?= $bill['id'] ?>&print=1" class="btn btn-outline btn-sm" target="_blank">
                         <i class="fas fa-print"></i> Receipt
                     </a>
                 </div>
             </div>
         </div>
         <?php endforeach; ?>
-        
     <?php else: ?>
         <div class="empty-state">
             <i class="fas fa-file-invoice"></i>
             <h3>No Paid Bills Found</h3>
             <p>This patient has no paid bills yet</p>
-            <p class="sub">Once a bill is fully paid, it will appear here with a "PAID" watermark</p>
+            <p class="text-sm text-gray-400 mt-2">Once a bill is fully paid, it will appear here with a "PAID" watermark</p>
             <a href="patients.php" class="btn btn-primary mt-4">
                 <i class="fas fa-arrow-left"></i> Back to Patients
             </a>
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1256,9 +986,7 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1267,16 +995,12 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE - SYNC WITH HEADER
+    // DARK MODE
     // ================================================================
     (function() {
         var htmlElement = document.documentElement;
-        
         function syncDarkMode() {
             var isDark = localStorage.getItem('darkMode') === 'true';
             if (isDark) {
@@ -1285,18 +1009,12 @@ include_once '../../components/cashier_sidebar.php';
                 htmlElement.removeAttribute('data-theme');
             }
         }
-        
         syncDarkMode();
-        
         window.addEventListener('storage', function(e) {
-            if (e.key === 'darkMode') {
-                syncDarkMode();
-            }
+            if (e.key === 'darkMode') syncDarkMode();
         });
-        
         document.addEventListener('darkModeChanged', function(e) {
-            var isDark = e.detail && e.detail.isDark;
-            if (isDark) {
+            if (e.detail && e.detail.isDark) {
                 htmlElement.setAttribute('data-theme', 'dark');
             } else {
                 htmlElement.removeAttribute('data-theme');
@@ -1310,7 +1028,6 @@ include_once '../../components/cashier_sidebar.php';
     function toggleBill(billId) {
         var body = document.getElementById('billBody_' + billId);
         var icon = document.getElementById('toggleIcon_' + billId);
-        
         if (body) {
             if (body.classList.contains('collapsed')) {
                 body.classList.remove('collapsed');
@@ -1328,19 +1045,18 @@ include_once '../../components/cashier_sidebar.php';
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
-    if (sidebarToggle) {
+    if (sidebarToggle && sidebar) {
         sidebarToggle.addEventListener('click', function() {
-            if (sidebar) sidebar.classList.toggle('open');
+            sidebar.classList.toggle('open');
+        });
+        document.addEventListener('click', function(e) {
+            if (window.innerWidth <= 1024) {
+                if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+                    sidebar.classList.remove('open');
+                }
+            }
         });
     }
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
 
     // ================================================================
     // SEARCH
@@ -1349,7 +1065,7 @@ include_once '../../components/cashier_sidebar.php';
     var searchInput = document.getElementById('searchInput');
     
     function performSearch() {
-        var query = searchInput.value.trim();
+        var query = searchInput?.value?.trim() || '';
         if (query.length > 0) {
             window.location.href = 'search.php?q=' + encodeURIComponent(query);
         }
@@ -1369,24 +1085,14 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     function updateDateTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        
-        var clockDisplay = document.getElementById('clockDisplay');
-        if (clockDisplay) {
-            clockDisplay.textContent = dateStr + ' • ' + timeStr;
-        }
-        
         var footerTimestamp = document.getElementById('footerTimestamp');
         if (footerTimestamp) {
             footerTimestamp.textContent = 'Last updated: ' + timeStr;
         }
     }
-    
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
@@ -1397,21 +1103,16 @@ include_once '../../components/cashier_sidebar.php';
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
-        
         if (!toast) return;
-        
         toast.className = 'toast-custom ' + (type || 'info');
         toastTitle.textContent = title || 'Notification';
         toastMessage.textContent = message || '';
         toast.style.display = 'flex';
-        
         toast.classList.add('show');
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
 
@@ -1422,11 +1123,9 @@ include_once '../../components/cashier_sidebar.php';
         var btn = document.getElementById('refreshBtn');
         btn.innerHTML = '<span class="spinner"></span> Loading...';
         btn.disabled = true;
-        
         setTimeout(function() {
             window.location.reload();
         }, 1000);
-        
         setTimeout(function() {
             btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
             btn.disabled = false;
@@ -1435,20 +1134,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            if (searchInput) {
-                searchInput.focus();
-                searchInput.select();
-            }
-        }
-    });
-
-    // ================================================================
-    // INIT - Expand first bill by default
+    // INIT
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var firstBillBody = document.querySelector('.bill-row-body');
@@ -1459,14 +1145,13 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c💰 Braick - Paid Bills (With Watermark)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick - Paid Bills (Using Your Database)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Uses bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Uses bill_items table', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Total Paid Bills: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total Paid: <?= $currency ?> <?= number_format($total_paid, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Each bill has a "PAID" watermark with slash/strikethrough effect', 'font-size:12px; color:#34D399;');
-    console.log('%c🌓 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ Each bill has a "PAID" watermark', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

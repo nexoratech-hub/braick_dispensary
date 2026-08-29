@@ -2,6 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/cashier/edit_profile.php
 // CASHIER - EDIT PROFILE
+// FIXED: Uses correct database tables (users only)
+// 8 CARDS DESIGN: 4 TOP + 4 BOTTOM
+// WITH AUTO-UPDATE (3 SECONDS)
 // USES SHARED HEADER WITH DARK MODE
 // ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
@@ -247,43 +250,119 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
-// GET STATISTICS FOR SIDEBAR
+// GET GLOBAL STATS FOR AUTO-UPDATE - Using bills table
 // ================================================================
-$pending_bills = 0;
-$partial_payments = 0;
-$paid_today = 0;
-$patients_waiting = 0;
+$today = date('Y-m-d');
 
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
-    $stmt->execute([$user_branch_id]);
-    $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'partial'");
-    $stmt->execute([$user_branch_id]);
-    $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()");
-    $stmt->execute([$user_branch_id]);
-    $paid_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM patient_bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
-    $stmt->execute([$user_branch_id]);
-    $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    // Keep counts as 0
-}
+    // Today Payments
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? 
+        AND DATE(updated_at) = ?
+        AND paid_amount > 0
+        AND status IN ('paid', 'partial')
+    ");
+    $stmt->execute([$user_branch_id, $today]);
+    $today_payments = $stmt->fetch(PDO::FETCH_ASSOC);
+    $today_payments_count = $today_payments['count'] ?? 0;
+    $today_payments_total = $today_payments['total'] ?? 0;
 
-// ================================================================
-// UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    // Pending Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? AND status = 'pending'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC);
+    $pending_bills_count = $pending_bills['count'] ?? 0;
+    $pending_bills_total = $pending_bills['total'] ?? 0;
+
+    // Paid Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $paid_bills = $stmt->fetch(PDO::FETCH_ASSOC);
+    $paid_bills_count = $paid_bills['count'] ?? 0;
+    $paid_bills_total = $paid_bills['total'] ?? 0;
+
+    // Cancelled Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? AND status = 'cancelled'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $cancelled_stats = $stmt->fetch(PDO::FETCH_ASSOC);
+    $cancelled_bills_count = $cancelled_stats['count'] ?? 0;
+    $cancelled_bills_total = $cancelled_stats['total'] ?? 0;
+
+    // Total Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills WHERE branch_id = ?
+    ");
+    $stmt->execute([$user_branch_id]);
+    $total_bills = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_bills_count = $total_bills['count'] ?? 0;
+    $total_bills_amount = $total_bills['total'] ?? 0;
+
+    // Partial Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance
+        FROM bills 
+        WHERE branch_id = ? AND status = 'partial'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $partial_bills = $stmt->fetch(PDO::FETCH_ASSOC);
+    $partial_bills_count = $partial_bills['count'] ?? 0;
+    $partial_bills_paid = $partial_bills['total_paid'] ?? 0;
+    $partial_bills_balance = $partial_bills['total_balance'] ?? 0;
+
+    // Expenses
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        FROM expenses 
+        WHERE branch_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $expenses = $stmt->fetch(PDO::FETCH_ASSOC);
+    $expenses_count = $expenses['count'] ?? 0;
+    $expenses_total = $expenses['total'] ?? 0;
+    
+    // Today's receipts count
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count
+        FROM receipts 
+        WHERE branch_id = ? AND DATE(printed_at) = ?
+    ");
+    $stmt->execute([$user_branch_id, $today]);
+    $receipts_today = $stmt->fetch(PDO::FETCH_ASSOC);
+    $today_receipts = $receipts_today['count'] ?? 0;
+    
 } catch (Exception $e) {
-    $unread_notifications = 0;
+    error_log("Global stats error: " . $e->getMessage());
+    $today_payments_count = 0;
+    $today_payments_total = 0;
+    $pending_bills_count = 0;
+    $pending_bills_total = 0;
+    $paid_bills_count = 0;
+    $paid_bills_total = 0;
+    $cancelled_bills_count = 0;
+    $cancelled_bills_total = 0;
+    $total_bills_count = 0;
+    $total_bills_amount = 0;
+    $partial_bills_count = 0;
+    $partial_bills_paid = 0;
+    $partial_bills_balance = 0;
+    $expenses_count = 0;
+    $expenses_total = 0;
+    $today_receipts = 0;
 }
 
 // ================================================================
@@ -312,7 +391,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
-    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
@@ -331,6 +409,12 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
+            --pink: #DB2777;
+            --pink-bg: #FCE4EC;
+            --indigo: #4F46E5;
+            --indigo-bg: #E0E7FF;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -353,11 +437,9 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
-            --table-stripe: #E8F0FE;
-            --table-hover: #D1FAE5;
         }
 
-        /* DARK MODE - MATCH HEADER */
+        /* DARK MODE */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -368,119 +450,52 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-stripe: #1E293B;
-            --table-hover: #1A3A2A;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
         }
 
-        [data-theme="dark"] .bg-white {
-            background-color: #1E293B !important;
-        }
-
-        [data-theme="dark"] .text-gray-700 {
-            color: #CBD5E1 !important;
-        }
-
-        [data-theme="dark"] .text-gray-800 {
-            color: #E2E8F0 !important;
-        }
-
-        [data-theme="dark"] .text-gray-900 {
-            color: #F1F5F9 !important;
-        }
-
-        [data-theme="dark"] .border-gray-200 {
-            border-color: #334155 !important;
-        }
-
-        [data-theme="dark"] .bg-gray-50 {
-            background-color: #1E293B !important;
-        }
-
-        [data-theme="dark"] .bg-gray-100 {
-            background-color: #2D3748 !important;
-        }
-
-        [data-theme="dark"] .shadow {
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
-        }
-
-        [data-theme="dark"] .shadow-md {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
-        }
-
-        [data-theme="dark"] .shadow-lg {
-            box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important;
-        }
-
-        [data-theme="dark"] .border-t {
-            border-top-color: #334155 !important;
-        }
-
-        [data-theme="dark"] .border-t-gray-200 {
-            border-top-color: #334155 !important;
-        }
-
-        [data-theme="dark"] .text-blue-600 {
-            color: #6EA8FE !important;
-        }
-
-        [data-theme="dark"] .text-gray-500 {
-            color: #94A3B8 !important;
-        }
-
-        [data-theme="dark"] .message-box.success {
-            background: #1A3A2A;
-            color: #34D399;
-            border-color: #34D399;
-        }
-
-        [data-theme="dark"] .message-box.error {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: #F87171;
-        }
-
-        [data-theme="dark"] .form-card {
-            background: #1E293B;
-            border-color: #334155;
-        }
-
-        [data-theme="dark"] .form-card:hover {
-            border-color: #34D399;
-        }
-
-        [data-theme="dark"] .form-control {
-            background: #1E293B;
-            color: #F1F5F9;
-            border-color: #334155;
-        }
-
-        [data-theme="dark"] .form-control:focus {
-            border-color: #34D399;
-            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
-        }
-
-        [data-theme="dark"] .form-control:disabled {
-            opacity: 0.5;
-        }
-
-        [data-theme="dark"] .avatar-upload {
-            background: #0F172A;
-            border-color: #334155;
-        }
-
-        [data-theme="dark"] .btn-outline {
-            border-color: #334155;
-            color: #94A3B8;
-        }
-
-        [data-theme="dark"] .btn-outline:hover {
-            border-color: #34D399;
-            color: #34D399;
-            background: #1A3A2A;
-        }
-
+        /* Dark mode fixes */
+        [data-theme="dark"] .bg-white { background-color: #1E293B !important; }
+        [data-theme="dark"] .text-gray-700 { color: #CBD5E1 !important; }
+        [data-theme="dark"] .text-gray-800 { color: #E2E8F0 !important; }
+        [data-theme="dark"] .text-gray-900 { color: #F1F5F9 !important; }
+        [data-theme="dark"] .border-gray-200 { border-color: #334155 !important; }
+        [data-theme="dark"] .bg-gray-50 { background-color: #1E293B !important; }
+        [data-theme="dark"] .bg-gray-100 { background-color: #2D3748 !important; }
+        [data-theme="dark"] .shadow { box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important; }
+        [data-theme="dark"] .shadow-md { box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
+        [data-theme="dark"] .shadow-lg { box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important; }
+        [data-theme="dark"] .border-t { border-top-color: #334155 !important; }
+        [data-theme="dark"] .border-t-gray-200 { border-top-color: #334155 !important; }
+        [data-theme="dark"] .text-blue-600 { color: #6EA8FE !important; }
+        [data-theme="dark"] .text-gray-500 { color: #94A3B8 !important; }
+        [data-theme="dark"] .message-box.success { background: #1A3A2A; color: #34D399; border-color: #34D399; }
+        [data-theme="dark"] .message-box.error { background: #3A1A1A; color: #F87171; border-color: #F87171; }
+        [data-theme="dark"] .form-card { background: #1E293B; border-color: #334155; }
+        [data-theme="dark"] .form-card:hover { border-color: #34D399; }
+        [data-theme="dark"] .form-control { background: #1E293B; color: #F1F5F9; border-color: #334155; }
+        [data-theme="dark"] .form-control:focus { border-color: #34D399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15); }
+        [data-theme="dark"] .form-control:disabled { opacity: 0.5; }
+        [data-theme="dark"] .avatar-upload { background: #0F172A; border-color: #334155; }
+        [data-theme="dark"] .btn-outline { border-color: #334155; color: #94A3B8; }
+        [data-theme="dark"] .btn-outline:hover { border-color: #34D399; color: #34D399; background: #1A3A2A; }
+        [data-theme="dark"] .page-header-custom .page-title { color: var(--success-light); }
+        [data-theme="dark"] .page-header-custom .branch-tag { background: #047857; }
+        [data-theme="dark"] .page-header-custom .role-badge { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .page-header-custom .reception-badge { background: rgba(251, 191, 36, 0.15); color: #FCD34D; border-color: rgba(251, 191, 36, 0.2); }
+        [data-theme="dark"] .stat-card { background: #1E293B; border-color: #334155; }
+        [data-theme="dark"] .stat-card:hover { border-color: #34D399; transform: translateY(-4px); }
+        [data-theme="dark"] .stat-card .stat-number { color: #F1F5F9 !important; }
+        [data-theme="dark"] .stat-card .stat-number.green { color: #34D399 !important; }
+        [data-theme="dark"] .stat-card .stat-number.red { color: #F87171 !important; }
+        [data-theme="dark"] .stat-card .stat-number.blue { color: #6EA8FE !important; }
+        [data-theme="dark"] .stat-card .stat-number.yellow { color: #FBBF24 !important; }
+        [data-theme="dark"] .stat-card .stat-number.purple { color: #A78BFA !important; }
+        [data-theme="dark"] .stat-card .stat-number.pink { color: #F472B6 !important; }
+        [data-theme="dark"] .stat-card .stat-number.indigo { color: #818CF8 !important; }
+        [data-theme="dark"] .footer { border-top-color: #334155; }
+        [data-theme="dark"] .footer .footer-brand { color: #34D399; }
+        [data-theme="dark"] .toast-custom.success { background: #059669; }
+        [data-theme="dark"] .toast-custom.error { background: #DC2626; }
+        
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -494,6 +509,183 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
 
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header-custom {
+            border-bottom: 3px solid var(--success);
+            padding-bottom: 12px;
+            margin-bottom: 20px;
+        }
+        
+        .page-header-custom .page-title {
+            color: var(--success-dark);
+            font-size: 1.8rem;
+            font-weight: 700;
+        }
+        
+        .page-header-custom .page-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .page-header-custom .branch-tag {
+            background: var(--success);
+            color: white;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .page-header-custom .role-badge {
+            background: var(--primary-bg);
+            color: var(--primary);
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        .page-header-custom .reception-badge {
+            background: rgba(251, 191, 36, 0.2);
+            color: #D97706;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            border: 1px solid rgba(251, 191, 36, 0.2);
+        }
+
+        .page-header-custom .btn-outline-light {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 18px;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+        }
+        
+        .page-header-custom .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+
+        /* ================================================================
+           STATS CARDS - 4 TOP + 4 BOTTOM (8 CARDS TOTAL)
+           ================================================================ */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+            max-width: 1200px;
+            margin: 0 auto 16px;
+        }
+        
+        .stats-grid-bottom {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 14px;
+            max-width: 1200px;
+            margin: 0 auto 20px;
+        }
+        
+        .stat-card {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 16px 18px;
+            border: 2px solid var(--border-color);
+            text-align: center;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .stat-card::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            border-radius: 14px 14px 0 0;
+        }
+        
+        .stat-card:hover {
+            border-color: var(--success);
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .stat-card .stat-icon {
+            font-size: 1.6rem;
+            margin-bottom: 4px;
+            display: block;
+        }
+        
+        .stat-card .stat-number {
+            font-size: 1.8rem;
+            font-weight: 700;
+            line-height: 1.2;
+            letter-spacing: -0.02em;
+        }
+        
+        .stat-card .stat-number.green { color: var(--success); }
+        .stat-card .stat-number.red { color: #DC2626; }
+        .stat-card .stat-number.blue { color: var(--primary); }
+        .stat-card .stat-number.yellow { color: var(--warning); }
+        .stat-card .stat-number.purple { color: var(--purple); }
+        .stat-card .stat-number.pink { color: #DB2777; }
+        .stat-card .stat-number.indigo { color: #4F46E5; }
+        
+        .stat-card .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-top: 2px;
+        }
+        
+        .stat-card .stat-sub {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
+            opacity: 0.7;
+        }
+        
+        /* Card accent colors */
+        .stat-card.accent-blue::after { background: var(--primary); }
+        .stat-card.accent-red::after { background: #DC2626; }
+        .stat-card.accent-green::after { background: var(--success); }
+        .stat-card.accent-yellow::after { background: var(--warning); }
+        .stat-card.accent-purple::after { background: var(--purple); }
+        .stat-card.accent-pink::after { background: #DB2777; }
+        .stat-card.accent-indigo::after { background: #4F46E5; }
+        .stat-card.accent-orange::after { background: #EA580C; }
+
+        /* ================================================================
+           FORM CARD
+           ================================================================ */
         .form-card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -737,81 +929,9 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             margin-top: 4px;
         }
 
-        .page-header-custom {
-            border-bottom: 3px solid var(--success);
-            padding-bottom: 12px;
-            margin-bottom: 20px;
-        }
-        
-        .page-header-custom .page-title {
-            color: var(--success-dark);
-            font-size: 1.8rem;
-            font-weight: 700;
-        }
-        
-        [data-theme="dark"] .page-header-custom .page-title {
-            color: var(--success-light);
-        }
-        
-        .page-header-custom .page-subtitle {
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-        }
-        
-        .page-header-custom .branch-tag {
-            background: var(--success);
-            color: white;
-            padding: 3px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-
-        [data-theme="dark"] .page-header-custom .branch-tag {
-            background: #047857;
-        }
-
-        .page-header-custom .role-badge {
-            background: var(--primary-bg);
-            color: var(--primary);
-            padding: 3px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-
-        [data-theme="dark"] .page-header-custom .role-badge {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-
-        .page-header-custom .reception-badge {
-            background: rgba(251, 191, 36, 0.2);
-            color: #D97706;
-            padding: 3px 14px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            border: 1px solid rgba(251, 191, 36, 0.2);
-        }
-
-        [data-theme="dark"] .page-header-custom .reception-badge {
-            background: rgba(251, 191, 36, 0.15);
-            color: #FCD34D;
-            border-color: rgba(251, 191, 36, 0.2);
-        }
-
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-
+        /* ================================================================
+           FOOTER
+           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -826,10 +946,46 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             font-weight: 600; 
         }
 
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .stats-grid-bottom { grid-template-columns: repeat(2, 1fr); }
         }
-
+        
         @media (max-width: 768px) {
             .form-card {
                 padding: 16px 18px;
@@ -849,11 +1005,30 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                 justify-content: center;
             }
             .page-header-custom .page-title { font-size: 1.3rem; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .stats-grid-bottom { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+            .stat-card { padding: 12px 14px; }
+            .stat-card .stat-number { font-size: 1.4rem; }
         }
-
+        
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .form-card { padding: 12px 14px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+            .stats-grid-bottom { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+            .stat-card { padding: 8px 10px; }
+            .stat-card .stat-number { font-size: 1.1rem; }
+            .stat-card .stat-label { font-size: 0.55rem; }
+            .stat-card .stat-icon { font-size: 1.2rem; }
+        }
+        
+        @media (max-width: 400px) {
+            .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 4px; }
+            .stats-grid-bottom { grid-template-columns: repeat(2, 1fr); gap: 4px; }
+            .stat-card { padding: 6px 6px; }
+            .stat-card .stat-number { font-size: 0.9rem; }
+            .stat-card .stat-label { font-size: 0.5rem; }
+            .stat-card .stat-icon { font-size: 1rem; }
         }
     </style>
     
@@ -876,7 +1051,9 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- ================================================================ -->
+    <!-- PAGE HEADER -->
+    <!-- ================================================================ -->
     <div class="page-header-custom flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
@@ -909,6 +1086,80 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             <?= $message ?>
         </div>
     <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- 8 STATS CARDS - 4 TOP + 4 BOTTOM -->
+    <!-- ================================================================ -->
+    
+    <!-- TOP 4 CARDS -->
+    <div class="stats-grid" id="globalStatsTop">
+        <!-- Card 1: Today Payments -->
+        <div class="stat-card accent-blue" onclick="window.location.href='payment_history.php'">
+            <span class="stat-icon">💳</span>
+            <p class="stat-number blue" id="statTodayPayments"><?= number_format($today_payments_count) ?></p>
+            <p class="stat-label">Today Payments</p>
+            <p class="stat-sub">TSh <?= number_format($today_payments_total) ?></p>
+        </div>
+        
+        <!-- Card 2: Pending Bills -->
+        <div class="stat-card accent-red" onclick="window.location.href='pending_bills.php'">
+            <span class="stat-icon">⏳</span>
+            <p class="stat-number red" id="statPending"><?= number_format($pending_bills_count) ?></p>
+            <p class="stat-label">Pending Bills</p>
+            <p class="stat-sub">TSh <?= number_format($pending_bills_total) ?></p>
+        </div>
+        
+        <!-- Card 3: Paid Bills -->
+        <div class="stat-card accent-green" onclick="window.location.href='paid_bills.php'">
+            <span class="stat-icon">✅</span>
+            <p class="stat-number green" id="statPaid"><?= number_format($paid_bills_count) ?></p>
+            <p class="stat-label">Paid Bills</p>
+            <p class="stat-sub">TSh <?= number_format($paid_bills_total) ?></p>
+        </div>
+        
+        <!-- Card 4: Cancelled Bills -->
+        <div class="stat-card accent-red" onclick="window.location.href='cancelled_bills.php'">
+            <span class="stat-icon">❌</span>
+            <p class="stat-number red" id="statCancelled"><?= number_format($cancelled_bills_count) ?></p>
+            <p class="stat-label">Cancelled Bills</p>
+            <p class="stat-sub">TSh <?= number_format($cancelled_bills_total) ?></p>
+        </div>
+    </div>
+    
+    <!-- BOTTOM 4 CARDS -->
+    <div class="stats-grid-bottom" id="globalStatsBottom">
+        <!-- Card 5: Total Bills -->
+        <div class="stat-card accent-purple" onclick="window.location.href='all_bills.php'">
+            <span class="stat-icon">📋</span>
+            <p class="stat-number purple" id="statTotal"><?= number_format($total_bills_count) ?></p>
+            <p class="stat-label">Total Bills</p>
+            <p class="stat-sub">TSh <?= number_format($total_bills_amount) ?></p>
+        </div>
+        
+        <!-- Card 6: Partial Bills -->
+        <div class="stat-card accent-yellow" onclick="window.location.href='partial_payments.php'">
+            <span class="stat-icon">💰</span>
+            <p class="stat-number yellow" id="statPartial"><?= number_format($partial_bills_count) ?></p>
+            <p class="stat-label">Partial Bills</p>
+            <p class="stat-sub">Paid: TSh <?= number_format($partial_bills_paid) ?></p>
+        </div>
+        
+        <!-- Card 7: Expenses -->
+        <div class="stat-card accent-pink" onclick="window.location.href='expenses.php'">
+            <span class="stat-icon">💸</span>
+            <p class="stat-number pink" id="statExpenses"><?= number_format($expenses_count) ?></p>
+            <p class="stat-label">Expenses</p>
+            <p class="stat-sub">TSh <?= number_format($expenses_total) ?></p>
+        </div>
+        
+        <!-- Card 8: Today Receipts -->
+        <div class="stat-card accent-indigo" onclick="window.location.href='receipt_history.php'">
+            <span class="stat-icon">🧾</span>
+            <p class="stat-number indigo" id="statReceipts"><?= number_format($today_receipts) ?></p>
+            <p class="stat-label">Today Receipts</p>
+            <p class="stat-sub">Printed today</p>
+        </div>
+    </div>
 
     <!-- ================================================================ -->
     <!-- EDIT PROFILE FORM -->
@@ -1081,6 +1332,8 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                 <?php endif; ?>
             </span>
             <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
+            <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1099,13 +1352,45 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - AUTO UPDATE EVERY 3 SECONDS -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE - SYNC WITH HEADER
+    // TOAST
     // ================================================================
-    // Note: Dark mode is controlled by header.
+    function showToast(title, message, type) {
+        var toast = document.getElementById('toast');
+        var toastTitle = document.getElementById('toastTitle');
+        var toastMessage = document.getElementById('toastMessage');
+        
+        if (!toast) {
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            toast.className = 'toast-custom';
+            toast.innerHTML = `
+                <i class="fas fa-info-circle"></i>
+                <div>
+                    <p id="toastTitle">Notification</p>
+                    <p id="toastMessage"></p>
+                </div>
+            `;
+            document.body.appendChild(toast);
+        }
+        
+        toast.className = 'toast-custom ' + type;
+        toastTitle.textContent = title;
+        toastMessage.textContent = message;
+        toast.style.display = 'flex';
+        
+        toast.classList.add('show');
+        clearTimeout(toast.timeout);
+        toast.timeout = setTimeout(function() {
+            toast.classList.remove('show');
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
+        }, 3500);
+    }
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1155,43 +1440,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        if (!toast) {
-            toast = document.createElement('div');
-            toast.id = 'toast';
-            toast.className = 'toast-custom';
-            toast.innerHTML = `
-                <i class="fas fa-info-circle"></i>
-                <div>
-                    <p id="toastTitle">Notification</p>
-                    <p id="toastMessage"></p>
-                </div>
-            `;
-            document.body.appendChild(toast);
-        }
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-
-    // ================================================================
     // FILE INPUT PREVIEW
     // ================================================================
     var profilePicInput = document.getElementById('profilePicInput');
@@ -1231,13 +1479,154 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         });
     }
 
-    console.log('%c💰 Braick - Cashier Edit Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        if (btn) {
+            btn.innerHTML = '<span class="spinner" style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;animation:spin 0.6s linear infinite;"></span> Loading...';
+            btn.disabled = true;
+        }
+        
+        fetchDashboardData();
+        
+        setTimeout(function() {
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+                btn.disabled = false;
+            }
+            showToast('✅ Refreshed', 'Page data updated manually', 'success');
+        }, 1500);
+    }
+
+    // ================================================================
+    // FETCH DASHBOARD DATA (AJAX)
+    // ================================================================
+    function fetchDashboardData() {
+        var url = 'get_dashboard_data.php?t=' + Date.now();
+        
+        fetch(url)
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    updateStats(data);
+                } else {
+                    console.error('Failed to fetch dashboard data:', data.message);
+                }
+            })
+            .catch(function(error) {
+                console.error('Fetch error:', error);
+            });
+    }
+
+    // ================================================================
+    // UPDATE STATS UI
+    // ================================================================
+    function updateStats(data) {
+        // Update all 8 stat cards
+        var statMap = {
+            'statTodayPayments': data.today_payments_count || 0,
+            'statPending': data.pending_bills || 0,
+            'statPaid': data.paid_bills || 0,
+            'statCancelled': data.cancelled_bills || 0,
+            'statTotal': data.total_bills || 0,
+            'statPartial': data.partial_bills || 0,
+            'statExpenses': data.expenses_count || 0,
+            'statReceipts': data.today_receipts || 0
+        };
+        
+        for (var key in statMap) {
+            var el = document.getElementById(key);
+            if (el) {
+                el.textContent = Number(statMap[key]).toLocaleString();
+            }
+        }
+        
+        // Update footer timestamp
+        var footerTs = document.getElementById('footerTimestamp');
+        if (footerTs) {
+            var now = new Date();
+            var timeStr = now.toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+            });
+            footerTs.textContent = 'Last updated: ' + timeStr;
+        }
+    }
+
+    // ================================================================
+    // AUTO UPDATE - EVERY 3 SECONDS
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        fetchDashboardData();
+        updateInterval = setInterval(function() {
+            if (!isUpdating) {
+                isUpdating = true;
+                fetchDashboardData();
+                setTimeout(function() {
+                    isUpdating = false;
+                }, 1000);
+            }
+        }, 3000);
+        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
+    }
+    
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
+        }
+    }
+
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
+
+    // ================================================================
+    // ADD CSS ANIMATIONS
+    // ================================================================
+    var style = document.createElement('style');
+    style.textContent = `
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pulse-dot { 
+            0%, 100% { opacity: 1; transform: scale(1); } 
+            50% { opacity: 0.5; transform: scale(0.8); } 
+        }
+        .stat-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .stat-card:hover { transform: translateY(-4px); }
+        .form-control { transition: all 0.3s ease; }
+        .btn { transition: all 0.3s ease; }
+        .stat-number { transition: all 0.3s ease; }
+    `;
+    document.head.appendChild(style);
+
+    // ================================================================
+    // INIT
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 1000);
+    });
+
+    console.log('%c💰 Braick - Cashier Edit Profile (8 Cards + Auto-Update)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
     console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
-    console.log('%c📁 Upload Dir: <?= $upload_dir ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ 8 CARDS: 4 TOP + 4 BOTTOM', 'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

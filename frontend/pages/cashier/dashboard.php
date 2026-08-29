@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/dashboard.php
-// CASHIER DASHBOARD - ALLOWS RECEPTION AND ADMIN
+// CASHIER DASHBOARD - FULL FIXED
+// Uses: bills, bill_items, prescriptions, lab_tests
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -65,7 +66,7 @@ try {
 }
 
 // ================================================================
-// GET CASHIER STATISTICS
+// GET CASHIER STATISTICS - USING CORRECT TABLES
 // ================================================================
 $today = date('Y-m-d');
 $unread_notifications = 0;
@@ -76,96 +77,224 @@ try {
     $stmt->execute([$cashier_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // 2. Pending Bills
+    // ================================================================
+    // 1. TODAY PAYMENTS (from bills with paid_amount > 0 today)
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM patient_bills 
-        WHERE branch_id = ? AND status IN ('pending', 'partial')
-    ");
-    $stmt->execute([$cashier_branch_id]);
-    $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    // 3. Today's Payments
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM payments 
-        WHERE branch_id = ? AND DATE(received_at) = ?
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? 
+        AND DATE(updated_at) = ?
+        AND paid_amount > 0
+        AND status IN ('paid', 'partial')
     ");
     $stmt->execute([$cashier_branch_id, $today]);
-    $today_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $today_payments_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $today_payments_count = $today_payments_data['count'] ?? 0;
+    $today_payments_total = $today_payments_data['total'] ?? 0;
     
-    // 4. Total Bills
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ?");
-    $stmt->execute([$cashier_branch_id]);
-    $total_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    // 5. Paid Bills
+    // ================================================================
+    // 2. PENDING BILLS (status = 'pending')
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM patient_bills 
-        WHERE branch_id = ? AND status = 'paid'
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? 
+        AND status = 'pending'
     ");
     $stmt->execute([$cashier_branch_id]);
-    $paid_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $pending_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $pending_bills = $pending_bills_data['count'] ?? 0;
+    $pending_bills_total = $pending_bills_data['total'] ?? 0;
     
-    // 6. Today's Receipts
+    // ================================================================
+    // 3. CANCELLED BILLS (status = 'cancelled')
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count 
-        FROM receipts 
-        WHERE DATE(printed_at) = ?
-    ");
-    $stmt->execute([$today]);
-    $today_receipts = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    // 7. Recent Payments
-    $stmt = $db->prepare("
-        SELECT p.*, pb.bill_number, pb.total_amount,
-               pat.full_name as patient_name, pat.patient_id,
-               u.full_name as cashier_name
-        FROM payments p
-        JOIN patient_bills pb ON p.bill_id = pb.id
-        JOIN patients pat ON p.patient_id = pat.id
-        LEFT JOIN users u ON p.received_by = u.id
-        WHERE p.branch_id = ?
-        ORDER BY p.received_at DESC
-        LIMIT 10
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? 
+        AND status = 'cancelled'
     ");
     $stmt->execute([$cashier_branch_id]);
-    $recent_payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $cancelled_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $cancelled_bills = $cancelled_bills_data['count'] ?? 0;
+    $cancelled_bills_total = $cancelled_bills_data['total'] ?? 0;
     
-    // 8. Payment Methods Today
+    // ================================================================
+    // 4. TOTAL BILLS (all bills)
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT payment_method, COUNT(*) as count, COALESCE(SUM(amount), 0) as total
-        FROM payments 
-        WHERE branch_id = ? AND DATE(received_at) = ?
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ?
+    ");
+    $stmt->execute([$cashier_branch_id]);
+    $total_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_bills = $total_bills_data['count'] ?? 0;
+    $total_bills_amount = $total_bills_data['total'] ?? 0;
+    
+    // ================================================================
+    // 5. PAID BILLS (status = 'paid')
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? 
+        AND status = 'paid'
+    ");
+    $stmt->execute([$cashier_branch_id]);
+    $paid_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $paid_bills = $paid_bills_data['count'] ?? 0;
+    $paid_bills_total = $paid_bills_data['total'] ?? 0;
+    
+    // ================================================================
+    // 6. PARTIAL PAYMENTS (status = 'partial')
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance
+        FROM bills 
+        WHERE branch_id = ? 
+        AND status = 'partial'
+    ");
+    $stmt->execute([$cashier_branch_id]);
+    $partial_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $partial_bills = $partial_bills_data['count'] ?? 0;
+    $partial_bills_paid = $partial_bills_data['total_paid'] ?? 0;
+    $partial_bills_balance = $partial_bills_data['total_balance'] ?? 0;
+    
+    // ================================================================
+    // 7. EXPENSES (from expenses table)
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        FROM expenses 
+        WHERE branch_id = ? 
+        AND status = 'paid'
+    ");
+    $stmt->execute([$cashier_branch_id]);
+    $expenses_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $expenses_count = $expenses_data['count'] ?? 0;
+    $expenses_total = $expenses_data['total'] ?? 0;
+    
+    // Today's expenses
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        FROM expenses 
+        WHERE branch_id = ? 
+        AND DATE(payment_date) = ?
+        AND status = 'paid'
+    ");
+    $stmt->execute([$cashier_branch_id, $today]);
+    $today_expenses_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $today_expenses = $today_expenses_data['total'] ?? 0;
+    
+    // ================================================================
+    // 8. PAYMENT HISTORY (Recent payments from bills)
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT 
+            b.id as bill_id,
+            b.bill_number,
+            b.patient_id,
+            b.total_amount,
+            b.paid_amount,
+            b.balance,
+            b.status,
+            b.payment_method,
+            b.updated_at,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            u.full_name as cashier_name
+        FROM bills b
+        JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        WHERE b.branch_id = ?
+        AND b.paid_amount > 0
+        ORDER BY b.updated_at DESC
+        LIMIT 15
+    ");
+    $stmt->execute([$cashier_branch_id]);
+    $payment_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // ================================================================
+    // ADDITIONAL: Payment Methods Today
+    // ================================================================
+    $stmt = $db->prepare("
+        SELECT 
+            payment_method,
+            COUNT(*) as count,
+            COALESCE(SUM(paid_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? 
+        AND DATE(updated_at) = ?
+        AND paid_amount > 0
+        AND status IN ('paid', 'partial')
         GROUP BY payment_method
     ");
     $stmt->execute([$cashier_branch_id, $today]);
     $payment_methods = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // 9. Patients with Bills
+    // ================================================================
+    // ADDITIONAL: Today's Bill Items Summary
+    // ================================================================
     $stmt = $db->prepare("
-        SELECT DISTINCT p.id, p.full_name, p.patient_id,
-            (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND branch_id = ? AND status IN ('pending', 'partial')) as pending_bills_count,
-            (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND branch_id = ? AND status = 'paid') as paid_bills_count
-        FROM patients p
-        WHERE p.branch_id = ?
-        AND EXISTS (SELECT 1 FROM patient_bills WHERE patient_id = p.id AND branch_id = ?)
-        ORDER BY p.full_name
-        LIMIT 10
+        SELECT 
+            bi.item_type,
+            COUNT(DISTINCT bi.bill_id) as bill_count,
+            COUNT(bi.id) as item_count,
+            COALESCE(SUM(bi.final_price), 0) as total_amount
+        FROM bill_items bi
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE b.branch_id = ?
+        AND DATE(b.created_at) = ?
+        GROUP BY bi.item_type
+        ORDER BY total_amount DESC
     ");
-    $stmt->execute([$cashier_branch_id, $cashier_branch_id, $cashier_branch_id, $cashier_branch_id]);
-    $patients_with_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt->execute([$cashier_branch_id, $today]);
+    $today_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // ================================================================
+    // ADDITIONAL: Monthly Revenue
+    // ================================================================
+    $month_start = date('Y-m-01');
+    $stmt = $db->prepare("
+        SELECT 
+            DATE(created_at) as date,
+            COUNT(*) as bill_count,
+            COALESCE(SUM(total_amount), 0) as total_amount,
+            COALESCE(SUM(paid_amount), 0) as paid_amount
+        FROM bills 
+        WHERE branch_id = ?
+        AND created_at >= ?
+        GROUP BY DATE(created_at)
+        ORDER BY DATE(created_at) ASC
+    ");
+    $stmt->execute([$cashier_branch_id, $month_start]);
+    $monthly_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
 } catch (Exception $e) {
+    error_log("Cashier dashboard error: " . $e->getMessage());
     $pending_bills = 0;
-    $today_payments = 0;
+    $pending_bills_total = 0;
+    $today_payments_count = 0;
+    $today_payments_total = 0;
     $total_bills = 0;
+    $total_bills_amount = 0;
     $paid_bills = 0;
-    $today_receipts = 0;
-    $recent_payments = [];
+    $paid_bills_total = 0;
+    $cancelled_bills = 0;
+    $cancelled_bills_total = 0;
+    $partial_bills = 0;
+    $partial_bills_paid = 0;
+    $partial_bills_balance = 0;
+    $expenses_count = 0;
+    $expenses_total = 0;
+    $today_expenses = 0;
+    $payment_history = [];
     $payment_methods = [];
-    $patients_with_bills = [];
+    $today_items = [];
+    $monthly_data = [];
 }
 
 // ================================================================
@@ -174,8 +303,6 @@ try {
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // TIME AGO FUNCTION
@@ -186,6 +313,7 @@ function time_ago($timestamp) {
     $past = new DateTime($timestamp);
     $diff = $now->diff($past);
     
+    if ($diff->days > 7) return date('M d, Y', strtotime($timestamp));
     if ($diff->days > 0) return $diff->days . 'd ago';
     if ($diff->h > 0) return $diff->h . 'h ago';
     if ($diff->i > 0) return $diff->i . 'm ago';
@@ -205,7 +333,7 @@ include_once '../../components/cashier_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER - WITH GREEN BACKGROUND -->
+    <!-- PAGE HEADER - GREEN BACKGROUND -->
     <!-- ================================================================ -->
     <div class="page-header-green" style="background:linear-gradient(135deg, #059669, #047857);border-radius:16px;padding:24px 32px;margin-bottom:28px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px;box-shadow:0 4px 25px rgba(5,150,105,0.3);">
         <div>
@@ -227,9 +355,6 @@ include_once '../../components/cashier_sidebar.php';
             <p class="page-subtitle" style="color:rgba(255,255,255,0.85);font-size:0.95rem;margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
                 <i class="fas fa-user-check" style="color:rgba(255,255,255,0.7);"></i>
                 Welcome back, <strong style="color:white;font-weight:600;"><?= htmlspecialchars($cashier_name) ?></strong>
-                <?php if ($is_reception): ?>
-                    <span style="background:rgba(251,191,36,0.2);color:#FCD34D;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:500;">👀 Viewing as Receptionist</span>
-                <?php endif; ?>
                 <span style="color:rgba(255,255,255,0.3);margin:0 4px;">|</span>
                 <span style="color:rgba(255,255,255,0.8);"><i class="far fa-calendar-alt"></i> <?= date('F d, Y') ?></span>
                 <span style="color:rgba(255,255,255,0.3);margin:0 4px;">|</span>
@@ -242,7 +367,6 @@ include_once '../../components/cashier_sidebar.php';
             </p>
         </div>
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
-            <!-- Go to Reception Dashboard Button -->
             <a href="../reception/dashboard.php" class="btn-reception-custom" style="display:inline-flex;align-items:center;gap:8px;padding:10px 22px;background:rgba(255,255,255,0.2);color:white;border:1px solid rgba(255,255,255,0.3);border-radius:12px;font-weight:600;font-size:0.82rem;text-decoration:none;transition:all 0.3s;cursor:pointer;">
                 <i class="fas fa-arrow-left"></i> Reception Dashboard
             </a>
@@ -256,228 +380,250 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
+    <!-- 8 STATS CARDS -->
     <!-- ================================================================ -->
-    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:16px;margin-bottom:28px;">
+    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:14px;margin-bottom:28px;">
         
-        <!-- Card 1: Pending Bills -->
-        <div class="stat-card-modern" onclick="window.location.href='pending_bills.php'" style="background:linear-gradient(135deg, #DC2626, #B91C1C);border-radius:16px;padding:20px 22px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(220,38,38,0.25);">
+        <!-- Card 1: Today Payments -->
+        <div class="stat-card-modern" onclick="window.location.href='payment_history.php'" style="background:linear-gradient(135deg, #0B5ED7, #0A4CA8);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(11,94,215,0.25);">
             <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
-            <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" id="statPending" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $pending_bills ?></div>
-                    <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Pending Bills</div>
+                    <div class="stat-number" id="statTodayPayments" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($today_payments_count) ?></div>
+                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Today Payments</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($today_payments_total) ?></div>
                 </div>
-                <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
-                    <i class="fas fa-clock"></i>
-                </div>
-            </div>
-            <div style="margin-top:14px;font-size:0.6rem;color:rgba(255,255,255,0.6);display:flex;align-items:center;gap:6px;">
-                <span class="live-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
-                Live Update
-                <span style="margin-left:auto;opacity:0.5;"><i class="fas fa-arrow-right"></i></span>
-            </div>
-        </div>
-        
-        <!-- Card 2: Today's Payments -->
-        <div class="stat-card-modern" onclick="window.location.href='payment_history.php'" style="background:linear-gradient(135deg, #0B5ED7, #0A4CA8);border-radius:16px;padding:20px 22px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(11,94,215,0.25);">
-            <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
-            <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
-                <div>
-                    <div class="stat-number" id="statPayments" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $today_payments ?></div>
-                    <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Today's Payments</div>
-                </div>
-                <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
+                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-credit-card"></i>
                 </div>
             </div>
-            <div style="margin-top:14px;font-size:0.6rem;color:rgba(255,255,255,0.6);display:flex;align-items:center;gap:6px;">
-                <span class="live-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
-                Live Update
-                <span style="margin-left:auto;opacity:0.5;"><i class="fas fa-arrow-right"></i></span>
+            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
+                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
+                Live
             </div>
         </div>
         
-        <!-- Card 3: Total Bills -->
-        <div class="stat-card-modern" onclick="window.location.href='pending_bills.php'" style="background:linear-gradient(135deg, #D97706, #B45309);border-radius:16px;padding:20px 22px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(217,119,6,0.25);">
+        <!-- Card 2: Pending Bills -->
+        <div class="stat-card-modern" onclick="window.location.href='pending_bills.php'" style="background:linear-gradient(135deg, #DC2626, #B91C1C);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(220,38,38,0.25);">
             <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
-            <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" id="statTotal" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($total_bills) ?></div>
-                    <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Total Bills</div>
+                    <div class="stat-number" id="statPending" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($pending_bills) ?></div>
+                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Pending Bills</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($pending_bills_total) ?></div>
                 </div>
-                <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
+                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
+                    <i class="fas fa-clock"></i>
+                </div>
+            </div>
+            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
+                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
+                Live
+            </div>
+        </div>
+        
+        <!-- Card 3: Cancelled Bills -->
+        <div class="stat-card-modern" onclick="window.location.href='cancelled_bills.php'" style="background:linear-gradient(135deg, #6B7280, #4B5563);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(107,114,128,0.25);">
+            <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
+                <div>
+                    <div class="stat-number" id="statCancelled" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($cancelled_bills) ?></div>
+                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Cancelled Bills</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($cancelled_bills_total) ?></div>
+                </div>
+                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
+                    <i class="fas fa-ban"></i>
+                </div>
+            </div>
+            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
+                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
+                Live
+            </div>
+        </div>
+        
+        <!-- Card 4: Total Bills -->
+        <div class="stat-card-modern" onclick="window.location.href='all_bills.php'" style="background:linear-gradient(135deg, #D97706, #B45309);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(217,119,6,0.25);">
+            <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
+                <div>
+                    <div class="stat-number" id="statTotal" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($total_bills) ?></div>
+                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Total Bills</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($total_bills_amount) ?></div>
+                </div>
+                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-file-invoice"></i>
                 </div>
             </div>
-            <div style="margin-top:14px;font-size:0.6rem;color:rgba(255,255,255,0.6);display:flex;align-items:center;gap:6px;">
-                <span class="live-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
-                Live Update
-                <span style="margin-left:auto;opacity:0.5;"><i class="fas fa-arrow-right"></i></span>
+            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
+                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
+                Live
             </div>
         </div>
         
-        <!-- Card 4: Paid Bills -->
-        <div class="stat-card-modern" onclick="window.location.href='paid_bills.php'" style="background:linear-gradient(135deg, #059669, #047857);border-radius:16px;padding:20px 22px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(5,150,105,0.25);">
+        <!-- Card 5: Paid Bills -->
+        <div class="stat-card-modern" onclick="window.location.href='paid_bills.php'" style="background:linear-gradient(135deg, #059669, #047857);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(5,150,105,0.25);">
             <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
-            <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" id="statPaid" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($paid_bills) ?></div>
-                    <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Paid Bills</div>
+                    <div class="stat-number" id="statPaid" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($paid_bills) ?></div>
+                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Paid Bills</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($paid_bills_total) ?></div>
                 </div>
-                <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
+                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-check-circle"></i>
                 </div>
             </div>
-            <div style="margin-top:14px;font-size:0.6rem;color:rgba(255,255,255,0.6);display:flex;align-items:center;gap:6px;">
-                <span class="live-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
-                Live Update
-                <span style="margin-left:auto;opacity:0.5;"><i class="fas fa-arrow-right"></i></span>
+            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
+                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
+                Live
             </div>
         </div>
         
-        <!-- Card 5: Today's Receipts -->
-        <div class="stat-card-modern" onclick="window.location.href='receipt_history.php'" style="background:linear-gradient(135deg, #0D9488, #0F766E);border-radius:16px;padding:20px 22px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(13,148,136,0.25);">
+        <!-- Card 6: Partial Payments -->
+        <div class="stat-card-modern" onclick="window.location.href='partial_payments.php'" style="background:linear-gradient(135deg, #7C3AED, #6D28D9);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(124,58,237,0.25);">
             <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
-            <div style="position:absolute;bottom:-40px;left:-20px;width:80px;height:80px;border-radius:50%;background:rgba(255,255,255,0.04);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
                 <div>
-                    <div class="stat-number" id="statReceipts" style="font-size:2.2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= $today_receipts ?></div>
-                    <div class="stat-label" style="font-size:0.75rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Today's Receipts</div>
+                    <div class="stat-number" id="statPartial" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($partial_bills) ?></div>
+                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Partial Payments</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">Paid: TSh <?= number_format($partial_bills_paid) ?> | Bal: TSh <?= number_format($partial_bills_balance) ?></div>
                 </div>
-                <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.2rem;backdrop-filter:blur(4px);">
-                    <i class="fas fa-receipt"></i>
+                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
+                    <i class="fas fa-hand-holding-usd"></i>
                 </div>
             </div>
-            <div style="margin-top:14px;font-size:0.6rem;color:rgba(255,255,255,0.6);display:flex;align-items:center;gap:6px;">
-                <span class="live-dot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
-                Live Update
-                <span style="margin-left:auto;opacity:0.5;"><i class="fas fa-arrow-right"></i></span>
+            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
+                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
+                Live
+            </div>
+        </div>
+        
+        <!-- Card 7: Expenses -->
+        <div class="stat-card-modern" onclick="window.location.href='expenses.php'" style="background:linear-gradient(135deg, #E11D48, #BE123C);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(225,29,72,0.25);">
+            <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
+                <div>
+                    <div class="stat-number" id="statExpenses" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($expenses_count) ?></div>
+                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Total Expenses</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($expenses_total) ?> | Today: TSh <?= number_format($today_expenses) ?></div>
+                </div>
+                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
+                    <i class="fas fa-money-bill-wave"></i>
+                </div>
+            </div>
+            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
+                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
+                Live
+            </div>
+        </div>
+        
+        <!-- Card 8: Payment History -->
+        <div class="stat-card-modern" onclick="window.location.href='payment_history.php'" style="background:linear-gradient(135deg, #0D9488, #0F766E);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(13,148,136,0.25);">
+            <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
+                <div>
+                    <div class="stat-number" id="statHistory" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format(count($payment_history)) ?></div>
+                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Recent Payments</div>
+                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">Last 15 transactions</div>
+                </div>
+                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
+                    <i class="fas fa-history"></i>
+                </div>
+            </div>
+            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
+                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
+                Live
             </div>
         </div>
         
     </div>
 
     <!-- ================================================================ -->
-    <!-- PATIENTS WITH BILLS -->
+    <!-- PAYMENT HISTORY TABLE -->
     <!-- ================================================================ -->
     <div class="card-modern" style="background:var(--bg-card);border-radius:16px;padding:22px 24px;border:2px solid var(--border-color);margin-bottom:24px;transition:all 0.3s;box-shadow:0 2px 10px rgba(0,0,0,0.04);">
         <div class="card-header-modern" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
             <h3 class="card-title" style="font-size:0.95rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:10px;">
-                <i class="fas fa-users" style="color:var(--primary);"></i>
-                Patients with Bills
-                <span style="font-size:0.7rem;font-weight:400;color:var(--text-secondary);background:var(--bg-body);padding:2px 12px;border-radius:20px;">Click to view history</span>
+                <i class="fas fa-history" style="color:var(--success);"></i>
+                Payment History
+                <span style="font-size:0.7rem;font-weight:400;color:var(--text-secondary);background:var(--bg-body);padding:2px 12px;border-radius:20px;">Last 15 transactions</span>
             </h3>
-            <a href="payment_history.php" style="color:var(--primary);font-size:0.85rem;text-decoration:none;font-weight:500;transition:all 0.3s;display:flex;align-items:center;gap:4px;">
+            <a href="payment_history.php" style="color:var(--success);font-size:0.85rem;text-decoration:none;font-weight:500;transition:all 0.3s;display:flex;align-items:center;gap:4px;">
                 View All <i class="fas fa-arrow-right" style="font-size:0.7rem;"></i>
             </a>
         </div>
         
-        <div class="patients-grid" style="display:grid;grid-template-columns:repeat(auto-fill, minmax(280px, 1fr));gap:12px;" id="patientsWithBills">
-            <?php if (count($patients_with_bills) > 0): ?>
-                <?php foreach ($patients_with_bills as $patient): ?>
-                    <a href="payment_history.php?patient_id=<?= $patient['id'] ?>" 
-                       class="patient-item-modern" style="display:flex;align-items:center;justify-content:space-between;padding:12px 16px;border-radius:12px;border:2px solid var(--border-color);transition:all 0.3s;text-decoration:none;cursor:pointer;background:var(--bg-card);">
-                        <div style="display:flex;align-items:center;gap:12px;">
-                            <div style="width:40px;height:40px;border-radius:50%;background:var(--primary-bg);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:0.9rem;color:var(--primary);flex-shrink:0;">
-                                <?= strtoupper(substr($patient['full_name'], 0, 1)) ?>
-                            </div>
-                            <div>
-                                <p style="font-weight:600;font-size:0.85rem;color:var(--text-primary);"><?= htmlspecialchars($patient['full_name']) ?></p>
-                                <p style="font-size:0.65rem;color:var(--text-secondary);"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></p>
-                            </div>
-                        </div>
-                        <div style="display:flex;align-items:center;gap:8px;">
-                            <div style="display:flex;gap:4px;">
-                                <?php if (($patient['pending_bills_count'] ?? 0) > 0): ?>
-                                    <span class="badge-pending-modern" style="padding:3px 10px;border-radius:20px;font-size:0.6rem;font-weight:600;background:#FEF3C7;color:#D97706;border:1px solid #FDE68A;">⏳ <?= $patient['pending_bills_count'] ?></span>
-                                <?php endif; ?>
-                                <?php if (($patient['paid_bills_count'] ?? 0) > 0): ?>
-                                    <span class="badge-paid-modern" style="padding:3px 10px;border-radius:20px;font-size:0.6rem;font-weight:600;background:#D1FAE5;color:#059669;border:1px solid #A7F3D0;">✅ <?= $patient['paid_bills_count'] ?></span>
-                                <?php endif; ?>
-                                <?php if (($patient['pending_bills_count'] ?? 0) == 0 && ($patient['paid_bills_count'] ?? 0) == 0): ?>
-                                    <span class="badge-empty" style="padding:3px 10px;border-radius:20px;font-size:0.6rem;font-weight:600;background:var(--bg-body);color:var(--text-secondary);border:1px solid var(--border-color);">No bills</span>
-                                <?php endif; ?>
-                            </div>
-                            <i class="fas fa-chevron-right" style="font-size:0.6rem;color:var(--text-secondary);opacity:0.3;transition:all 0.3s;"></i>
-                        </div>
-                    </a>
-                <?php endforeach; ?>
+        <div class="scroll-container" style="max-height:350px;overflow-y:auto;padding-right:4px;" id="paymentHistoryList">
+            <?php if (count($payment_history) > 0): ?>
+                <table style="width:100%;border-collapse:collapse;font-size:0.8rem;">
+                    <thead style="background:var(--gray-50);border-radius:8px;border-bottom:2px solid var(--border-color);">
+                        <tr>
+                            <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Bill #</th>
+                            <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Patient</th>
+                            <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Amount</th>
+                            <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Paid</th>
+                            <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Balance</th>
+                            <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Status</th>
+                            <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Method</th>
+                            <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($payment_history as $payment): 
+                            $status = $payment['status'] ?? 'pending';
+                            $status_color = $status === 'paid' ? '#059669' : ($status === 'partial' ? '#D97706' : '#DC2626');
+                            $status_bg = $status === 'paid' ? '#D1FAE5' : ($status === 'partial' ? '#FEF3C7' : '#FEE2E2');
+                            $method_icon = ($payment['payment_method'] ?? 'cash') === 'cash' ? '💵' : '📱';
+                        ?>
+                            <tr style="border-bottom:1px solid var(--border-color);transition:all 0.2s;">
+                                <td style="padding:8px 12px;font-weight:500;color:var(--text-primary);">
+                                    <a href="view_bill.php?id=<?= $payment['bill_id'] ?>" style="color:var(--success);text-decoration:none;"><?= htmlspecialchars($payment['bill_number']) ?></a>
+                                </td>
+                                <td style="padding:8px 12px;color:var(--text-primary);">
+                                    <div style="font-weight:500;"><?= htmlspecialchars($payment['patient_name'] ?? 'N/A') ?></div>
+                                    <div style="font-size:0.6rem;color:var(--text-secondary);"><?= htmlspecialchars($payment['patient_code'] ?? 'N/A') ?></div>
+                                </td>
+                                <td style="padding:8px 12px;text-align:right;font-weight:500;color:var(--text-secondary);">TSh <?= number_format($payment['total_amount'] ?? 0) ?></td>
+                                <td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--success);">TSh <?= number_format($payment['paid_amount'] ?? 0) ?></td>
+                                <td style="padding:8px 12px;text-align:right;font-weight:500;color:<?= ($payment['balance'] ?? 0) > 0 ? '#DC2626' : 'var(--text-secondary)' ?>;">
+                                    TSh <?= number_format($payment['balance'] ?? 0) ?>
+                                </td>
+                                <td style="padding:8px 12px;text-align:center;">
+                                    <span style="display:inline-block;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:600;background:<?= $status_bg ?>;color:<?= $status_color ?>;border:1px solid <?= $status_color ?>20;">
+                                        <?= strtoupper($status) ?>
+                                    </span>
+                                </td>
+                                <td style="padding:8px 12px;text-align:center;font-size:0.8rem;"><?= $method_icon ?></td>
+                                <td style="padding:8px 12px;text-align:center;font-size:0.65rem;color:var(--text-secondary);"><?= time_ago($payment['updated_at'] ?? '') ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
             <?php else: ?>
-                <div class="col-span-full" style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
-                    <i class="fas fa-users" style="font-size:2.5rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
-                    <p style="font-size:0.95rem;font-weight:500;">No patients with bills found</p>
-                    <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Patients with bills will appear here</p>
+                <div style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
+                    <i class="fas fa-receipt" style="font-size:2.5rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
+                    <p style="font-size:0.95rem;font-weight:500;">No payment history found</p>
+                    <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Payments will appear here</p>
                 </div>
             <?php endif; ?>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PAYMENTS & PAYMENT METHODS -->
+    <!-- TWO COLUMN GRID: Payment Methods + Today's Items -->
     <!-- ================================================================ -->
-    <div class="two-col-grid" style="display:grid;grid-template-columns:2fr 1fr;gap:20px;margin-bottom:24px;">
+    <div class="two-col-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:24px;">
         
-        <!-- Recent Payments -->
-        <div class="card-modern" style="background:var(--bg-card);border-radius:16px;padding:22px 24px;border:2px solid var(--border-color);box-shadow:0 2px 10px rgba(0,0,0,0.04);">
-            <div class="card-header-modern" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
-                <h3 class="card-title" style="font-size:0.95rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:10px;">
-                    <i class="fas fa-history" style="color:var(--primary);"></i>
-                    Recent Payments
-                </h3>
-                <span style="font-size:0.65rem;color:var(--text-secondary);background:var(--bg-body);padding:2px 12px;border-radius:20px;">Last 10</span>
-            </div>
-            <div class="scroll-container" style="max-height:300px;overflow-y:auto;padding-right:4px;" id="recentPaymentsList">
-                <?php if (count($recent_payments) > 0): ?>
-                    <?php foreach ($recent_payments as $payment): ?>
-                        <div class="payment-item" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-color);transition:all 0.3s;border-radius:8px;margin-bottom:2px;">
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <div style="width:36px;height:36px;border-radius:50%;background:var(--success-bg);display:flex;align-items:center;justify-content:center;font-size:0.8rem;color:var(--success);flex-shrink:0;">
-                                    <i class="fas fa-user"></i>
-                                </div>
-                                <div>
-                                    <p style="font-weight:500;font-size:0.85rem;color:var(--text-primary);"><?= htmlspecialchars($payment['patient_name']) ?></p>
-                                    <p style="font-size:0.65rem;color:var(--text-secondary);"><?= htmlspecialchars($payment['bill_number']) ?></p>
-                                </div>
-                            </div>
-                            <div style="text-align:right;">
-                                <p style="font-weight:700;font-size:0.95rem;color:var(--success);">TSh <?= number_format($payment['amount'] ?? 0) ?></p>
-                                <p style="font-size:0.6rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px;justify-content:flex-end;">
-                                    <?php 
-                                        $method = $payment['payment_method'] ?? 'cash';
-                                        $methodIcon = $method === 'cash' ? '💵' : ($method === 'm-pesa' ? '📱' : '💳');
-                                        echo $methodIcon . ' ' . strtoupper($method);
-                                    ?>
-                                    <span style="opacity:0.3;">•</span>
-                                    <?= time_ago($payment['received_at'] ?? '') ?>
-                                </p>
-                            </div>
-                        </div>
-                    <?php endforeach; ?>
-                <?php else: ?>
-                    <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
-                        <i class="fas fa-clock" style="font-size:2rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
-                        <p style="font-size:0.95rem;font-weight:500;">No recent payments</p>
-                        <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Payments will appear here</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-        <!-- Payment Methods -->
-        <div class="card-modern" style="background:var(--bg-card);border-radius:16px;padding:22px 24px;border:2px solid var(--border-color);box-shadow:0 2px 10px rgba(0,0,0,0.04);">
-            <div class="card-header-modern" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:8px;">
-                <h3 class="card-title" style="font-size:0.95rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:10px;">
+        <!-- Payment Methods Today -->
+        <div class="card-modern" style="background:var(--bg-card);border-radius:16px;padding:20px 22px;border:2px solid var(--border-color);box-shadow:0 2px 10px rgba(0,0,0,0.04);">
+            <div class="card-header-modern" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+                <h3 class="card-title" style="font-size:0.9rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
                     <i class="fas fa-chart-pie" style="color:var(--success);"></i>
-                    Payment Methods
+                    Payment Methods Today
                 </h3>
-                <span style="font-size:0.65rem;color:var(--text-secondary);background:var(--bg-body);padding:2px 12px;border-radius:20px;">Today</span>
+                <span style="font-size:0.6rem;color:var(--text-secondary);background:var(--bg-body);padding:2px 10px;border-radius:20px;"><?= date('M d, Y') ?></span>
             </div>
-            <div class="scroll-container" style="max-height:300px;overflow-y:auto;padding-right:4px;" id="paymentMethods">
+            <div id="paymentMethods">
                 <?php if (count($payment_methods) > 0): ?>
                     <?php 
                         $methodIcons = [
@@ -504,24 +650,67 @@ include_once '../../components/cashier_sidebar.php';
                         ];
                     ?>
                     <?php foreach ($payment_methods as $method): ?>
-                        <div class="method-item" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-color);">
-                            <div style="display:flex;align-items:center;gap:10px;">
-                                <div style="width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.9rem;background:<?= $methodColors[$method['payment_method']] ?? '#6B7280' ?>20;color:<?= $methodColors[$method['payment_method']] ?? '#6B7280' ?>;">
+                        <div class="method-item" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border-color);">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <div style="width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.8rem;background:<?= $methodColors[$method['payment_method']] ?? '#6B7280' ?>20;color:<?= $methodColors[$method['payment_method']] ?? '#6B7280' ?>;">
                                     <?= $methodIcons[$method['payment_method']] ?? '💵' ?>
                                 </div>
-                                <span style="font-size:0.85rem;font-weight:500;color:var(--text-primary);"><?= strtoupper($method['payment_method'] ?? 'CASH') ?></span>
+                                <span style="font-size:0.8rem;font-weight:500;color:var(--text-primary);text-transform:uppercase;"><?= htmlspecialchars($method['payment_method'] ?? 'CASH') ?></span>
                             </div>
-                            <div style="display:flex;align-items:center;gap:10px;">
-                                <span style="font-size:0.7rem;color:var(--text-secondary);"><?= $method['count'] ?> payments</span>
-                                <span style="font-weight:700;font-size:0.85rem;color:var(--success);">TSh <?= number_format($method['total'] ?? 0) ?></span>
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:0.65rem;color:var(--text-secondary);"><?= $method['count'] ?> payments</span>
+                                <span style="font-weight:600;font-size:0.85rem;color:var(--success);">TSh <?= number_format($method['total'] ?? 0) ?></span>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
-                        <i class="fas fa-chart-pie" style="font-size:2rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
-                        <p style="font-size:0.95rem;font-weight:500;">No payments today</p>
-                        <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Payment methods will appear here</p>
+                    <div style="text-align:center;padding:20px;color:var(--text-secondary);">
+                        <i class="fas fa-chart-pie" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.2;"></i>
+                        <p style="font-size:0.8rem;">No payments today</p>
+                    </div>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <!-- Today's Items Summary -->
+        <div class="card-modern" style="background:var(--bg-card);border-radius:16px;padding:20px 22px;border:2px solid var(--border-color);box-shadow:0 2px 10px rgba(0,0,0,0.04);">
+            <div class="card-header-modern" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
+                <h3 class="card-title" style="font-size:0.9rem;font-weight:600;color:var(--text-primary);display:flex;align-items:center;gap:8px;">
+                    <i class="fas fa-boxes" style="color:var(--primary);"></i>
+                    Today's Items Summary
+                </h3>
+                <span style="font-size:0.6rem;color:var(--text-secondary);background:var(--bg-body);padding:2px 10px;border-radius:20px;"><?= date('M d, Y') ?></span>
+            </div>
+            <div id="todayItems">
+                <?php if (count($today_items) > 0): ?>
+                    <?php 
+                        $itemIcons = [
+                            'consultation' => '🩺',
+                            'medication' => '💊',
+                            'lab_test' => '🔬',
+                            'procedure' => '⚕️',
+                            'registration' => '📋',
+                            'equipment' => '🛠️',
+                            'tool' => '🔧',
+                            'other' => '📦'
+                        ];
+                    ?>
+                    <?php foreach ($today_items as $item): ?>
+                        <div class="item-summary" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border-color);">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:1rem;"><?= $itemIcons[$item['item_type']] ?? '📦' ?></span>
+                                <div>
+                                    <span style="font-size:0.8rem;font-weight:500;color:var(--text-primary);text-transform:capitalize;"><?= htmlspecialchars($item['item_type'] ?? 'Other') ?></span>
+                                    <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:1px;"><?= $item['item_count'] ?> items | <?= $item['bill_count'] ?> bills</span>
+                                </div>
+                            </div>
+                            <span style="font-weight:600;font-size:0.85rem;color:var(--text-primary);">TSh <?= number_format($item['total_amount'] ?? 0) ?></span>
+                        </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <div style="text-align:center;padding:20px;color:var(--text-secondary);">
+                        <i class="fas fa-boxes" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.2;"></i>
+                        <p style="font-size:0.8rem;">No items today</p>
                     </div>
                 <?php endif; ?>
             </div>
@@ -532,55 +721,60 @@ include_once '../../components/cashier_sidebar.php';
     <!-- ================================================================ -->
     <!-- QUICK ACTIONS -->
     <!-- ================================================================ -->
-    <div class="quick-actions-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(150px, 1fr));gap:12px;margin-top:4px;">
-        <a href="pending_bills.php" class="quick-action-btn" style="padding:16px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
-            <span style="font-size:1.8rem;display:block;margin-bottom:6px;">⏳</span>
-            <span style="font-size:0.75rem;font-weight:600;color:var(--text-primary);">Pending Bills</span>
-            <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:3px;opacity:0.6;">View all pending</span>
+    <div class="quick-actions-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(140px, 1fr));gap:12px;margin-top:4px;">
+        <a href="pending_bills.php" class="quick-action-btn" style="padding:14px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
+            <span style="font-size:1.6rem;display:block;margin-bottom:4px;">⏳</span>
+            <span style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Pending Bills</span>
+            <span style="font-size:0.55rem;color:var(--text-secondary);display:block;margin-top:2px;opacity:0.6;"><?= $pending_bills ?> bills</span>
         </a>
         
-        <a href="paid_bills.php" class="quick-action-btn" style="padding:16px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
-            <span style="font-size:1.8rem;display:block;margin-bottom:6px;">✅</span>
-            <span style="font-size:0.75rem;font-weight:600;color:var(--text-primary);">Paid Bills</span>
-            <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:3px;opacity:0.6;">View all paid</span>
+        <a href="paid_bills.php" class="quick-action-btn" style="padding:14px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
+            <span style="font-size:1.6rem;display:block;margin-bottom:4px;">✅</span>
+            <span style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Paid Bills</span>
+            <span style="font-size:0.55rem;color:var(--text-secondary);display:block;margin-top:2px;opacity:0.6;"><?= $paid_bills ?> paid</span>
         </a>
         
-        <a href="print_receipt.php" class="quick-action-btn" style="padding:16px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
-            <span style="font-size:1.8rem;display:block;margin-bottom:6px;">🧾</span>
-            <span style="font-size:0.75rem;font-weight:600;color:var(--text-primary);">Print Receipt</span>
-            <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:3px;opacity:0.6;">Print new receipt</span>
+        <a href="partial_payments.php" class="quick-action-btn" style="padding:14px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
+            <span style="font-size:1.6rem;display:block;margin-bottom:4px;">💰</span>
+            <span style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Partial</span>
+            <span style="font-size:0.55rem;color:var(--text-secondary);display:block;margin-top:2px;opacity:0.6;"><?= $partial_bills ?> bills</span>
         </a>
         
-        <a href="payment_history.php" class="quick-action-btn" style="padding:16px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
-            <span style="font-size:1.8rem;display:block;margin-bottom:6px;">📜</span>
-            <span style="font-size:0.75rem;font-weight:600;color:var(--text-primary);">Payment History</span>
-            <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:3px;opacity:0.6;">View history</span>
+        <a href="payment_history.php" class="quick-action-btn" style="padding:14px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
+            <span style="font-size:1.6rem;display:block;margin-bottom:4px;">📜</span>
+            <span style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">History</span>
+            <span style="font-size:0.55rem;color:var(--text-secondary);display:block;margin-top:2px;opacity:0.6;">View all</span>
         </a>
         
-        <!-- Reception Dashboard Quick Action -->
-        <a href="../reception/dashboard.php" class="quick-action-btn" style="padding:16px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
-            <span style="font-size:1.8rem;display:block;margin-bottom:6px;">🏥</span>
-            <span style="font-size:0.75rem;font-weight:600;color:var(--text-primary);">Reception</span>
-            <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:3px;opacity:0.6;">Go to Reception</span>
+        <a href="expenses.php" class="quick-action-btn" style="padding:14px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
+            <span style="font-size:1.6rem;display:block;margin-bottom:4px;">💸</span>
+            <span style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Expenses</span>
+            <span style="font-size:0.55rem;color:var(--text-secondary);display:block;margin-top:2px;opacity:0.6;"><?= $expenses_count ?> records</span>
+        </a>
+        
+        <a href="../reception/dashboard.php" class="quick-action-btn" style="padding:14px 12px;border-radius:14px;text-align:center;transition:all 0.3s;cursor:pointer;text-decoration:none;display:block;border:2px solid var(--border-color);background:var(--bg-card);">
+            <span style="font-size:1.6rem;display:block;margin-bottom:4px;">🏥</span>
+            <span style="font-size:0.7rem;font-weight:600;color:var(--text-primary);">Reception</span>
+            <span style="font-size:0.55rem;color:var(--text-secondary);display:block;margin-top:2px;opacity:0.6;">Go to</span>
         </a>
     </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer" style="padding:16px 0;border-top:2px solid var(--border-color);margin-top:28px;text-align:center;font-size:0.7rem;color:var(--text-secondary);">
+    <footer class="footer" style="padding:14px 0;border-top:2px solid var(--border-color);margin-top:24px;text-align:center;font-size:0.65rem;color:var(--text-secondary);">
         <p>
             <span class="footer-brand" style="color:var(--success);font-weight:600;">Braick Dispensary</span> Management System
-            <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary);opacity:0.3;margin:0 6px;">|</span>
             Cashier Dashboard
-            <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary);opacity:0.3;margin:0 6px;">|</span>
             <span style="color:#FFD700;font-weight:600;">👤 <?= htmlspecialchars($cashier_name) ?></span>
             <?php if ($is_reception): ?>
-                <span style="color:#FCD34D;font-weight:500;font-size:0.6rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 View Only (Reception)</span>
+                <span style="color:#FCD34D;font-weight:500;font-size:0.55rem;background:rgba(251,191,36,0.15);padding:2px 8px;border-radius:10px;margin-left:4px;">👀 View Only</span>
             <?php endif; ?>
-            <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary);opacity:0.3;margin:0 6px;">|</span>
             <span id="footerTimestamp">● Live</span>
-            <span style="color:var(--text-secondary);opacity:0.3;margin:0 8px;">|</span>
+            <span style="color:var(--text-secondary);opacity:0.3;margin:0 6px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -590,11 +784,11 @@ include_once '../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <!-- TOAST -->
 <!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;position:fixed;bottom:24px;right:24px;padding:14px 20px;border-radius:12px;z-index:999;max-width:380px;transform:translateY(100px);opacity:0;transition:all 0.4s cubic-bezier(0.4,0,0.2,1);display:flex;align-items:center;gap:12px;color:white;box-shadow:0 10px 40px rgba(0,0,0,0.15);">
-    <i class="fas fa-info-circle" style="font-size:1.2rem;"></i>
+<div id="toast" class="toast-custom" style="display:none;position:fixed;bottom:24px;right:24px;padding:12px 18px;border-radius:12px;z-index:999;max-width:360px;transform:translateY(100px);opacity:0;transition:all 0.4s cubic-bezier(0.4,0,0.2,1);display:flex;align-items:center;gap:10px;color:white;box-shadow:0 10px 40px rgba(0,0,0,0.15);">
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
-        <p style="font-weight:600;font-size:0.9rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.8rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
     </div>
 </div>
 
@@ -670,118 +864,170 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     function updateDashboard(data) {
         // Update stats
-        var pendingEl = document.getElementById('statPending');
-        var paymentsEl = document.getElementById('statPayments');
-        var totalEl = document.getElementById('statTotal');
-        var paidEl = document.getElementById('statPaid');
-        var receiptsEl = document.getElementById('statReceipts');
-        var pendingCountEl = document.getElementById('pendingCount');
+        var elements = {
+            statTodayPayments: data.today_payments_count || 0,
+            statPending: data.pending_bills || 0,
+            statCancelled: data.cancelled_bills || 0,
+            statTotal: data.total_bills || 0,
+            statPaid: data.paid_bills || 0,
+            statPartial: data.partial_bills || 0,
+            statExpenses: data.expenses_count || 0,
+            statHistory: data.history_count || 0,
+            pendingCount: data.pending_bills || 0
+        };
         
-        if (pendingEl) pendingEl.textContent = data.pending_bills || 0;
-        if (paymentsEl) paymentsEl.textContent = data.today_payments || 0;
-        if (totalEl) totalEl.textContent = (data.total_bills || 0).toLocaleString();
-        if (paidEl) paidEl.textContent = (data.paid_bills || 0).toLocaleString();
-        if (receiptsEl) receiptsEl.textContent = data.today_receipts || 0;
-        if (pendingCountEl) pendingCountEl.textContent = data.pending_bills || 0;
+        for (var key in elements) {
+            var el = document.getElementById(key);
+            if (el) {
+                if (key === 'statTotal' || key === 'statPaid' || key === 'statExpenses' || key === 'statCancelled') {
+                    el.textContent = Number(elements[key]).toLocaleString();
+                } else {
+                    el.textContent = elements[key];
+                }
+            }
+        }
         
-        // Update recent payments
-        var paymentsList = document.getElementById('recentPaymentsList');
-        if (paymentsList && data.recent_payments) {
+        // Update payment history table
+        var historyList = document.getElementById('paymentHistoryList');
+        if (historyList && data.payment_history) {
             var html = '';
-            if (data.recent_payments.length > 0) {
-                data.recent_payments.forEach(function(payment) {
-                    var methodIcon = payment.payment_method === 'cash' ? '💵' : 
-                                    (payment.payment_method === 'm-pesa' ? '📱' : '💳');
+            if (data.payment_history.length > 0) {
+                html = `
+                    <table style="width:100%;border-collapse:collapse;font-size:0.8rem;">
+                        <thead style="background:var(--gray-50);border-radius:8px;border-bottom:2px solid var(--border-color);">
+                            <tr>
+                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Bill #</th>
+                                <th style="padding:8px 12px;text-align:left;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Patient</th>
+                                <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Amount</th>
+                                <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Paid</th>
+                                <th style="padding:8px 12px;text-align:right;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Balance</th>
+                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Status</th>
+                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Method</th>
+                                <th style="padding:8px 12px;text-align:center;font-weight:600;color:var(--text-secondary);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.03em;">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                `;
+                data.payment_history.forEach(function(payment) {
+                    var status = payment.status || 'pending';
+                    var statusColor = status === 'paid' ? '#059669' : (status === 'partial' ? '#D97706' : '#DC2626');
+                    var statusBg = status === 'paid' ? '#D1FAE5' : (status === 'partial' ? '#FEF3C7' : '#FEE2E2');
+                    var methodIcon = (payment.payment_method || 'cash') === 'cash' ? '💵' : '📱';
                     html += `
-                        <div class="payment-item" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-color);transition:all 0.3s;border-radius:8px;margin-bottom:2px;">
-                            <div style="display:flex;align-items:center;gap:12px;">
-                                <div style="width:36px;height:36px;border-radius:50%;background:var(--success-bg);display:flex;align-items:center;justify-content:center;font-size:0.8rem;color:var(--success);flex-shrink:0;">
-                                    <i class="fas fa-user"></i>
-                                </div>
-                                <div>
-                                    <p style="font-weight:500;font-size:0.85rem;color:var(--text-primary);">${payment.patient_name}</p>
-                                    <p style="font-size:0.65rem;color:var(--text-secondary);">${payment.bill_number}</p>
-                                </div>
-                            </div>
-                            <div style="text-align:right;">
-                                <p style="font-weight:700;font-size:0.95rem;color:var(--success);">TSh ${Number(payment.amount).toLocaleString()}</p>
-                                <p style="font-size:0.6rem;color:var(--text-secondary);display:flex;align-items:center;gap:4px;justify-content:flex-end;">
-                                    ${methodIcon} ${payment.payment_method.toUpperCase()}
-                                    <span style="opacity:0.3;">•</span>
-                                    ${payment.time_ago}
-                                </p>
-                            </div>
-                        </div>
+                        <tr style="border-bottom:1px solid var(--border-color);transition:all 0.2s;">
+                            <td style="padding:8px 12px;font-weight:500;color:var(--text-primary);">
+                                <a href="view_bill.php?id=${payment.bill_id}" style="color:var(--success);text-decoration:none;">${payment.bill_number}</a>
+                            </td>
+                            <td style="padding:8px 12px;color:var(--text-primary);">
+                                <div style="font-weight:500;">${payment.patient_name || 'N/A'}</div>
+                                <div style="font-size:0.6rem;color:var(--text-secondary);">${payment.patient_code || 'N/A'}</div>
+                            </td>
+                            <td style="padding:8px 12px;text-align:right;font-weight:500;color:var(--text-secondary);">TSh ${Number(payment.total_amount || 0).toLocaleString()}</td>
+                            <td style="padding:8px 12px;text-align:right;font-weight:600;color:var(--success);">TSh ${Number(payment.paid_amount || 0).toLocaleString()}</td>
+                            <td style="padding:8px 12px;text-align:right;font-weight:500;color:${Number(payment.balance || 0) > 0 ? '#DC2626' : 'var(--text-secondary)'};">TSh ${Number(payment.balance || 0).toLocaleString()}</td>
+                            <td style="padding:8px 12px;text-align:center;">
+                                <span style="display:inline-block;padding:2px 12px;border-radius:12px;font-size:0.6rem;font-weight:600;background:${statusBg};color:${statusColor};border:1px solid ${statusColor}20;">
+                                    ${status.toUpperCase()}
+                                </span>
+                            </td>
+                            <td style="padding:8px 12px;text-align:center;font-size:0.8rem;">${methodIcon}</td>
+                            <td style="padding:8px 12px;text-align:center;font-size:0.65rem;color:var(--text-secondary);">${payment.time_ago || 'Just now'}</td>
+                        </tr>
                     `;
                 });
+                html += `</tbody></table>`;
             } else {
                 html = `
-                    <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
-                        <i class="fas fa-clock" style="font-size:2rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
-                        <p style="font-size:0.95rem;font-weight:500;">No recent payments</p>
+                    <div style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
+                        <i class="fas fa-receipt" style="font-size:2.5rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
+                        <p style="font-size:0.95rem;font-weight:500;">No payment history found</p>
                         <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Payments will appear here</p>
                     </div>
                 `;
             }
-            paymentsList.innerHTML = html;
+            historyList.innerHTML = html;
         }
         
         // Update payment methods
         var methodsEl = document.getElementById('paymentMethods');
         if (methodsEl && data.payment_methods) {
             var methodIcons = {
-                'cash': '💵',
-                'm-pesa': '📱',
-                'airtel_money': '📱',
-                'tigo_pesa': '📱',
-                'halopesa': '📱',
-                'card': '💳',
-                'bank': '🏦',
-                'insurance': '🏥',
-                'other': '📦'
+                'cash': '💵', 'm-pesa': '📱', 'airtel_money': '📱',
+                'tigo_pesa': '📱', 'halopesa': '📱', 'card': '💳',
+                'bank': '🏦', 'insurance': '🏥', 'other': '📦'
             };
             var methodColors = {
-                'cash': '#059669',
-                'm-pesa': '#0B5ED7',
-                'airtel_money': '#DC2626',
-                'tigo_pesa': '#D97706',
-                'halopesa': '#7C3AED',
-                'card': '#0D9488',
-                'bank': '#4B5563',
-                'insurance': '#0891B2',
-                'other': '#6B7280'
+                'cash': '#059669', 'm-pesa': '#0B5ED7', 'airtel_money': '#DC2626',
+                'tigo_pesa': '#D97706', 'halopesa': '#7C3AED', 'card': '#0D9488',
+                'bank': '#4B5563', 'insurance': '#0891B2', 'other': '#6B7280'
             };
             
             var html = '';
-            if (data.payment_methods.length > 0) {
+            if (data.payment_methods && data.payment_methods.length > 0) {
                 data.payment_methods.forEach(function(method) {
                     var icon = methodIcons[method.payment_method] || '💵';
                     var color = methodColors[method.payment_method] || '#6B7280';
                     html += `
-                        <div class="method-item" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--border-color);">
-                            <div style="display:flex;align-items:center;gap:10px;">
-                                <div style="width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.9rem;background:${color}20;color:${color};">
+                        <div class="method-item" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border-color);">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <div style="width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.8rem;background:${color}20;color:${color};">
                                     ${icon}
                                 </div>
-                                <span style="font-size:0.85rem;font-weight:500;color:var(--text-primary);">${method.payment_method.toUpperCase()}</span>
+                                <span style="font-size:0.8rem;font-weight:500;color:var(--text-primary);text-transform:uppercase;">${method.payment_method.toUpperCase()}</span>
                             </div>
-                            <div style="display:flex;align-items:center;gap:10px;">
-                                <span style="font-size:0.7rem;color:var(--text-secondary);">${method.count} payments</span>
-                                <span style="font-weight:700;font-size:0.85rem;color:var(--success);">TSh ${Number(method.total).toLocaleString()}</span>
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:0.65rem;color:var(--text-secondary);">${method.count} payments</span>
+                                <span style="font-weight:600;font-size:0.85rem;color:var(--success);">TSh ${Number(method.total || 0).toLocaleString()}</span>
                             </div>
                         </div>
                     `;
                 });
             } else {
                 html = `
-                    <div style="text-align:center;padding:30px 20px;color:var(--text-secondary);">
-                        <i class="fas fa-chart-pie" style="font-size:2rem;display:block;margin-bottom:12px;opacity:0.2;"></i>
-                        <p style="font-size:0.95rem;font-weight:500;">No payments today</p>
-                        <p style="font-size:0.8rem;opacity:0.6;margin-top:4px;">Payment methods will appear here</p>
+                    <div style="text-align:center;padding:20px;color:var(--text-secondary);">
+                        <i class="fas fa-chart-pie" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.2;"></i>
+                        <p style="font-size:0.8rem;">No payments today</p>
                     </div>
                 `;
             }
             methodsEl.innerHTML = html;
+        }
+        
+        // Update today's items
+        var itemsEl = document.getElementById('todayItems');
+        if (itemsEl && data.today_items) {
+            var itemIcons = {
+                'consultation': '🩺', 'medication': '💊', 'lab_test': '🔬',
+                'procedure': '⚕️', 'registration': '📋', 'equipment': '🛠️',
+                'tool': '🔧', 'other': '📦'
+            };
+            
+            var html = '';
+            if (data.today_items && data.today_items.length > 0) {
+                data.today_items.forEach(function(item) {
+                    var icon = itemIcons[item.item_type] || '📦';
+                    html += `
+                        <div class="item-summary" style="display:flex;align-items:center;justify-content:space-between;padding:8px 12px;border-bottom:1px solid var(--border-color);">
+                            <div style="display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:1rem;">${icon}</span>
+                                <div>
+                                    <span style="font-size:0.8rem;font-weight:500;color:var(--text-primary);text-transform:capitalize;">${item.item_type || 'Other'}</span>
+                                    <span style="font-size:0.6rem;color:var(--text-secondary);display:block;margin-top:1px;">${item.item_count} items | ${item.bill_count} bills</span>
+                                </div>
+                            </div>
+                            <span style="font-weight:600;font-size:0.85rem;color:var(--text-primary);">TSh ${Number(item.total_amount || 0).toLocaleString()}</span>
+                        </div>
+                    `;
+                });
+            } else {
+                html = `
+                    <div style="text-align:center;padding:20px;color:var(--text-secondary);">
+                        <i class="fas fa-boxes" style="font-size:1.5rem;display:block;margin-bottom:8px;opacity:0.2;"></i>
+                        <p style="font-size:0.8rem;">No items today</p>
+                    </div>
+                `;
+            }
+            itemsEl.innerHTML = html;
         }
         
         // Update footer timestamp
@@ -805,9 +1051,7 @@ include_once '../../components/cashier_sidebar.php';
         if (updateInterval) {
             clearInterval(updateInterval);
         }
-        // Initial fetch
         fetchDashboardData();
-        // Set interval
         updateInterval = setInterval(function() {
             if (!isUpdating) {
                 isUpdating = true;
@@ -867,20 +1111,17 @@ include_once '../../components/cashier_sidebar.php';
             50% { opacity: 0.5; transform: scale(0.8); } 
         }
         .stat-card-modern:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(0,0,0,0.15) !important; }
-        .patient-item-modern:hover { border-color: var(--success); transform: translateY(-2px); box-shadow: 0 4px 15px rgba(5,150,105,0.08); }
-        .patient-item-modern:hover .fa-chevron-right { opacity: 0.8 !important; transform: translateX(2px); }
         .quick-action-btn:hover { border-color: var(--success); transform: translateY(-3px); box-shadow: 0 4px 15px rgba(5,150,105,0.08); }
         .btn-primary-custom:hover { transform: translateY(-2px); box-shadow: 0 6px 25px rgba(0,0,0,0.2) !important; }
         .btn-refresh:hover { background: rgba(255,255,255,0.25) !important; }
         .btn-reception-custom:hover { background: rgba(255,255,255,0.3) !important; transform: translateY(-2px); }
-        .payment-item:hover { background: var(--bg-body); border-radius: 8px; }
-        .method-item:hover { background: var(--bg-body); border-radius: 8px; }
         .scroll-container::-webkit-scrollbar { width: 4px; }
         .scroll-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
         .scroll-container::-webkit-scrollbar-thumb { background: var(--success); border-radius: 4px; }
         @media (max-width: 768px) { .two-col-grid { grid-template-columns: 1fr !important; } }
-        .stat-number { transition: all 0.3s ease; }
         .stat-number.updated { transform: scale(1.1); color: #FCD34D; }
+        .method-item:hover { background: var(--bg-body); border-radius: 8px; }
+        .item-summary:hover { background: var(--bg-body); border-radius: 8px; }
     `;
     document.head.appendChild(style);
 
@@ -901,11 +1142,10 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c👤 Role: <?= strtoupper($cashier_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c💳 Today\'s Payments: <?= $today_payments ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Receptionists can now access Cashier Dashboard', 'font-size:13px; color:#34D399;');
+    console.log('%c💳 Today\'s Payments: <?= $today_payments_count ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ 8 Cards: Today Payments, Pending, Cancelled, Total, Paid, Partial, Expenses, History', 'font-size:13px; color:#34D399;');
     console.log('%c🟢 Green Header Applied', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds (NO PAGE REFRESH)', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Login protection: Active (Cashier, Reception, Admin)', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

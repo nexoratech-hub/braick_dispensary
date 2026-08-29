@@ -6,6 +6,8 @@
 // ✅ Auto-dismiss messages after 5 seconds
 // ✅ Click to dismiss immediately
 // ✅ Session auto-clear after 30 seconds
+// ✅ Reduced table width (Items column smaller)
+// ✅ Dark Mode support
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -213,6 +215,11 @@ $profile_pic_url = !empty($profile_pic)
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
+// DARK MODE - Check cookie
+// ================================================================
+$dark_mode = isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/pharmacy_header.php';
@@ -220,7 +227,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 ?>
 
 <!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<html lang="en" data-theme="<?= $dark_mode ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -232,6 +239,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* ================================================================
+           ROOT VARIABLES
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A3D8A;
@@ -259,6 +269,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
         }
         
+        /* ================================================================
+           DARK MODE VARIABLES
+           ================================================================ */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -272,6 +285,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             --success-light: #1A3A2A;
             --warning-light: #3D2E0A;
             --danger-light: #3A1A1A;
+            --purple-light: #2A1A3A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -615,6 +629,16 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
         }
         
+        [data-theme="dark"] .filter-form .form-control {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .filter-form .form-control option {
+            background: var(--bg-card);
+            color: var(--text-primary);
+        }
+        
         .btn-search {
             padding: 8px 20px;
             border-radius: 8px;
@@ -659,7 +683,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
         
         /* ================================================================
-           TABLE
+           TABLE - REDUCED WIDTH
            ================================================================ */
         .table-wrap {
             overflow-x: auto;
@@ -682,10 +706,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .data-table {
             width: 100%;
-            min-width: 1000px;
+            min-width: 800px;
             border-collapse: separate;
             border-spacing: 0;
-            font-size: 0.78rem;
+            font-size: 0.75rem;
         }
         
         .data-table thead th {
@@ -694,8 +718,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             z-index: 10;
             background: var(--primary);
             color: white;
-            padding: 8px 12px;
-            font-size: 0.65rem;
+            padding: 6px 10px;
+            font-size: 0.6rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             font-weight: 700;
@@ -706,6 +730,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .data-table thead th:first-child { border-radius: 8px 0 0 0; }
         .data-table thead th:last-child { border-radius: 0 8px 0 0; }
         
+        .data-table thead th.center { text-align: center; }
+        .data-table thead th.right { text-align: right; }
+        
         .data-table tbody tr:nth-child(even) {
             background: var(--primary-light);
         }
@@ -715,21 +742,27 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
         
         .data-table td {
-            padding: 8px 12px;
+            padding: 6px 10px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
         }
         
-        .col-sno { width: 35px; text-align: center; }
-        .col-sale { min-width: 120px; }
-        .col-customer { min-width: 140px; }
-        .col-items { min-width: 200px; }
-        .col-total { min-width: 90px; text-align: right; }
-        .col-payment { min-width: 100px; }
-        .col-status { min-width: 90px; text-align: center; }
-        .col-date { min-width: 130px; }
-        .col-actions { min-width: 100px; text-align: center; }
+        .data-table td.center { text-align: center; }
+        .data-table td.right { text-align: right; }
+        
+        /* ================================================================
+           COLUMN WIDTHS - REDUCED
+           ================================================================ */
+        .col-sno { width: 30px; text-align: center; }
+        .col-sale { width: 100px; }
+        .col-customer { width: 130px; }
+        .col-items { width: 140px; }  /* REDUCED */
+        .col-total { width: 85px; text-align: right; }
+        .col-payment { width: 80px; }
+        .col-status { width: 80px; text-align: center; }
+        .col-date { width: 100px; }
+        .col-actions { width: 80px; text-align: center; }
         
         /* ================================================================
            BADGES
@@ -738,8 +771,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             display: inline-block;
             padding: 2px 10px;
             border-radius: 12px;
-            font-size: 0.6rem;
+            font-size: 0.55rem;
             font-weight: 600;
+            white-space: nowrap;
         }
         
         .badge-success { background: var(--success-light); color: var(--success); border: 1px solid var(--success); }
@@ -748,10 +782,36 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .badge-info { background: var(--primary-light); color: var(--primary); border: 1px solid var(--primary); }
         .badge-purple { background: var(--purple-light); color: var(--purple); border: 1px solid var(--purple); }
         
+        [data-theme="dark"] .badge-success {
+            background: #1A3A2A;
+            color: #34D399;
+            border-color: #34D399;
+        }
+        [data-theme="dark"] .badge-warning {
+            background: #3D2E0A;
+            color: #FBBF24;
+            border-color: #FBBF24;
+        }
+        [data-theme="dark"] .badge-danger {
+            background: #3A1A1A;
+            color: #F87171;
+            border-color: #F87171;
+        }
+        [data-theme="dark"] .badge-info {
+            background: #1E3A5F;
+            color: #6EA8FE;
+            border-color: #6EA8FE;
+        }
+        [data-theme="dark"] .badge-purple {
+            background: #2A1A3A;
+            color: #A78BFA;
+            border-color: #A78BFA;
+        }
+        
         .action-btn {
             padding: 3px 8px;
             border-radius: 4px;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             font-weight: 600;
             border: none;
             cursor: pointer;
@@ -780,6 +840,59 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .action-btn.print:hover {
             background: #6D28D9;
             transform: scale(1.05);
+        }
+        
+        [data-theme="dark"] .action-btn.view {
+            background: #2563EB;
+        }
+        [data-theme="dark"] .action-btn.view:hover {
+            background: #1D4ED8;
+        }
+        [data-theme="dark"] .action-btn.print {
+            background: #7C3AED;
+        }
+        [data-theme="dark"] .action-btn.print:hover {
+            background: #6D28D9;
+        }
+        
+        /* ================================================================
+           BATCH NUMBER
+           ================================================================ */
+        .batch-number {
+            font-family: 'Courier New', monospace;
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: var(--primary-light);
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: var(--primary);
+            display: inline-block;
+        }
+        
+        [data-theme="dark"] .batch-number {
+            background: #1E3A5F;
+            color: #60A5FA;
+        }
+        
+        /* ================================================================
+           ITEMS LIST - COMPACT
+           ================================================================ */
+        .items-list-compact {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            max-width: 130px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        
+        .items-list-compact .item-count {
+            font-weight: 600;
+            color: var(--primary);
+        }
+        
+        [data-theme="dark"] .items-list-compact .item-count {
+            color: #60A5FA;
         }
         
         /* ================================================================
@@ -827,8 +940,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .filter-form .form-group { min-width: 100%; }
             .stat-card .stat-number { font-size: 1.1rem; }
             .stat-card { padding: 10px 12px; min-height: 60px; }
-            .data-table { min-width: 750px; font-size: 0.7rem; }
+            .data-table { min-width: 650px; font-size: 0.65rem; }
             .data-table th, .data-table td { padding: 4px 6px; }
+            .col-items { width: 100px; }
+            .col-customer { width: 100px; }
+            .col-date { width: 80px; }
         }
         
         @media (max-width: 480px) {
@@ -836,9 +952,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .stat-card .stat-number { font-size: 0.9rem; }
             .stat-card { padding: 6px 8px; min-height: 50px; }
             .stat-card .stat-icon { font-size: 0.8rem; }
-            .data-table { min-width: 650px; font-size: 0.6rem; }
+            .data-table { min-width: 550px; font-size: 0.55rem; }
+            .data-table th, .data-table td { padding: 3px 4px; }
             .page-header .page-title { font-size: 1rem; }
             .page-header .btn-outline-light { font-size: 0.7rem; padding: 4px 10px; }
+            .col-items { width: 80px; }
+            .col-sale { width: 80px; }
+            .col-customer { width: 80px; }
         }
         
         .footer {
@@ -1002,7 +1122,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- OTC SALES TABLE -->
+    <!-- OTC SALES TABLE - REDUCED WIDTH -->
     <!-- ================================================================ -->
     <div class="card">
         <div class="card-header">
@@ -1045,35 +1165,43 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 $items_count = $sale['items_count'] ?? 0;
                                 $items_list = $sale['items_list'] ?? '';
                                 $grand_total = $sale['grand_total'] ?? 0;
+                                
+                                // Shorten items list for display
+                                $short_items = $items_list;
+                                if (strlen($short_items) > 60) {
+                                    $short_items = substr($short_items, 0, 60) . '...';
+                                }
                             ?>
                             <tr>
                                 <td class="col-sno"><?= $counter++ ?></td>
                                 <td class="col-sale">
-                                    <span class="batch-number" style="font-family:monospace;font-size:0.7rem;font-weight:600;background:var(--primary-light);padding:2px 8px;border-radius:4px;color:var(--primary);">
+                                    <span class="batch-number">
                                         <?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td class="col-customer">
                                     <strong><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></strong>
                                     <?php if (!empty($sale['customer_phone'])): ?>
-                                        <div style="font-size:0.65rem;color:var(--text-muted);">
+                                        <div style="font-size:0.55rem;color:var(--text-muted);">
                                             <i class="fas fa-phone"></i> <?= htmlspecialchars($sale['customer_phone']) ?>
                                         </div>
                                     <?php endif; ?>
                                 </td>
                                 <td class="col-items">
-                                    <div style="font-size:0.7rem;color:var(--text-secondary);">
-                                        <?= $items_count ?> item(s)
-                                    </div>
-                                    <div style="font-size:0.65rem;color:var(--text-muted);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
-                                        <?= htmlspecialchars($items_list) ?>
+                                    <div class="items-list-compact">
+                                        <span class="item-count"><?= $items_count ?></span> item(s)
+                                        <?php if (!empty($items_list)): ?>
+                                            <div style="font-size:0.55rem;color:var(--text-muted);max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">
+                                                <?= htmlspecialchars($short_items) ?>
+                                            </div>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                                 <td class="col-total">
-                                    <strong style="color:var(--primary);">TSh <?= number_format($grand_total) ?></strong>
+                                    <strong style="color:var(--primary);font-size:0.75rem;">TSh <?= number_format($grand_total) ?></strong>
                                 </td>
                                 <td class="col-payment">
-                                    <span style="font-size:0.7rem;">
+                                    <span style="font-size:0.65rem;">
                                         <?= ucfirst(str_replace('_', ' ', $sale['payment_method'] ?? 'N/A')) ?>
                                     </span>
                                 </td>
@@ -1083,10 +1211,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     </span>
                                 </td>
                                 <td class="col-date">
-                                    <div style="font-size:0.7rem;">
+                                    <div style="font-size:0.65rem;">
                                         <?= date('d/m/Y', strtotime($sale['created_at'] ?? 'now')) ?>
                                     </div>
-                                    <div style="font-size:0.6rem;color:var(--text-muted);">
+                                    <div style="font-size:0.55rem;color:var(--text-muted);">
                                         <?= date('H:i', strtotime($sale['created_at'] ?? 'now')) ?>
                                     </div>
                                 </td>
@@ -1167,7 +1295,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             
             // Click on message or close button to dismiss immediately
             messageBox.addEventListener('click', function(e) {
-                // If clicked on close button or the message itself
                 if (e.target.classList.contains('message-close') || e.target === this) {
                     clearTimeout(dismissTimer);
                     dismissMessage();
@@ -1243,10 +1370,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick - OTC Sale History (Auto-Dismiss Messages)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    // ================================================================
+    // DARK MODE - Page listens to header toggle
+    // ================================================================
+    console.log('%c💊 Braick - OTC Sale History', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ Table width reduced (Items column compact)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Dark Mode support (controlled by header)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Messages auto-dismiss after 5 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click to dismiss immediately', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Hover to pause auto-dismiss', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Using item_name (NOT medicine_name)', 'font-size:13px; color:#34D399;');
 </script>
 

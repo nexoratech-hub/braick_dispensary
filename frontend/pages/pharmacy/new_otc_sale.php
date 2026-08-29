@@ -5,6 +5,8 @@
 // ✅ Auto-format money with commas (1,000,000,000)
 // ✅ Discount input auto-format with commas
 // ✅ Auto-dismiss messages after 5 seconds
+// ✅ INSTRUCTIONS: Large text area with suggestions
+// ✅ Can pick and continue typing
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -40,7 +42,7 @@ try {
 }
 
 // ================================================================
-// PRE-DEFINED INSTRUCTIONS (15 character limit each)
+// PRE-DEFINED INSTRUCTIONS (for suggestions)
 // ================================================================
 $predefined_instructions = [
     '1x daily',
@@ -82,7 +84,20 @@ $predefined_instructions = [
     'Take with meal',
     'Take after exercise',
     'Take at bedtime',
-    'Take upon waking'
+    'Take upon waking',
+    'Take before food',
+    'Take after food',
+    'With milk',
+    'Without food',
+    'At night',
+    'In the morning',
+    'Twice a day',
+    'Thrice a day',
+    'Every 4 hours',
+    'Every 6 hours',
+    'Every 8 hours',
+    'Every 12 hours',
+    'Every 24 hours'
 ];
 
 // ================================================================
@@ -994,63 +1009,109 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             transform: scale(1.05);
         }
         
-        .cart-item .instructions-box {
-            margin-top: 4px;
-            padding-left: 4px;
+        /* ================================================================
+           INSTRUCTIONS - LARGE TEXT AREA WITH SUGGESTIONS
+           ================================================================ */
+        .instructions-section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed var(--border-color);
             width: 100%;
         }
         
-        .cart-item .instructions-box .instructions-row {
+        .instructions-section .instr-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
             display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
             align-items: center;
+            gap: 6px;
+            margin-bottom: 4px;
         }
         
-        .cart-item .instructions-box .instructions-row select,
-        .cart-item .instructions-box .instructions-row input {
-            padding: 6px 12px;
+        .instructions-section .instr-label i {
+            color: var(--primary);
+        }
+        
+        .instructions-section .instr-label .instr-count {
+            font-size: 0.6rem;
+            background: var(--primary-light);
+            color: var(--primary);
+            padding: 0 8px;
+            border-radius: 10px;
+            font-weight: 600;
+        }
+        
+        .instructions-section .instr-textarea-wrapper {
+            position: relative;
+        }
+        
+        .instructions-section .instr-textarea-wrapper textarea {
+            width: 100%;
+            padding: 8px 12px;
             border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 0.78rem;
+            border-radius: 10px;
+            font-size: 0.85rem;
             font-family: 'Inter', 'Segoe UI', sans-serif;
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
             transition: all 0.3s ease;
+            resize: vertical;
+            min-height: 55px;
+            max-height: 120px;
+            line-height: 1.5;
         }
         
-        .cart-item .instructions-box .instructions-row select {
-            flex: 2;
-            min-width: 150px;
-            cursor: pointer;
-        }
-        
-        .cart-item .instructions-box .instructions-row select:focus,
-        .cart-item .instructions-box .instructions-row input:focus {
+        .instructions-section .instr-textarea-wrapper textarea:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
         }
         
-        .cart-item .instructions-box .instructions-row input {
-            flex: 1;
-            min-width: 100px;
+        .instructions-section .instr-textarea-wrapper textarea::placeholder {
+            color: var(--text-muted);
+            font-size: 0.8rem;
         }
         
-        .cart-item .instructions-box .instructions-row input:focus {
-            border-color: var(--success);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
-        }
-        
-        .cart-item .instructions-box .instructions-display {
+        .instructions-section .instr-suggestions {
             display: flex;
             flex-wrap: wrap;
             gap: 4px;
             margin-top: 6px;
-            padding: 4px 0;
         }
         
-        .cart-item .instructions-box .instructions-display .instr-tag {
+        .instructions-section .instr-suggestions .suggestion-btn {
+            padding: 3px 12px;
+            border: 1px solid var(--border-color);
+            border-radius: 14px;
+            font-size: 0.65rem;
+            background: var(--bg-body);
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s ease;
+            white-space: nowrap;
+        }
+        
+        .instructions-section .instr-suggestions .suggestion-btn:hover {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+            transform: translateY(-1px);
+        }
+        
+        .instructions-section .instr-suggestions .suggestion-btn.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+        
+        .instructions-section .instr-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 6px;
+        }
+        
+        .instructions-section .instr-tags .instr-tag {
             background: var(--primary-light);
             color: var(--primary);
             padding: 2px 10px;
@@ -1059,38 +1120,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             font-weight: 500;
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 6px;
             border: 1px solid var(--primary);
-            max-width: 150px;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
         }
         
-        .cart-item .instructions-box .instructions-display .instr-tag .remove-instr {
+        .instructions-section .instr-tags .instr-tag .remove-instr {
             cursor: pointer;
-            font-size: 0.6rem;
+            font-size: 0.7rem;
             color: var(--danger);
-            margin-left: 2px;
             font-weight: 700;
+            padding: 0 2px;
         }
         
-        .cart-item .instructions-box .instructions-display .instr-tag .remove-instr:hover {
+        .instructions-section .instr-tags .instr-tag .remove-instr:hover {
             color: #B91C1C;
             transform: scale(1.2);
-        }
-        
-        .cart-item .instructions-box .instructions-label {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            margin-bottom: 3px;
-        }
-        
-        .cart-item .instructions-box .instructions-label i {
-            color: var(--primary);
         }
         
         .empty-cart {
@@ -1594,14 +1638,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .payment-options { flex-direction: column; }
             .payment-option-card { min-width: unset; }
             .payment-methods { justify-content: center; }
-            .cart-item .instructions-box .instructions-row {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .cart-item .instructions-box .instructions-row select,
-            .cart-item .instructions-box .instructions-row input {
-                width: 100%;
-            }
+            .instructions-section .instr-suggestions { gap: 3px; }
+            .instructions-section .instr-suggestions .suggestion-btn { font-size: 0.55rem; padding: 2px 8px; }
         }
         
         @media (max-width: 480px) {
@@ -1978,25 +2016,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     // MONEY FORMAT - Auto format with commas
     // ================================================================
     function formatMoneyInput(input) {
-        // Get raw value (remove commas)
         var raw = input.value.replace(/,/g, '');
-        // Remove non-numeric characters except decimal point
         raw = raw.replace(/[^0-9.]/g, '');
         
-        // If empty, set to 0
         if (raw === '' || raw === '.') {
             input.value = '0';
             return;
         }
         
-        // Parse as number
         var num = parseFloat(raw);
         if (isNaN(num)) {
             input.value = '0';
             return;
         }
         
-        // Format with commas
         var formatted = num.toLocaleString('en-US', {
             minimumFractionDigits: 0,
             maximumFractionDigits: 0
@@ -2027,12 +2060,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     document.addEventListener('DOMContentLoaded', function() {
         var messageBox = document.getElementById('messageBox');
         if (messageBox) {
-            // Auto dismiss after 5 seconds
             var dismissTimer = setTimeout(function() {
                 dismissMessage();
             }, 5000);
             
-            // Click on message or close button to dismiss immediately
             messageBox.addEventListener('click', function(e) {
                 if (e.target.classList.contains('message-close') || e.target === this) {
                     clearTimeout(dismissTimer);
@@ -2040,12 +2071,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 }
             });
             
-            // Hover to pause auto-dismiss
             messageBox.addEventListener('mouseenter', function() {
                 clearTimeout(dismissTimer);
             });
             
-            // Resume auto-dismiss after hover
             messageBox.addEventListener('mouseleave', function() {
                 dismissTimer = setTimeout(function() {
                     dismissMessage();
@@ -2063,9 +2092,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     var subtotal = 0;
     var grandTotal = 0;
     var selectedPaymentOption = 'cashier';
-
-    // Predefined instructions
-    var predefinedInstructions = <?= json_encode($predefined_instructions) ?>;
 
     // ================================================================
     // MEDICINE SELECT - UPDATE PRICE
@@ -2113,105 +2139,116 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // ADD INSTRUCTION FROM DROPDOWN - APPEND
+    // INSTRUCTION FUNCTIONS - TEXTAREA WITH SUGGESTIONS
     // ================================================================
-    function addInstructionFromDropdown(id, value) {
-        if (!value) return;
+    function getInstructionText(id) {
+        var textarea = document.getElementById('instr_textarea_' + id);
+        return textarea ? textarea.value : '';
+    }
+    
+    function setInstructionText(id, value) {
+        var textarea = document.getElementById('instr_textarea_' + id);
+        if (textarea) {
+            textarea.value = value;
+            // Update the item in cart
+            var item = cart.find(function(i) { return i.id === id; });
+            if (item) {
+                item.instructions = value;
+            }
+        }
+    }
+    
+    function addSuggestionToInstruction(id, suggestion) {
+        var textarea = document.getElementById('instr_textarea_' + id);
+        if (!textarea) return;
         
+        var currentValue = textarea.value;
         var item = cart.find(function(i) { return i.id === id; });
         if (!item) return;
         
-        var currentInstructions = item.instructions ? item.instructions.split('|') : [];
-        
-        if (currentInstructions.indexOf(value) !== -1) {
-            showToast('Warning', 'Instruction "' + value + '" already added', 'warning');
-            var select = document.getElementById('instr_select_' + id);
-            if (select) select.value = '';
+        // Check if suggestion already exists in the text
+        if (currentValue.toLowerCase().includes(suggestion.toLowerCase())) {
+            showToast('Info', 'Instruction already added: ' + suggestion, 'info');
             return;
         }
         
-        if (currentInstructions.length >= 5) {
-            showToast('Warning', 'Maximum 5 instructions per item', 'warning');
-            var select = document.getElementById('instr_select_' + id);
-            if (select) select.value = '';
-            return;
-        }
-        
-        if (item.instructions) {
-            item.instructions += '|' + value;
+        // Add with comma separator
+        if (currentValue.length > 0 && !currentValue.endsWith(' ')) {
+            textarea.value = currentValue + ', ' + suggestion;
+        } else if (currentValue.length > 0) {
+            textarea.value = currentValue + suggestion;
         } else {
-            item.instructions = value;
+            textarea.value = suggestion;
         }
         
-        var select = document.getElementById('instr_select_' + id);
-        if (select) select.value = '';
+        // Update the item
+        item.instructions = textarea.value;
         
-        var input = document.getElementById('instr_input_' + id);
-        if (input) {
-            input.value = item.instructions.replace(/\|/g, ', ');
-        }
+        // Update the instruction display
+        updateInstructionDisplay(id);
         
-        renderCart();
-        updateTotals();
-        showToast('Success', 'Added instruction: ' + value, 'success');
+        // Auto-resize the textarea
+        autoResizeTextarea(textarea);
+        
+        showToast('Success', 'Added instruction: ' + suggestion, 'success');
     }
-
-    // ================================================================
-    // REMOVE SINGLE INSTRUCTION
-    // ================================================================
-    function removeSingleInstruction(id, instrToRemove) {
+    
+    function removeInstructionPart(id, partToRemove) {
+        var textarea = document.getElementById('instr_textarea_' + id);
+        if (!textarea) return;
+        
+        var currentValue = textarea.value;
+        var parts = currentValue.split(',').map(function(s) { return s.trim(); });
+        
+        // Filter out the part to remove
+        var newParts = parts.filter(function(p) { 
+            return p.toLowerCase() !== partToRemove.toLowerCase().trim();
+        });
+        
+        textarea.value = newParts.join(', ');
+        
+        // Update the item
+        var item = cart.find(function(i) { return i.id === id; });
+        if (item) {
+            item.instructions = textarea.value;
+        }
+        
+        // Update the instruction display
+        updateInstructionDisplay(id);
+        
+        // Auto-resize
+        autoResizeTextarea(textarea);
+        
+        showToast('Info', 'Removed instruction: ' + partToRemove, 'info');
+    }
+    
+    function updateInstructionDisplay(id) {
         var item = cart.find(function(i) { return i.id === id; });
         if (!item) return;
         
-        var instructions = item.instructions.split('|');
-        var newInstructions = instructions.filter(function(i) { return i !== instrToRemove; });
-        item.instructions = newInstructions.join('|');
+        var displayDiv = document.getElementById('instr_display_' + id);
+        if (!displayDiv) return;
         
-        var input = document.getElementById('instr_input_' + id);
-        if (input) {
-            input.value = item.instructions.replace(/\|/g, ', ');
+        var text = item.instructions || '';
+        var parts = text.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        
+        if (parts.length === 0) {
+            displayDiv.innerHTML = '<span style="font-size:0.7rem;color:var(--text-muted);">No instructions added</span>';
+            return;
         }
         
-        renderCart();
-        updateTotals();
-        showToast('Info', 'Removed instruction: ' + instrToRemove, 'info');
+        var html = '';
+        parts.forEach(function(part) {
+            var escapedPart = part.replace(/'/g, "\\'");
+            html += '<span class="instr-tag">' + part + ' <span class="remove-instr" onclick="removeInstructionPart(' + id + ', \'' + escapedPart + '\')">&times;</span></span>';
+        });
+        displayDiv.innerHTML = html;
     }
-
-    // ================================================================
-    // UPDATE INSTRUCTIONS FROM MANUAL INPUT
-    // ================================================================
-    function updateInstructionsFromInput(id, value) {
-        var item = cart.find(function(i) { return i.id === id; });
-        if (!item) return;
-        
-        var parts = value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
-        
-        var validParts = [];
-        var totalChars = 0;
-        for (var i = 0; i < parts.length; i++) {
-            var part = parts[i];
-            if (part.length > 15) {
-                part = part.substring(0, 15);
-                showToast('Warning', 'Instruction limited to 15 characters', 'warning');
-            }
-            totalChars += part.length;
-            if (totalChars <= 100) {
-                validParts.push(part);
-            } else {
-                showToast('Warning', 'Total instructions too long', 'warning');
-                break;
-            }
-        }
-        
-        item.instructions = validParts.join('|');
-        
-        var input = document.getElementById('instr_input_' + id);
-        if (input) {
-            input.value = item.instructions.replace(/\|/g, ', ');
-        }
-        
-        renderCart();
-        updateTotals();
+    
+    function autoResizeTextarea(textarea) {
+        if (!textarea) return;
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     }
 
     // ================================================================
@@ -2299,7 +2336,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // RENDER CART
+    // RENDER CART - WITH LARGE TEXTAREA + SUGGESTIONS
     // ================================================================
     function renderCart() {
         var itemsDiv = document.getElementById('cartItems');
@@ -2320,23 +2357,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         itemsDiv.style.display = 'block';
         
         var html = '';
+        var suggestions = <?= json_encode($predefined_instructions) ?>;
+        
         cart.forEach(function(item) {
-            var optionsHtml = '<option value="">-- Add Instruction --</option>';
-            predefinedInstructions.forEach(function(instr) {
-                optionsHtml += '<option value="' + instr + '">' + instr + '</option>';
-            });
+            var instrText = item.instructions || '';
             
-            var instructions = item.instructions ? item.instructions.split('|') : [];
-            var tagsHtml = '';
-            if (instructions.length > 0) {
-                tagsHtml = '<div class="instructions-display">';
-                instructions.forEach(function(instr) {
-                    tagsHtml += '<span class="instr-tag">' + instr + ' <span class="remove-instr" onclick="removeSingleInstruction(' + item.id + ', \'' + instr + '\')">&times;</span></span>';
-                });
-                tagsHtml += '</div>';
-            } else {
-                tagsHtml = '<div style="font-size:0.7rem;color:var(--text-muted);padding:4px 0;">No instructions added</div>';
-            }
+            // Build suggestion buttons (limit to 15 for cleanliness)
+            var suggestionHtml = '';
+            var displaySuggestions = suggestions.slice(0, 15);
+            displaySuggestions.forEach(function(sug) {
+                var escapedSug = sug.replace(/'/g, "\\'");
+                suggestionHtml += '<button type="button" class="suggestion-btn" onclick="addSuggestionToInstruction(' + item.id + ', \'' + escapedSug + '\')">' + sug + '</button>';
+            });
             
             html += `
                 <div class="cart-item">
@@ -2353,30 +2385,72 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             </button>
                         </div>
                     </div>
-                    <div class="instructions-box">
-                        <div class="instructions-label">
-                            <i class="fas fa-sticky-note"></i> Instructions (max 5 per item)
-                            <span style="font-size:0.6rem;color:var(--text-muted);margin-left:4px;">${instructions.length}/5</span>
+                    
+                    <!-- INSTRUCTIONS SECTION - LARGE TEXTAREA WITH SUGGESTIONS -->
+                    <div class="instructions-section">
+                        <div class="instr-label">
+                            <i class="fas fa-sticky-note"></i> Instructions
+                            <span class="instr-count" id="instr_count_${item.id}">0</span>
+                            <span style="font-size:0.6rem;color:var(--text-muted);margin-left:4px;">(Click suggestions or type manually, separated by commas)</span>
                         </div>
-                        <div class="instructions-row">
-                            <select id="instr_select_${item.id}" onchange="addInstructionFromDropdown(${item.id}, this.value)">
-                                ${optionsHtml}
-                            </select>
-                            <input type="text" 
-                                   id="instr_input_${item.id}" 
-                                   placeholder="Or type manual (comma separated)..."
-                                   value="${item.instructions ? item.instructions.replace(/\|/g, ', ') : ''}"
-                                   oninput="updateInstructionsFromInput(${item.id}, this.value)"
-                                   onfocus="this.select()"
-                                   style="flex:2;min-width:150px;">
+                        
+                        <div class="instr-textarea-wrapper">
+                            <textarea 
+                                id="instr_textarea_${item.id}"
+                                class="form-control"
+                                placeholder="e.g. 2x daily, After meals, With water..."
+                                oninput="updateInstructionsFromTextarea(${item.id}, this.value)"
+                                onfocus="this.select()"
+                                style="min-height:55px;max-height:120px;resize:vertical;font-size:0.85rem;padding:8px 12px;"
+                            >${instrText}</textarea>
                         </div>
-                        ${tagsHtml}
+                        
+                        <div class="instr-suggestions">
+                            ${suggestionHtml}
+                            <button type="button" class="suggestion-btn" style="background:var(--success);color:white;border-color:var(--success);" onclick="addSuggestionToInstruction(${item.id}, 'Custom')">+ Custom</button>
+                        </div>
+                        
+                        <div class="instr-tags" id="instr_display_${item.id}">
+                            ${instrText ? instrText.split(',').map(function(p) { 
+                                var part = p.trim();
+                                if (!part) return '';
+                                var escapedPart = part.replace(/'/g, "\\'");
+                                return '<span class="instr-tag">' + part + ' <span class="remove-instr" onclick="removeInstructionPart(' + item.id + ', \'' + escapedPart + '\')">&times;</span></span>';
+                            }).join('') : '<span style="font-size:0.7rem;color:var(--text-muted);">No instructions added</span>'}
+                        </div>
                     </div>
                 </div>
             `;
         });
         itemsDiv.innerHTML = html;
         btn.disabled = false;
+    }
+
+    // ================================================================
+    // UPDATE INSTRUCTIONS FROM TEXTAREA
+    // ================================================================
+    function updateInstructionsFromTextarea(id, value) {
+        var item = cart.find(function(i) { return i.id === id; });
+        if (!item) return;
+        
+        // Limit total characters to prevent abuse
+        if (value.length > 500) {
+            value = value.substring(0, 500);
+            var textarea = document.getElementById('instr_textarea_' + id);
+            if (textarea) textarea.value = value;
+        }
+        
+        item.instructions = value;
+        
+        // Update count
+        var parts = value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        var countEl = document.getElementById('instr_count_' + id);
+        if (countEl) {
+            countEl.textContent = parts.length;
+        }
+        
+        // Update display
+        updateInstructionDisplay(id);
     }
 
     // ================================================================
@@ -2388,7 +2462,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             subtotal += item.total;
         });
         
-        // Get discount from input (remove commas)
         var discountInput = document.getElementById('discountAmountInput');
         var discountAmount = getRawNumber(discountInput.value);
         
@@ -2507,12 +2580,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick - New OTC Sale (Money Format + Auto-Dismiss)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c💊 Braick - New OTC Sale (Improved Instructions)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c📝 Instructions: Large text area with suggestions', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Click suggestion → adds to text area (can continue typing)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Type manually with commas to add multiple', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Remove individual instructions with × button', 'font-size:13px; color:#34D399;');
     console.log('%c💰 Auto-format money with commas: 1000 → 1,000', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Messages auto-dismiss after 5 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click to dismiss immediately', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Hover to pause auto-dismiss', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ OTC Customers HAWAENDI kwenye Patients Table', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

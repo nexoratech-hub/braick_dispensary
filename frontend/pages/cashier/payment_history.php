@@ -2,31 +2,19 @@
 // ================================================================
 // FILE: frontend/pages/cashier/payment_history.php
 // CASHIER - PAYMENT HISTORY (GREEN THEME)
-// VIEW ALL PAYMENTS WITH FILTERS - FIXED PATIENT NAME
-// REMOVED: Total Amount Card
-// USES SHARED HEADER WITH DARK MODE
-// ALLOWS RECEPTION, CASHIER AND ADMIN
-// BRAICK DISPENSARY
+// FIXED: Uses bills table (not patient_bills)
+// WITH PDF EXPORT - Official Stamp & Admin Numbers
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// ALLOWED ROLES: Cashier, Reception, Admin
-// ================================================================
 $allowed_roles = ['cashier', 'reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
@@ -39,24 +27,16 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
     exit;
 }
 
-// ================================================================
-// GET USER DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
 $user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+$user_phone = $_SESSION['phone'] ?? '';
 
-// ================================================================
-// CHECK IF USER IS RECEPTION
-// ================================================================
 $is_reception = ($user_role === 'reception');
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -70,6 +50,34 @@ $message_type = '';
 $currency = 'TSh';
 
 // ================================================================
+// GET ADMIN CONTACT NUMBERS
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone FROM users 
+        WHERE role = 'admin' AND branch_id = ? AND status = 'active'
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$user_branch_id]);
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+}
+
+// ================================================================
+// GET BRANCH PHONE
+// ================================================================
+$branch_phone = '';
+try {
+    $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
+    $stmt->execute([$user_branch_id]);
+    $branch_phone = $stmt->fetchColumn();
+} catch (Exception $e) {
+    $branch_phone = '';
+}
+
+// ================================================================
 // GET FILTER PARAMETERS
 // ================================================================
 $filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
@@ -77,7 +85,6 @@ $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : '';
 $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-// Initialize variables
 $payments = [];
 $total_payments = 0;
 $total_amount = 0;
@@ -126,11 +133,8 @@ switch ($filter) {
             $date_condition = "AND DATE(p.received_at) BETWEEN ? AND ?";
             $params[] = $start_date;
             $params[] = $end_date;
-        } else {
-            $date_condition = "";
         }
         break;
-    case 'all':
     default:
         $date_condition = "";
         break;
@@ -141,7 +145,7 @@ switch ($filter) {
 // ================================================================
 $search_condition = "";
 if (!empty($search)) {
-    $search_condition = "AND (pat.full_name LIKE ? OR pat.patient_id LIKE ? OR pb.bill_number LIKE ? OR p.receipt_number LIKE ?)";
+    $search_condition = "AND (pat.full_name LIKE ? OR pat.patient_id LIKE ? OR b.bill_number LIKE ? OR p.receipt_number LIKE ?)";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
@@ -149,7 +153,7 @@ if (!empty($search)) {
 }
 
 // ================================================================
-// GET PAYMENTS - FIXED: Get patient name from patient_bills
+// GET PAYMENTS - FIXED: Using bills table (not patient_bills)
 // ================================================================
 try {
     $sql = "
@@ -167,13 +171,13 @@ try {
             COALESCE(pat.full_name, 'Unknown Patient') as patient_name,
             COALESCE(pat.patient_id, 'N/A') as patient_id_number,
             pat.phone,
-            pb.bill_number,
-            pb.total_amount as bill_total,
-            pb.patient_id as bill_patient_id,
+            b.bill_number,
+            b.total_amount as bill_total,
+            b.patient_id as bill_patient_id,
             COALESCE(u.full_name, 'System') as received_by_name
         FROM payments p
-        LEFT JOIN patient_bills pb ON p.bill_id = pb.id
-        LEFT JOIN patients pat ON pb.patient_id = pat.id
+        LEFT JOIN bills b ON p.bill_id = b.id
+        LEFT JOIN patients pat ON b.patient_id = pat.id
         LEFT JOIN users u ON p.received_by = u.id
         WHERE p.branch_id = ?
         $date_condition
@@ -186,9 +190,6 @@ try {
     $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     $total_payments = count($payments);
     
-    // ================================================================
-    // CALCULATE TOTAL AMOUNT
-    // ================================================================
     $total_amount = 0;
     foreach ($payments as $payment) {
         $total_amount += $payment['amount'] ?? 0;
@@ -202,26 +203,13 @@ try {
     $total_amount = 0;
 }
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once '../../components/cashier_header.php';
-
-// ================================================================
-// SIDEBAR - CASHIER SIDEBAR (RECEPTION HAS FULL ACCESS)
-// ================================================================
 include_once '../../components/cashier_sidebar.php';
 ?>
 <!DOCTYPE html>
@@ -236,6 +224,7 @@ include_once '../../components/cashier_sidebar.php';
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
     <style>
         :root {
@@ -279,7 +268,6 @@ include_once '../../components/cashier_sidebar.php';
             --table-hover: #D1FAE5;
         }
         
-        /* DARK MODE - MATCH HEADER */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -292,270 +280,62 @@ include_once '../../components/cashier_sidebar.php';
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
         }
 
-        /* Dark mode specific fixes */
-        [data-theme="dark"] .bg-white {
-            background-color: #1E293B !important;
-        }
-
-        [data-theme="dark"] .text-gray-700 {
-            color: #CBD5E1 !important;
-        }
-
-        [data-theme="dark"] .text-gray-800 {
-            color: #E2E8F0 !important;
-        }
-
-        [data-theme="dark"] .text-gray-900 {
-            color: #F1F5F9 !important;
-        }
-
-        [data-theme="dark"] .border-gray-200 {
-            border-color: #334155 !important;
-        }
-
-        [data-theme="dark"] .bg-gray-50 {
-            background-color: #1E293B !important;
-        }
-
-        [data-theme="dark"] .bg-gray-100 {
-            background-color: #2D3748 !important;
-        }
-
-        [data-theme="dark"] .shadow {
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important;
-        }
-
-        [data-theme="dark"] .shadow-md {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
-        }
-
-        [data-theme="dark"] .shadow-lg {
-            box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important;
-        }
-
-        /* Dark mode for filter buttons */
-        [data-theme="dark"] .filter-btn {
-            border-color: #334155;
-            color: #94A3B8;
-        }
-
-        [data-theme="dark"] .filter-btn:hover {
-            border-color: #34D399;
-            color: #34D399;
-            background: rgba(5, 150, 105, 0.15);
-        }
-
-        [data-theme="dark"] .filter-btn.active {
-            background: #059669;
-            color: white;
-            border-color: #059669;
-        }
-
-        [data-theme="dark"] .filter-btn.active:hover {
-            background: #047857;
-            border-color: #047857;
-        }
-
-        /* Dark mode for date picker */
-        [data-theme="dark"] .date-picker-group .form-control {
-            background: #1E293B;
-            color: #F1F5F9;
-            border-color: #334155;
-        }
-
-        [data-theme="dark"] .date-picker-group .form-control:focus {
-            border-color: #34D399;
-            box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1);
-        }
-
-        /* Dark mode for table */
-        [data-theme="dark"] .data-table tbody tr:hover td {
-            background: #1A3A2A;
-        }
-
-        [data-theme="dark"] .data-table td {
-            border-bottom-color: #334155;
-        }
-
-        /* Dark mode for stat cards */
-        [data-theme="dark"] .stat-card {
-            background: #1E293B;
-            border-color: #334155;
-        }
-
-        [data-theme="dark"] .stat-card:hover {
-            border-color: #059669;
-        }
-
-        /* Dark mode for card */
-        [data-theme="dark"] .card {
-            background: #1E293B;
-            border-color: #334155;
-        }
-
-        [data-theme="dark"] .card:hover {
-            border-color: #059669;
-        }
-
-        /* Dark mode for page header */
-        [data-theme="dark"] .page-header {
-            background: linear-gradient(135deg, #059669, #047857) !important;
-        }
-
-        /* Dark mode for footer */
-        [data-theme="dark"] .footer {
-            border-top-color: #334155;
-        }
-
-        /* Dark mode for toast */
-        [data-theme="dark"] .toast-custom.success {
-            background: #059669;
-        }
-
-        [data-theme="dark"] .toast-custom.error {
-            background: #DC2626;
-        }
-
-        /* Dark mode for header badges */
-        [data-theme="dark"] .header-badge {
-            background: rgba(255,255,255,0.1);
-            border-color: rgba(255,255,255,0.1);
-        }
-
-        /* Dark mode for text colors */
-        [data-theme="dark"] .text-gray-400 {
-            color: #94A3B8 !important;
-        }
-
-        [data-theme="dark"] .text-gray-500 {
-            color: #94A3B8 !important;
-        }
-
-        [data-theme="dark"] .text-gray-600 {
-            color: #94A3B8 !important;
-        }
-
-        /* Dark mode for table header text */
-        [data-theme="dark"] .data-table thead th {
-            color: white;
-        }
-
-        /* Dark mode for bill number */
-        [data-theme="dark"] .font-mono.text-gray-700 {
-            color: #CBD5E1 !important;
-        }
-
-        /* Dark mode for table cell text */
-        [data-theme="dark"] .font-semibold.text-gray-800 {
-            color: #E2E8F0 !important;
-        }
-
-        [data-theme="dark"] .font-medium.text-sm {
-            color: #F1F5F9 !important;
-        }
-
-        /* Dark mode for card title */
-        [data-theme="dark"] .card-title {
-            color: #F1F5F9 !important;
-        }
-
-        /* Dark mode for footer text */
-        [data-theme="dark"] .footer .footer-brand {
-            color: #34D399;
-        }
-
-        [data-theme="dark"] .footer .text-gray-300 {
-            color: #475569 !important;
-        }
-
-        /* Dark mode for payment method badges */
-        [data-theme="dark"] .method-badge.cash {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-
-        [data-theme="dark"] .method-badge.m-pesa {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-
-        [data-theme="dark"] .method-badge.card {
-            background: #3D2E0A;
-            color: #FBBF24;
-        }
-
-        [data-theme="dark"] .method-badge.bank {
-            background: #2D1B5F;
-            color: #A78BFA;
-        }
-
-        /* Dark mode for role badge */
-        [data-theme="dark"] .role-badge-display {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-
-        [data-theme="dark"] .role-badge-display[style*="background:rgba(255,255,255,0.2)"] {
-            background: rgba(255,255,255,0.2) !important;
-            color: white !important;
-        }
-
-        /* Dark mode for branch badge */
-        [data-theme="dark"] .branch-badge-display {
-            background: #1A3A2A;
-            color: #34D399;
-        }
-
-        /* Dark mode for toast */
-        [data-theme="dark"] .toast-custom {
-            box-shadow: 0 20px 25px rgba(0,0,0,0.4);
-        }
-
-        /* Dark mode for dark toggle button */
-        [data-theme="dark"] .dark-toggle-btn {
-            background: #0F172A;
-            border-color: #334155;
-            color: #F1F5F9;
-        }
-
-        [data-theme="dark"] .dark-toggle-btn:hover {
-            border-color: #34D399;
-            background: #1E293B;
-        }
-
-        /* Dark mode for icon buttons */
-        [data-theme="dark"] .icon-btn:hover {
-            background: #0F172A;
-            color: #34D399;
-        }
-
-        /* Dark mode for message alerts */
-        [data-theme="dark"] .bg-green-100 {
-            background-color: rgba(5, 150, 105, 0.15) !important;
-        }
-
-        [data-theme="dark"] .text-green-700 {
-            color: #34D399 !important;
-        }
-
-        [data-theme="dark"] .border-green-200 {
-            border-color: rgba(5, 150, 105, 0.3) !important;
-        }
-
-        [data-theme="dark"] .bg-red-100 {
-            background-color: rgba(220, 38, 38, 0.15) !important;
-        }
-
-        [data-theme="dark"] .text-red-700 {
-            color: #F87171 !important;
-        }
-
-        [data-theme="dark"] .border-red-200 {
-            border-color: rgba(220, 38, 38, 0.3) !important;
-        }
+        [data-theme="dark"] .bg-white { background-color: #1E293B !important; }
+        [data-theme="dark"] .text-gray-700 { color: #CBD5E1 !important; }
+        [data-theme="dark"] .text-gray-800 { color: #E2E8F0 !important; }
+        [data-theme="dark"] .text-gray-900 { color: #F1F5F9 !important; }
+        [data-theme="dark"] .border-gray-200 { border-color: #334155 !important; }
+        [data-theme="dark"] .bg-gray-50 { background-color: #1E293B !important; }
+        [data-theme="dark"] .bg-gray-100 { background-color: #2D3748 !important; }
+        [data-theme="dark"] .shadow { box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important; }
+        [data-theme="dark"] .shadow-md { box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
+        [data-theme="dark"] .shadow-lg { box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important; }
+        [data-theme="dark"] .filter-btn { border-color: #334155; color: #94A3B8; }
+        [data-theme="dark"] .filter-btn:hover { border-color: #34D399; color: #34D399; background: rgba(5, 150, 105, 0.15); }
+        [data-theme="dark"] .filter-btn.active { background: #059669; color: white; border-color: #059669; }
+        [data-theme="dark"] .filter-btn.active:hover { background: #047857; border-color: #047857; }
+        [data-theme="dark"] .date-picker-group .form-control { background: #1E293B; color: #F1F5F9; border-color: #334155; }
+        [data-theme="dark"] .date-picker-group .form-control:focus { border-color: #34D399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1); }
+        [data-theme="dark"] .data-table tbody tr:hover td { background: #1A3A2A; }
+        [data-theme="dark"] .data-table td { border-bottom-color: #334155; }
+        [data-theme="dark"] .stat-card { background: #1E293B; border-color: #334155; }
+        [data-theme="dark"] .stat-card:hover { border-color: #059669; }
+        [data-theme="dark"] .card { background: #1E293B; border-color: #334155; }
+        [data-theme="dark"] .card:hover { border-color: #059669; }
+        [data-theme="dark"] .page-header { background: linear-gradient(135deg, #059669, #047857) !important; }
+        [data-theme="dark"] .footer { border-top-color: #334155; }
+        [data-theme="dark"] .toast-custom.success { background: #059669; }
+        [data-theme="dark"] .toast-custom.error { background: #DC2626; }
+        [data-theme="dark"] .header-badge { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.1); }
+        [data-theme="dark"] .text-gray-400 { color: #94A3B8 !important; }
+        [data-theme="dark"] .text-gray-500 { color: #94A3B8 !important; }
+        [data-theme="dark"] .text-gray-600 { color: #94A3B8 !important; }
+        [data-theme="dark"] .data-table thead th { color: white; }
+        [data-theme="dark"] .font-mono.text-gray-700 { color: #CBD5E1 !important; }
+        [data-theme="dark"] .font-semibold.text-gray-800 { color: #E2E8F0 !important; }
+        [data-theme="dark"] .font-medium.text-sm { color: #F1F5F9 !important; }
+        [data-theme="dark"] .card-title { color: #F1F5F9 !important; }
+        [data-theme="dark"] .footer .footer-brand { color: #34D399; }
+        [data-theme="dark"] .footer .text-gray-300 { color: #475569 !important; }
+        [data-theme="dark"] .method-badge.cash { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .method-badge.m-pesa { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .method-badge.card { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .method-badge.bank { background: #2D1B5F; color: #A78BFA; }
+        [data-theme="dark"] .role-badge-display { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .role-badge-display[style*="background:rgba(255,255,255,0.2)"] { background: rgba(255,255,255,0.2) !important; color: white !important; }
+        [data-theme="dark"] .branch-badge-display { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .toast-custom { box-shadow: 0 20px 25px rgba(0,0,0,0.4); }
+        [data-theme="dark"] .dark-toggle-btn { background: #0F172A; border-color: #334155; color: #F1F5F9; }
+        [data-theme="dark"] .dark-toggle-btn:hover { border-color: #34D399; background: #1E293B; }
+        [data-theme="dark"] .icon-btn:hover { background: #0F172A; color: #34D399; }
+        [data-theme="dark"] .bg-green-100 { background-color: rgba(5, 150, 105, 0.15) !important; }
+        [data-theme="dark"] .text-green-700 { color: #34D399 !important; }
+        [data-theme="dark"] .border-green-200 { border-color: rgba(5, 150, 105, 0.3) !important; }
+        [data-theme="dark"] .bg-red-100 { background-color: rgba(220, 38, 38, 0.15) !important; }
+        [data-theme="dark"] .text-red-700 { color: #F87171 !important; }
+        [data-theme="dark"] .border-red-200 { border-color: rgba(220, 38, 38, 0.3) !important; }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -570,9 +350,6 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -580,9 +357,6 @@ include_once '../../components/cashier_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - GREEN THEME
-           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--success), var(--success-dark));
             border-radius: 16px;
@@ -693,9 +467,6 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           FILTER SECTION
-           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: 14px;
@@ -762,9 +533,6 @@ include_once '../../components/cashier_sidebar.php';
             margin-right: 4px;
         }
         
-        /* ================================================================
-           DATE PICKER
-           ================================================================ */
         .date-picker-group {
             display: flex;
             align-items: center;
@@ -806,9 +574,6 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-1px);
         }
         
-        /* ================================================================
-           CARD
-           ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -840,9 +605,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
         .table-wrap {
             overflow-x: auto;
         }
@@ -886,9 +648,6 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--table-hover);
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -932,9 +691,6 @@ include_once '../../components/cashier_sidebar.php';
             border-radius: 6px; 
         }
         
-        /* ================================================================
-           STATS CARD
-           ================================================================ */
         .stat-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -971,9 +727,6 @@ include_once '../../components/cashier_sidebar.php';
             margin-bottom: 4px;
         }
         
-        /* ================================================================
-           PAYMENT METHOD BADGE
-           ================================================================ */
         .method-badge {
             display: inline-block;
             padding: 2px 10px;
@@ -1002,9 +755,6 @@ include_once '../../components/cashier_sidebar.php';
             color: #7C3AED;
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1019,9 +769,6 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600; 
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .role-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -1043,9 +790,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--success);
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1074,9 +818,279 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        /* PDF MODAL */
+        .pdf-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.6);
+            z-index: 9999;
+            backdrop-filter: blur(4px);
+            justify-content: center;
+            align-items: center;
+        }
+        .pdf-modal-overlay.active { display: flex; }
+        
+        .pdf-modal {
+            background: var(--bg-card);
+            border-radius: 16px;
+            width: 95%;
+            max-width: 1100px;
+            max-height: 95vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-lg);
+            animation: slideUp 0.3s ease;
+        }
+        
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(30px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        .pdf-modal-header {
+            padding: 14px 22px;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+            background: linear-gradient(135deg, #059669, #047857);
+            border-radius: 16px 16px 0 0;
+        }
+        
+        .pdf-modal-header .modal-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .pdf-modal-header .modal-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .pdf-modal-header .modal-actions .btn {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .pdf-modal-header .modal-actions .btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal {
+            background: rgba(220,38,38,0.3);
+            border-color: rgba(220,38,38,0.2);
+        }
+        
+        .pdf-modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 28px;
+            background: var(--bg-body);
+        }
+        
+        .pdf-modal-body .pdf-content {
+            max-width: 100%;
+            font-size: 14px;
+            background: var(--bg-card);
+            padding: 24px 28px;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+            line-height: 1.5;
+            margin-top: 0;
+            padding-top: 28px;
+        }
+        
+        .pdf-content .pdf-header {
+            text-align: center;
+            padding-bottom: 12px;
+            border-bottom: 3px solid #059669;
+            margin-bottom: 16px;
+            page-break-after: avoid;
+            break-after: avoid;
+            margin-top: 0;
+            padding-top: 0;
+        }
+        
+        .pdf-content .pdf-header .pdf-logo {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 4px;
+        }
+        
+        .pdf-content .pdf-header .pdf-logo img {
+            height: 55px;
+            width: auto;
+            object-fit: contain;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        .pdf-content .pdf-header .clinic-name {
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: #059669;
+            letter-spacing: -0.5px;
+            margin-top: 4px;
+        }
+        
+        .pdf-content .pdf-header .clinic-sub {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+        
+        .pdf-content .pdf-header .doc-title {
+            font-size: 0.85rem;
+            font-weight: 700;
+            color: #059669;
+            margin-top: 4px;
+            background: #D1FAE5;
+            padding: 4px 16px;
+            border-radius: 20px;
+            display: inline-block;
+        }
+        
+        .pdf-content .pdf-section-title {
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: #059669;
+            border-bottom: 2px solid #34D399;
+            padding-bottom: 4px;
+            margin: 6px 0 4px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .pdf-content .pdf-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+            margin: 4px 0;
+        }
+        
+        .pdf-content .pdf-table th {
+            background: #059669;
+            color: white;
+            padding: 4px 10px;
+            text-align: left;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            border: 1px solid #047857;
+        }
+        
+        .pdf-content .pdf-table td {
+            padding: 4px 10px;
+            border-bottom: 1px solid #E2E8F0;
+            font-size: 13px;
+            word-wrap: break-word;
+        }
+        
+        .pdf-content .pdf-table tr:nth-child(even) td {
+            background: #F8FAFC;
+        }
+        
+        .pdf-content .pdf-empty {
+            padding: 6px 0;
+            color: var(--text-secondary);
+            font-style: italic;
+            font-size: 14px;
+            text-align: center;
+            background: #F8FAFC;
+            border-radius: 4px;
+            margin: 2px 0;
+        }
+        
+        .pdf-content .pdf-footer {
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 2px solid #E2E8F0;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        
+        .pdf-content .pdf-footer .footer-stamp {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .pdf-content .pdf-footer .footer-left {
+            font-size: 14px;
+            color: var(--text-secondary);
+        }
+        
+        .pdf-content .pdf-footer .stamp-box {
+            text-align: center;
+            padding: 6px 14px;
+            border: 3px solid #059669;
+            border-radius: 10px;
+            background: #D1FAE5;
+            min-width: 150px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-title {
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-name {
+            font-size: 14px;
+            font-weight: 800;
+            color: #059669;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-line {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-date {
+            font-size: 10px;
+            color: #94A3B8;
+            margin-top: 2px;
+        }
+        
+        .pdf-content .pdf-footer .footer-bottom {
+            text-align: center;
+            margin-top: 6px;
+            font-size: 12px;
+            color: #94A3B8;
+        }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
         }
@@ -1101,7 +1115,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     </style>
     
-    <!-- Preload dark mode from localStorage -->
     <script>
         (function() {
             var darkMode = localStorage.getItem('darkMode');
@@ -1113,16 +1126,9 @@ include_once '../../components/cashier_sidebar.php';
 </head>
 <body>
 
-<!-- TOP NAV is loaded from header -->
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1165,6 +1171,9 @@ include_once '../../components/cashier_sidebar.php';
             <button onclick="manualRefresh()" class="btn-outline-light" id="refreshBtn">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
+            <button onclick="generatePDF()" class="btn-outline-light" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);">
+                <i class="fas fa-file-pdf"></i> Export PDF
+            </button>
         </div>
     </div>
 
@@ -1176,9 +1185,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- FILTERS -->
-    <!-- ================================================================ -->
     <div class="filter-section">
         <div class="filter-group" style="margin-bottom:8px;">
             <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
@@ -1206,9 +1213,6 @@ include_once '../../components/cashier_sidebar.php';
             </a>
         </div>
         
-        <!-- ============================================================ -->
-        <!-- DATE PICKER (Custom Range) -->
-        <!-- ============================================================ -->
         <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
             <input type="hidden" name="filter" value="custom">
             <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
@@ -1233,9 +1237,7 @@ include_once '../../components/cashier_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- QUICK STATS - 2 CARDS ONLY (REMOVED Total Amount) -->
-    <!-- ================================================================ -->
+    <!-- QUICK STATS - 2 CARDS ONLY -->
     <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5" style="max-width:1200px;margin:0 auto;">
         <div class="stat-card">
             <div class="stat-icon">💰</div>
@@ -1260,9 +1262,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- PAYMENTS TABLE -->
-    <!-- ================================================================ -->
     <div class="card" style="max-width:1200px;margin:0 auto;">
         <div class="card-header">
             <h3 class="card-title">
@@ -1344,11 +1344,9 @@ include_once '../../components/cashier_sidebar.php';
                                 </td>
                                 <td>
                                     <div class="flex flex-wrap gap-1">
-                                        <!-- View Bill -->
                                         <a href="view_bill.php?id=<?= $payment['bill_id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
                                             <i class="fas fa-eye"></i>
                                         </a>
-                                        <!-- Print Receipt -->
                                         <a href="print_receipt.php?bill_id=<?= $payment['bill_id'] ?>&payment_id=<?= $payment['id'] ?>&print=1" class="btn btn-outline btn-sm" title="Print Receipt" target="_blank">
                                             <i class="fas fa-print"></i>
                                         </a>
@@ -1376,9 +1374,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1399,9 +1395,35 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
+<!-- PDF MODAL -->
+<div class="pdf-modal-overlay" id="pdfModal">
+    <div class="pdf-modal">
+        <div class="pdf-modal-header">
+            <div class="modal-title">
+                <i class="fas fa-file-pdf" style="color:rgba(255,255,255,0.8);"></i>
+                Payment History Report
+            </div>
+            <div class="modal-actions">
+                <button onclick="downloadPDF()" class="btn">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                <button onclick="window.print()" class="btn">
+                    <i class="fas fa-print"></i> Print
+                </button>
+                <button onclick="closePDFModal()" class="btn btn-danger-modal">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+        <div class="pdf-modal-body" id="pdfModalBody">
+            <div class="pdf-content" id="pdfContent">
+                <!-- PDF content generated by JavaScript -->
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1415,12 +1437,7 @@ include_once '../../components/cashier_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE - SYNC WITH HEADER
-    // ================================================================
-    // Note: Dark mode is controlled by header.
-
-    // ================================================================
-    // SIDEBAR TOGGLE
+    // DARK MODE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -1533,8 +1550,178 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // ADD CSS ANIMATIONS
+    // PDF GENERATION
     // ================================================================
+    function generatePDF() {
+        var modal = document.getElementById('pdfModal');
+        var content = document.getElementById('pdfContent');
+        
+        var adminPhones = '<?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>';
+        var currency = '<?= $currency ?>';
+        var branchName = '<?= htmlspecialchars($user_branch_name) ?>';
+        var totalPayments = <?= $total_payments ?>;
+        var filterLabel = '<?= $filter ?>';
+        var filterDisplay = filterLabel === 'all' ? 'All Time' : filterLabel;
+        
+        var paymentsHtml = '';
+        var counter = 1;
+        <?php foreach ($payments as $payment): ?>
+            paymentsHtml += `
+                <tr>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:13px;">${counter}</td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;font-weight:600;color:#0B5ED7;"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><strong><?= htmlspecialchars($payment['patient_name'] ?? 'Unknown Patient') ?></strong></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-weight:600;font-size:13px;color:#059669;">${currency} <?= number_format($payment['amount'] ?? 0, 0) ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;text-transform:capitalize;"><?= strtoupper(str_replace('_', ' ', $payment['payment_method'] ?? 'Cash')) ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($payment['reference_number'] ?? 'N/A') ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($payment['received_by_name'] ?? 'N/A') ?></td>
+                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= isset($payment['received_at']) ? date('d/m/Y h:i A', strtotime($payment['received_at'])) : 'N/A' ?></td>
+                </tr>
+            `;
+            counter++;
+        <?php endforeach; ?>
+        
+        if (!paymentsHtml) {
+            paymentsHtml = `<tr><td colspan="9" style="text-align:center;padding:20px;font-size:14px;color:#64748B;">No payments found</td></tr>`;
+        }
+        
+        var html = `
+            <!-- PDF HEADER -->
+            <div class="pdf-header">
+                <div class="pdf-logo">
+                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" style="height:55px;width:auto;object-fit:contain;display:block;margin:0 auto;" onerror="this.style.display='none'">
+                    <div class="clinic-name">BRAICK DISPENSARY</div>
+                    <div class="clinic-sub">Tunajali Afya Yako</div>
+                </div>
+                <div style="display:flex;justify-content:center;gap:14px;flex-wrap:wrap;margin-top:4px;padding-top:4px;border-top:1px solid #E2E8F0;font-size:0.6rem;color:#64748B;">
+                    <span>📞 Admin Contacts: ${adminPhones}</span>
+                    <span>🏢 Branch: ${branchName}</span>
+                    <span>📅 ${new Date().toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })}</span>
+                </div>
+                <div class="doc-title">
+                    💳 Payment History Report
+                </div>
+            </div>
+            
+            <!-- SUMMARY -->
+            <div style="margin-bottom:8px;">
+                <div class="pdf-section-title"><i class="fas fa-chart-bar"></i> Summary</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:4px 0;">
+                    <div style="background:#E8F0FE;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #6EA8FE;">
+                        <div style="font-size:20px;font-weight:700;color:#0B5ED7;">${totalPayments}</div>
+                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">📋 Total Payments</div>
+                    </div>
+                    <div style="background:#D1FAE5;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #059669;">
+                        <div style="font-size:20px;font-weight:700;color:#059669;">${currency} <?= number_format($total_amount, 0) ?></div>
+                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">💰 Total Amount</div>
+                    </div>
+                    <div style="background:#FEF3C7;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #D97706;">
+                        <div style="font-size:20px;font-weight:700;color:#D97706;">${filterDisplay}</div>
+                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">📅 Date Range</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- PAYMENTS TABLE -->
+            <div style="margin-bottom:8px;">
+                <div class="pdf-section-title"><i class="fas fa-list"></i> Payments (${totalPayments})</div>
+                <div class="pdf-table-wrap">
+                    <table class="pdf-table">
+                        <thead>
+                            <tr>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">#</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Receipt #</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Bill #</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Patient</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:11px;">Amount</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Method</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Reference</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Received By</th>
+                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${paymentsHtml}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            
+            <!-- PDF FOOTER WITH OFFICIAL STAMP -->
+            <div class="pdf-footer">
+                <div class="footer-stamp">
+                    <div class="footer-left">
+                        <span>Generated by: <?= htmlspecialchars($user_full_name) ?></span>
+                        <span style="margin-left:14px;">Date: <?= date('F d, Y') ?></span>
+                    </div>
+                    <div class="stamp-box">
+                        <div class="stamp-title">Official Stamp</div>
+                        <div class="stamp-name">BRAICK DISPENSARY</div>
+                        <div class="stamp-line">Approved By: _________________</div>
+                        <div class="stamp-date">Date: <?= date('F d, Y') ?></div>
+                    </div>
+                </div>
+                <div class="footer-bottom">
+                    Braick Dispensary • Generated on <?= date('F d, Y h:i:s A') ?> • All rights reserved
+                </div>
+            </div>
+        `;
+        
+        content.innerHTML = html;
+        modal.classList.add('active');
+        
+        var modalBody = document.getElementById('pdfModalBody');
+        if (modalBody) {
+            modalBody.scrollTop = 0;
+        }
+    }
+    
+    function closePDFModal() {
+        document.getElementById('pdfModal').classList.remove('active');
+    }
+    
+    function downloadPDF() {
+        var element = document.getElementById('pdfContent');
+        var opt = {
+            margin: [8, 8, 8, 8],
+            filename: 'Payment_History_<?= date('Y-m-d') ?>.pdf',
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                logging: false,
+                allowTaint: true
+            },
+            jsPDF: { 
+                unit: 'mm', 
+                format: 'a4', 
+                orientation: 'portrait' 
+            },
+            pagebreak: { 
+                mode: ['css', 'legacy']
+            }
+        };
+        
+        html2pdf().set(opt).from(element).save();
+    }
+
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closePDFModal();
+        }
+    });
+
+    document.getElementById('pdfModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closePDFModal();
+        }
+    });
+
     var style = document.createElement('style');
     style.textContent = `
         .stat-card:hover { transform: translateY(-4px); box-shadow: 0 8px 30px rgba(0,0,0,0.08) !important; }
@@ -1546,14 +1733,12 @@ include_once '../../components/cashier_sidebar.php';
     `;
     document.head.appendChild(style);
 
-    console.log('%c💳 Braick - Payment History', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💳 Braick - Payment History (Fixed DB + PDF)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ FIXED: Using bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ PDF Export with Official Stamp & Admin Numbers', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📋 Total Payments: <?= $total_payments ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Reception access: <?= $is_reception ? 'YES' : 'NO' ?>', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Removed: Total Amount Card', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Fixed: Using patient_bills.patient_id to get patient name', 'font-size:13px; color:#059669;');
-    console.log('%c🌙 Dark mode controlled by header', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>

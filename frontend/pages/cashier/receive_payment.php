@@ -2,6 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/cashier/receive_payment.php
 // CASHIER - RECEIVE PAYMENT
+// FIXED: Uses bills table instead of patient_bills
+// 8 CARDS DESIGN: 4 TOP + 4 BOTTOM
+// WITH AUTO-UPDATE (3 SECONDS)
 // ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
@@ -73,7 +76,7 @@ $bill_number = isset($_GET['bill_number']) ? trim($_GET['bill_number']) : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ================================================================
-// GET BILL DETAILS
+// GET BILL DETAILS - USING bills TABLE
 // ================================================================
 $bill = null;
 $bill_items = [];
@@ -81,14 +84,24 @@ $patient = null;
 $visit = null;
 
 if ($bill_id > 0) {
-    // Get bill from patient_bills table
+    // Get bill from bills table
     $stmt = $db->prepare("
-        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
-               v.visit_number
-        FROM patient_bills pb
-        JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        WHERE pb.id = ? AND pb.branch_id = ?
+        SELECT 
+            b.*,
+            p.full_name as patient_name,
+            p.patient_id,
+            p.phone,
+            p.gender,
+            p.date_of_birth,
+            v.visit_number,
+            v.visit_type,
+            v.status as visit_status,
+            u.full_name as created_by_name
+        FROM bills b
+        JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN visits v ON b.visit_id = v.id
+        LEFT JOIN users u ON b.created_by = u.id
+        WHERE b.id = ? AND b.branch_id = ?
     ");
     $stmt->execute([$bill_id, $user_branch_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -97,7 +110,7 @@ if ($bill_id > 0) {
         // Get bill items
         $stmt = $db->prepare("
             SELECT * FROM bill_items 
-            WHERE bill_id = ?
+            WHERE bill_id = ? AND status != 'cancelled'
             ORDER BY id
         ");
         $stmt->execute([$bill_id]);
@@ -114,18 +127,37 @@ if ($bill_id > 0) {
             $stmt->execute([$bill['visit_id']]);
             $visit = $stmt->fetch(PDO::FETCH_ASSOC);
         }
+        
+        // Get payments
+        $stmt = $db->prepare("
+            SELECT * FROM payments 
+            WHERE bill_id = ?
+            ORDER BY received_at DESC
+        ");
+        $stmt->execute([$bill_id]);
+        $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
 // If bill not found by ID, try by bill number
 if (!$bill && !empty($bill_number)) {
     $stmt = $db->prepare("
-        SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
-               v.visit_number
-        FROM patient_bills pb
-        JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        WHERE pb.bill_number = ? AND pb.branch_id = ?
+        SELECT 
+            b.*,
+            p.full_name as patient_name,
+            p.patient_id,
+            p.phone,
+            p.gender,
+            p.date_of_birth,
+            v.visit_number,
+            v.visit_type,
+            v.status as visit_status,
+            u.full_name as created_by_name
+        FROM bills b
+        JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN visits v ON b.visit_id = v.id
+        LEFT JOIN users u ON b.created_by = u.id
+        WHERE b.bill_number = ? AND b.branch_id = ?
     ");
     $stmt->execute([$bill_number, $user_branch_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -133,26 +165,31 @@ if (!$bill && !empty($bill_number)) {
     if ($bill) {
         $bill_id = $bill['id'];
         // Get bill items
-        $stmt = $db->prepare("SELECT * FROM bill_items WHERE bill_id = ?");
+        $stmt = $db->prepare("SELECT * FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
         $stmt->execute([$bill_id]);
         $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         $stmt = $db->prepare("SELECT * FROM patients WHERE id = ?");
         $stmt->execute([$bill['patient_id']]);
         $patient = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // Get payments
+        $stmt = $db->prepare("SELECT * FROM payments WHERE bill_id = ? ORDER BY received_at DESC");
+        $stmt->execute([$bill_id]);
+        $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
 // Search bills
 if (!empty($search) && !$bill) {
     $stmt = $db->prepare("
-        SELECT pb.id, pb.bill_number, pb.total_amount, pb.balance, pb.status,
+        SELECT b.id, b.bill_number, b.total_amount, b.balance, b.status,
                p.full_name as patient_name, p.patient_id
-        FROM patient_bills pb
-        JOIN patients p ON pb.patient_id = p.id
-        WHERE pb.branch_id = ? 
-        AND (pb.bill_number LIKE ? OR p.full_name LIKE ? OR p.patient_id LIKE ?)
-        AND pb.status IN ('pending', 'partial')
+        FROM bills b
+        JOIN patients p ON b.patient_id = p.id
+        WHERE b.branch_id = ? 
+        AND (b.bill_number LIKE ? OR p.full_name LIKE ? OR p.patient_id LIKE ?)
+        AND b.status IN ('pending', 'partial')
         LIMIT 10
     ");
     $search_term = "%$search%";
@@ -181,8 +218,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $message = "Amount must be greater than zero!";
         $message_type = 'error';
     } else {
-        // Get bill details from patient_bills
-        $stmt = $db->prepare("SELECT * FROM patient_bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
+        // Get bill details from bills table
+        $stmt = $db->prepare("SELECT * FROM bills WHERE id = ? AND branch_id = ? AND status NOT IN ('paid', 'cancelled')");
         $stmt->execute([$bill_id, $user_branch_id]);
         $bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -240,13 +277,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 
                 if ($new_balance <= 0) {
                     $new_status = 'paid';
+                    $new_balance = 0;
                 } else {
                     $new_status = 'partial';
                 }
                 
-                // Update patient_bills
+                // Update bills table
                 $stmt = $db->prepare("
-                    UPDATE patient_bills 
+                    UPDATE bills 
                     SET paid_amount = ?, 
                         balance = ?, 
                         status = ?, 
@@ -255,13 +293,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ");
                 $stmt->execute([$new_paid, $new_balance, $new_status, $bill_id]);
                 
-                // Update bill_items
+                // Update bill_items - mark as paid
                 $stmt = $db->prepare("
                     UPDATE bill_items 
-                    SET is_paid = 1, 
-                        payment_status = 'paid', 
-                        paid_at = NOW()
-                    WHERE bill_id = ? AND (is_paid = 0 OR is_paid IS NULL)
+                    SET status = 'paid',
+                        updated_at = NOW()
+                    WHERE bill_id = ? AND status = 'pending'
                 ");
                 $stmt->execute([$bill_id]);
                 
@@ -273,17 +310,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 
                 // Refresh bill data
                 $stmt = $db->prepare("
-                    SELECT pb.*, p.full_name as patient_name, p.patient_id, p.phone,
-                           v.visit_number
-                    FROM patient_bills pb
-                    JOIN patients p ON pb.patient_id = p.id
-                    LEFT JOIN visits v ON pb.visit_id = v.id
-                    WHERE pb.id = ? AND pb.branch_id = ?
+                    SELECT 
+                        b.*,
+                        p.full_name as patient_name,
+                        p.patient_id,
+                        p.phone,
+                        p.gender,
+                        p.date_of_birth,
+                        v.visit_number,
+                        v.visit_type,
+                        v.status as visit_status,
+                        u.full_name as created_by_name
+                    FROM bills b
+                    JOIN patients p ON b.patient_id = p.id
+                    LEFT JOIN visits v ON b.visit_id = v.id
+                    LEFT JOIN users u ON b.created_by = u.id
+                    WHERE b.id = ? AND b.branch_id = ?
                 ");
                 $stmt->execute([$bill_id, $user_branch_id]);
                 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 $bill_items = [];
-                $stmt = $db->prepare("SELECT * FROM bill_items WHERE bill_id = ?");
+                $stmt = $db->prepare("SELECT * FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
                 $stmt->execute([$bill_id]);
                 $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
@@ -298,49 +345,126 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $db->rollBack();
                 $message = "Error: " . $e->getMessage();
                 $message_type = 'error';
+                error_log("Payment processing error: " . $e->getMessage());
             }
         }
     }
 }
 
 // ================================================================
-// GET SIDEBAR STATISTICS
+// GET GLOBAL STATS FOR AUTO-UPDATE - Using bills table
 // ================================================================
-$pending_bills = 0;
-$partial_payments = 0;
-$paid_today = 0;
-$patients_waiting = 0;
+$today = date('Y-m-d');
 
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
-    $stmt->execute([$user_branch_id]);
-    $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'partial'");
-    $stmt->execute([$user_branch_id]);
-    $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    $stmt = $db->prepare("SELECT COUNT(*) as count FROM patient_bills WHERE branch_id = ? AND status = 'paid' AND DATE(updated_at) = CURDATE()");
-    $stmt->execute([$user_branch_id]);
-    $paid_today = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    
-    $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM patient_bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
-    $stmt->execute([$user_branch_id]);
-    $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-} catch (Exception $e) {
-    // Keep counts as 0
-}
+    // Today Payments
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? 
+        AND DATE(updated_at) = ?
+        AND paid_amount > 0
+        AND status IN ('paid', 'partial')
+    ");
+    $stmt->execute([$user_branch_id, $today]);
+    $today_payments = $stmt->fetch(PDO::FETCH_ASSOC);
+    $today_payments_count = $today_payments['count'] ?? 0;
+    $today_payments_total = $today_payments['total'] ?? 0;
 
-// ================================================================
-// UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    // Pending Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? AND status = 'pending'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC);
+    $pending_bills_count = $pending_bills['count'] ?? 0;
+    $pending_bills_total = $pending_bills['total'] ?? 0;
+
+    // Paid Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $paid_bills = $stmt->fetch(PDO::FETCH_ASSOC);
+    $paid_bills_count = $paid_bills['count'] ?? 0;
+    $paid_bills_total = $paid_bills['total'] ?? 0;
+
+    // Cancelled Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills 
+        WHERE branch_id = ? AND status = 'cancelled'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $cancelled_stats = $stmt->fetch(PDO::FETCH_ASSOC);
+    $cancelled_bills_count = $cancelled_stats['count'] ?? 0;
+    $cancelled_bills_total = $cancelled_stats['total'] ?? 0;
+
+    // Total Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
+        FROM bills WHERE branch_id = ?
+    ");
+    $stmt->execute([$user_branch_id]);
+    $total_bills = $stmt->fetch(PDO::FETCH_ASSOC);
+    $total_bills_count = $total_bills['count'] ?? 0;
+    $total_bills_amount = $total_bills['total'] ?? 0;
+
+    // Partial Bills
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance
+        FROM bills 
+        WHERE branch_id = ? AND status = 'partial'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $partial_bills = $stmt->fetch(PDO::FETCH_ASSOC);
+    $partial_bills_count = $partial_bills['count'] ?? 0;
+    $partial_bills_paid = $partial_bills['total_paid'] ?? 0;
+    $partial_bills_balance = $partial_bills['total_balance'] ?? 0;
+
+    // Expenses
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
+        FROM expenses 
+        WHERE branch_id = ? AND status = 'paid'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $expenses = $stmt->fetch(PDO::FETCH_ASSOC);
+    $expenses_count = $expenses['count'] ?? 0;
+    $expenses_total = $expenses['total'] ?? 0;
+    
+    // Today's receipts count
+    $stmt = $db->prepare("
+        SELECT COUNT(*) as count
+        FROM receipts 
+        WHERE branch_id = ? AND DATE(printed_at) = ?
+    ");
+    $stmt->execute([$user_branch_id, $today]);
+    $receipts_today = $stmt->fetch(PDO::FETCH_ASSOC);
+    $today_receipts = $receipts_today['count'] ?? 0;
+    
 } catch (Exception $e) {
-    $unread_notifications = 0;
+    error_log("Global stats error: " . $e->getMessage());
+    $today_payments_count = 0;
+    $today_payments_total = 0;
+    $pending_bills_count = 0;
+    $pending_bills_total = 0;
+    $paid_bills_count = 0;
+    $paid_bills_total = 0;
+    $cancelled_bills_count = 0;
+    $cancelled_bills_total = 0;
+    $total_bills_count = 0;
+    $total_bills_amount = 0;
+    $partial_bills_count = 0;
+    $partial_bills_paid = 0;
+    $partial_bills_balance = 0;
+    $expenses_count = 0;
+    $expenses_total = 0;
+    $today_receipts = 0;
 }
 
 // ================================================================
@@ -363,6 +487,97 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     /* ================================================================
        RECEIVE PAYMENT STYLES
        ================================================================ */
+    
+    /* STATS CARDS - 4 TOP + 4 BOTTOM (8 CARDS TOTAL) */
+    .stats-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        max-width: 1200px;
+        margin: 0 auto 16px;
+    }
+    
+    .stats-grid-bottom {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        max-width: 1200px;
+        margin: 0 auto 20px;
+    }
+    
+    .stat-card {
+        background: var(--bg-card);
+        border-radius: 14px;
+        padding: 16px 18px;
+        border: 2px solid var(--border-color);
+        text-align: center;
+        transition: all 0.3s ease;
+        box-shadow: var(--shadow-sm);
+        cursor: pointer;
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .stat-card::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        border-radius: 14px 14px 0 0;
+    }
+    
+    .stat-card:hover {
+        border-color: var(--success);
+        transform: translateY(-4px);
+        box-shadow: var(--shadow-lg);
+    }
+    
+    .stat-card .stat-icon {
+        font-size: 1.6rem;
+        margin-bottom: 4px;
+        display: block;
+    }
+    
+    .stat-card .stat-number {
+        font-size: 1.8rem;
+        font-weight: 700;
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+    }
+    
+    .stat-card .stat-number.green { color: var(--success); }
+    .stat-card .stat-number.red { color: #DC2626; }
+    .stat-card .stat-number.blue { color: var(--primary); }
+    .stat-card .stat-number.yellow { color: var(--warning); }
+    .stat-card .stat-number.purple { color: #7C3AED; }
+    .stat-card .stat-number.pink { color: #DB2777; }
+    .stat-card .stat-number.indigo { color: #4F46E5; }
+    
+    .stat-card .stat-label {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        font-weight: 500;
+        margin-top: 2px;
+    }
+    
+    .stat-card .stat-sub {
+        font-size: 0.6rem;
+        color: var(--text-secondary);
+        margin-top: 2px;
+        opacity: 0.7;
+    }
+    
+    /* Card accent colors */
+    .stat-card.accent-blue::after { background: var(--primary); }
+    .stat-card.accent-red::after { background: #DC2626; }
+    .stat-card.accent-green::after { background: var(--success); }
+    .stat-card.accent-yellow::after { background: var(--warning); }
+    .stat-card.accent-purple::after { background: #7C3AED; }
+    .stat-card.accent-pink::after { background: #DB2777; }
+    .stat-card.accent-indigo::after { background: #4F46E5; }
+    .stat-card.accent-orange::after { background: #EA580C; }
     
     .bill-summary {
         background: var(--bg-card);
@@ -726,6 +941,101 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         background: var(--table-hover);
     }
     
+    .status-badge {
+        display: inline-block;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+    
+    .status-badge.pending { background: #FEF3C7; color: #D97706; }
+    .status-badge.partial { background: #E8F0FE; color: #0B5ED7; }
+    .status-badge.paid { background: #D1FAE5; color: #059669; }
+    .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
+    
+    .page-header {
+        background: linear-gradient(135deg, #059669, #047857);
+        border-radius: 16px;
+        padding: 24px 32px;
+        margin-bottom: 28px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
+    }
+    
+    .page-header .page-title {
+        color: white;
+        font-size: 1.8rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+    }
+    
+    .page-header .page-title i {
+        font-size: 2rem;
+        opacity: 0.9;
+    }
+    
+    .page-header .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.95rem;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    
+    .page-header .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        backdrop-filter: blur(4px);
+    }
+    
+    .page-header .branch-tag {
+        background: rgba(255,255,255,0.15);
+        color: white;
+        padding: 4px 14px;
+        border-radius: 20px;
+        font-size: 0.7rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        border: 1px solid rgba(255,255,255,0.1);
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+    }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 1px solid var(--border-color);
+        margin-top: 24px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand { 
+        color: var(--success); 
+        font-weight: 600; 
+    }
+    
+    @media (max-width: 1024px) {
+        .stats-grid { grid-template-columns: repeat(2, 1fr); }
+        .stats-grid-bottom { grid-template-columns: repeat(2, 1fr); }
+    }
+    
     @media (max-width: 768px) {
         .bill-summary .summary-grid {
             grid-template-columns: 1fr 1fr;
@@ -737,9 +1047,19 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             width: 100%;
             justify-content: center;
         }
+        .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .stats-grid-bottom { grid-template-columns: repeat(2, 1fr); gap: 10px; }
+        .stat-card { padding: 12px 14px; }
+        .stat-card .stat-number { font-size: 1.4rem; }
     }
     
-    @media (max-width: 480px) {
+    @media (max-width: 640px) {
+        .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+        .stats-grid-bottom { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+        .stat-card { padding: 8px 10px; }
+        .stat-card .stat-number { font-size: 1.1rem; }
+        .stat-card .stat-label { font-size: 0.55rem; }
+        .stat-card .stat-icon { font-size: 1.2rem; }
         .bill-summary .summary-grid {
             grid-template-columns: 1fr;
         }
@@ -750,6 +1070,15 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             padding: 14px 16px;
         }
     }
+    
+    @media (max-width: 400px) {
+        .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 4px; }
+        .stats-grid-bottom { grid-template-columns: repeat(2, 1fr); gap: 4px; }
+        .stat-card { padding: 6px 6px; }
+        .stat-card .stat-number { font-size: 0.9rem; }
+        .stat-card .stat-label { font-size: 0.5rem; }
+        .stat-card .stat-icon { font-size: 1rem; }
+    }
 </style>
 
 <!-- ================================================================ -->
@@ -758,11 +1087,12 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-hand-holding-usd mr-2" style="color: #059669;"></i> Receive Payment
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
+                <i class="fas fa-hand-holding-usd"></i>
+                Receive Payment
+                <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
                 <?php if ($is_reception): ?>
                     <span class="role-badge-display" style="background:rgba(251,191,36,0.3);color:#FCD34D;border:1px solid rgba(251,191,36,0.2);">
                         <i class="fas fa-eye"></i> Reception
@@ -771,15 +1101,89 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 Process payment for patient bill
-                <span class="branch-tag ml-2">
+                <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                 </span>
             </p>
         </div>
         <div>
-            <a href="pending_bills.php" class="btn btn-outline btn-sm">
+            <a href="pending_bills.php" class="btn btn-outline" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);padding:8px 18px;border-radius:10px;text-decoration:none;display:inline-flex;align-items:center;gap:8px;backdrop-filter:blur(4px);">
                 <i class="fas fa-arrow-left"></i> Back to Pending Bills
             </a>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- 8 STATS CARDS - 4 TOP + 4 BOTTOM -->
+    <!-- ================================================================ -->
+    
+    <!-- TOP 4 CARDS -->
+    <div class="stats-grid" id="globalStatsTop">
+        <!-- Card 1: Today Payments -->
+        <div class="stat-card accent-blue" onclick="window.location.href='payment_history.php'">
+            <span class="stat-icon">💳</span>
+            <p class="stat-number blue" id="statTodayPayments"><?= number_format($today_payments_count) ?></p>
+            <p class="stat-label">Today Payments</p>
+            <p class="stat-sub">TSh <?= number_format($today_payments_total) ?></p>
+        </div>
+        
+        <!-- Card 2: Pending Bills -->
+        <div class="stat-card accent-red" onclick="window.location.href='pending_bills.php'">
+            <span class="stat-icon">⏳</span>
+            <p class="stat-number red" id="statPending"><?= number_format($pending_bills_count) ?></p>
+            <p class="stat-label">Pending Bills</p>
+            <p class="stat-sub">TSh <?= number_format($pending_bills_total) ?></p>
+        </div>
+        
+        <!-- Card 3: Paid Bills -->
+        <div class="stat-card accent-green" onclick="window.location.href='paid_bills.php'">
+            <span class="stat-icon">✅</span>
+            <p class="stat-number green" id="statPaid"><?= number_format($paid_bills_count) ?></p>
+            <p class="stat-label">Paid Bills</p>
+            <p class="stat-sub">TSh <?= number_format($paid_bills_total) ?></p>
+        </div>
+        
+        <!-- Card 4: Cancelled Bills -->
+        <div class="stat-card accent-red" onclick="window.location.href='cancelled_bills.php'">
+            <span class="stat-icon">❌</span>
+            <p class="stat-number red" id="statCancelled"><?= number_format($cancelled_bills_count) ?></p>
+            <p class="stat-label">Cancelled Bills</p>
+            <p class="stat-sub">TSh <?= number_format($cancelled_bills_total) ?></p>
+        </div>
+    </div>
+    
+    <!-- BOTTOM 4 CARDS -->
+    <div class="stats-grid-bottom" id="globalStatsBottom">
+        <!-- Card 5: Total Bills -->
+        <div class="stat-card accent-purple" onclick="window.location.href='all_bills.php'">
+            <span class="stat-icon">📋</span>
+            <p class="stat-number purple" id="statTotal"><?= number_format($total_bills_count) ?></p>
+            <p class="stat-label">Total Bills</p>
+            <p class="stat-sub">TSh <?= number_format($total_bills_amount) ?></p>
+        </div>
+        
+        <!-- Card 6: Partial Bills -->
+        <div class="stat-card accent-yellow" onclick="window.location.href='partial_payments.php'">
+            <span class="stat-icon">💰</span>
+            <p class="stat-number yellow" id="statPartial"><?= number_format($partial_bills_count) ?></p>
+            <p class="stat-label">Partial Bills</p>
+            <p class="stat-sub">Paid: TSh <?= number_format($partial_bills_paid) ?></p>
+        </div>
+        
+        <!-- Card 7: Expenses -->
+        <div class="stat-card accent-pink" onclick="window.location.href='expenses.php'">
+            <span class="stat-icon">💸</span>
+            <p class="stat-number pink" id="statExpenses"><?= number_format($expenses_count) ?></p>
+            <p class="stat-label">Expenses</p>
+            <p class="stat-sub">TSh <?= number_format($expenses_total) ?></p>
+        </div>
+        
+        <!-- Card 8: Today Receipts -->
+        <div class="stat-card accent-indigo" onclick="window.location.href='receipt_history.php'">
+            <span class="stat-icon">🧾</span>
+            <p class="stat-number indigo" id="statReceipts"><?= number_format($today_receipts) ?></p>
+            <p class="stat-label">Today Receipts</p>
+            <p class="stat-sub">Printed today</p>
         </div>
     </div>
 
@@ -889,11 +1293,11 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             <div class="flex flex-wrap justify-between items-center mt-4 pt-4 border-t border-gray-200">
                 <div class="text-right">
                     <div class="text-sm text-gray-500">Total Amount</div>
-                    <div class="text-xl font-bold text-blue-600">TSh <?= number_format($bill['total_amount'] ?? $bill['grand_total'] ?? 0, 0) ?></div>
+                    <div class="text-xl font-bold text-blue-600">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></div>
                 </div>
                 <div class="text-right">
                     <div class="text-sm text-gray-500">Amount Paid</div>
-                    <div class="text-xl font-bold text-green-600">TSh <?= number_format($bill['paid_amount'] ?? $bill['amount_paid'] ?? 0, 0) ?></div>
+                    <div class="text-xl font-bold text-green-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></div>
                 </div>
                 <div class="text-right">
                     <div class="text-sm text-gray-500">Balance</div>
@@ -985,7 +1389,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                     <button type="submit" name="print_receipt" value="1" class="btn btn-primary">
                         <i class="fas fa-print"></i> Print Receipt
                     </button>
-                    <button type="submit" class="btn btn-primary">
+                    <button type="submit" class="btn btn-success">
                         <i class="fas fa-check"></i> Receive Payment
                     </button>
                     <a href="pending_bills.php" class="btn btn-outline">
@@ -1029,6 +1433,8 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                     <span style="color:#FCD34D;font-weight:500;font-size:0.55rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 Reception</span>
                 <?php endif; ?>
             </span>
+            <span class="text-gray-300 mx-2">|</span>
+            <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1075,7 +1481,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     // DARK MODE - SYNC WITH HEADER
     // ================================================================
     // Note: Dark mode is controlled by header.
-    // This page listens for changes and applies them.
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1117,26 +1522,123 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         searchInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter') performSearch();
         });
+        // Set value from PHP
+        searchInput.value = '<?= htmlspecialchars($search) ?>';
     }
 
     // ================================================================
-    // DATE & TIME
+    // MANUAL REFRESH
     // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
+    function manualRefresh() {
+        var btn = document.getElementById('refreshBtn');
+        if (btn) {
+            btn.innerHTML = '<span class="spinner" style="display:inline-block;width:14px;height:14px;border:2px solid rgba(255,255,255,0.3);border-top-color:white;border-radius:50%;animation:spin 0.6s linear infinite;"></span> Loading...';
+            btn.disabled = true;
+        }
+        
+        fetchDashboardData();
+        
+        setTimeout(function() {
+            if (btn) {
+                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
+                btn.disabled = false;
+            }
+            showToast('✅ Refreshed', 'Page data updated manually', 'success');
+        }, 1500);
+    }
+
+    // ================================================================
+    // FETCH DASHBOARD DATA (AJAX)
+    // ================================================================
+    function fetchDashboardData() {
+        var url = 'get_dashboard_data.php?t=' + Date.now();
+        
+        fetch(url)
+            .then(function(response) { return response.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    updateStats(data);
+                } else {
+                    console.error('Failed to fetch dashboard data:', data.message);
+                }
+            })
+            .catch(function(error) {
+                console.error('Fetch error:', error);
+            });
+    }
+
+    // ================================================================
+    // UPDATE STATS UI
+    // ================================================================
+    function updateStats(data) {
+        // Update all 8 stat cards
+        var statMap = {
+            'statTodayPayments': data.today_payments_count || 0,
+            'statPending': data.pending_bills || 0,
+            'statPaid': data.paid_bills || 0,
+            'statCancelled': data.cancelled_bills || 0,
+            'statTotal': data.total_bills || 0,
+            'statPartial': data.partial_bills || 0,
+            'statExpenses': data.expenses_count || 0,
+            'statReceipts': data.today_receipts || 0
+        };
+        
+        for (var key in statMap) {
+            var el = document.getElementById(key);
+            if (el) {
+                el.textContent = Number(statMap[key]).toLocaleString();
+            }
+        }
+        
+        // Update footer timestamp
+        var footerTs = document.getElementById('footerTimestamp');
+        if (footerTs) {
+            var now = new Date();
+            var timeStr = now.toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+            });
+            footerTs.textContent = 'Last updated: ' + timeStr;
         }
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // AUTO UPDATE - EVERY 3 SECONDS
+    // ================================================================
+    var updateInterval = null;
+    var isUpdating = false;
+    
+    function startAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+        }
+        fetchDashboardData();
+        updateInterval = setInterval(function() {
+            if (!isUpdating) {
+                isUpdating = true;
+                fetchDashboardData();
+                setTimeout(function() {
+                    isUpdating = false;
+                }, 1000);
+            }
+        }, 3000);
+        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
+    }
+    
+    function stopAutoUpdate() {
+        if (updateInterval) {
+            clearInterval(updateInterval);
+            updateInterval = null;
+            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
+        }
+    }
+
+    document.addEventListener('visibilitychange', function() {
+        if (document.hidden) {
+            stopAutoUpdate();
+        } else {
+            startAutoUpdate();
+        }
+    });
 
     // ================================================================
     // TOAST
@@ -1176,11 +1678,49 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c💰 Braick - Receive Payment', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
+    // ================================================================
+    // ADD CSS ANIMATIONS
+    // ================================================================
+    var style = document.createElement('style');
+    style.textContent = `
+        @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes pulse-dot { 
+            0%, 100% { opacity: 1; transform: scale(1); } 
+            50% { opacity: 0.5; transform: scale(0.8); } 
+        }
+        .stat-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .stat-card:hover { transform: translateY(-4px); }
+        .form-control { transition: all 0.3s ease; }
+        .btn { transition: all 0.3s ease; }
+        .stat-number { transition: all 0.3s ease; }
+        .animate-fade-in-up {
+            animation: fadeInUp 0.4s ease forwards;
+            opacity: 0;
+        }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    `;
+    document.head.appendChild(style);
+
+    // ================================================================
+    // INIT
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(function() {
+            startAutoUpdate();
+        }, 1000);
+    });
+
+    console.log('%c💰 Braick - Receive Payment (8 Cards + Auto-Update)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Bill: <?= isset($bill['bill_number']) ? htmlspecialchars($bill['bill_number']) : 'None' ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Balance: TSh <?= isset($bill['balance']) ? number_format($bill['balance']) : '0' ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ FIXED: Uses bills table instead of patient_bills', 'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
