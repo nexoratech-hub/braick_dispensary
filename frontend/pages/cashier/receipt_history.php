@@ -1,33 +1,20 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/receipt_history.php
-// CASHIER - RECEIPT HISTORY (GREEN THEME)
-// FIXED: Uses bills table instead of patient_bills
-// 8 CARDS DESIGN: 4 TOP + 4 BOTTOM
-// WITH AUTO-UPDATE (3 SECONDS)
-// USES SHARED HEADER WITH DARK MODE
-// ALLOWS RECEPTION, CASHIER AND ADMIN
-// BRAICK DISPENSARY
+// CASHIER - RECEIPT HISTORY
+// SHOWS: OTC Receipts AND Regular Receipts
+// FIXED: Uses otc_sales AND receipts with bills (visit_id)
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// ALLOWED ROLES: Cashier, Reception, Admin
-// ================================================================
 $allowed_roles = ['cashier', 'reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
@@ -40,9 +27,6 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
     exit;
 }
 
-// ================================================================
-// GET USER DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
 $user_role = $_SESSION['role'] ?? 'cashier';
@@ -50,14 +34,9 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// CHECK IF USER IS RECEPTION
-// ================================================================
 $is_reception = ($user_role === 'reception');
+$is_admin = ($user_role === 'admin');
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -78,7 +57,6 @@ $start_date = isset($_GET['start_date']) ? $_GET['start_date'] : '';
 $end_date = isset($_GET['end_date']) ? $_GET['end_date'] : '';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
-// Initialize variables
 $receipts = [];
 $total_receipts = 0;
 $total_amount = 0;
@@ -98,40 +76,37 @@ try {
 }
 
 // ================================================================
-// BUILD DATE FILTER - Using receipts table with bills join
+// BUILD DATE FILTER
 // ================================================================
 $date_condition = "";
 $params = [];
 
 switch ($filter) {
     case 'today':
-        $date_condition = "AND DATE(r.printed_at) = CURDATE()";
+        $date_condition = "AND DATE(receipt_date) = CURDATE()";
         break;
     case 'week':
-        $date_condition = "AND r.printed_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_condition = "AND receipt_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         break;
     case 'month':
-        $date_condition = "AND r.printed_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_condition = "AND receipt_date >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         break;
     case '3months':
-        $date_condition = "AND r.printed_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_condition = "AND receipt_date >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         break;
     case '6months':
-        $date_condition = "AND r.printed_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_condition = "AND receipt_date >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         break;
     case 'year':
-        $date_condition = "AND r.printed_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_condition = "AND receipt_date >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         break;
     case 'custom':
         if (!empty($start_date) && !empty($end_date)) {
-            $date_condition = "AND DATE(r.printed_at) BETWEEN ? AND ?";
+            $date_condition = "AND DATE(receipt_date) BETWEEN ? AND ?";
             $params[] = $start_date;
             $params[] = $end_date;
-        } else {
-            $date_condition = "";
         }
         break;
-    case 'all':
     default:
         $date_condition = "";
         break;
@@ -142,67 +117,131 @@ switch ($filter) {
 // ================================================================
 $search_condition = "";
 if (!empty($search)) {
-    $search_condition = "AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR r.receipt_number LIKE ? OR b.bill_number LIKE ?)";
+    $search_condition = "AND (patient_name LIKE ? OR receipt_number LIKE ? OR bill_number LIKE ? OR patient_phone LIKE ?)";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
     $params[] = "%$search%";
 }
 
-// ================================================================
-// GET RECEIPTS - FIXED: Using bills table
-// ================================================================
 try {
-    $sql = "
+    $all_receipts = [];
+    
+    // ================================================================
+    // 1. GET OTC RECEIPTS FROM otc_sales
+    // ================================================================
+    $otc_params = [$user_branch_id];
+    $otc_date_condition = str_replace('receipt_date', 'o.updated_at', $date_condition);
+    $otc_search_condition = "";
+    
+    if (!empty($search)) {
+        $otc_search_condition = "AND (o.customer_name LIKE ? OR o.sale_number LIKE ? OR o.customer_phone LIKE ?)";
+        $otc_params[] = "%$search%";
+        $otc_params[] = "%$search%";
+        $otc_params[] = "%$search%";
+    }
+    
+    $sql_otc = "
         SELECT 
-            r.id,
+            o.id as receipt_id,
+            CONCAT('OTC-', o.sale_number) as receipt_number,
+            o.bill_id,
+            o.patient_id,
+            o.total_amount,
+            o.subtotal,
+            o.discount_amount,
+            o.payment_method,
+            o.updated_at as receipt_date,
+            o.sold_by as printed_by,
+            'OTC' as receipt_type,
+            COALESCE(o.customer_name, 'Walk-in Customer') as patient_name,
+            o.customer_phone as patient_phone,
+            o.patient_id as patient_code,
+            o.sale_number as bill_number,
+            u.full_name as printed_by_name,
+            NULL as visit_number
+        FROM otc_sales o
+        LEFT JOIN users u ON o.sold_by = u.id
+        WHERE o.branch_id = ? 
+        AND o.payment_status = 'paid'
+        $otc_date_condition
+        $otc_search_condition
+    ";
+    
+    $stmt = $db->prepare($sql_otc);
+    $stmt->execute($otc_params);
+    $otc_receipts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($otc_receipts as $receipt) {
+        $all_receipts[] = $receipt;
+    }
+    
+    // ================================================================
+    // 2. GET REGULAR RECEIPTS FROM receipts TABLE (with visit_id)
+    // ================================================================
+    $regular_params = [$user_branch_id];
+    $regular_date_condition = str_replace('receipt_date', 'r.printed_at', $date_condition);
+    $regular_search_condition = "";
+    
+    if (!empty($search)) {
+        $regular_search_condition = "AND (p.full_name LIKE ? OR r.receipt_number LIKE ? OR b.bill_number LIKE ? OR p.patient_id LIKE ?)";
+        $regular_params[] = "%$search%";
+        $regular_params[] = "%$search%";
+        $regular_params[] = "%$search%";
+        $regular_params[] = "%$search%";
+    }
+    
+    $sql_regular = "
+        SELECT 
+            r.id as receipt_id,
             r.receipt_number,
             r.bill_id,
             r.patient_id,
-            r.printed_by,
-            r.printed_at,
-            r.downloaded_at,
-            r.receipt_data,
-            b.bill_number,
             b.total_amount,
-            b.paid_amount,
-            b.branch_id,
-            p.full_name as patient_name,
+            b.subtotal,
+            b.discount_amount,
+            b.payment_method,
+            r.printed_at as receipt_date,
+            r.printed_by,
+            'Regular' as receipt_type,
+            COALESCE(p.full_name, 'Unknown Patient') as patient_name,
+            p.phone as patient_phone,
             p.patient_id as patient_code,
-            p.phone,
-            u.full_name as printed_by_name
+            b.bill_number,
+            u.full_name as printed_by_name,
+            v.visit_number
         FROM receipts r
-        LEFT JOIN bills b ON r.bill_id = b.id
+        INNER JOIN bills b ON r.bill_id = b.id
         LEFT JOIN patients p ON r.patient_id = p.id
         LEFT JOIN users u ON r.printed_by = u.id
-        WHERE 1=1
+        LEFT JOIN visits v ON b.visit_id = v.id
+        WHERE r.branch_id = ?
+        AND b.visit_id IS NOT NULL
+        AND b.visit_id > 0
+        $regular_date_condition
+        $regular_search_condition
     ";
     
-    // Add branch filter
-    $sql .= " AND (b.branch_id = ? OR b.branch_id IS NULL)";
-    $params[] = $user_branch_id;
+    $stmt = $db->prepare($sql_regular);
+    $stmt->execute($regular_params);
+    $regular_receipts = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Add date conditions
-    if (!empty($date_condition)) {
-        $sql .= " $date_condition";
+    foreach ($regular_receipts as $receipt) {
+        $all_receipts[] = $receipt;
     }
     
-    // Add search conditions
-    if (!empty($search_condition)) {
-        $sql .= " $search_condition";
-    }
+    // ================================================================
+    // SORT BY RECEIPT DATE (newest first)
+    // ================================================================
+    usort($all_receipts, function($a, $b) {
+        return strtotime($b['receipt_date']) - strtotime($a['receipt_date']);
+    });
     
-    $sql .= " ORDER BY r.printed_at DESC";
-    
-    $stmt = $db->prepare($sql);
-    $stmt->execute($params);
-    $receipts = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $receipts = $all_receipts;
     $total_receipts = count($receipts);
-    
-    // Calculate total amount
     $total_amount = 0;
     foreach ($receipts as $receipt) {
-        $total_amount += $receipt['total_amount'] ?? 0;
+        $total_amount += (float)($receipt['total_amount'] ?? 0);
     }
     
 } catch (Exception $e) {
@@ -215,7 +254,7 @@ try {
 }
 
 // ================================================================
-// GET GLOBAL STATS FOR AUTO-UPDATE - Using bills table
+// GET GLOBAL STATS
 // ================================================================
 $today = date('Y-m-d');
 
@@ -279,7 +318,7 @@ try {
 
     // Partial Bills
     $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance
+        SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid
         FROM bills 
         WHERE branch_id = ? AND status = 'partial'
     ");
@@ -287,7 +326,6 @@ try {
     $partial_bills = $stmt->fetch(PDO::FETCH_ASSOC);
     $partial_bills_count = $partial_bills['count'] ?? 0;
     $partial_bills_paid = $partial_bills['total_paid'] ?? 0;
-    $partial_bills_balance = $partial_bills['total_balance'] ?? 0;
 
     // Expenses
     $stmt = $db->prepare("
@@ -300,7 +338,7 @@ try {
     $expenses_count = $expenses['count'] ?? 0;
     $expenses_total = $expenses['total'] ?? 0;
     
-    // Today's receipts count
+    // Today Receipts
     $stmt = $db->prepare("
         SELECT COUNT(*) as count
         FROM receipts 
@@ -324,27 +362,17 @@ try {
     $total_bills_amount = 0;
     $partial_bills_count = 0;
     $partial_bills_paid = 0;
-    $partial_bills_balance = 0;
     $expenses_count = 0;
     $expenses_total = 0;
     $today_receipts = 0;
 }
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
 include_once '../../components/cashier_header.php';
 include_once '../../components/cashier_sidebar.php';
 ?>
@@ -382,6 +410,8 @@ include_once '../../components/cashier_sidebar.php';
             --pink-bg: #FCE4EC;
             --indigo: #4F46E5;
             --indigo-bg: #E0E7FF;
+            --otc-color: #8B5CF6;
+            --otc-bg: #EDE9FE;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -408,7 +438,6 @@ include_once '../../components/cashier_sidebar.php';
             --table-hover: #D1FAE5;
         }
         
-        /* DARK MODE */
         [data-theme="dark"] {
             --bg-body: #0F172A;
             --bg-card: #1E293B;
@@ -422,9 +451,9 @@ include_once '../../components/cashier_sidebar.php';
             --table-stripe: #1E293B;
             --table-hover: #1A3A2A;
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+            --otc-bg: #2A1A3A;
         }
 
-        /* Dark mode fixes */
         [data-theme="dark"] .bg-white { background-color: #1E293B !important; }
         [data-theme="dark"] .text-gray-700 { color: #CBD5E1 !important; }
         [data-theme="dark"] .text-gray-800 { color: #E2E8F0 !important; }
@@ -458,6 +487,7 @@ include_once '../../components/cashier_sidebar.php';
         [data-theme="dark"] .data-table thead th { color: white; }
         [data-theme="dark"] .font-mono.text-gray-700 { color: #CBD5E1 !important; }
         [data-theme="dark"] .font-semibold.text-green-600 { color: #34D399 !important; }
+        [data-theme="dark"] .font-semibold.text-purple-600 { color: #A78BFA !important; }
         [data-theme="dark"] .card-title { color: #F1F5F9 !important; }
         [data-theme="dark"] .footer .footer-brand { color: #34D399; }
         [data-theme="dark"] .footer .text-gray-300 { color: #475569 !important; }
@@ -479,6 +509,8 @@ include_once '../../components/cashier_sidebar.php';
         [data-theme="dark"] .stat-card .stat-number.purple { color: #A78BFA !important; }
         [data-theme="dark"] .stat-card .stat-number.pink { color: #F472B6 !important; }
         [data-theme="dark"] .stat-card .stat-number.indigo { color: #818CF8 !important; }
+        [data-theme="dark"] .receipt-type-badge.otc { background: #2A1A3A; color: #A78BFA; border-color: rgba(139,92,246,0.2); }
+        [data-theme="dark"] .receipt-type-badge.regular { background: #1A3A2A; color: #34D399; border-color: rgba(5,150,105,0.2); }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -493,9 +525,6 @@ include_once '../../components/cashier_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -503,9 +532,6 @@ include_once '../../components/cashier_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - GREEN THEME
-           ================================================================ */
         .page-header {
             background: linear-gradient(135deg, var(--success), var(--success-dark));
             border-radius: 16px;
@@ -616,9 +642,6 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           STATS CARDS - 4 TOP + 4 BOTTOM (8 CARDS TOTAL)
-           ================================================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -699,7 +722,6 @@ include_once '../../components/cashier_sidebar.php';
             opacity: 0.7;
         }
         
-        /* Card accent colors */
         .stat-card.accent-blue::after { background: var(--primary); }
         .stat-card.accent-red::after { background: #DC2626; }
         .stat-card.accent-green::after { background: var(--success); }
@@ -709,9 +731,6 @@ include_once '../../components/cashier_sidebar.php';
         .stat-card.accent-indigo::after { background: #4F46E5; }
         .stat-card.accent-orange::after { background: #EA580C; }
         
-        /* ================================================================
-           FILTER SECTION
-           ================================================================ */
         .filter-section {
             background: var(--bg-card);
             border-radius: 14px;
@@ -778,9 +797,6 @@ include_once '../../components/cashier_sidebar.php';
             margin-right: 4px;
         }
         
-        /* ================================================================
-           DATE PICKER
-           ================================================================ */
         .date-picker-group {
             display: flex;
             align-items: center;
@@ -822,9 +838,6 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-1px);
         }
         
-        /* ================================================================
-           CARD
-           ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -856,9 +869,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
         .table-wrap {
             overflow-x: auto;
         }
@@ -867,7 +877,7 @@ include_once '../../components/cashier_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.8rem;
-            min-width: 700px;
+            min-width: 750px;
         }
         
         .data-table thead th {
@@ -902,9 +912,27 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--table-hover);
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
+        .receipt-type-badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .receipt-type-badge.otc {
+            background: #EDE9FE;
+            color: #6D28D9;
+            border: 1px solid rgba(139,92,246,0.2);
+        }
+        
+        .receipt-type-badge.regular {
+            background: #E8F0FE;
+            color: #0B5ED7;
+            border: 1px solid rgba(11,94,215,0.2);
+        }
+        
         .btn {
             display: inline-flex;
             align-items: center;
@@ -941,6 +969,16 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
+        .btn-otc {
+            background: var(--otc-color);
+            color: white;
+        }
+        .btn-otc:hover {
+            background: #6D28D9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+        }
+        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
@@ -959,9 +997,6 @@ include_once '../../components/cashier_sidebar.php';
             border-radius: 6px; 
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -976,9 +1011,6 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600; 
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .role-badge-display {
             display: inline-block;
             font-size: 0.6rem;
@@ -1000,9 +1032,6 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--success);
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1031,9 +1060,6 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1079,7 +1105,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     </style>
     
-    <!-- Preload dark mode from localStorage -->
     <script>
         (function() {
             var darkMode = localStorage.getItem('darkMode');
@@ -1091,16 +1116,9 @@ include_once '../../components/cashier_sidebar.php';
 </head>
 <body>
 
-<!-- TOP NAV is loaded from header -->
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1112,6 +1130,11 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-check-circle"></i> Full Access
                     </span>
                 <?php endif; ?>
+                <?php if ($is_admin): ?>
+                    <span class="role-badge-display" style="background:rgba(255,215,0,0.3);color:#FFD700;border-color:rgba(255,215,0,0.3);">
+                        <i class="fas fa-user-shield"></i> ADMIN
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-history"></i>
@@ -1120,6 +1143,11 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="header-badge">
                     <i class="fas fa-receipt"></i>
                     <?= $total_receipts ?> Total Receipts
+                </span>
+                
+                <span class="header-badge" style="background:rgba(139,92,246,0.2);border-color:rgba(139,92,246,0.2);">
+                    <i class="fas fa-shopping-cart"></i>
+                    Including OTC Receipts
                 </span>
                 
                 <?php if ($filter !== 'all' && $filter !== 'custom'): ?>
@@ -1140,7 +1168,6 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- Message -->
     <?php if ($message): ?>
         <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>" style="max-width:1200px;margin:0 auto 16px;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
@@ -1148,13 +1175,8 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- 8 STATS CARDS - 4 TOP + 4 BOTTOM -->
-    <!-- ================================================================ -->
-    
-    <!-- TOP 4 CARDS -->
+    <!-- 8 STATS CARDS -->
     <div class="stats-grid" id="globalStatsTop">
-        <!-- Card 1: Today Payments -->
         <div class="stat-card accent-blue" onclick="window.location.href='payment_history.php'">
             <span class="stat-icon">💳</span>
             <p class="stat-number blue" id="statTodayPayments"><?= number_format($today_payments_count) ?></p>
@@ -1162,7 +1184,6 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-sub">TSh <?= number_format($today_payments_total) ?></p>
         </div>
         
-        <!-- Card 2: Pending Bills -->
         <div class="stat-card accent-red" onclick="window.location.href='pending_bills.php'">
             <span class="stat-icon">⏳</span>
             <p class="stat-number red" id="statPending"><?= number_format($pending_bills_count) ?></p>
@@ -1170,7 +1191,6 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-sub">TSh <?= number_format($pending_bills_total) ?></p>
         </div>
         
-        <!-- Card 3: Paid Bills -->
         <div class="stat-card accent-green" onclick="window.location.href='paid_bills.php'">
             <span class="stat-icon">✅</span>
             <p class="stat-number green" id="statPaid"><?= number_format($paid_bills_count) ?></p>
@@ -1178,7 +1198,6 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-sub">TSh <?= number_format($paid_bills_total) ?></p>
         </div>
         
-        <!-- Card 4: Cancelled Bills -->
         <div class="stat-card accent-red" onclick="window.location.href='cancelled_bills.php'">
             <span class="stat-icon">❌</span>
             <p class="stat-number red" id="statCancelled"><?= number_format($cancelled_bills_count) ?></p>
@@ -1187,9 +1206,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
     
-    <!-- BOTTOM 4 CARDS -->
     <div class="stats-grid-bottom" id="globalStatsBottom">
-        <!-- Card 5: Total Bills -->
         <div class="stat-card accent-purple" onclick="window.location.href='all_bills.php'">
             <span class="stat-icon">📋</span>
             <p class="stat-number purple" id="statTotal"><?= number_format($total_bills_count) ?></p>
@@ -1197,7 +1214,6 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-sub">TSh <?= number_format($total_bills_amount) ?></p>
         </div>
         
-        <!-- Card 6: Partial Bills -->
         <div class="stat-card accent-yellow" onclick="window.location.href='partial_payments.php'">
             <span class="stat-icon">💰</span>
             <p class="stat-number yellow" id="statPartial"><?= number_format($partial_bills_count) ?></p>
@@ -1205,7 +1221,6 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-sub">Paid: TSh <?= number_format($partial_bills_paid) ?></p>
         </div>
         
-        <!-- Card 7: Expenses -->
         <div class="stat-card accent-pink" onclick="window.location.href='expenses.php'">
             <span class="stat-icon">💸</span>
             <p class="stat-number pink" id="statExpenses"><?= number_format($expenses_count) ?></p>
@@ -1213,7 +1228,6 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-sub">TSh <?= number_format($expenses_total) ?></p>
         </div>
         
-        <!-- Card 8: Receipts (Current Filter) -->
         <div class="stat-card accent-indigo" style="border-color:<?= $total_receipts > 0 ? '#4F46E5' : 'var(--border-color)' ?>;">
             <span class="stat-icon">🧾</span>
             <p class="stat-number indigo"><?= number_format($total_receipts) ?></p>
@@ -1222,9 +1236,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FILTERS -->
-    <!-- ================================================================ -->
     <div class="filter-section">
         <div class="filter-group" style="margin-bottom:8px;">
             <span class="filter-label"><i class="fas fa-calendar-alt"></i> Filter:</span>
@@ -1252,9 +1264,6 @@ include_once '../../components/cashier_sidebar.php';
             </a>
         </div>
         
-        <!-- ============================================================ -->
-        <!-- DATE PICKER (Custom Range) -->
-        <!-- ============================================================ -->
         <form method="GET" action="" class="filter-group" style="border-top:1px solid var(--border-color);padding-top:8px;margin-top:4px;">
             <input type="hidden" name="filter" value="custom">
             <input type="hidden" name="search" value="<?= htmlspecialchars($search) ?>">
@@ -1279,9 +1288,7 @@ include_once '../../components/cashier_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
     <!-- RECEIPTS TABLE -->
-    <!-- ================================================================ -->
     <div class="card" style="max-width:1200px;margin:0 auto;">
         <div class="card-header">
             <h3 class="card-title">
@@ -1300,70 +1307,98 @@ include_once '../../components/cashier_sidebar.php';
                 <thead>
                     <tr>
                         <th>#</th>
+                        <th>Type</th>
                         <th>Receipt #</th>
-                        <th>Bill #</th>
-                        <th>Patient</th>
+                        <th>Bill / Sale #</th>
+                        <th>Patient / Customer</th>
                         <th>Amount</th>
                         <th>Printed By</th>
-                        <th>Printed Date</th>
+                        <th>Date</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     <?php if (is_array($receipts) && count($receipts) > 0): ?>
-                        <?php $i = 1; foreach ($receipts as $receipt): ?>
+                        <?php $i = 1; foreach ($receipts as $receipt): 
+                            $is_otc = ($receipt['receipt_type'] ?? '') === 'OTC';
+                        ?>
                             <tr>
                                 <td><?= $i++ ?></td>
                                 <td>
-                                    <span class="font-mono text-xs font-bold text-gray-700">
+                                    <?php if ($is_otc): ?>
+                                        <span class="receipt-type-badge otc">
+                                            <i class="fas fa-shopping-cart"></i> OTC
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="receipt-type-badge regular">
+                                            <i class="fas fa-file-invoice"></i> Regular
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="font-mono text-xs font-bold <?= $is_otc ? 'text-purple-600' : 'text-gray-700' ?>" style="color:<?= $is_otc ? '#6D28D9' : 'var(--text-primary)' ?>;">
                                         <?= htmlspecialchars($receipt['receipt_number'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <span class="font-mono text-xs text-gray-500">
+                                    <span class="font-mono text-xs" style="color:var(--text-secondary);">
                                         <?= htmlspecialchars($receipt['bill_number'] ?? 'N/A') ?>
                                     </span>
+                                    <?php if (!empty($receipt['visit_number']) && !$is_otc): ?>
+                                        <br><span style="font-size:0.5rem;color:var(--text-secondary);">Visit: <?= htmlspecialchars($receipt['visit_number']) ?></span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="font-medium text-sm">
-                                        <?= htmlspecialchars($receipt['patient_name'] ?? 'Unknown Patient') ?>
+                                    <div class="font-medium text-sm" style="color:var(--text-primary);">
+                                        <?= htmlspecialchars($receipt['patient_name'] ?? 'Unknown') ?>
                                     </div>
-                                    <div class="text-xs text-gray-400">
-                                        <?= htmlspecialchars($receipt['patient_code'] ?? $receipt['patient_id'] ?? 'N/A') ?>
+                                    <div class="text-xs" style="color:var(--text-secondary);">
+                                        <?php if ($is_otc): ?>
+                                            📞 <?= htmlspecialchars($receipt['patient_phone'] ?? 'N/A') ?>
+                                        <?php else: ?>
+                                            ID: <?= htmlspecialchars($receipt['patient_code'] ?? $receipt['patient_id'] ?? 'N/A') ?>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                                 <td>
-                                    <span class="font-semibold text-green-600">
+                                    <span class="font-semibold <?= $is_otc ? 'text-purple-600' : 'text-green-600' ?>" style="color:<?= $is_otc ? '#6D28D9' : '#059669' ?>;">
                                         <?= $currency ?> <?= number_format($receipt['total_amount'] ?? 0, 0) ?>
                                     </span>
                                 </td>
                                 <td>
                                     <span class="text-sm"><?= htmlspecialchars($receipt['printed_by_name'] ?? 'N/A') ?></span>
                                 </td>
-                                <td class="text-xs">
-                                    <?= isset($receipt['printed_at']) ? date('d/m/Y', strtotime($receipt['printed_at'])) : 'N/A' ?>
+                                <td class="text-xs" style="color:var(--text-secondary);">
+                                    <?= isset($receipt['receipt_date']) ? date('d/m/Y', strtotime($receipt['receipt_date'])) : 'N/A' ?>
                                     <br>
-                                    <span class="text-gray-400 text-[0.6rem]">
-                                        <?= isset($receipt['printed_at']) ? date('h:i A', strtotime($receipt['printed_at'])) : '' ?>
+                                    <span class="text-[0.6rem]" style="color:var(--text-secondary);opacity:0.6;">
+                                        <?= isset($receipt['receipt_date']) ? date('h:i A', strtotime($receipt['receipt_date'])) : '' ?>
                                     </span>
                                 </td>
                                 <td>
                                     <div class="flex flex-wrap gap-1">
-                                        <!-- View Bill -->
-                                        <a href="view_bill.php?id=<?= $receipt['bill_id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <!-- Print Receipt -->
-                                        <a href="print_receipt.php?bill_id=<?= $receipt['bill_id'] ?>&print=1" class="btn btn-success btn-sm" title="Print Receipt" target="_blank">
-                                            <i class="fas fa-print"></i>
-                                        </a>
+                                        <?php if ($is_otc): ?>
+                                            <a href="receipt.php?sale_id=<?= $receipt['receipt_id'] ?>" class="btn btn-otc btn-sm" title="View OTC Receipt">
+                                                <i class="fas fa-receipt"></i>
+                                            </a>
+                                            <a href="print_receipt.php?type=otc&sale_id=<?= $receipt['receipt_id'] ?>&print=1" class="btn btn-success btn-sm" title="Print OTC Receipt" target="_blank">
+                                                <i class="fas fa-print"></i>
+                                            </a>
+                                        <?php else: ?>
+                                            <a href="view_bill.php?id=<?= $receipt['bill_id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
+                                                <i class="fas fa-eye"></i>
+                                            </a>
+                                            <a href="print_receipt.php?bill_id=<?= $receipt['bill_id'] ?>&print=1" class="btn btn-success btn-sm" title="Print Receipt" target="_blank">
+                                                <i class="fas fa-print"></i>
+                                            </a>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="8" class="text-center py-8 text-gray-400">
+                            <td colspan="9" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-receipt text-3xl block mb-2 text-gray-300"></i>
                                 <p class="text-lg">No receipts found</p>
                                 <p class="text-sm">
@@ -1381,9 +1416,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1395,6 +1428,10 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="text-gray-300 mx-2">|</span>
                 <span style="color:#34D399;">👀 Reception Access</span>
             <?php endif; ?>
+            <?php if ($is_admin): ?>
+                <span class="text-gray-300 mx-2">|</span>
+                <span style="color:#FFD700;">⭐ Admin</span>
+            <?php endif; ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1404,9 +1441,7 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1415,13 +1450,7 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT - AUTO UPDATE EVERY 3 SECONDS -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1445,9 +1474,6 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
     function manualRefresh() {
         var btn = document.getElementById('refreshBtn');
         if (btn) {
@@ -1455,121 +1481,19 @@ include_once '../../components/cashier_sidebar.php';
             btn.disabled = true;
         }
         
-        fetchDashboardData();
+        setTimeout(function() {
+            window.location.reload();
+        }, 1000);
         
         setTimeout(function() {
             if (btn) {
                 btn.innerHTML = '<i class="fas fa-sync-alt"></i> Refresh';
                 btn.disabled = false;
             }
-            showToast('✅ Refreshed', 'Page data updated manually', 'success');
-        }, 1500);
+            showToast('✅ Refreshed', 'Page data updated', 'success');
+        }, 2000);
     }
 
-    // ================================================================
-    // FETCH DASHBOARD DATA (AJAX)
-    // ================================================================
-    function fetchDashboardData() {
-        var url = 'get_dashboard_data.php?t=' + Date.now();
-        
-        fetch(url)
-            .then(function(response) { return response.json(); })
-            .then(function(data) {
-                if (data.success) {
-                    updateStats(data);
-                } else {
-                    console.error('Failed to fetch dashboard data:', data.message);
-                }
-            })
-            .catch(function(error) {
-                console.error('Fetch error:', error);
-            });
-    }
-
-    // ================================================================
-    // UPDATE STATS UI
-    // ================================================================
-    function updateStats(data) {
-        // Update all 8 stat cards
-        var statMap = {
-            'statTodayPayments': data.today_payments_count || 0,
-            'statPending': data.pending_bills || 0,
-            'statPaid': data.paid_bills || 0,
-            'statCancelled': data.cancelled_bills || 0,
-            'statTotal': data.total_bills || 0,
-            'statPartial': data.partial_bills || 0,
-            'statExpenses': data.expenses_count || 0
-        };
-        
-        for (var key in statMap) {
-            var el = document.getElementById(key);
-            if (el) {
-                el.textContent = Number(statMap[key]).toLocaleString();
-            }
-        }
-        
-        // Update timestamp
-        var ts = document.getElementById('liveTimestamp');
-        if (ts) {
-            var now = new Date();
-            var timeStr = now.toLocaleTimeString('en-US', {
-                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-            });
-            ts.innerHTML = '<i class="fas fa-clock"></i> Updated: ' + timeStr;
-        }
-        
-        var footerTs = document.getElementById('footerTimestamp');
-        if (footerTs) {
-            var now = new Date();
-            var timeStr = now.toLocaleTimeString('en-US', {
-                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-            });
-            footerTs.textContent = 'Last updated: ' + timeStr;
-        }
-    }
-
-    // ================================================================
-    // AUTO UPDATE - EVERY 3 SECONDS
-    // ================================================================
-    var updateInterval = null;
-    var isUpdating = false;
-    
-    function startAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-        }
-        fetchDashboardData();
-        updateInterval = setInterval(function() {
-            if (!isUpdating) {
-                isUpdating = true;
-                fetchDashboardData();
-                setTimeout(function() {
-                    isUpdating = false;
-                }, 1000);
-            }
-        }, 3000);
-        console.log('%c🔄 Auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
-    }
-    
-    function stopAutoUpdate() {
-        if (updateInterval) {
-            clearInterval(updateInterval);
-            updateInterval = null;
-            console.log('%c⏹️ Auto-update stopped', 'font-size:12px; color:#DC2626;');
-        }
-    }
-
-    document.addEventListener('visibilitychange', function() {
-        if (document.hidden) {
-            stopAutoUpdate();
-        } else {
-            startAutoUpdate();
-        }
-    });
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -1587,47 +1511,9 @@ include_once '../../components/cashier_sidebar.php';
         });
     }
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    if (!searchBtn && !searchInput) {
-        searchBtn = document.querySelector('.top-nav .search-btn');
-        searchInput = document.querySelector('.top-nav #searchInput');
-    }
-    
-    function performSearch() {
-        var query = searchInput?.value?.trim() || '';
-        var filter = '<?= $filter ?>';
-        var start_date = '<?= $start_date ?>';
-        var end_date = '<?= $end_date ?>';
-        if (query.length > 0) {
-            window.location.href = 'receipt_history.php?search=' + encodeURIComponent(query) + '&filter=' + filter + '&start_date=' + start_date + '&end_date=' + end_date;
-        }
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-        searchInput.value = '<?= htmlspecialchars($search) ?>';
-    }
-
-    // ================================================================
-    // ADD CSS ANIMATIONS
-    // ================================================================
     var style = document.createElement('style');
     style.textContent = `
         @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes pulse-dot { 
-            0%, 100% { opacity: 1; transform: scale(1); } 
-            50% { opacity: 0.5; transform: scale(0.8); } 
-        }
         .stat-card { transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
         .stat-card:hover { transform: translateY(-4px); }
         .filter-btn { transition: all 0.3s ease; }
@@ -1636,26 +1522,13 @@ include_once '../../components/cashier_sidebar.php';
     `;
     document.head.appendChild(style);
 
-    // ================================================================
-    // INIT
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        setTimeout(function() {
-            startAutoUpdate();
-        }, 1000);
-    });
-
-    // ================================================================
-    // CONSOLE
-    // ================================================================
-    console.log('%c🧾 Braick - Receipt History (FIXED - uses bills table)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🧾 Braick - Receipt History', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Shows BOTH OTC Receipts AND Regular Receipts', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ OTC from otc_sales (payment_status=paid)', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ Regular from receipts + bills (visit_id IS NOT NULL)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Total Receipts: <?= $total_receipts ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📅 Filter: <?= ucfirst($filter) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ 8 CARDS: 4 TOP + 4 BOTTOM', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Uses bills table instead of patient_bills', 'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
+    console.log('%c💰 Total Amount: <?= $currency ?> <?= number_format($total_amount, 0) ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>
