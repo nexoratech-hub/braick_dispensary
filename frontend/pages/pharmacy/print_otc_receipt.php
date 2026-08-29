@@ -3,8 +3,7 @@
 // FILE: frontend/pages/pharmacy/print_otc_receipt.php
 // PHARMACY - PRINT OTC RECEIPT WITH MEDICATION INSTRUCTIONS
 // OTC SALE RECEIPT
-// FIXED: Gets payment_id from payments table using bill_id
-// FIXED: patient_id = 0 if no patient
+// FIXED: Uses NULL for patient_id (not 0)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -143,13 +142,13 @@ try {
             $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             // ================================================================
-            // GET BILL ID AND PAYMENT ID FROM BILLS AND PAYMENTS TABLES
+            // GET BILL ID FROM OTC SALE
             // ================================================================
             $bill_id = !empty($sale['bill_id']) ? (int)$sale['bill_id'] : null;
             $payment_id = null;
             
+            // If bill_id exists, get payment_id from payments table
             if ($bill_id) {
-                // Get payment_id from payments table using bill_id
                 $stmt = $db->prepare("
                     SELECT id FROM payments WHERE bill_id = ? ORDER BY received_at DESC LIMIT 1
                 ");
@@ -161,12 +160,12 @@ try {
             }
             
             // ================================================================
-            // SAVE RECEIPT TO DATABASE
+            // SAVE RECEIPT TO DATABASE - FIXED: Use NULL for patient_id
             // ================================================================
             $receipt_number = 'OTC-REC-' . date('Ymd') . '-' . str_pad($sale_id, 6, '0', STR_PAD_LEFT);
             
-            // Get patient_id (use 0 if NULL)
-            $patient_id = !empty($sale['patient_id']) ? (int)$sale['patient_id'] : 0;
+            // Get patient_id (use NULL if no patient)
+            $patient_id = !empty($sale['patient_id']) ? (int)$sale['patient_id'] : null;
             
             // Check if receipt already exists
             $stmt = $db->prepare("SELECT id FROM receipts WHERE receipt_number = ?");
@@ -187,7 +186,7 @@ try {
                     'printed_at' => date('Y-m-d H:i:s')
                 ]);
                 
-                // Insert with payment_id (if found) or NULL
+                // Insert with patient_id as NULL
                 $stmt = $db->prepare("
                     INSERT INTO receipts (
                         receipt_number, 
@@ -203,8 +202,8 @@ try {
                 $stmt->execute([
                     $receipt_number,
                     $bill_id,
-                    $patient_id,
-                    $payment_id,  // Can be NULL if no payment found
+                    $patient_id,  // NULL if no patient
+                    $payment_id,
                     $user_branch_id,
                     $receipt_data,
                     $user_id
@@ -916,8 +915,8 @@ $admin_phones_display = !empty($admin_phones) ? implode(' | ', $admin_phones) : 
 
     console.log('%c🧾 Braick - Print OTC Receipt', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c✅ OTC Sale Receipt with instructions', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ patient_id set to NULL (not 0)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Items show: name, quantity, batch, instructions', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ payment_id found from payments table using bill_id', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total: <?= $currency ?> <?= number_format($sale['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📞 Admin: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#0B5ED7;');

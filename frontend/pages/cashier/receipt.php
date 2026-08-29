@@ -2,9 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/cashier/receipt.php
 // RECEIPT - VIEW AND PRINT RECEIPT
-// SUPPORTS: Bills, OTC Sales, Prescriptions with Instructions
-// FIXED: Shows OTC details with instructions
-// FIXED: Admin banner at bottom
+// FIXED: Checks OTC sales FIRST before bills
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -33,7 +31,6 @@ $user_full_name = $_SESSION['full_name'] ?? 'Cashier';
 $user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $is_admin = ($user_role === 'admin');
 $is_reception = ($user_role === 'reception');
@@ -52,16 +49,18 @@ try {
 $payment_id = isset($_GET['payment_id']) ? (int)$_GET['payment_id'] : 0;
 $bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
 $sale_id = isset($_GET['sale_id']) ? (int)$_GET['sale_id'] : 0;
+
 $receipt_data = null;
 $all_items = [];
 $medication_items = [];
 $other_items = [];
 $otc_items = [];
 $otc_sale = null;
+$payment_data = null;
 $is_otc = false;
 $error = null;
 $currency = 'TSh';
-$is_from_otc = false;
+$actual_bill_id = 0;
 
 try {
     // Get system settings for currency
@@ -76,28 +75,68 @@ try {
 }
 
 // ================================================================
-// STEP 1: CHECK IF THIS IS AN OTC SALE
+// STEP 1: GET PAYMENT FIRST (if payment_id provided)
 // ================================================================
-if ($sale_id > 0) {
+if ($payment_id > 0) {
     $stmt = $db->prepare("
         SELECT 
-            o.*,
+            p.*,
             u.full_name as cashier_name,
             br.name as branch_name,
             br.location as branch_location,
             br.phone as branch_phone,
             br.email as branch_email
-        FROM otc_sales o
-        LEFT JOIN users u ON o.sold_by = u.id
-        LEFT JOIN branches br ON o.branch_id = br.id
-        WHERE o.id = ? AND o.branch_id = ?
+        FROM payments p
+        LEFT JOIN users u ON p.received_by = u.id
+        LEFT JOIN branches br ON p.branch_id = br.id
+        WHERE p.id = ?
     ");
-    $stmt->execute([$sale_id, $user_branch_id]);
+    $stmt->execute([$payment_id]);
+    $payment_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($payment_data) {
+        $actual_bill_id = $payment_data['bill_id'];
+        if ($bill_id == 0) {
+            $bill_id = $actual_bill_id;
+        }
+    }
+}
+
+// ================================================================
+// STEP 2: CHECK OTC SALE FIRST (using bill_id or sale_id)
+// ================================================================
+$otc_found = false;
+
+if ($bill_id > 0 || $sale_id > 0) {
+    $otc_sql = "SELECT 
+        o.*,
+        u.full_name as cashier_name,
+        br.name as branch_name,
+        br.location as branch_location,
+        br.phone as branch_phone,
+        br.email as branch_email
+    FROM otc_sales o
+    LEFT JOIN users u ON o.sold_by = u.id
+    LEFT JOIN branches br ON o.branch_id = br.id
+    WHERE 1=1 ";
+    
+    $otc_params = [];
+    
+    if ($sale_id > 0) {
+        $otc_sql .= " AND o.id = ?";
+        $otc_params[] = $sale_id;
+    } elseif ($bill_id > 0) {
+        $otc_sql .= " AND o.bill_id = ?";
+        $otc_params[] = $bill_id;
+    }
+    
+    $stmt = $db->prepare($otc_sql);
+    $stmt->execute($otc_params);
     $otc_sale = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($otc_sale) {
+        $otc_found = true;
         $is_otc = true;
-        $is_from_otc = true;
         
         // Get OTC items with instructions
         $stmt = $db->prepare("
@@ -105,30 +144,30 @@ if ($sale_id > 0) {
             WHERE sale_id = ?
             ORDER BY created_at ASC
         ");
-        $stmt->execute([$sale_id]);
+        $stmt->execute([$otc_sale['id']]);
         $otc_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
         // Build receipt data from OTC sale
         $receipt_data = [
-            'payment_id' => null,
-            'receipt_number' => 'OTC-' . $otc_sale['sale_number'],
+            'payment_id' => $payment_data['id'] ?? null,
+            'receipt_number' => $payment_data['receipt_number'] ?? 'OTC-' . $otc_sale['sale_number'],
             'bill_id' => $otc_sale['bill_id'],
             'patient_id' => $otc_sale['patient_id'],
-            'paid_amount' => $otc_sale['total_amount'],
-            'payment_method' => $otc_sale['payment_method'] ?? 'cash',
-            'received_by' => $otc_sale['sold_by'],
-            'received_at' => $otc_sale['updated_at'] ?? $otc_sale['created_at'],
+            'paid_amount' => $payment_data['amount'] ?? $otc_sale['total_amount'],
+            'payment_method' => $payment_data['payment_method'] ?? $otc_sale['payment_method'] ?? 'cash',
+            'received_by' => $payment_data['received_by'] ?? $otc_sale['sold_by'],
+            'received_at' => $payment_data['received_at'] ?? $otc_sale['updated_at'] ?? $otc_sale['created_at'],
             'branch_id' => $otc_sale['branch_id'],
             'bill_number' => 'OTC-' . $otc_sale['sale_number'],
             'bill_total' => $otc_sale['total_amount'],
             'bill_subtotal' => $otc_sale['subtotal'],
-            'bill_paid' => $otc_sale['total_amount'],
+            'bill_paid' => $payment_data['amount'] ?? $otc_sale['total_amount'],
             'bill_balance' => 0,
             'bill_status' => 'paid',
             'discount_amount' => $otc_sale['discount_amount'] ?? 0,
             'cashier_discount' => 0,
             'total_discount' => $otc_sale['discount_amount'] ?? 0,
-            'bill_payment_method' => $otc_sale['payment_method'] ?? 'cash',
+            'bill_payment_method' => $payment_data['payment_method'] ?? $otc_sale['payment_method'] ?? 'cash',
             'bill_created_at' => $otc_sale['created_at'],
             'patient_name' => $otc_sale['customer_name'] ?? 'Walk-in Customer',
             'patient_code' => $otc_sale['patient_id'] ?? 'N/A',
@@ -136,7 +175,7 @@ if ($sale_id > 0) {
             'patient_address' => null,
             'patient_gender' => null,
             'patient_dob' => null,
-            'cashier_name' => $otc_sale['cashier_name'] ?? $user_full_name,
+            'cashier_name' => $payment_data['cashier_name'] ?? $otc_sale['cashier_name'] ?? $user_full_name,
             'branch_name' => $otc_sale['branch_name'] ?? $user_branch_name,
             'branch_location' => $otc_sale['branch_location'] ?? 'Dodoma, Tanzania',
             'branch_phone' => $otc_sale['branch_phone'] ?? '+255 759 154 160',
@@ -151,12 +190,12 @@ if ($sale_id > 0) {
 }
 
 // ================================================================
-// STEP 2: IF NOT OTC, GET FROM BILLS TABLE
+// STEP 3: IF NOT OTC, GET FROM BILLS TABLE (Regular bills)
 // ================================================================
-if (!$is_otc && ($payment_id > 0 || $bill_id > 0)) {
+if (!$otc_found && ($payment_id > 0 || $bill_id > 0)) {
     try {
         // GET PAYMENT AND BILL DETAILS
-        if ($payment_id > 0) {
+        if ($payment_id > 0 && !$payment_data) {
             $stmt = $db->prepare("
                 SELECT 
                     p.id as payment_id,
@@ -297,12 +336,12 @@ if (!$is_otc && ($payment_id > 0 || $bill_id > 0)) {
 }
 
 // ================================================================
-// STEP 3: SEPARATE ITEMS BY CATEGORY
+// STEP 4: SEPARATE ITEMS BY CATEGORY
 // ================================================================
 $medication_items = [];
 $other_items = [];
 
-if (!$is_otc) {
+if (!$is_otc && $receipt_data) {
     foreach ($all_items as $item) {
         if ($item['item_type'] === 'medication') {
             $medication_items[] = $item;
@@ -328,10 +367,10 @@ foreach ($otc_items as $item) {
     $otc_total += (float)($item['total_price'] ?? 0);
 }
 
-// If error, redirect
-if ($error) {
-    $_SESSION['receipt_error'] = $error;
-    header('Location: pending_bills.php');
+// If error or no data, redirect
+if ($error || !$receipt_data) {
+    $_SESSION['receipt_error'] = $error ?? 'Receipt not found!';
+    header('Location: pending_bills.php?error=' . urlencode($error ?? 'Receipt not found'));
     exit;
 }
 
@@ -342,9 +381,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 ?>
 
 <style>
-    /* ================================================================
-       RECEIPT STYLES
-       ================================================================ */
     .receipt-wrapper {
         max-width: 1000px;
         margin: 0 auto;
@@ -360,7 +396,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         box-shadow: 0 8px 40px rgba(5, 150, 105, 0.1);
     }
     
-    /* ===== RECEIPT HEADER ===== */
     .receipt-header {
         background: linear-gradient(135deg, #065F46, #047857);
         color: white;
@@ -463,12 +498,10 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         z-index: 1;
     }
     
-    /* ===== RECEIPT BODY ===== */
     .receipt-body {
         padding: 24px 32px;
     }
     
-    /* Business Details */
     .business-details {
         display: grid;
         grid-template-columns: repeat(4, 1fr);
@@ -493,7 +526,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         font-size: 0.8rem;
     }
     
-    /* Patient Details */
     .patient-details {
         display: grid;
         grid-template-columns: 2fr 1fr 1fr;
@@ -524,7 +556,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         font-size: 1rem;
     }
     
-    /* ===== SECTION HEADERS ===== */
     .section-header {
         display: flex;
         align-items: center;
@@ -538,15 +569,15 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
     
     .section-header.other-bills {
-        background: var(--section-other-bg, #E8F0FE);
-        border-left-color: var(--section-other-border, #0B5ED7);
-        color: var(--section-other-border, #0B5ED7);
+        background: #E8F0FE;
+        border-left-color: #0B5ED7;
+        color: #0B5ED7;
     }
     
     .section-header.medications {
-        background: var(--section-medication-bg, #FEF3C7);
-        border-left-color: var(--section-medication-border, #D97706);
-        color: var(--section-medication-border, #D97706);
+        background: #FEF3C7;
+        border-left-color: #D97706;
+        color: #D97706;
     }
     
     .section-header.otc-section {
@@ -564,11 +595,11 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
     
     .section-header.other-bills .section-badge {
-        background: var(--section-other-border, #0B5ED7);
+        background: #0B5ED7;
     }
     
     .section-header.medications .section-badge {
-        background: var(--section-medication-border, #D97706);
+        background: #D97706;
     }
     
     .section-header.otc-section .section-badge {
@@ -581,7 +612,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         font-weight: 700;
     }
     
-    /* ===== TABLE ===== */
     .receipt-table-wrap {
         overflow-x: auto;
         margin-bottom: 12px;
@@ -630,7 +660,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
     
     .receipt-table tbody tr:hover td {
-        background: var(--table-hover, #D1FAE5);
+        background: #D1FAE5;
     }
     
     .receipt-table .item-name {
@@ -652,7 +682,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         background: var(--bg-body);
         padding: 2px 10px;
         border-radius: 4px;
-        border-left: 3px solid var(--warning, #D97706);
+        border-left: 3px solid #D97706;
         margin-top: 3px;
         max-width: 300px;
     }
@@ -665,7 +695,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         font-family: 'Courier New', monospace;
     }
     
-    /* ===== TOTALS ===== */
     .totals-section {
         display: flex;
         justify-content: flex-end;
@@ -720,21 +749,20 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
     
     .totals-box .total-row.grand-total .value {
-        color: var(--success);
+        color: #059669;
         font-weight: 700;
         font-size: 1.1rem;
     }
     
     .totals-box .total-row.balance .value {
-        color: var(--danger);
+        color: #DC2626;
         font-weight: 700;
     }
     
     .totals-box .total-row.discount-row .value {
-        color: var(--warning);
+        color: #D97706;
     }
     
-    /* ===== CATEGORY TOTALS ===== */
     .category-totals {
         display: grid;
         grid-template-columns: 1fr 1fr 1fr;
@@ -753,13 +781,13 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
     
     .category-total-box.other {
-        border-color: var(--section-other-border, #0B5ED7);
-        background: var(--section-other-bg, #E8F0FE);
+        border-color: #0B5ED7;
+        background: #E8F0FE;
     }
     
     .category-total-box.medication {
-        border-color: var(--section-medication-border, #D97706);
-        background: var(--section-medication-bg, #FEF3C7);
+        border-color: #D97706;
+        background: #FEF3C7;
     }
     
     .category-total-box.otc {
@@ -778,18 +806,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     }
     
     .category-total-box.other .cat-value {
-        color: var(--section-other-border, #0B5ED7);
+        color: #0B5ED7;
     }
     
     .category-total-box.medication .cat-value {
-        color: var(--section-medication-border, #D97706);
+        color: #D97706;
     }
     
     .category-total-box.otc .cat-value {
         color: #6D28D9;
     }
     
-    /* ===== STATUS BADGE ===== */
     .status-badge {
         display: inline-flex;
         align-items: center;
@@ -816,20 +843,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         color: #2563EB;
     }
     
-    [data-theme="dark"] .status-badge.completed,
-    [data-theme="dark"] .status-badge.paid {
-        background: #1A3A2A;
-        color: #34D399;
-    }
-    [data-theme="dark"] .status-badge.pending {
-        background: #3D2E0A;
-        color: #FBBF24;
-    }
-    [data-theme="dark"] .status-badge.partial {
-        background: #1E3A5F;
-        color: #60A5FA;
-    }
-    
     .payment-method-badge {
         display: inline-flex;
         align-items: center;
@@ -843,7 +856,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         color: var(--text-primary);
     }
     
-    /* ===== RECEIPT FOOTER ===== */
     .receipt-footer {
         padding: 16px 32px;
         background: var(--bg-body);
@@ -854,7 +866,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     .receipt-footer .thank-you {
         font-size: 1rem;
         font-weight: 700;
-        color: var(--success);
+        color: #059669;
         margin-bottom: 4px;
     }
     
@@ -887,9 +899,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         color: var(--text-primary);
     }
     
-    /* ================================================================
-       ADMIN BANNER
-       ================================================================ */
     .admin-banner {
         background: linear-gradient(135deg, #1E3A5F, #0B5ED7);
         color: white;
@@ -932,9 +941,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         font-family: monospace;
     }
     
-    /* ================================================================
-       PRINT STYLES
-       ================================================================ */
     @media print {
         .top-nav, .sidebar, .no-print, .btn, 
         #sidebarToggle, #darkModeToggle, .page-header .btn,
@@ -976,28 +982,16 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
             padding: 12px 24px !important;
         }
         
-        [data-theme="dark"] .receipt-footer {
-            background: #1E293B !important;
-        }
-        
         .patient-details {
             background: #F1F5F9 !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
         }
         
-        [data-theme="dark"] .patient-details {
-            background: #1E293B !important;
-        }
-        
         .receipt-table thead th {
             background: #F1F5F9 !important;
             -webkit-print-color-adjust: exact !important;
             print-color-adjust: exact !important;
-        }
-        
-        [data-theme="dark"] .receipt-table thead th {
-            background: #1E293B !important;
         }
         
         .status-badge.completed,
@@ -1056,59 +1050,45 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         }
     }
     
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
     @media (max-width: 768px) {
         .receipt-header {
             flex-direction: column;
             text-align: center;
             padding: 16px 20px;
         }
-        
         .receipt-header .logo-area {
             flex-direction: column;
             text-align: center;
         }
-        
         .receipt-header .receipt-number {
             text-align: center;
         }
-        
         .receipt-header .receipt-number .date-badge {
             justify-content: center;
         }
-        
         .business-details {
             grid-template-columns: 1fr 1fr;
         }
-        
         .patient-details {
             grid-template-columns: 1fr;
         }
-        
         .totals-box {
             width: 100%;
         }
-        
         .receipt-body {
             padding: 12px 16px;
         }
-        
         .receipt-footer {
             padding: 12px 16px;
         }
-        
         .category-totals {
             grid-template-columns: 1fr;
         }
-        
         .cashier-info {
             flex-direction: column;
             align-items: center;
             text-align: center;
         }
-        
         .admin-banner {
             flex-direction: column;
             gap: 8px;
@@ -1120,22 +1100,18 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         .business-details {
             grid-template-columns: 1fr;
         }
-        
         .receipt-header .logo-area .brand-name {
             font-size: 1.2rem;
         }
-        
         .receipt-header .logo-area .logo-img {
             width: 50px;
             height: 50px;
         }
-        
         .receipt-table thead th,
         .receipt-table tbody td {
             padding: 4px 8px;
             font-size: 0.7rem;
         }
-        
         .receipt-table .item-instruction {
             max-width: 150px;
             font-size: 0.5rem;
@@ -1186,6 +1162,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
     <!-- ================================================================ -->
     <!-- RECEIPT -->
     <!-- ================================================================ -->
+    <?php if ($receipt_data): ?>
     <div class="receipt-wrapper">
         
         <!-- Receipt Header -->
@@ -1401,7 +1378,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                             <?php endforeach; ?>
                             <tr style="font-weight:700;background:var(--bg-body);">
                                 <td colspan="3" class="text-right" style="padding:6px 14px;">OTHER BILLS TOTAL</td>
-                                <td class="text-right" style="color:var(--section-other-border, #0B5ED7);font-size:0.9rem;"><?= $currency ?> <?= number_format($other_total, 0) ?></td>
+                                <td class="text-right" style="color:#0B5ED7;font-size:0.9rem;"><?= $currency ?> <?= number_format($other_total, 0) ?></td>
                             </tr>
                         </tbody>
                     </table>
@@ -1465,7 +1442,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                             <?php endforeach; ?>
                             <tr style="font-weight:700;background:var(--bg-body);">
                                 <td colspan="4" class="text-right" style="padding:6px 14px;">MEDICATIONS TOTAL</td>
-                                <td class="text-right" style="color:var(--section-medication-border, #D97706);font-size:0.9rem;"><?= $currency ?> <?= number_format($medication_total, 0) ?></td>
+                                <td class="text-right" style="color:#D97706;font-size:0.9rem;"><?= $currency ?> <?= number_format($medication_total, 0) ?></td>
                             </tr>
                         </tbody>
                     </table>
@@ -1486,7 +1463,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
                     <?php if ($discount_amount > 0): ?>
                         <div class="total-row discount-row">
                             <span class="label"><i class="fas fa-tag"></i> <?= $is_otc ? 'Discount' : 'Total Discount' ?></span>
-                            <span class="value" style="color:var(--warning);">
+                            <span class="value" style="color:#D97706;">
                                 -<span class="currency"><?= $currency ?></span> <?= number_format($discount_amount, 0) ?>
                             </span>
                         </div>
@@ -1552,7 +1529,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         <!-- Receipt Footer -->
         <div class="receipt-footer">
             <div class="thank-you">
-                <i class="fas fa-heart" style="color:var(--danger);opacity:0.6;"></i>
+                <i class="fas fa-heart" style="color:#DC2626;opacity:0.6;"></i>
                 <?= $is_otc ? 'Thank You for Your Purchase at Braick Dispensary' : 'Thank You for Choosing Braick Dispensary' ?>
             </div>
             <div class="footer-text">
@@ -1565,7 +1542,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         </div>
         
         <!-- ================================================================ -->
-        <!-- ADMIN BANNER - Shows for all users -->
+        <!-- ADMIN BANNER -->
         <!-- ================================================================ -->
         <div class="admin-banner">
             <span class="admin-badge">
@@ -1597,11 +1574,12 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         </div>
         
     </div>
+    <?php endif; ?>
 
     <!-- Footer -->
     <footer class="footer" style="padding:12px 0;border-top:1px solid var(--border-color);margin-top:20px;text-align:center;font-size:0.6rem;color:var(--text-secondary);">
         <p>
-            <span style="color:var(--success);font-weight:600;">Braick Dispensary</span>
+            <span style="color:#059669;font-weight:600;">Braick Dispensary</span>
             <span style="opacity:0.3;margin:0 6px;">|</span>
             <?= $is_otc ? 'OTC Receipt' : 'Receipt' ?>
             <span style="opacity:0.3;margin:0 6px;">|</span>
@@ -1619,20 +1597,6 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;position:fixed;bottom:24px;right:24px;padding:14px 20px;border-radius:12px;z-index:999;max-width:380px;transform:translateY(100px);opacity:0;transition:all 0.4s cubic-bezier(0.4,0,0.2,1);display:flex;align-items:center;gap:12px;color:white;box-shadow:0 10px 40px rgba(0,0,0,0.15);">
-    <i class="fas fa-info-circle" style="font-size:1.2rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.9rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.8rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -1650,34 +1614,17 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         });
     }
 
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        toast.className = 'toast-custom ' + (type || 'info');
-        toastTitle.textContent = title || 'Notification';
-        toastMessage.textContent = message || '';
-        toast.style.display = 'flex';
-        setTimeout(function() { toast.classList.add('show'); }, 50);
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() { toast.style.display = 'none'; }, 400);
-        }, 3500);
-    }
-
-    console.log('%c🧾 Braick - Receipt (Full Support)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Categories: Other Bills, Prescriptions, OTC Sales', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Instructions shown for each medication item', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Admin banner at bottom with user role', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ OTC: Customer name, phone, items, discount', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c🧾 Braick - Receipt (FIXED OTC)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Checks OTC sales table FIRST (bill_id=216)', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ Gets items from otc_sale_items', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Shows instructions from otc_sale_items', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Admin banner at bottom', 'font-size:13px; color:#0B5ED7;');
     <?php if ($is_otc): ?>
         console.log('%c🛒 OTC Sale: <?= htmlspecialchars($receipt_data['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#8B5CF6;');
         console.log('%c👤 Customer: <?= htmlspecialchars($receipt_data['patient_name'] ?? 'Walk-in') ?>', 'font-size:13px; color:#8B5CF6;');
         console.log('%c📞 Phone: <?= htmlspecialchars($receipt_data['patient_phone'] ?? 'N/A') ?>', 'font-size:13px; color:#8B5CF6;');
+        console.log('%c💰 Amount: <?= $currency ?> <?= number_format($receipt_data['paid_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#34D399;');
     <?php endif; ?>
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= strtoupper($user_role) ?>)', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Total: <?= $currency ?> <?= number_format($receipt_data['paid_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
