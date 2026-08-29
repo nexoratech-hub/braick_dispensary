@@ -5,7 +5,7 @@
 // ✅ SIDEBAR TOGGLE BUTTON INAFANYA KAZI
 // ✅ SEARCH BAR WIDTH IMEPUNGUZWA
 // ✅ DATE/TIME CARD - CSS NZURI
-// ✅ NOTIFICATIONS FIXED
+// ✅ NOTIFICATIONS REMOVED - CLEAN HEADER
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -63,40 +63,6 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     $db = null;
-}
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS COUNT
-// ================================================================
-$unread_notifications = 0;
-$notifications_list = [];
-
-if ($db !== null && $user_id > 0) {
-    try {
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as total 
-            FROM notifications 
-            WHERE user_id = ? AND is_read = 0
-        ");
-        $stmt->execute([$user_id]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        $unread_notifications = (int)($result['total'] ?? 0);
-        
-        $stmt = $db->prepare("
-            SELECT id, title, message, type, link, is_read, created_at 
-            FROM notifications 
-            WHERE user_id = ? 
-            ORDER BY created_at DESC 
-            LIMIT 5
-        ");
-        $stmt->execute([$user_id]);
-        $notifications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        
-    } catch (Exception $e) {
-        error_log("Notification error: " . $e->getMessage());
-        $unread_notifications = 0;
-        $notifications_list = [];
-    }
 }
 
 // ================================================================
@@ -510,236 +476,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
         }
         
         /* ================================================================
-           ICON BUTTON
-           ================================================================ */
-        .top-nav .icon-btn {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        /* ================================================================
-           NOTIFICATION BELL
-           ================================================================ */
-        .notif-bell-wrapper {
-            position: relative;
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: -2px;
-            right: -2px;
-            min-width: 18px;
-            height: 18px;
-            border-radius: 50%;
-            font-size: 0.5rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 2px solid var(--bg-nav);
-            padding: 0 4px;
-            line-height: 1;
-        }
-        
-        .notif-dot.has-notif {
-            background: var(--danger);
-            color: white;
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.no-notif {
-            background: var(--gray-400);
-            color: white;
-            font-size: 0.45rem;
-            animation: none;
-            min-width: 16px;
-            height: 16px;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.1); }
-        }
-        
-        /* ================================================================
-           NOTIFICATION DROPDOWN
-           ================================================================ */
-        .notif-dropdown {
-            position: absolute;
-            top: 46px;
-            right: 0;
-            width: 360px;
-            max-height: 420px;
-            background: var(--bg-card);
-            border-radius: 12px;
-            border: 2px solid var(--border-color);
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-            z-index: 100;
-            display: none;
-            overflow: hidden;
-        }
-        
-        .notif-dropdown.open {
-            display: block;
-            animation: fadeInDown 0.3s ease;
-        }
-        
-        @keyframes fadeInDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .notif-dropdown .notif-header {
-            padding: 10px 16px;
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            background: var(--bg-body);
-        }
-        
-        .notif-dropdown .notif-header .notif-title {
-            font-weight: 600;
-            font-size: 0.8rem;
-            color: var(--text-primary);
-        }
-        
-        .notif-dropdown .notif-header .notif-mark-all {
-            font-size: 0.65rem;
-            color: var(--primary);
-            cursor: pointer;
-            text-decoration: none;
-            font-weight: 500;
-        }
-        
-        .notif-dropdown .notif-header .notif-mark-all:hover {
-            text-decoration: underline;
-        }
-        
-        .notif-dropdown .notif-list {
-            max-height: 300px;
-            overflow-y: auto;
-            padding: 4px 0;
-        }
-        
-        .notif-dropdown .notif-list::-webkit-scrollbar {
-            width: 4px;
-        }
-        
-        .notif-dropdown .notif-list::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 4px;
-        }
-        
-        .notif-dropdown .notif-item {
-            padding: 8px 14px;
-            border-bottom: 1px solid var(--border-color);
-            transition: background 0.2s ease;
-            cursor: pointer;
-            text-decoration: none;
-            display: block;
-        }
-        
-        .notif-dropdown .notif-item:hover {
-            background: var(--primary-bg);
-        }
-        
-        .notif-dropdown .notif-item:last-child {
-            border-bottom: none;
-        }
-        
-        .notif-dropdown .notif-item .notif-item-title {
-            font-weight: 600;
-            font-size: 0.75rem;
-            color: var(--text-primary);
-        }
-        
-        .notif-dropdown .notif-item .notif-item-message {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            margin-top: 2px;
-            line-height: 1.4;
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-        }
-        
-        .notif-dropdown .notif-item .notif-item-time {
-            font-size: 0.55rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-            display: block;
-        }
-        
-        .notif-dropdown .notif-item.unread {
-            border-left: 3px solid var(--primary);
-            background: var(--primary-bg);
-        }
-        
-        .notif-dropdown .notif-item.unread:hover {
-            background: var(--success-bg);
-        }
-        
-        .notif-dropdown .notif-empty {
-            padding: 30px 20px;
-            text-align: center;
-            color: var(--text-secondary);
-        }
-        
-        .notif-dropdown .notif-empty i {
-            font-size: 2rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 8px;
-        }
-        
-        .notif-dropdown .notif-empty p {
-            font-size: 0.8rem;
-        }
-        
-        .notif-dropdown .notif-footer {
-            padding: 8px 16px;
-            border-top: 2px solid var(--border-color);
-            text-align: center;
-            background: var(--bg-body);
-        }
-        
-        .notif-dropdown .notif-footer a {
-            font-size: 0.7rem;
-            color: var(--primary);
-            text-decoration: none;
-            font-weight: 500;
-        }
-        
-        .notif-dropdown .notif-footer a:hover {
-            text-decoration: underline;
-        }
-        
-        [data-theme="dark"] .notif-dropdown .notif-item.unread {
-            background: #1E3A5F;
-        }
-        
-        [data-theme="dark"] .notif-dropdown .notif-item.unread:hover {
-            background: #1A3A2A;
-        }
-        
-        /* ================================================================
            DARK MODE TOGGLE
            ================================================================ */
         .dark-toggle-btn {
@@ -811,21 +547,17 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
            ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
-            .notif-dropdown { right: -20px; width: 320px; }
         }
         
         @media (max-width: 768px) {
             .top-nav .datetime { display: none; }
-            .notif-dropdown { right: -30px; width: 300px; }
             .branch-badge { font-size: 0.5rem; padding: 1px 8px; }
         }
         
         @media (max-width: 640px) {
-            .notif-dropdown { right: -40px; width: 280px; }
             .dark-toggle-btn { padding: 3px 6px; font-size: 0.65rem; }
             .dark-toggle-btn span { display: none; }
             .top-nav .avatar { width: 30px; height: 30px; }
-            .top-nav .icon-btn { width: 30px; height: 30px; font-size: 0.8rem; }
         }
         
         .spinner {
@@ -896,83 +628,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
             <i id="darkIcon" class="fas <?= $dark_mode === 'dark' ? 'fa-sun' : 'fa-moon' ?>"></i>
             <span id="darkText"><?= $dark_mode === 'dark' ? 'Light' : 'Dark' ?></span>
         </button>
-        
-        <!-- ================================================================ -->
-        <!-- NOTIFICATION BELL -->
-        <!-- ================================================================ -->
-        <div class="notif-bell-wrapper">
-            <button class="icon-btn" id="notifBellBtn" onclick="toggleNotifications()" title="Notifications">
-                <i class="fas fa-bell text-lg"></i>
-                <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>">
-                    <?php if ($unread_notifications > 0): ?>
-                        <?= $unread_notifications > 9 ? '9+' : $unread_notifications ?>
-                    <?php else: ?>
-                        <i class="fas fa-check" style="font-size:0.35rem;"></i>
-                    <?php endif; ?>
-                </span>
-            </button>
-            
-            <!-- Notification Dropdown -->
-            <div class="notif-dropdown" id="notifDropdown">
-                <div class="notif-header">
-                    <span class="notif-title">
-                        <i class="fas fa-bell mr-1"></i> Notifications
-                        <?php if ($unread_notifications > 0): ?>
-                            <span class="badge badge-red" style="font-size:0.55rem; padding:1px 8px;">
-                                <?= $unread_notifications ?> new
-                            </span>
-                        <?php endif; ?>
-                    </span>
-                    <?php if ($unread_notifications > 0): ?>
-                        <a href="#" class="notif-mark-all" onclick="markAllRead(event)">Mark all as read</a>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="notif-list" id="notifList">
-                    <?php if (count($notifications_list) > 0): ?>
-                        <?php foreach ($notifications_list as $notif): ?>
-                            <a href="<?= !empty($notif['link']) ? $notif['link'] : '#' ?>" 
-                               class="notif-item <?= $notif['is_read'] == 0 ? 'unread' : '' ?>"
-                               onclick="markNotificationRead(<?= $notif['id'] ?>, event)">
-                                <div class="notif-item-title">
-                                    <?= htmlspecialchars($notif['title']) ?>
-                                    <?php if ($notif['is_read'] == 0): ?>
-                                        <span class="badge badge-blue" style="font-size:0.45rem; padding:0 6px;">New</span>
-                                    <?php endif; ?>
-                                </div>
-                                <div class="notif-item-message"><?= htmlspecialchars($notif['message']) ?></div>
-                                <span class="notif-item-time">
-                                    <i class="far fa-clock mr-1"></i>
-                                    <?php 
-                                        $time = strtotime($notif['created_at']);
-                                        $diff = time() - $time;
-                                        if ($diff < 60) {
-                                            echo 'Just now';
-                                        } elseif ($diff < 3600) {
-                                            echo floor($diff / 60) . ' min ago';
-                                        } elseif ($diff < 86400) {
-                                            echo floor($diff / 3600) . ' hours ago';
-                                        } else {
-                                            echo date('M d, Y', $time);
-                                        }
-                                    ?>
-                                </span>
-                            </a>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <div class="notif-empty">
-                            <i class="fas fa-bell-slash"></i>
-                            <p>No notifications</p>
-                            <p style="font-size:0.65rem; color:var(--text-secondary);">All caught up!</p>
-                        </div>
-                    <?php endif; ?>
-                </div>
-                
-                <div class="notif-footer">
-                    <a href="notifications.php">View all notifications</a>
-                </div>
-            </div>
-        </div>
         
         <!-- Profile Avatar -->
         <a href="profile.php">
@@ -1132,67 +787,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
     })();
 
     // ================================================================
-    // TOGGLE NOTIFICATION DROPDOWN
-    // ================================================================
-    function toggleNotifications() {
-        var dropdown = document.getElementById('notifDropdown');
-        if (dropdown) {
-            dropdown.classList.toggle('open');
-        }
-    }
-
-    document.addEventListener('click', function(e) {
-        var wrapper = document.querySelector('.notif-bell-wrapper');
-        var dropdown = document.getElementById('notifDropdown');
-        if (wrapper && dropdown) {
-            if (!wrapper.contains(e.target)) {
-                dropdown.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // MARK NOTIFICATION AS READ
-    // ================================================================
-    function markNotificationRead(id, event) {
-        if (event) event.preventDefault();
-        if (!id) return;
-        
-        fetch('../../backend/api/mark_notification_read.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            },
-            body: 'id=' + id
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                location.reload();
-            }
-        })
-        .catch(error => console.error('Error:', error));
-    }
-
-    function markAllRead(event) {
-        if (event) event.preventDefault();
-        
-        fetch('../../backend/api/mark_all_notifications_read.php', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                location.reload();
-            }
-        })
-        .catch(error => console.error('Error:', error));
-    }
-
-    // ================================================================
     // SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
@@ -1241,13 +835,13 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'light';
     // ================================================================
     // CONSOLE LOG
     // ================================================================
-    console.log('%c💊 Braick Dispensary - Pharmacy Header (FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick Dispensary - Pharmacy Header (CLEAN)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c✅ Sidebar toggle button works', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Search bar width reduced', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Date/Time card with good CSS', 'font-size:12px; color:#34D399;');
+    console.log('%c🔔 Notifications REMOVED - Clean header', 'font-size:12px; color:#64748B;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c🔔 Unread Notifications: <?= $unread_notifications ?>', 'font-size:12px; color:#DC2626;');
 </script>
 </body>
 </html>

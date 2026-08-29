@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/components/doctor_sidebar.php
 // DOCTOR - SHARED SIDEBAR (WITH API INTEGRATION - FIXED)
+// FIXED: Sidebar toggles properly with full page width when hidden
+// REMOVED: Doctor profile from sidebar (cleaner design)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -507,22 +509,23 @@ $initial_data = [
 <!-- SIDEBAR HTML -->
 <style>
     /* ================================================================
-       SIDEBAR STYLES
+       SIDEBAR STYLES - FIXED: Full width when hidden
        ================================================================ */
     
+    /* Sidebar - positioned fixed with transform */
     .sidebar {
         position: fixed;
         top: 0;
         left: 0;
         bottom: 0;
-        width: 280px;
+        width: 270px;
         background: #0B4EA8;
         color: white;
         z-index: 9999;
         overflow-y: auto;
         overflow-x: hidden;
         transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        transform: translateX(-100%);
+        transform: translateX(0);
         box-shadow: 4px 0 30px rgba(0,0,0,0.3);
         padding-bottom: 20px;
     }
@@ -532,14 +535,60 @@ $initial_data = [
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
-    .sidebar.open {
-        transform: translateX(0) !important;
+    /* When sidebar is hidden on mobile/tablet */
+    .sidebar.hidden-sidebar {
+        transform: translateX(-100%) !important;
     }
     
-    .sidebar::-webkit-scrollbar { width: 5px; }
-    .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
-    .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
-    .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
+    /* Desktop: always visible */
+    @media (min-width: 1025px) {
+        .sidebar {
+            transform: translateX(0) !important;
+            z-index: 50;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
+        }
+        .sidebar.hidden-sidebar {
+            transform: translateX(0) !important;
+        }
+        #sidebarOverlay {
+            display: none !important;
+        }
+        .sidebar-close-btn {
+            display: none !important;
+        }
+        .sidebar-toggle-btn {
+            display: none !important;
+        }
+    }
+    
+    /* Mobile/Tablet: toggleable */
+    @media (max-width: 1024px) {
+        .sidebar {
+            transform: translateX(-100%);
+            z-index: 9999;
+            border-radius: 0 12px 12px 0;
+            width: 280px;
+        }
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        .sidebar.hidden-sidebar {
+            transform: translateX(-100%) !important;
+        }
+        #sidebarOverlay {
+            display: none;
+            z-index: 9998;
+        }
+        #sidebarOverlay.active {
+            display: block !important;
+        }
+        .sidebar-close-btn {
+            display: block !important;
+        }
+        .sidebar-toggle-btn {
+            display: block !important;
+        }
+    }
     
     /* Overlay */
     #sidebarOverlay {
@@ -558,6 +607,11 @@ $initial_data = [
     #sidebarOverlay.active {
         display: block !important;
     }
+    
+    .sidebar::-webkit-scrollbar { width: 5px; }
+    .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
+    .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
+    .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
     
     /* Sidebar Brand */
     .sidebar-brand {
@@ -607,75 +661,6 @@ $initial_data = [
     .sidebar-close-btn:hover {
         background: rgba(255,255,255,0.2);
         transform: scale(1.05);
-    }
-    @media (max-width: 1024px) {
-        .sidebar-close-btn {
-            display: block;
-        }
-    }
-    
-    /* Doctor Info */
-    .sidebar-doctor-info {
-        padding: 12px 16px;
-        border-bottom: 2px solid rgba(255,255,255,0.08);
-        background: #0B4EA8;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    [data-theme="dark"] .sidebar-doctor-info {
-        background: #0A3D7A;
-    }
-    .sidebar-doctor-info .doctor-avatar {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        background: #0B5ED7;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-weight: 700;
-        font-size: 0.9rem;
-        flex-shrink: 0;
-        border: 2px solid rgba(255,255,255,0.15);
-    }
-    .sidebar-doctor-info .doctor-name {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: white;
-    }
-    .sidebar-doctor-info .doctor-role {
-        font-size: 0.6rem;
-        color: #9EC5FE;
-    }
-    .sidebar-doctor-info .doctor-status {
-        margin-left: auto;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    }
-    .sidebar-doctor-info .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        display: inline-block;
-    }
-    .sidebar-doctor-info .status-dot.online {
-        background: #34D399;
-        animation: pulse-dot 1.5s infinite;
-    }
-    .sidebar-doctor-info .status-dot.offline {
-        background: #94A3B8;
-    }
-    .sidebar-doctor-info .status-text {
-        font-size: 0.6rem;
-        color: #D2E3FC;
-    }
-    
-    @keyframes pulse-dot {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.4; transform: scale(0.8); }
     }
     
     /* Navigation */
@@ -832,7 +817,12 @@ $initial_data = [
         display: inline-block;
     }
     
-    /* Sidebar Status */
+    @keyframes pulse-dot {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.4; transform: scale(0.8); }
+    }
+    
+    /* Sidebar Status - Removed doctor profile, kept status only */
     .sidebar-status {
         padding: 10px 16px;
         border-top: 2px solid rgba(255,255,255,0.08);
@@ -869,38 +859,51 @@ $initial_data = [
         margin-left: auto;
     }
     
-    /* Responsive */
+    /* ================================================================
+       MAIN CONTENT OFFSET - FIXED: Full width when sidebar hidden
+       ================================================================ */
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 28px 32px;
+        min-height: calc(100vh - 68px);
+        transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    /* When sidebar is hidden on mobile/tablet */
+    .main-content.sidebar-hidden {
+        margin-left: 0 !important;
+    }
+    
+    /* Desktop: always have sidebar margin */
     @media (min-width: 1025px) {
-        .sidebar {
-            transform: translateX(0) !important;
-            z-index: 50;
-            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
+        .main-content {
+            margin-left: 270px !important;
         }
-        #sidebarOverlay {
-            display: none !important;
-        }
-        .sidebar-close-btn {
-            display: none !important;
+        .main-content.sidebar-hidden {
+            margin-left: 270px !important;
         }
     }
     
+    /* Mobile/Tablet: full width when hidden */
     @media (max-width: 1024px) {
-        .sidebar {
-            width: 280px;
-            transform: translateX(-100%);
-            z-index: 9999;
-            border-radius: 0 12px 12px 0;
+        .main-content {
+            margin-left: 0;
+            padding: 16px;
         }
-        .sidebar.open {
-            transform: translateX(0) !important;
+        .main-content.sidebar-hidden {
+            margin-left: 0 !important;
         }
-        #sidebarOverlay {
-            display: none;
-            z-index: 9998;
+    }
+    
+    @media (max-width: 640px) {
+        .main-content {
+            padding: 10px;
         }
-        #sidebarOverlay.active {
-            display: block !important;
-        }
+    }
+    
+    /* Responsive adjustments for sidebar itself */
+    @media (max-width: 1024px) {
         .sidebar-brand {
             padding: 14px 14px 10px;
         }
@@ -923,6 +926,12 @@ $initial_data = [
         .sidebar-link .badge {
             font-size: 0.55rem;
             padding: 1px 7px;
+        }
+        .sidebar-close-btn {
+            display: block !important;
+        }
+        .sidebar-toggle-btn {
+            display: block !important;
         }
     }
     
@@ -947,14 +956,6 @@ $initial_data = [
         .sidebar-link i {
             width: 16px;
             font-size: 0.75rem;
-        }
-        .sidebar-doctor-info .doctor-name {
-            font-size: 0.7rem;
-        }
-        .sidebar-doctor-info .doctor-avatar {
-            width: 28px;
-            height: 28px;
-            font-size: 0.7rem;
         }
     }
     
@@ -990,14 +991,6 @@ $initial_data = [
         .sidebar-nav .nav-label {
             font-size: 0.4rem;
         }
-        .sidebar-doctor-info .doctor-name {
-            font-size: 0.65rem;
-        }
-        .sidebar-doctor-info .doctor-avatar {
-            width: 24px;
-            height: 24px;
-            font-size: 0.6rem;
-        }
     }
 </style>
 
@@ -1023,30 +1016,6 @@ $initial_data = [
             <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
                 <i class="fas fa-times"></i>
             </button>
-        </div>
-    </div>
-    
-    <!-- Doctor Info -->
-    <div class="sidebar-doctor-info">
-        <div class="doctor-avatar">
-            <?php
-            $initials = '';
-            $name_parts = explode(' ', $doctor_full_name);
-            foreach ($name_parts as $part) {
-                if (!empty($part)) {
-                    $initials .= strtoupper($part[0]);
-                }
-            }
-            echo substr($initials, 0, 2);
-            ?>
-        </div>
-        <div>
-            <div class="doctor-name"><?= htmlspecialchars($doctor_full_name) ?></div>
-            <div class="doctor-role">👨‍⚕️ Doctor</div>
-        </div>
-        <div class="doctor-status">
-            <span class="status-dot <?= $doctor_is_online ? 'online' : 'offline' ?>" id="sidebarStatusDot"></span>
-            <span class="status-text" id="sidebarStatusText"><?= $doctor_is_online ? 'Online' : 'Offline' ?></span>
         </div>
     </div>
     
@@ -1186,11 +1155,13 @@ $initial_data = [
         updateInterval: null,
         lastUpdate: null,
         changeCount: 0,
-        apiRequestCount: 0
+        apiRequestCount: 0,
+        isOpen: false,
+        isDesktop: window.innerWidth > 1024
     };
     
     // ================================================================
-    // SIDEBAR TOGGLE
+    // SIDEBAR TOGGLE - FIXED: Proper slide with full width
     // ================================================================
     (function() {
         if (document.readyState === 'loading') {
@@ -1204,6 +1175,7 @@ $initial_data = [
             var toggleBtn = document.getElementById('sidebarToggle');
             var closeBtn = document.getElementById('sidebarCloseBtn');
             var overlay = document.getElementById('sidebarOverlay');
+            var mainContent = document.querySelector('.main-content');
             
             if (!overlay) {
                 overlay = document.createElement('div');
@@ -1217,26 +1189,97 @@ $initial_data = [
                 return;
             }
             
+            function isDesktopView() {
+                return window.innerWidth > 1024;
+            }
+            
             function openSidebar() {
+                if (isDesktopView()) {
+                    return;
+                }
+                sidebar.classList.remove('hidden-sidebar');
                 sidebar.classList.add('open');
                 overlay.style.display = 'block';
                 overlay.classList.add('active');
                 document.body.style.overflow = 'hidden';
+                sidebarState.isOpen = true;
+                
+                if (mainContent) {
+                    mainContent.classList.remove('sidebar-hidden');
+                }
             }
             
             function closeSidebar() {
+                if (isDesktopView()) {
+                    return;
+                }
                 sidebar.classList.remove('open');
+                sidebar.classList.add('hidden-sidebar');
                 overlay.style.display = 'none';
                 overlay.classList.remove('active');
                 document.body.style.overflow = '';
+                sidebarState.isOpen = false;
+                
+                if (mainContent) {
+                    mainContent.classList.add('sidebar-hidden');
+                }
             }
             
             function toggleSidebar() {
+                if (isDesktopView()) {
+                    return;
+                }
                 if (sidebar.classList.contains('open')) {
                     closeSidebar();
                 } else {
                     openSidebar();
                 }
+            }
+            
+            function handleResize() {
+                var isDesktop = isDesktopView();
+                if (isDesktop) {
+                    sidebar.classList.remove('hidden-sidebar', 'open');
+                    overlay.style.display = 'none';
+                    overlay.classList.remove('active');
+                    document.body.style.overflow = '';
+                    if (mainContent) {
+                        mainContent.classList.remove('sidebar-hidden');
+                        mainContent.style.marginLeft = '270px';
+                    }
+                    sidebarState.isOpen = true;
+                } else {
+                    if (!sidebarState.isOpen) {
+                        sidebar.classList.add('hidden-sidebar');
+                        sidebar.classList.remove('open');
+                        overlay.style.display = 'none';
+                        overlay.classList.remove('active');
+                        if (mainContent) {
+                            mainContent.classList.add('sidebar-hidden');
+                            mainContent.style.marginLeft = '0';
+                        }
+                    } else {
+                        sidebar.classList.remove('hidden-sidebar');
+                        sidebar.classList.add('open');
+                        overlay.style.display = 'block';
+                        overlay.classList.add('active');
+                        if (mainContent) {
+                            mainContent.classList.remove('sidebar-hidden');
+                            mainContent.style.marginLeft = '0';
+                        }
+                    }
+                }
+                sidebarState.isDesktop = isDesktop;
+            }
+            
+            if (!isDesktopView()) {
+                sidebar.classList.add('hidden-sidebar');
+                if (mainContent) {
+                    mainContent.classList.add('sidebar-hidden');
+                }
+                sidebarState.isOpen = false;
+            } else {
+                sidebarState.isOpen = true;
             }
             
             if (toggleBtn) {
@@ -1275,11 +1318,13 @@ $initial_data = [
                 }
             });
             
+            var resizeTimeout;
             window.addEventListener('resize', function() {
-                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-                    closeSidebar();
-                }
+                clearTimeout(resizeTimeout);
+                resizeTimeout = setTimeout(handleResize, 200);
             });
+            
+            handleResize();
         }
     })();
 
@@ -1334,7 +1379,6 @@ $initial_data = [
             }
         }
         
-        // Update Services badge
         if (data.proceduresCount !== undefined && data.labTestsCount !== undefined) {
             var total = data.proceduresCount + data.labTestsCount;
             var el = document.getElementById('servicesTotalBadge');
@@ -1348,7 +1392,6 @@ $initial_data = [
             }
         }
         
-        // Update timestamp
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
             var now = new Date();
@@ -1372,20 +1415,11 @@ $initial_data = [
     function updateDoctorStatus(data) {
         if (!data) return;
         
-        var statusDot = document.getElementById('sidebarStatusDot');
-        var statusText = document.getElementById('sidebarStatusText');
         var footerDot = document.getElementById('sidebarFooterDot');
         var footerText = document.getElementById('sidebarFooterText');
         
         var isOnline = data.doctorStatus === 'online';
         
-        if (statusDot) {
-            statusDot.className = isOnline ? 'status-dot online' : 'status-dot offline';
-        }
-        if (statusText) {
-            statusText.textContent = isOnline ? 'Online' : 'Offline';
-            statusText.style.color = isOnline ? '#34D399' : '#94A3B8';
-        }
         if (footerDot) {
             footerDot.className = isOnline ? 'status-dot online' : 'status-dot offline';
         }
@@ -1409,12 +1443,13 @@ $initial_data = [
         sidebarState.apiRequestCount++;
         
         var formData = new FormData();
+        formData.append('action', 'get_sidebar_data');
         formData.append('doctor_id', doctorId);
         formData.append('branch_id', branchId);
         formData.append('hash', sidebarState.dataHash);
         formData.append('force_update', forceUpdate ? '1' : '0');
         
-        var url = SIDEBAR_CONFIG.API_URL;
+        var url = window.location.pathname;
         
         fetch(url, {
             method: 'POST',
@@ -1536,6 +1571,13 @@ $initial_data = [
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 1000);
+        
+        var mainContent = document.querySelector('.main-content');
+        if (mainContent && window.innerWidth <= 1024) {
+            if (!document.getElementById('sidebar').classList.contains('open')) {
+                mainContent.classList.add('sidebar-hidden');
+            }
+        }
     });
 
     console.log('%c👨‍⚕️ Braick Dispensary - Doctor Sidebar (FIXED)', 
@@ -1552,4 +1594,8 @@ $initial_data = [
         'font-size:13px; color:#34D399;');
     console.log('%c💡 Call window.refreshSidebarData() to manually update', 
         'font-size:12px; color:#6EA8FE;');
+    console.log('%c📱 Sidebar toggles properly - full width when hidden', 
+        'font-size:12px; color:#0B5ED7;');
+    console.log('%c👤 Doctor profile removed from sidebar', 
+        'font-size:12px; color:#64748B;');
 </script>

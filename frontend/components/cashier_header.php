@@ -6,6 +6,7 @@
 // WITH DATE AND TIME - LIVE UPDATE
 // WITH DARK MODE - FULLY WORKING
 // WITH SIDEBAR TOGGLE - FULLY WORKING ON MOBILE
+// WITHOUT NOTIFICATIONS - CLEAN HEADER
 // ALLOWS: Cashier, Reception, Admin
 // BRAICK DISPENSARY
 // ================================================================
@@ -41,19 +42,6 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 // INCLUDE DATABASE - CORRECT PATH
 // ================================================================
 require_once __DIR__ . '/../../backend/config/database.php';
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $db = Database::getInstance()->getConnection();
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
 
 // ================================================================
 // PROFILE PICTURE - CHECK IF EXISTS
@@ -402,51 +390,6 @@ $is_cashier = ($user_role === 'cashier');
             border-color: var(--success-light);
         }
         
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--success);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif {
-            background: var(--danger);
-        }
-        
-        .notif-dot.no-notif {
-            background: var(--gray-400);
-            animation: none;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
         .dark-toggle-btn {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
@@ -497,8 +440,6 @@ $is_cashier = ($user_role === 'cashier');
             background: #1A3A2A;
             color: #34D399;
         }
-        
-        /* Reception Badge - REMOVED */
         
         .main-content {
             margin-left: 270px;
@@ -804,8 +745,6 @@ $is_cashier = ($user_role === 'cashier');
             .top-nav .search-wrapper .search-btn i { margin-right: 0; }
             .top-nav .datetime .date-part { display: none; }
             .top-nav .datetime .time-part { font-size: 0.7rem; }
-            .top-nav .icon-btn { width: 32px; height: 32px; }
-            .top-nav .icon-btn i { font-size: 0.9rem; }
             .top-nav .avatar, .top-nav .avatar-avatar { width: 32px; height: 32px; font-size: 0.8rem; }
             .dark-toggle-btn { padding: 4px 10px; font-size: 0.7rem; }
             .dark-toggle-btn span { display: none; }
@@ -825,8 +764,6 @@ $is_cashier = ($user_role === 'cashier');
             .top-nav .datetime .time-part { font-size: 0.6rem; }
             .dark-toggle-btn { padding: 3px 6px; font-size: 0.6rem; }
             .dark-toggle-btn i { font-size: 0.7rem; }
-            .top-nav .icon-btn { width: 28px; height: 28px; }
-            .top-nav .icon-btn i { font-size: 0.8rem; }
             .top-nav .avatar, .top-nav .avatar-avatar { width: 28px; height: 28px; font-size: 0.7rem; }
             .branch-badge { font-size: 0.45rem; padding: 2px 6px; }
             .role-badge { font-size: 0.45rem; padding: 2px 6px; }
@@ -911,12 +848,6 @@ $is_cashier = ($user_role === 'cashier');
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
-        </button>
-        
-        <!-- Notifications -->
-        <button class="icon-btn" id="notifBtn" title="Notifications">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <!-- Profile Avatar -->
@@ -1222,16 +1153,6 @@ $is_cashier = ($user_role === 'cashier');
     }
 
     // ================================================================
-    // NOTIFICATIONS
-    // ================================================================
-    var notifBtn = document.getElementById('notifBtn');
-    if (notifBtn) {
-        notifBtn.addEventListener('click', function() {
-            window.location.href = 'notifications.php';
-        });
-    }
-
-    // ================================================================
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
@@ -1262,7 +1183,7 @@ $is_cashier = ($user_role === 'cashier');
         }
     });
 
-    console.log('%c🟢 Cashier Header - With Sidebar Toggle', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c🟢 Cashier Header - Clean (No Notifications)', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Role: <?= htmlspecialchars($user_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
@@ -1272,7 +1193,7 @@ $is_cashier = ($user_role === 'cashier');
     console.log('%c📅 Date/Time: ' + new Date().toLocaleString(), 'font-size:13px; color:#0B5ED7;');
     console.log('%c📱 Hamburger button: Click ☰ to toggle sidebar', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Sidebar toggle works on all devices!', 'font-size:13px; color:#059669;');
-    console.log('%c🔐 Session-based login active', 'font-size:13px; color:#34D399;');
+    console.log('%c🔔 Notifications REMOVED - Clean header', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

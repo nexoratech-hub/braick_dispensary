@@ -2,8 +2,8 @@
 // ================================================================
 // FILE: frontend/components/laboratory_sidebar.php
 // LABORATORY - SHARED SIDEBAR (WITH AUTO-UPDATE API)
-// REAL-TIME UPDATES VIA get_lab_sidebar_stats.php API
-// FULL SIDEBAR TOGGLE FUNCTIONALITY
+// WITH SIDEBAR TOGGLE BUTTON - SMOOTH SLIDE TRANSITION
+// INCREASED FONT SIZE & SLOWER SLIDE ANIMATION
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -196,14 +196,14 @@ $initial_data = [
         top: 0;
         left: 0;
         bottom: 0;
-        width: 280px;
+        width: 260px;
         background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
         color: white;
         z-index: 9999;
         overflow-y: auto;
         overflow-x: hidden;
-        transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-        transform: translateX(-100%);
+        transition: transform 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+        transform: translateX(0);
         box-shadow: 4px 0 30px rgba(0,0,0,0.3);
         padding-bottom: 20px;
         scroll-behavior: smooth;
@@ -214,14 +214,111 @@ $initial_data = [
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
-    .sidebar.open {
+    .sidebar.hidden {
+        transform: translateX(-100%) !important;
+    }
+    
+    .sidebar.visible {
         transform: translateX(0) !important;
     }
     
-    .sidebar::-webkit-scrollbar { width: 5px; }
+    .sidebar::-webkit-scrollbar { width: 4px; }
     .sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
     .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
     .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
+    
+    /* ================================================================
+       SIDEBAR TOGGLE BUTTON - FLOATING
+       SHOWS WHEN SIDEBAR IS HIDDEN, HIDES WHEN SIDEBAR IS OPEN
+       ================================================================ */
+    .sidebar-toggle-float {
+        position: fixed;
+        top: 14px;
+        left: 14px;
+        z-index: 10000;
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        background: var(--primary);
+        color: white;
+        border: none;
+        font-size: 0.95rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        display: none;
+        opacity: 0;
+        pointer-events: none;
+    }
+    
+    /* Show button only when sidebar is hidden */
+    .sidebar-toggle-float.show {
+        display: flex !important;
+        opacity: 1;
+        pointer-events: auto;
+    }
+    
+    .sidebar-toggle-float:hover {
+        transform: scale(1.08);
+        box-shadow: 0 6px 24px rgba(11, 94, 215, 0.5);
+    }
+    
+    .sidebar-toggle-float .toggle-icon {
+        transition: transform 0.3s ease;
+        font-size: 0.95rem;
+    }
+    
+    [data-theme="dark"] .sidebar-toggle-float {
+        background: #1E3A5F;
+        box-shadow: 0 4px 16px rgba(30, 58, 95, 0.4);
+    }
+    
+    [data-theme="dark"] .sidebar-toggle-float:hover {
+        box-shadow: 0 6px 24px rgba(30, 58, 95, 0.6);
+    }
+    
+    /* ================================================================
+       RESPONSIVE - SHOW BUTTON ON MOBILE WHEN SIDEBAR IS HIDDEN
+       ================================================================ */
+    @media (max-width: 1024px) {
+        .sidebar-toggle-float {
+            display: none !important;
+        }
+        
+        .sidebar-toggle-float.show {
+            display: flex !important;
+        }
+        
+        .sidebar {
+            transform: translateX(-100%);
+            border-radius: 0 12px 12px 0;
+        }
+        
+        .sidebar.visible {
+            transform: translateX(0) !important;
+        }
+        
+        .sidebar.hidden {
+            transform: translateX(-100%) !important;
+        }
+    }
+    
+    @media (min-width: 1025px) {
+        .sidebar-toggle-float {
+            display: none !important;
+        }
+        
+        .sidebar {
+            transform: translateX(0) !important;
+        }
+        
+        .sidebar.hidden {
+            transform: translateX(-100%) !important;
+        }
+    }
     
     /* ================================================================
        OVERLAY
@@ -247,7 +344,7 @@ $initial_data = [
        SIDEBAR BRAND
        ================================================================ */
     .sidebar-brand {
-        padding: 18px 16px 14px;
+        padding: 16px 14px 12px;
         border-bottom: 2px solid rgba(255,255,255,0.08);
         background: rgba(0,0,0,0.1);
         position: sticky;
@@ -256,8 +353,8 @@ $initial_data = [
         backdrop-filter: blur(10px);
     }
     .sidebar-brand .logo {
-        width: 42px;
-        height: 42px;
+        width: 38px;
+        height: 38px;
         border-radius: 10px;
         object-fit: cover;
         background: white;
@@ -289,8 +386,8 @@ $initial_data = [
         color: white;
         font-size: 1.2rem;
         cursor: pointer;
-        padding: 4px 10px;
-        border-radius: 8px;
+        padding: 3px 8px;
+        border-radius: 6px;
         transition: all 0.3s ease;
         margin-left: auto;
     }
@@ -306,102 +403,13 @@ $initial_data = [
     }
     
     /* ================================================================
-       USER INFO
-       ================================================================ */
-    .sidebar-user-info {
-        padding: 14px 16px;
-        border-bottom: 2px solid rgba(255,255,255,0.08);
-        background: rgba(0,0,0,0.05);
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        transition: background 0.3s ease;
-    }
-    .sidebar-user-info:hover {
-        background: rgba(255,255,255,0.05);
-    }
-    .sidebar-user-info .user-avatar {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        background: linear-gradient(135deg, #0AA84F, #059669);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-weight: 700;
-        font-size: 1rem;
-        flex-shrink: 0;
-        border: 2px solid rgba(255,255,255,0.15);
-        transition: all 0.3s ease;
-    }
-    .sidebar-user-info .user-avatar:hover {
-        transform: scale(1.05);
-        border-color: #6EA8FE;
-    }
-    .sidebar-user-info .user-name {
-        font-size: 0.85rem;
-        font-weight: 600;
-        color: white;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-    .sidebar-user-info .user-role {
-        font-size: 0.6rem;
-        color: #9EC5FE;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-    }
-    .sidebar-user-info .user-role .role-badge {
-        background: rgba(255,255,255,0.1);
-        padding: 1px 8px;
-        border-radius: 10px;
-        font-size: 0.5rem;
-        color: #D2E3FC;
-    }
-    .sidebar-user-info .user-status {
-        margin-left: auto;
-        display: flex;
-        align-items: center;
-        gap: 4px;
-        flex-shrink: 0;
-    }
-    .sidebar-user-info .status-dot {
-        width: 8px;
-        height: 8px;
-        border-radius: 50%;
-        display: inline-block;
-        transition: all 0.3s ease;
-    }
-    .sidebar-user-info .status-dot.online {
-        background: #34D399;
-        box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
-        animation: pulse-dot 1.5s infinite;
-    }
-    .sidebar-user-info .status-dot.offline {
-        background: #94A3B8;
-    }
-    .sidebar-user-info .status-text {
-        font-size: 0.55rem;
-        color: #D2E3FC;
-        font-weight: 500;
-    }
-    
-    @keyframes pulse-dot {
-        0%, 100% { opacity: 1; transform: scale(1); }
-        50% { opacity: 0.4; transform: scale(0.8); }
-    }
-    
-    /* ================================================================
-       NAVIGATION
+       NAVIGATION - INCREASED FONT SIZE
        ================================================================ */
     .sidebar-nav {
-        padding: 8px 8px 16px;
+        padding: 6px 8px 12px;
     }
     .sidebar-nav .nav-label {
-        font-size: 0.5rem;
+        font-size: 0.55rem;
         text-transform: uppercase;
         letter-spacing: 0.08em;
         color: #6EA8FE;
@@ -418,7 +426,7 @@ $initial_data = [
     }
     
     /* ================================================================
-       SIDEBAR LINKS
+       SIDEBAR LINKS - INCREASED FONT SIZE
        ================================================================ */
     .sidebar-link {
         display: flex;
@@ -429,9 +437,9 @@ $initial_data = [
         color: #D2E3FC;
         text-decoration: none;
         transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-        font-size: 0.8rem;
+        font-size: 0.85rem;
         font-weight: 500;
-        margin: 1px 0;
+        margin: 2px 0;
         background: transparent;
         cursor: pointer;
         border: none;
@@ -477,17 +485,18 @@ $initial_data = [
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
+        font-size: 0.85rem;
     }
     
     /* ================================================================
-       BADGES
+       BADGES - INCREASED FONT SIZE
        ================================================================ */
     .sidebar-link .badge {
         margin-left: auto;
         background: rgba(255,255,255,0.12);
-        padding: 1px 8px;
+        padding: 2px 10px;
         border-radius: 20px;
-        font-size: 0.6rem;
+        font-size: 0.65rem;
         font-weight: 600;
         color: white;
         transition: all 0.3s ease;
@@ -599,8 +608,8 @@ $initial_data = [
         font-weight: 500;
     }
     .sidebar-live-indicator .dot {
-        width: 6px;
-        height: 6px;
+        width: 5px;
+        height: 5px;
         border-radius: 50%;
         background: #34D399;
         animation: pulse-dot 1.5s infinite;
@@ -611,19 +620,19 @@ $initial_data = [
        SIDEBAR STATUS FOOTER
        ================================================================ */
     .sidebar-status {
-        padding: 10px 16px;
+        padding: 8px 14px;
         border-top: 2px solid rgba(255,255,255,0.06);
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
         background: rgba(0,0,0,0.1);
         position: sticky;
         bottom: 0;
         backdrop-filter: blur(10px);
     }
     .sidebar-status .status-dot {
-        width: 8px;
-        height: 8px;
+        width: 6px;
+        height: 6px;
         border-radius: 50%;
         display: inline-block;
         transition: all 0.3s ease;
@@ -653,29 +662,16 @@ $initial_data = [
     /* ================================================================
        RESPONSIVE
        ================================================================ */
-    @media (min-width: 1025px) {
-        .sidebar {
-            transform: translateX(0) !important;
-            z-index: 50;
-            box-shadow: 4px 0 20px rgba(0,0,0,0.1);
-        }
-        #sidebarOverlay {
-            display: none !important;
-        }
-        .sidebar-close-btn {
-            display: none !important;
-        }
-    }
-    
     @media (max-width: 1024px) {
         .sidebar {
-            width: 280px;
-            transform: translateX(-100%);
-            z-index: 9999;
+            width: 260px;
             border-radius: 0 12px 12px 0;
         }
-        .sidebar.open {
+        .sidebar.visible {
             transform: translateX(0) !important;
+        }
+        .sidebar.hidden {
+            transform: translateX(-100%) !important;
         }
         #sidebarOverlay {
             display: none;
@@ -685,35 +681,6 @@ $initial_data = [
             display: block !important;
         }
         .sidebar-brand {
-            padding: 14px 14px 10px;
-        }
-        .sidebar-brand .logo {
-            width: 36px;
-            height: 36px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.85rem;
-        }
-        .sidebar-link {
-            padding: 7px 10px;
-            font-size: 0.75rem;
-            gap: 8px;
-        }
-        .sidebar-link i {
-            width: 18px;
-            font-size: 0.8rem;
-        }
-        .sidebar-link .badge {
-            font-size: 0.55rem;
-            padding: 1px 7px;
-        }
-    }
-    
-    @media (max-width: 768px) {
-        .sidebar {
-            width: 300px;
-        }
-        .sidebar-brand {
             padding: 12px 12px 10px;
         }
         .sidebar-brand .logo {
@@ -721,65 +688,98 @@ $initial_data = [
             height: 34px;
         }
         .sidebar-brand .brand-text {
-            font-size: 0.8rem;
+            font-size: 0.85rem;
         }
         .sidebar-link {
             padding: 6px 10px;
-            font-size: 0.7rem;
+            font-size: 0.8rem;
+            gap: 8px;
+        }
+        .sidebar-link i {
+            width: 18px;
+            font-size: 0.85rem;
+        }
+        .sidebar-link .badge {
+            font-size: 0.6rem;
+            padding: 1px 8px;
+        }
+    }
+    
+    @media (max-width: 768px) {
+        .sidebar {
+            width: 280px;
+        }
+        .sidebar-toggle-float {
+            width: 36px;
+            height: 36px;
+            font-size: 0.85rem;
+            top: 12px;
+            left: 12px;
+        }
+        .sidebar-toggle-float .toggle-icon {
+            font-size: 0.85rem;
+        }
+        .sidebar-brand {
+            padding: 10px 12px 8px;
+        }
+        .sidebar-brand .logo {
+            width: 32px;
+            height: 32px;
+        }
+        .sidebar-brand .brand-text {
+            font-size: 0.8rem;
+        }
+        .sidebar-link {
+            padding: 5px 8px;
+            font-size: 0.75rem;
         }
         .sidebar-link i {
             width: 16px;
-            font-size: 0.75rem;
-        }
-        .sidebar-user-info .user-name {
-            font-size: 0.7rem;
-        }
-        .sidebar-user-info .user-avatar {
-            width: 28px;
-            height: 28px;
-            font-size: 0.7rem;
+            font-size: 0.8rem;
         }
     }
     
     @media (max-width: 480px) {
         .sidebar {
             width: 100%;
-            max-width: 320px;
+            max-width: 300px;
+        }
+        .sidebar-toggle-float {
+            width: 32px;
+            height: 32px;
+            font-size: 0.75rem;
+            top: 10px;
+            left: 10px;
+        }
+        .sidebar-toggle-float .toggle-icon {
+            font-size: 0.75rem;
         }
         .sidebar-brand {
-            padding: 10px 10px 8px;
+            padding: 8px 10px 8px;
         }
         .sidebar-brand .logo {
-            width: 30px;
-            height: 30px;
+            width: 28px;
+            height: 28px;
         }
         .sidebar-brand .brand-text {
             font-size: 0.75rem;
         }
         .sidebar-link {
-            padding: 5px 8px;
-            font-size: 0.65rem;
+            padding: 4px 8px;
+            font-size: 0.7rem;
             gap: 6px;
         }
         .sidebar-link i {
             width: 14px;
-            font-size: 0.7rem;
+            font-size: 0.75rem;
         }
         .sidebar-link .badge {
-            font-size: 0.45rem;
-            padding: 1px 5px;
+            font-size: 0.55rem;
+            padding: 1px 6px;
             min-width: 16px;
         }
         .sidebar-nav .nav-label {
-            font-size: 0.4rem;
-        }
-        .sidebar-user-info .user-name {
-            font-size: 0.65rem;
-        }
-        .sidebar-user-info .user-avatar {
-            width: 24px;
-            height: 24px;
-            font-size: 0.6rem;
+            font-size: 0.45rem;
         }
         .sidebar-status .status-text {
             font-size: 0.55rem;
@@ -796,6 +796,9 @@ $initial_data = [
         #sidebarOverlay {
             display: none !important;
         }
+        .sidebar-toggle-float {
+            display: none !important;
+        }
     }
     
     /* ================================================================
@@ -803,13 +806,20 @@ $initial_data = [
        ================================================================ */
     .flex { display: flex; }
     .items-center { align-items: center; }
-    .gap-2 { gap: 8px; }
-    .gap-3 { gap: 12px; }
-    .mt-2 { margin-top: 8px; }
+    .gap-2 { gap: 6px; }
+    .gap-3 { gap: 10px; }
+    .mt-2 { margin-top: 6px; }
     .mt-1 { margin-top: 4px; }
     .ml-auto { margin-left: auto; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
+
+<!-- ================================================================ -->
+<!-- FLOATING TOGGLE BUTTON -->
+<!-- ================================================================ -->
+<button class="sidebar-toggle-float" id="sidebarToggleFloat" aria-label="Toggle Sidebar">
+    <i class="fas fa-bars toggle-icon" id="toggleFloatIcon"></i>
+</button>
 
 <!-- ================================================================ -->
 <!-- SIDEBAR OVERLAY -->
@@ -819,7 +829,7 @@ $initial_data = [
 <!-- ================================================================ -->
 <!-- SIDEBAR -->
 <!-- ================================================================ -->
-<aside class="sidebar" id="sidebar" role="navigation" aria-label="Laboratory Sidebar">
+<aside class="sidebar hidden" id="sidebar" role="navigation" aria-label="Laboratory Sidebar">
     
     <!-- ================================================================ -->
     <!-- BRAND -->
@@ -835,35 +845,6 @@ $initial_data = [
             <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
                 <i class="fas fa-times"></i>
             </button>
-        </div>
-    </div>
-    
-    <!-- ================================================================ -->
-    <!-- USER INFO -->
-    <!-- ================================================================ -->
-    <div class="sidebar-user-info" id="userInfoContainer">
-        <div class="user-avatar" id="userAvatar">
-            <?php
-            $initials = '';
-            $name_parts = explode(' ', $user_full_name);
-            foreach ($name_parts as $part) {
-                if (!empty($part)) {
-                    $initials .= strtoupper($part[0]);
-                }
-            }
-            echo substr($initials, 0, 2);
-            ?>
-        </div>
-        <div class="truncate">
-            <div class="user-name" id="userNameDisplay"><?= htmlspecialchars($user_full_name) ?></div>
-            <div class="user-role">
-                🧪 Laboratory
-                <span class="role-badge"><?= htmlspecialchars($user_branch_name) ?></span>
-            </div>
-        </div>
-        <div class="user-status">
-            <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>" id="sidebarStatusDot"></span>
-            <span class="status-text" id="sidebarStatusText"><?= $user_is_online ? 'Online' : 'Offline' ?></span>
         </div>
     </div>
     
@@ -955,9 +936,208 @@ $initial_data = [
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - FULL REAL-TIME UPDATES WITH API -->
+<!-- JAVASCRIPT - SIDEBAR TOGGLE WITH SMOOTH SLIDE -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // SIDEBAR TOGGLE - SMOOTH SLIDE TRANSITION (SLOWER)
+    // ================================================================
+    (function() {
+        var sidebar = document.getElementById('sidebar');
+        var toggleBtn = document.getElementById('sidebarToggleFloat');
+        var toggleIcon = document.getElementById('toggleFloatIcon');
+        var closeBtn = document.getElementById('sidebarCloseBtn');
+        var overlay = document.getElementById('sidebarOverlay');
+        
+        if (!sidebar) {
+            console.warn('⚠️ Sidebar not found');
+            return;
+        }
+        
+        if (!toggleBtn) {
+            console.warn('⚠️ Toggle button not found');
+            return;
+        }
+        
+        console.log('✅ Sidebar toggle initialized');
+        
+        // Create overlay if not exists
+        if (!overlay) {
+            overlay = document.createElement('div');
+            overlay.id = 'sidebarOverlay';
+            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.6);z-index:9998;display:none;backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);';
+            document.body.appendChild(overlay);
+        }
+        
+        function updateToggleButton(show) {
+            if (show) {
+                toggleBtn.classList.add('show');
+                toggleBtn.style.display = 'flex';
+            } else {
+                toggleBtn.classList.remove('show');
+                toggleBtn.style.display = 'none';
+            }
+        }
+        
+        function openSidebar() {
+            // Remove hidden class, add visible class for smooth slide in
+            sidebar.classList.remove('hidden');
+            sidebar.classList.add('visible');
+            
+            if (overlay) {
+                overlay.style.display = 'block';
+                overlay.classList.add('active');
+            }
+            document.body.style.overflow = 'hidden';
+            
+            // Update icon
+            if (toggleIcon) {
+                toggleIcon.className = 'fas fa-times toggle-icon';
+            }
+            
+            // HIDE toggle button when sidebar is open
+            updateToggleButton(false);
+            
+            // Update button style
+            if (toggleBtn) {
+                toggleBtn.style.background = '#DC2626';
+                toggleBtn.style.boxShadow = '0 4px 16px rgba(220, 38, 38, 0.4)';
+            }
+            console.log('🔓 Sidebar opened - toggle button hidden');
+        }
+        
+        function closeSidebar() {
+            // Add hidden class, remove visible class for smooth slide out
+            sidebar.classList.add('hidden');
+            sidebar.classList.remove('visible');
+            
+            if (overlay) {
+                overlay.style.display = 'none';
+                overlay.classList.remove('active');
+            }
+            document.body.style.overflow = '';
+            
+            // Update icon
+            if (toggleIcon) {
+                toggleIcon.className = 'fas fa-bars toggle-icon';
+            }
+            
+            // SHOW toggle button when sidebar is closed
+            updateToggleButton(true);
+            
+            // Update button style
+            if (toggleBtn) {
+                toggleBtn.style.background = '';
+                toggleBtn.style.boxShadow = '';
+            }
+            console.log('🔒 Sidebar closed - toggle button shown');
+        }
+        
+        function toggleSidebar() {
+            if (sidebar.classList.contains('hidden')) {
+                openSidebar();
+            } else {
+                closeSidebar();
+            }
+        }
+        
+        // ================================================================
+        // TOGGLE BUTTON CLICK
+        // ================================================================
+        toggleBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('🔘 Toggle button clicked!');
+            toggleSidebar();
+        });
+        
+        // ================================================================
+        // CLOSE BUTTON (X)
+        // ================================================================
+        if (closeBtn) {
+            closeBtn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                closeSidebar();
+            });
+        }
+        
+        // ================================================================
+        // OVERLAY CLICK
+        // ================================================================
+        if (overlay) {
+            overlay.addEventListener('click', function(e) {
+                if (e.target === overlay) {
+                    closeSidebar();
+                }
+            });
+        }
+        
+        // ================================================================
+        // ESC KEY
+        // ================================================================
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && !sidebar.classList.contains('hidden')) {
+                closeSidebar();
+            }
+        });
+        
+        // ================================================================
+        // WINDOW RESIZE
+        // ================================================================
+        window.addEventListener('resize', function() {
+            if (window.innerWidth > 1024) {
+                // On desktop, always show sidebar
+                sidebar.classList.remove('hidden');
+                sidebar.classList.add('visible');
+                if (overlay) {
+                    overlay.style.display = 'none';
+                    overlay.classList.remove('active');
+                }
+                if (toggleIcon) {
+                    toggleIcon.className = 'fas fa-times toggle-icon';
+                }
+                // Hide toggle button on desktop
+                updateToggleButton(false);
+            } else {
+                // On mobile, if sidebar is not visible and not hidden, hide it
+                if (!sidebar.classList.contains('hidden') && !sidebar.classList.contains('visible')) {
+                    sidebar.classList.add('hidden');
+                }
+                if (sidebar.classList.contains('visible')) {
+                    // Keep it as is
+                }
+            }
+        });
+        
+        // ================================================================
+        // CHECK INITIAL STATE
+        // ================================================================
+        if (window.innerWidth > 1024) {
+            // Desktop: show sidebar, hide button
+            sidebar.classList.remove('hidden');
+            sidebar.classList.add('visible');
+            if (toggleIcon) {
+                toggleIcon.className = 'fas fa-times toggle-icon';
+            }
+            updateToggleButton(false);
+        } else {
+            // Mobile: hide sidebar, show button
+            sidebar.classList.add('hidden');
+            sidebar.classList.remove('visible');
+            if (toggleIcon) {
+                toggleIcon.className = 'fas fa-bars toggle-icon';
+            }
+            updateToggleButton(true);
+        }
+        
+        console.log('✅ Sidebar toggle ready!');
+        console.log('📱 Current state:', sidebar.classList.contains('hidden') ? 'HIDDEN' : 'VISIBLE');
+        console.log('📱 Toggle button:', toggleBtn.classList.contains('show') ? 'VISIBLE' : 'HIDDEN');
+        console.log('✅ Smooth slide transition: 0.6s cubic-bezier');
+        console.log('✅ Font size increased for better readability');
+    })();
+
     // ================================================================
     // CONFIGURATION
     // ================================================================
@@ -982,100 +1162,6 @@ $initial_data = [
         changeCount: 0
     };
     
-    // ================================================================
-    // SIDEBAR TOGGLE - USING HEADER BUTTON
-    // ================================================================
-    (function() {
-        function initSidebarToggle() {
-            var sidebar = document.getElementById('sidebar');
-            var toggleBtn = document.getElementById('sidebarToggleBtn');
-            var closeBtn = document.getElementById('sidebarCloseBtn');
-            var overlay = document.getElementById('sidebarOverlay');
-            
-            if (!sidebar) {
-                setTimeout(initSidebarToggle, 300);
-                return;
-            }
-            
-            if (!toggleBtn) {
-                // Try to find by class
-                toggleBtn = document.querySelector('.sidebar-toggle-btn');
-                if (!toggleBtn) {
-                    setTimeout(initSidebarToggle, 300);
-                    return;
-                }
-            }
-            
-            console.log('✅ Sidebar toggle ready');
-            
-            function openSidebar() {
-                sidebar.classList.add('open');
-                if (overlay) {
-                    overlay.style.display = 'block';
-                    overlay.classList.add('active');
-                }
-                document.body.style.overflow = 'hidden';
-            }
-            
-            function closeSidebar() {
-                sidebar.classList.remove('open');
-                if (overlay) {
-                    overlay.style.display = 'none';
-                    overlay.classList.remove('active');
-                }
-                document.body.style.overflow = '';
-            }
-            
-            // Toggle button
-            toggleBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                e.stopPropagation();
-                if (sidebar.classList.contains('open')) {
-                    closeSidebar();
-                } else {
-                    openSidebar();
-                }
-            });
-            
-            // Close button
-            if (closeBtn) {
-                closeBtn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    closeSidebar();
-                });
-            }
-            
-            // Overlay
-            if (overlay) {
-                overlay.addEventListener('click', function(e) {
-                    if (e.target === overlay) {
-                        closeSidebar();
-                    }
-                });
-            }
-            
-            // ESC key
-            document.addEventListener('keydown', function(e) {
-                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-                    closeSidebar();
-                }
-            });
-            
-            // Resize
-            window.addEventListener('resize', function() {
-                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-                    closeSidebar();
-                }
-            });
-        }
-        
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', initSidebarToggle);
-        } else {
-            initSidebarToggle();
-        }
-    })();
-
     // ================================================================
     // UPDATE SIDEBAR BADGES
     // ================================================================
@@ -1354,8 +1440,12 @@ $initial_data = [
         'font-size:13px; color:#F59E0B;');
     console.log('%c📡 API: ' + SIDEBAR_CONFIG.API_URL, 
         'font-size:12px; color:#94A3B8;');
-    console.log('%c📱 Click ☰ to toggle sidebar', 
+    console.log('%c📱 Toggle button: Shows when sidebar hidden, hides when open', 
         'font-size:12px; color:#34D399;');
-    console.log('%c✅ Updates automatically when database changes!', 
+    console.log('%c✅ SLOW slide transition: 0.6s cubic-bezier', 
         'font-size:13px; font-weight:bold; color:#34D399;');
+    console.log('%c✅ Font size increased: links 0.85rem, badges 0.65rem', 
+        'font-size:13px; color:#34D399;');
+    console.log('%c✅ Profile removed from sidebar', 
+        'font-size:13px; color:#34D399;');
 </script>

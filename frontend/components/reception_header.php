@@ -4,6 +4,7 @@
 // SHARED HEADER - RECEPTION & CASHIER
 // ✅ USING NEW DATABASE: dispensary_db
 // WITH SEARCH BAR, CLOCK, DARK MODE, PROFILE
+// ✅ NOTIFICATIONS COMPLETELY REMOVED - NO ICON
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -154,24 +155,6 @@ if (empty($page_title) || $page_title == '') {
 }
 
 // ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-if ($user_id > 0) {
-    try {
-        require_once __DIR__ . '/../../backend/config/database.php';
-        $db = Database::getInstance()->getConnection();
-        
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$user_id]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        $unread_notifications = $result['total'] ?? 0;
-    } catch (Exception $e) {
-        $unread_notifications = 0;
-    }
-}
-
-// ================================================================
 // DEFAULT LETTER FOR AVATAR
 // ================================================================
 $default_letter = strtoupper(substr($user_full_name, 0, 1));
@@ -302,7 +285,7 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
             border: 2px solid var(--border-color);
             transition: all 0.3s;
             flex: 1;
-            max-width: 350px; /* ✅ PUNGEXEZA WIDTH */
+            max-width: 350px;
         }
         
         .top-nav .search-wrapper:focus-within {
@@ -392,51 +375,6 @@ $default_letter = strtoupper(substr($user_full_name, 0, 1));
         .top-nav .avatar:hover {
             border-color: var(--primary);
             transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 4px;
-            right: 4px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif {
-            background: var(--danger);
-        }
-        
-        .notif-dot.no-notif {
-            background: var(--gray-400);
-            animation: none;
-        }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
         }
         
         .dark-toggle-btn {
