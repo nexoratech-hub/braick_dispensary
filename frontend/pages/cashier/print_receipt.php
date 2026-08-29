@@ -1,9 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/print_receipt.php
-// CASHIER - PRINT RECEIPT WITH MEDICATION INSTRUCTIONS
-// WITH CATEGORIES: Other Bills & Prescriptions (Medications)
-// FIXED: Uses bills table (not patient_bills)
+// CASHIER - PRINT RECEIPT 
+// SUPPORTS: Regular Bills (with visit_id) AND OTC Sales
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -36,6 +35,7 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 $is_reception = ($user_role === 'reception');
+$is_admin = ($user_role === 'admin');
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -45,14 +45,21 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
+// ================================================================
+// GET PARAMETERS
+// ================================================================
 $bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
 $payment_id = isset($_GET['payment_id']) ? (int)$_GET['payment_id'] : 0;
+$sale_id = isset($_GET['sale_id']) ? (int)$_GET['sale_id'] : 0;
+$type = isset($_GET['type']) ? $_GET['type'] : 'regular'; // 'regular' or 'otc'
 $auto_print = isset($_GET['print']) && $_GET['print'] == 1;
 
 $bill = null;
 $all_items = [];
 $medication_items = [];
 $other_items = [];
+$otc_items = [];
+$otc_sale = null;
 $payment = null;
 $settings = [];
 $logo_base64 = '';
@@ -60,6 +67,39 @@ $logo_available = false;
 $error_message = '';
 $has_error = false;
 $currency = 'TSh';
+$is_otc = false;
+$site_name = 'Braick Dispensary';
+$site_phone = '+255 700 000 000';
+$site_email = 'info@braick.com';
+
+// ================================================================
+// GET ADMIN CONTACT NUMBERS
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone FROM users 
+        WHERE role = 'admin' AND branch_id = ? AND status = 'active'
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$user_branch_id]);
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+}
+
+// ================================================================
+// GET BRANCH PHONE
+// ================================================================
+$branch_phone = '';
+try {
+    $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
+    $stmt->execute([$user_branch_id]);
+    $branch_phone = $stmt->fetchColumn();
+} catch (Exception $e) {
+    $branch_phone = '';
+}
+$admin_phones_display = !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001');
 
 try {
     // ================================================================
@@ -76,9 +116,107 @@ try {
     $site_email = $settings['email'] ?? 'info@braick.com';
     
     // ================================================================
-    // GET BILL DETAILS - USING bills TABLE
+    // CASE 1: OTC SALE (type=otc or sale_id provided)
     // ================================================================
-    if ($bill_id > 0) {
+    if ($type === 'otc' || $sale_id > 0) {
+        // Get sale_id from parameter if not set
+        if ($sale_id == 0 && $bill_id > 0) {
+            // Try to find OTC sale by bill_id
+            $stmt = $db->prepare("SELECT id FROM otc_sales WHERE bill_id = ?");
+            $stmt->execute([$bill_id]);
+            $otc_check = $stmt->fetch(PDO::FETCH_ASSOC);
+            if ($otc_check) {
+                $sale_id = $otc_check['id'];
+            }
+        }
+        
+        if ($sale_id > 0) {
+            $stmt = $db->prepare("
+                SELECT 
+                    os.*,
+                    u.full_name as cashier_name,
+                    br.name as branch_name,
+                    br.location as branch_location,
+                    br.phone as branch_phone,
+                    br.email as branch_email
+                FROM otc_sales os
+                LEFT JOIN users u ON os.sold_by = u.id
+                LEFT JOIN branches br ON os.branch_id = br.id
+                WHERE os.id = ? AND os.branch_id = ?
+            ");
+            $stmt->execute([$sale_id, $user_branch_id]);
+            $otc_sale = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($otc_sale) {
+                $is_otc = true;
+                
+                // Get OTC items with instructions
+                $stmt = $db->prepare("
+                    SELECT * FROM otc_sale_items 
+                    WHERE sale_id = ?
+                    ORDER BY created_at ASC
+                ");
+                $stmt->execute([$sale_id]);
+                $otc_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Get payment
+                if ($otc_sale['bill_id'] > 0) {
+                    $stmt = $db->prepare("
+                        SELECT * FROM payments 
+                        WHERE bill_id = ? 
+                        ORDER BY received_at DESC LIMIT 1
+                    ");
+                    $stmt->execute([$otc_sale['bill_id']]);
+                    $payment = $stmt->fetch(PDO::FETCH_ASSOC);
+                }
+                
+                // Build bill array from OTC sale
+                $bill = [
+                    'id' => $otc_sale['id'],
+                    'bill_number' => 'OTC-' . $otc_sale['sale_number'],
+                    'sale_number' => $otc_sale['sale_number'],
+                    'patient_id' => $otc_sale['patient_id'],
+                    'patient_name' => $otc_sale['customer_name'] ?? 'Walk-in Customer',
+                    'patient_code' => $otc_sale['patient_id'] ?? 'N/A',
+                    'phone' => $otc_sale['customer_phone'] ?? 'N/A',
+                    'gender' => null,
+                    'address' => null,
+                    'date_of_birth' => null,
+                    'visit_number' => null,
+                    'visit_type' => 'OTC Sale',
+                    'subtotal' => $otc_sale['subtotal'],
+                    'total_amount' => $otc_sale['total_amount'],
+                    'paid_amount' => $payment['amount'] ?? $otc_sale['total_amount'],
+                    'balance' => 0,
+                    'status' => 'paid',
+                    'pharmacy_discount' => 0,
+                    'cashier_discount' => 0,
+                    'total_discount' => $otc_sale['discount_amount'] ?? 0,
+                    'payment_method' => $payment['payment_method'] ?? $otc_sale['payment_method'] ?? 'cash',
+                    'created_at' => $otc_sale['created_at'],
+                    'updated_at' => $otc_sale['updated_at'],
+                    'cashier_name' => $otc_sale['cashier_name'] ?? $user_full_name,
+                    'branch_name' => $otc_sale['branch_name'] ?? $user_branch_name,
+                    'branch_location' => $otc_sale['branch_location'] ?? 'Dodoma, Tanzania',
+                    'branch_phone' => $otc_sale['branch_phone'] ?? '+255 759 154 160',
+                    'branch_email' => $otc_sale['branch_email'] ?? 'info@braick.com',
+                    'is_otc' => true,
+                    'reference_id' => $otc_sale['id']
+                ];
+            } else {
+                $error_message = 'OTC sale not found.';
+                $has_error = true;
+            }
+        } else {
+            $error_message = 'Invalid OTC sale ID.';
+            $has_error = true;
+        }
+    }
+    
+    // ================================================================
+    // CASE 2: REGULAR BILL (with visit_id)
+    // ================================================================
+    if (!$is_otc && $bill_id > 0) {
         $stmt = $db->prepare("
             SELECT 
                 b.*,
@@ -95,13 +233,14 @@ try {
                 br.name as branch_name,
                 br.location as branch_location,
                 br.phone as branch_phone,
+                br.email as branch_email,
                 v.visit_number,
                 v.visit_type,
                 v.created_at as visit_date
             FROM bills b
-            JOIN patients p ON b.patient_id = p.id
-            JOIN users u ON b.created_by = u.id
-            JOIN branches br ON b.branch_id = br.id
+            LEFT JOIN patients p ON b.patient_id = p.id
+            LEFT JOIN users u ON b.created_by = u.id
+            LEFT JOIN branches br ON b.branch_id = br.id
             LEFT JOIN visits v ON b.visit_id = v.id
             WHERE b.id = ? AND b.branch_id = ?
         ");
@@ -109,126 +248,135 @@ try {
         $bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($bill) {
-            // ================================================================
-            // GET BILL ITEMS WITH MEDICATION INSTRUCTIONS
-            // ================================================================
-            $stmt = $db->prepare("
-                SELECT 
-                    bi.*,
-                    pi.instructions as medication_instructions,
-                    pi.dosage,
-                    pi.frequency,
-                    pi.duration,
-                    pi.route,
-                    p.prescription_number,
-                    p.status as prescription_status
-                FROM bill_items bi
-                LEFT JOIN prescriptions p ON bi.reference_id = p.id AND bi.reference_type = 'prescription'
-                LEFT JOIN prescription_items pi ON p.id = pi.prescription_id AND pi.medication_name = bi.item_name
-                WHERE bi.bill_id = ? AND bi.status != 'cancelled'
-                ORDER BY bi.item_type ASC, bi.created_at ASC
-            ");
-            $stmt->execute([$bill_id]);
-            $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            // Separate items by category
-            $medication_items = [];
-            $other_items = [];
-            foreach ($all_items as $item) {
-                if ($item['item_type'] === 'medication') {
-                    $medication_items[] = $item;
-                } else {
-                    $other_items[] = $item;
+            // Check if this bill has a visit_id (should be regular bill)
+            if (empty($bill['visit_number']) && empty($bill['visit_type'])) {
+                // This might be an OTC bill without type flag
+                // Check if it has no patient_id or is linked to OTC
+                if (empty($bill['patient_id'])) {
+                    $error_message = 'This appears to be an OTC sale. Please use the OTC print option.';
+                    $has_error = true;
                 }
             }
             
-            // Calculate totals for each category
-            $medication_total = 0;
-            foreach ($medication_items as $item) {
-                $medication_total += (float)($item['total_price'] ?? 0);
-            }
-            
-            $other_total = 0;
-            foreach ($other_items as $item) {
-                $other_total += (float)($item['total_price'] ?? 0);
-            }
-            
-            // ================================================================
-            // GET PAYMENT DETAILS
-            // ================================================================
-            $payment = null;
-            $valid_payment_id = null;
-            
-            if ($payment_id > 0) {
+            if (!$has_error) {
+                // Get bill items
                 $stmt = $db->prepare("
-                    SELECT * FROM payments WHERE id = ? AND bill_id = ?
-                ");
-                $stmt->execute([$payment_id, $bill_id]);
-                $payment = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($payment) {
-                    $valid_payment_id = $payment_id;
-                }
-            }
-            
-            if (!$payment) {
-                $stmt = $db->prepare("
-                    SELECT id FROM payments WHERE bill_id = ? ORDER BY received_at DESC LIMIT 1
+                    SELECT 
+                        bi.*,
+                        pi.instructions as medication_instructions,
+                        pi.dosage,
+                        pi.frequency,
+                        pi.duration,
+                        pi.route,
+                        p.prescription_number,
+                        p.status as prescription_status
+                    FROM bill_items bi
+                    LEFT JOIN prescriptions p ON bi.reference_id = p.id AND bi.reference_type = 'prescription'
+                    LEFT JOIN prescription_items pi ON p.id = pi.prescription_id AND pi.medication_name = bi.item_name
+                    WHERE bi.bill_id = ? AND bi.status != 'cancelled'
+                    ORDER BY bi.item_type ASC, bi.created_at ASC
                 ");
                 $stmt->execute([$bill_id]);
-                $latest_payment = $stmt->fetch(PDO::FETCH_ASSOC);
-                if ($latest_payment) {
-                    $valid_payment_id = $latest_payment['id'];
-                    $stmt = $db->prepare("SELECT * FROM payments WHERE id = ?");
-                    $stmt->execute([$valid_payment_id]);
+                $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Separate items by category
+                $medication_items = [];
+                $other_items = [];
+                foreach ($all_items as $item) {
+                    if ($item['item_type'] === 'medication') {
+                        $medication_items[] = $item;
+                    } else {
+                        $other_items[] = $item;
+                    }
+                }
+                
+                // Get payment
+                if ($payment_id > 0) {
+                    $stmt = $db->prepare("SELECT * FROM payments WHERE id = ? AND bill_id = ?");
+                    $stmt->execute([$payment_id, $bill_id]);
                     $payment = $stmt->fetch(PDO::FETCH_ASSOC);
                 }
-            }
-            
-            // ================================================================
-            // SAVE RECEIPT TO DATABASE
-            // ================================================================
-            $receipt_number = 'REC-' . date('Ymd') . '-' . str_pad($bill_id, 6, '0', STR_PAD_LEFT);
-            
-            $stmt = $db->prepare("SELECT id FROM receipts WHERE bill_id = ?");
-            $stmt->execute([$bill_id]);
-            $existing_receipt = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if (!$existing_receipt) {
-                $receipt_data = json_encode([
-                    'bill_number' => $bill['bill_number'],
-                    'patient_name' => $bill['patient_name'],
-                    'total_amount' => $bill['total_amount'],
-                    'paid_amount' => $bill['paid_amount'] ?? 0,
-                    'balance' => $bill['balance'] ?? 0,
-                    'medication_items' => $medication_items,
-                    'other_items' => $other_items,
-                    'payment_method' => $payment ? $payment['payment_method'] : null,
-                    'printed_at' => date('Y-m-d H:i:s')
-                ]);
                 
-                $stmt = $db->prepare("
-                    INSERT INTO receipts (
-                        receipt_number, payment_id, bill_id, patient_id, receipt_data, 
-                        printed_by, printed_at, branch_id
-                    ) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)
-                ");
-                $stmt->execute([
-                    $receipt_number,
-                    $valid_payment_id,
-                    $bill_id,
-                    $bill['patient_id'],
-                    $receipt_data,
-                    $user_id,
-                    $user_branch_id
-                ]);
+                if (!$payment) {
+                    $stmt = $db->prepare("SELECT * FROM payments WHERE bill_id = ? ORDER BY received_at DESC LIMIT 1");
+                    $stmt->execute([$bill_id]);
+                    $payment = $stmt->fetch(PDO::FETCH_ASSOC);
+                }
+                
+                $bill['is_otc'] = false;
+                $bill['reference_id'] = $bill_id;
             }
         } else {
             $error_message = 'Bill not found.';
             $has_error = true;
         }
-    } else {
-        $error_message = 'Invalid bill ID.';
-        $has_error = true;
+    }
+    
+    // ================================================================
+    // CASE 3: Try to find by payment_id (auto-detect)
+    // ================================================================
+    if (!$is_otc && !$bill && $payment_id > 0) {
+        $stmt = $db->prepare("SELECT bill_id FROM payments WHERE id = ?");
+        $stmt->execute([$payment_id]);
+        $payment_check = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($payment_check && $payment_check['bill_id'] > 0) {
+            // Check if this bill_id is from OTC
+            $stmt = $db->prepare("SELECT id FROM otc_sales WHERE bill_id = ?");
+            $stmt->execute([$payment_check['bill_id']]);
+            $otc_check = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($otc_check) {
+                // Redirect to OTC print with sale_id
+                header('Location: print_receipt.php?type=otc&sale_id=' . $otc_check['id'] . '&print=' . ($auto_print ? 1 : 0));
+                exit;
+            } else {
+                // Regular bill
+                header('Location: print_receipt.php?bill_id=' . $payment_check['bill_id'] . '&print=' . ($auto_print ? 1 : 0));
+                exit;
+            }
+        }
+    }
+    
+    // ================================================================
+    // SAVE RECEIPT TO DATABASE (if regular bill)
+    // ================================================================
+    if (!$has_error && $bill && !$is_otc) {
+        $receipt_number = 'REC-' . date('Ymd') . '-' . str_pad($bill_id, 6, '0', STR_PAD_LEFT);
+        
+        $stmt = $db->prepare("SELECT id FROM receipts WHERE bill_id = ?");
+        $stmt->execute([$bill_id]);
+        $existing_receipt = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if (!$existing_receipt) {
+            $receipt_data = json_encode([
+                'bill_number' => $bill['bill_number'],
+                'patient_name' => $bill['patient_name'],
+                'total_amount' => $bill['total_amount'],
+                'paid_amount' => $bill['paid_amount'] ?? 0,
+                'balance' => $bill['balance'] ?? 0,
+                'medication_items' => $medication_items,
+                'other_items' => $other_items,
+                'payment_method' => $payment ? $payment['payment_method'] : null,
+                'printed_at' => date('Y-m-d H:i:s')
+            ]);
+            
+            $stmt = $db->prepare("
+                INSERT INTO receipts (
+                    receipt_number, payment_id, bill_id, patient_id, receipt_data, 
+                    printed_by, printed_at, branch_id
+                ) VALUES (?, ?, ?, ?, ?, ?, NOW(), ?)
+            ");
+            $stmt->execute([
+                $receipt_number,
+                $payment ? $payment['id'] : null,
+                $bill_id,
+                $bill['patient_id'],
+                $receipt_data,
+                $user_id,
+                $user_branch_id
+            ]);
+        }
     }
     
 } catch (Exception $e) {
@@ -254,13 +402,29 @@ foreach ($logo_paths as $path) {
         break;
     }
 }
+
+// Calculate totals
+$medication_total = 0;
+foreach ($medication_items as $item) {
+    $medication_total += (float)($item['total_price'] ?? 0);
+}
+
+$other_total = 0;
+foreach ($other_items as $item) {
+    $other_total += (float)($item['total_price'] ?? 0);
+}
+
+$otc_total = 0;
+foreach ($otc_items as $item) {
+    $otc_total += (float)($item['total_price'] ?? 0);
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Receipt - <?= htmlspecialchars($site_name) ?></title>
+    <title><?= $is_otc ? 'OTC Receipt' : 'Receipt' ?> - <?= htmlspecialchars($site_name) ?></title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -338,6 +502,10 @@ foreach ($logo_paths as $path) {
             margin-bottom: 12px;
         }
         
+        .receipt-header.otc-header {
+            border-bottom-color: #7C3AED;
+        }
+        
         .receipt-logo {
             display: block;
             margin: 0 auto 8px auto;
@@ -365,6 +533,10 @@ foreach ($logo_paths as $path) {
             letter-spacing: 2px;
             text-transform: uppercase;
             margin-top: 2px;
+        }
+        
+        .receipt-title.otc-title {
+            color: #7C3AED;
         }
         
         .receipt-subtitle {
@@ -401,10 +573,9 @@ foreach ($logo_paths as $path) {
         }
         
         .receipt-row .value.bold { font-weight: 700; }
+        .receipt-row .value.otc-value { color: #7C3AED; }
         
-        /* ================================================================
-           SECTION HEADERS
-           ================================================================ */
+        /* SECTION HEADERS */
         .section-header {
             font-weight: 700;
             font-size: 0.7rem;
@@ -426,13 +597,16 @@ foreach ($logo_paths as $path) {
             border-bottom-color: #D97706;
         }
         
+        .section-header.otc-section {
+            color: #7C3AED;
+            border-bottom-color: #7C3AED;
+        }
+        
         .section-header .section-total {
             font-size: 0.7rem;
         }
         
-        /* ================================================================
-           ITEMS
-           ================================================================ */
+        /* ITEMS */
         .receipt-items {
             margin: 4px 0;
             padding: 4px 0;
@@ -479,9 +653,12 @@ foreach ($logo_paths as $path) {
             border-radius: 3px;
         }
         
-        /* ================================================================
-           TOTALS
-           ================================================================ */
+        .receipt-item .item-instruction.otc-instruction {
+            border-left-color: #7C3AED;
+            background: #EDE9FE;
+        }
+        
+        /* TOTALS */
         .receipt-totals {
             margin: 6px 0;
         }
@@ -513,6 +690,10 @@ foreach ($logo_paths as $path) {
             color: #0B5ED7;
         }
         
+        .receipt-grand-total .value.otc-total {
+            color: #7C3AED;
+        }
+        
         .discount-value {
             color: #DC2626;
         }
@@ -521,9 +702,7 @@ foreach ($logo_paths as $path) {
             color: #DC2626;
         }
         
-        /* ================================================================
-           CATEGORY TOTALS
-           ================================================================ */
+        /* CATEGORY TOTALS */
         .category-totals {
             display: flex;
             justify-content: space-between;
@@ -554,6 +733,11 @@ foreach ($logo_paths as $path) {
             color: #D97706;
         }
         
+        .category-totals .cat-item.otc-cat {
+            background: #EDE9FE;
+            color: #7C3AED;
+        }
+        
         .category-totals .cat-item .cat-label {
             font-size: 0.5rem;
             font-weight: 600;
@@ -565,9 +749,7 @@ foreach ($logo_paths as $path) {
             font-size: 0.75rem;
         }
         
-        /* ================================================================
-           PAYMENT STATUS
-           ================================================================ */
+        /* PAYMENT STATUS */
         .payment-status {
             display: inline-block;
             padding: 2px 10px;
@@ -581,10 +763,9 @@ foreach ($logo_paths as $path) {
         .payment-status.pending { background: #FEF3C7; color: #D97706; }
         .payment-status.partial { background: #FEF3C7; color: #D97706; }
         .payment-status.cancelled { background: #FEE2E2; color: #DC2626; }
+        .payment-status.otc-paid { background: #EDE9FE; color: #7C3AED; }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
+        /* FOOTER */
         .receipt-footer {
             text-align: center;
             font-size: 0.55rem;
@@ -600,15 +781,40 @@ foreach ($logo_paths as $path) {
             font-size: 0.65rem;
         }
         
+        .receipt-footer .footer-brand.otc-brand {
+            color: #7C3AED;
+        }
+        
         .receipt-footer .footer-divider {
             margin: 3px 0;
             border: none;
             border-top: 1px dashed #E2E8F0;
         }
         
-        /* ================================================================
-           ERROR
-           ================================================================ */
+        /* ADMIN CONTACT LINE */
+        .admin-contact-line {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 0.45rem;
+            color: #94A3B8;
+            margin-top: 2px;
+            padding-top: 4px;
+            border-top: 1px dashed #E2E8F0;
+        }
+        
+        .admin-contact-line span {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .admin-contact-line i {
+            color: #059669;
+        }
+        
+        /* ERROR */
         .error-box {
             max-width: 420px;
             margin: 0 auto;
@@ -650,9 +856,7 @@ foreach ($logo_paths as $path) {
             color: white;
         }
         
-        /* ================================================================
-           PRINT
-           ================================================================ */
+        /* PRINT */
         @media print {
             body { background: white; padding: 0; margin: 0; }
             .receipt-wrapper { max-width: 100%; margin: 0; }
@@ -663,12 +867,21 @@ foreach ($logo_paths as $path) {
             .no-print { display: none !important; }
             .error-box { display: none !important; }
             .category-totals .cat-item.other,
-            .category-totals .cat-item.medication {
+            .category-totals .cat-item.medication,
+            .category-totals .cat-item.otc-cat {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
             .receipt-item .item-instruction {
                 background: #FFFBEB !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            .receipt-item .item-instruction.otc-instruction {
+                background: #EDE9FE !important;
+            }
+            .payment-status.paid,
+            .payment-status.otc-paid {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
@@ -717,7 +930,7 @@ foreach ($logo_paths as $path) {
     <div class="receipt" id="receipt">
         
         <!-- HEADER -->
-        <div class="receipt-header">
+        <div class="receipt-header <?= $is_otc ? 'otc-header' : '' ?>">
             <?php if ($logo_available): ?>
                 <img src="<?= $logo_base64 ?>" alt="Braick Logo" class="receipt-logo">
             <?php else: ?>
@@ -726,7 +939,9 @@ foreach ($logo_paths as $path) {
                 </div>
             <?php endif; ?>
             
-            <div class="receipt-title">Official Receipt</div>
+            <div class="receipt-title <?= $is_otc ? 'otc-title' : '' ?>">
+                <?= $is_otc ? 'OTC Sale Receipt' : 'Official Receipt' ?>
+            </div>
             <div class="receipt-subtitle">
                 <?= htmlspecialchars($bill['branch_name'] ?? $site_name) ?>
                 <?php if (!empty($bill['branch_location'])): ?>
@@ -738,19 +953,30 @@ foreach ($logo_paths as $path) {
                 <span>Tel: <?= htmlspecialchars($site_phone) ?></span>
                 <span>Email: <?= htmlspecialchars($site_email) ?></span>
             </div>
+            <div class="admin-contact-line">
+                <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
+            </div>
         </div>
         
         <!-- BODY -->
         <div class="receipt-body">
             
-            <!-- Bill Info -->
+            <!-- Receipt Info -->
             <div class="receipt-row">
                 <span class="label">Receipt #</span>
-                <span class="value bold"><?= htmlspecialchars('REC-' . date('Ymd') . '-' . str_pad($bill_id, 6, '0', STR_PAD_LEFT)) ?></span>
+                <span class="value bold">
+                    <?php if ($is_otc): ?>
+                        <?= htmlspecialchars('OTC-REC-' . date('Ymd') . '-' . str_pad($bill['reference_id'] ?? 0, 6, '0', STR_PAD_LEFT)) ?>
+                    <?php else: ?>
+                        <?= htmlspecialchars('REC-' . date('Ymd') . '-' . str_pad($bill_id, 6, '0', STR_PAD_LEFT)) ?>
+                    <?php endif; ?>
+                </span>
             </div>
             <div class="receipt-row">
-                <span class="label">Bill #</span>
-                <span class="value"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></span>
+                <span class="label"><?= $is_otc ? 'Sale #' : 'Bill #' ?></span>
+                <span class="value <?= $is_otc ? 'otc-value' : '' ?>">
+                    <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
+                </span>
             </div>
             <div class="receipt-row">
                 <span class="label">Date</span>
@@ -759,54 +985,103 @@ foreach ($logo_paths as $path) {
             <div class="receipt-row">
                 <span class="label">Status</span>
                 <span class="value">
-                    <span class="payment-status <?= $bill['status'] ?? 'pending' ?>">
-                        <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                    <span class="payment-status <?= $is_otc ? 'otc-paid' : ($bill['status'] ?? 'paid') ?>">
+                        <?= $is_otc ? 'OTC Paid' : ucfirst($bill['status'] ?? 'Paid') ?>
                     </span>
                 </span>
             </div>
             
             <hr class="receipt-divider">
             
-            <!-- Patient Info -->
+            <!-- Patient / Customer Info -->
             <div class="receipt-row">
-                <span class="label">Patient</span>
-                <span class="value"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></span>
+                <span class="label"><?= $is_otc ? 'Customer' : 'Patient' ?></span>
+                <span class="value <?= $is_otc ? 'otc-value' : '' ?>">
+                    <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>
+                </span>
             </div>
             <div class="receipt-row">
-                <span class="label">Patient ID</span>
+                <span class="label"><?= $is_otc ? 'Customer ID' : 'Patient ID' ?></span>
                 <span class="value"><?= htmlspecialchars($bill['patient_code'] ?? 'N/A') ?></span>
             </div>
-            <?php if (!empty($bill['phone'])): ?>
+            <?php if (!empty($bill['phone']) && $bill['phone'] !== 'N/A'): ?>
             <div class="receipt-row">
                 <span class="label">Phone</span>
                 <span class="value"><?= htmlspecialchars($bill['phone']) ?></span>
             </div>
             <?php endif; ?>
-            <?php if (!empty($bill['visit_number'])): ?>
+            <?php if (!empty($bill['visit_number']) && !$is_otc): ?>
             <div class="receipt-row">
                 <span class="label">Visit #</span>
                 <span class="value"><?= htmlspecialchars($bill['visit_number']) ?></span>
+            </div>
+            <?php endif; ?>
+            <?php if ($is_otc && !empty($bill['sale_number'])): ?>
+            <div class="receipt-row">
+                <span class="label">Sale #</span>
+                <span class="value otc-value"><?= htmlspecialchars($bill['sale_number']) ?></span>
             </div>
             <?php endif; ?>
             
             <!-- ================================================================ -->
             <!-- CATEGORY TOTALS -->
             <!-- ================================================================ -->
-            <div class="category-totals">
-                <div class="cat-item other">
-                    <span class="cat-label"><i class="fas fa-file-invoice"></i> Other Bills</span>
-                    <span class="cat-value"><?= $currency ?> <?= number_format($other_total, 0) ?></span>
+            <?php if ($is_otc): ?>
+                <div class="category-totals" style="grid-template-columns: 1fr;">
+                    <div class="cat-item otc-cat" style="flex:1;">
+                        <span class="cat-label"><i class="fas fa-shopping-cart"></i> OTC Sale</span>
+                        <span class="cat-value"><?= $currency ?> <?= number_format($otc_total, 0) ?></span>
+                    </div>
                 </div>
-                <div class="cat-item medication">
-                    <span class="cat-label"><i class="fas fa-pills"></i> Medications</span>
-                    <span class="cat-value"><?= $currency ?> <?= number_format($medication_total, 0) ?></span>
+            <?php else: ?>
+                <div class="category-totals">
+                    <div class="cat-item other">
+                        <span class="cat-label"><i class="fas fa-file-invoice"></i> Other Bills</span>
+                        <span class="cat-value"><?= $currency ?> <?= number_format($other_total, 0) ?></span>
+                    </div>
+                    <div class="cat-item medication">
+                        <span class="cat-label"><i class="fas fa-pills"></i> Medications</span>
+                        <span class="cat-value"><?= $currency ?> <?= number_format($medication_total, 0) ?></span>
+                    </div>
                 </div>
-            </div>
+            <?php endif; ?>
             
             <!-- ================================================================ -->
-            <!-- OTHER BILLS SECTION -->
+            <!-- OTC ITEMS SECTION -->
             <!-- ================================================================ -->
-            <?php if (count($other_items) > 0): ?>
+            <?php if ($is_otc && count($otc_items) > 0): ?>
+                <div class="section-header otc-section">
+                    <span><i class="fas fa-shopping-cart"></i> OTC Items</span>
+                    <span class="section-total"><?= $currency ?> <?= number_format($otc_total, 0) ?></span>
+                </div>
+                <div class="receipt-items">
+                    <?php foreach ($otc_items as $item): ?>
+                        <div class="receipt-item">
+                            <span class="item-name">
+                                <?= htmlspecialchars($item['item_name'] ?? $item['medicine_name'] ?? 'N/A') ?>
+                                <?php if (isset($item['quantity']) && $item['quantity'] > 1): ?>
+                                    <span class="item-qty">x<?= $item['quantity'] ?></span>
+                                <?php endif; ?>
+                                <span style="font-size:0.5rem;color:#64748B;display:block;">OTC Medication</span>
+                                <?php if (!empty($item['instructions'])): ?>
+                                    <span class="item-instruction otc-instruction">
+                                        <i class="fas fa-edit" style="font-size:0.45rem;"></i>
+                                        <?= htmlspecialchars($item['instructions']) ?>
+                                    </span>
+                                <?php endif; ?>
+                            </span>
+                            <span class="item-price">
+                                <?= $currency ?> <?= number_format($item['total_price'] ?? $item['unit_price'] ?? 0, 0) ?>
+                            </span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            <?php endif; ?>
+            
+            <!-- ================================================================ -->
+            <!-- OTHER BILLS SECTION (Regular only) -->
+            <!-- ================================================================ -->
+            <?php if (!$is_otc && count($other_items) > 0): ?>
                 <div class="section-header other">
                     <span><i class="fas fa-file-invoice"></i> Other Bills</span>
                     <span class="section-total"><?= $currency ?> <?= number_format($other_total, 0) ?></span>
@@ -832,9 +1107,9 @@ foreach ($logo_paths as $path) {
             <?php endif; ?>
             
             <!-- ================================================================ -->
-            <!-- MEDICATIONS SECTION - WITH INSTRUCTIONS -->
+            <!-- MEDICATIONS SECTION - WITH INSTRUCTIONS (Regular only) -->
             <!-- ================================================================ -->
-            <?php if (count($medication_items) > 0): ?>
+            <?php if (!$is_otc && count($medication_items) > 0): ?>
                 <div class="section-header medication">
                     <span><i class="fas fa-prescription"></i> Prescriptions (Medications)</span>
                     <span class="section-total"><?= $currency ?> <?= number_format($medication_total, 0) ?></span>
@@ -894,33 +1169,19 @@ foreach ($logo_paths as $path) {
                     <span class="value"><?= $currency ?> <?= number_format($bill['subtotal'] ?? $bill['total_amount'] ?? 0, 0) ?></span>
                 </div>
                 
-                <?php $pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0); ?>
-                <?php if ($pharmacy_discount > 0): ?>
-                <div class="receipt-total-row">
-                    <span class="label"><i class="fas fa-prescription"></i> Pharmacy Disc</span>
-                    <span class="value discount-value">-<?= $currency ?> <?= number_format($pharmacy_discount, 0) ?></span>
-                </div>
-                <?php endif; ?>
-                
-                <?php $cashier_discount = (float)($bill['cashier_discount'] ?? 0); ?>
-                <?php if ($cashier_discount > 0): ?>
-                <div class="receipt-total-row">
-                    <span class="label"><i class="fas fa-tag"></i> Cashier Disc</span>
-                    <span class="value discount-value">-<?= $currency ?> <?= number_format($cashier_discount, 0) ?></span>
-                </div>
-                <?php endif; ?>
-                
                 <?php $total_discount = (float)($bill['total_discount'] ?? 0); ?>
                 <?php if ($total_discount > 0): ?>
-                <div class="receipt-total-row" style="border-top:1px dashed #E2E8F0;padding-top:4px;margin-top:2px;">
-                    <span class="label" style="font-weight:600;">Total Discount</span>
-                    <span class="value discount-value" style="font-weight:700;">-<?= $currency ?> <?= number_format($total_discount, 0) ?></span>
+                <div class="receipt-total-row">
+                    <span class="label"><i class="fas fa-tag"></i> Discount</span>
+                    <span class="value discount-value">-<?= $currency ?> <?= number_format($total_discount, 0) ?></span>
                 </div>
                 <?php endif; ?>
                 
                 <div class="receipt-total-row receipt-grand-total">
                     <span class="label">Total</span>
-                    <span class="value"><?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?></span>
+                    <span class="value <?= $is_otc ? 'otc-total' : '' ?>">
+                        <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
+                    </span>
                 </div>
                 
                 <div class="receipt-total-row" style="border-top:1px dashed #E2E8F0;padding-top:4px;">
@@ -928,7 +1189,7 @@ foreach ($logo_paths as $path) {
                     <span class="value" style="color:#059669;"><?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?></span>
                 </div>
                 
-                <?php if (($bill['balance'] ?? 0) > 0): ?>
+                <?php if (($bill['balance'] ?? 0) > 0 && !$is_otc): ?>
                 <div class="receipt-total-row">
                     <span class="label">Balance</span>
                     <span class="value" style="color:#DC2626;"><?= $currency ?> <?= number_format($bill['balance'] ?? 0, 0) ?></span>
@@ -937,13 +1198,12 @@ foreach ($logo_paths as $path) {
             </div>
             
             <!-- PAYMENT INFO -->
-            <?php if ($payment): ?>
             <hr class="receipt-divider">
             <div class="receipt-row">
                 <span class="label">Payment Method</span>
-                <span class="value capitalize"><?= htmlspecialchars($payment['payment_method'] ?? 'N/A') ?></span>
+                <span class="value capitalize"><?= htmlspecialchars($bill['payment_method'] ?? $payment['payment_method'] ?? 'Cash') ?></span>
             </div>
-            <?php if (!empty($payment['reference_number'])): ?>
+            <?php if ($payment && !empty($payment['reference_number'])): ?>
             <div class="receipt-row">
                 <span class="label">Reference #</span>
                 <span class="value"><?= htmlspecialchars($payment['reference_number']) ?></span>
@@ -951,17 +1211,16 @@ foreach ($logo_paths as $path) {
             <?php endif; ?>
             <div class="receipt-row">
                 <span class="label">Received By</span>
-                <span class="value"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></span>
+                <span class="value"><?= htmlspecialchars($bill['cashier_name'] ?? $user_full_name) ?></span>
             </div>
             <div class="receipt-row">
                 <span class="label">Received At</span>
-                <span class="value"><?= isset($payment['received_at']) ? date('d/m/Y h:i A', strtotime($payment['received_at'])) : 'N/A' ?></span>
+                <span class="value"><?= isset($payment['received_at']) ? date('d/m/Y h:i A', strtotime($payment['received_at'])) : date('d/m/Y h:i A', strtotime($bill['created_at'] ?? 'now')) ?></span>
             </div>
-            <?php endif; ?>
             
             <!-- FOOTER -->
             <div class="receipt-footer">
-                <div class="footer-brand"><?= htmlspecialchars($site_name) ?></div>
+                <div class="footer-brand <?= $is_otc ? 'otc-brand' : '' ?>"><?= htmlspecialchars($site_name) ?></div>
                 <hr class="footer-divider">
                 <p style="margin:2px 0;">
                     <?= htmlspecialchars($bill['branch_name'] ?? '') ?>
@@ -972,12 +1231,15 @@ foreach ($logo_paths as $path) {
                 <p style="margin:2px 0;font-size:0.5rem;">
                     Tel: <?= htmlspecialchars($site_phone) ?> | Email: <?= htmlspecialchars($site_email) ?>
                 </p>
+                <div class="admin-contact-line" style="justify-content:center;">
+                    <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
+                </div>
                 <hr class="footer-divider">
                 <p style="margin:2px 0;font-size:0.45rem;color:#94A3B8;">
                     <?= date('d/m/Y h:i A') ?>
                 </p>
                 <p style="margin:2px 0;font-size:0.45rem;color:#94A3B8;">
-                    Thank you for choosing <?= htmlspecialchars($site_name) ?>
+                    <?= $is_otc ? 'Thank you for your purchase at ' : 'Thank you for choosing ' ?><?= htmlspecialchars($site_name) ?>
                 </p>
                 <p style="margin:2px 0;font-size:0.4rem;color:#CBD5E1;">
                     This is a computer generated receipt
@@ -1006,11 +1268,19 @@ foreach ($logo_paths as $path) {
         }
     });
 
-    console.log('%c🧾 Braick - Print Receipt (With Medication Instructions)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Categories: Other Bills & Prescriptions (Medications)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Medications show: dosage, frequency, route, duration, instructions', 'font-size:13px; color:#D97706;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🧾 Braick - Print Receipt', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Supports Regular Bills (with visit_id) and OTC Sales', 'font-size:13px; color:#34D399;');
+    <?php if ($is_otc): ?>
+        console.log('%c🛒 OTC Sale: <?= htmlspecialchars($bill['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
+        console.log('%c👤 Customer: <?= htmlspecialchars($bill['patient_name'] ?? 'Walk-in') ?>', 'font-size:13px; color:#7C3AED;');
+        console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
+    <?php else: ?>
+        console.log('%c📋 Regular Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
+        console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#0B5ED7;');
+        console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
+        console.log('%c💊 Medications: <?= count($medication_items) ?> items', 'font-size:13px; color:#D97706;');
+    <?php endif; ?>
+    console.log('%c📞 Admin: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

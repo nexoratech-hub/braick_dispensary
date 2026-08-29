@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/cashier/receipt.php
 // RECEIPT - VIEW AND PRINT RECEIPT
-// FIXED: Checks OTC sales FIRST before bills
+// FIXED: Works with payment_id, bill_id, and sale_id
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -61,6 +61,7 @@ $is_otc = false;
 $error = null;
 $currency = 'TSh';
 $actual_bill_id = 0;
+$found_sale_id = 0;
 
 try {
     // Get system settings for currency
@@ -103,11 +104,31 @@ if ($payment_id > 0) {
 }
 
 // ================================================================
-// STEP 2: CHECK OTC SALE FIRST (using bill_id or sale_id)
+// STEP 2: DETERMINE WHICH ID TO USE
+// ================================================================
+// If we have a sale_id, use it directly
+// Otherwise try to find OTC sale via bill_id
+$search_sale_id = $sale_id;
+$search_bill_id = $bill_id;
+
+// If we have payment_id but no sale_id, check if bill_id is from OTC
+if ($payment_id > 0 && $sale_id == 0 && $bill_id > 0) {
+    // Check if this bill_id exists in otc_sales
+    $stmt = $db->prepare("SELECT id FROM otc_sales WHERE bill_id = ?");
+    $stmt->execute([$bill_id]);
+    $otc_check = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($otc_check) {
+        $search_sale_id = $otc_check['id'];
+        $found_sale_id = $otc_check['id'];
+    }
+}
+
+// ================================================================
+// STEP 3: CHECK OTC SALE (using sale_id or bill_id)
 // ================================================================
 $otc_found = false;
 
-if ($bill_id > 0 || $sale_id > 0) {
+if ($search_sale_id > 0 || $search_bill_id > 0) {
     $otc_sql = "SELECT 
         o.*,
         u.full_name as cashier_name,
@@ -122,12 +143,13 @@ if ($bill_id > 0 || $sale_id > 0) {
     
     $otc_params = [];
     
-    if ($sale_id > 0) {
+    if ($search_sale_id > 0) {
         $otc_sql .= " AND o.id = ?";
-        $otc_params[] = $sale_id;
-    } elseif ($bill_id > 0) {
+        $otc_params[] = $search_sale_id;
+        $found_sale_id = $search_sale_id;
+    } elseif ($search_bill_id > 0) {
         $otc_sql .= " AND o.bill_id = ?";
-        $otc_params[] = $bill_id;
+        $otc_params[] = $search_bill_id;
     }
     
     $stmt = $db->prepare($otc_sql);
@@ -137,6 +159,7 @@ if ($bill_id > 0 || $sale_id > 0) {
     if ($otc_sale) {
         $otc_found = true;
         $is_otc = true;
+        $found_sale_id = $otc_sale['id'];
         
         // Get OTC items with instructions
         $stmt = $db->prepare("
@@ -146,6 +169,17 @@ if ($bill_id > 0 || $sale_id > 0) {
         ");
         $stmt->execute([$otc_sale['id']]);
         $otc_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // If we don't have payment data, try to get it from the bill_id
+        if (!$payment_data && $otc_sale['bill_id'] > 0) {
+            $stmt = $db->prepare("
+                SELECT * FROM payments 
+                WHERE bill_id = ? 
+                ORDER BY received_at DESC LIMIT 1
+            ");
+            $stmt->execute([$otc_sale['bill_id']]);
+            $payment_data = $stmt->fetch(PDO::FETCH_ASSOC);
+        }
         
         // Build receipt data from OTC sale
         $receipt_data = [
@@ -190,7 +224,7 @@ if ($bill_id > 0 || $sale_id > 0) {
 }
 
 // ================================================================
-// STEP 3: IF NOT OTC, GET FROM BILLS TABLE (Regular bills)
+// STEP 4: IF NOT OTC, GET FROM BILLS TABLE (Regular bills)
 // ================================================================
 if (!$otc_found && ($payment_id > 0 || $bill_id > 0)) {
     try {
@@ -336,7 +370,44 @@ if (!$otc_found && ($payment_id > 0 || $bill_id > 0)) {
 }
 
 // ================================================================
-// STEP 4: SEPARATE ITEMS BY CATEGORY
+// STEP 5: FINAL CHECK - If still no data, try to get via payment_id only
+// ================================================================
+if (!$receipt_data && $payment_id > 0) {
+    // Last resort: try to get payment and see if bill_id exists
+    $stmt = $db->prepare("
+        SELECT 
+            p.*,
+            u.full_name as cashier_name,
+            br.name as branch_name,
+            br.location as branch_location,
+            br.phone as branch_phone,
+            br.email as branch_email
+        FROM payments p
+        LEFT JOIN users u ON p.received_by = u.id
+        LEFT JOIN branches br ON p.branch_id = br.id
+        WHERE p.id = ?
+    ");
+    $stmt->execute([$payment_id]);
+    $payment_only = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($payment_only) {
+        // Check if this payment's bill_id is in otc_sales
+        if ($payment_only['bill_id'] > 0) {
+            $stmt = $db->prepare("SELECT * FROM otc_sales WHERE bill_id = ?");
+            $stmt->execute([$payment_only['bill_id']]);
+            $otc_check = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($otc_check) {
+                // This is an OTC sale! Redirect to use sale_id
+                header('Location: receipt.php?sale_id=' . $otc_check['id']);
+                exit;
+            }
+        }
+    }
+}
+
+// ================================================================
+// STEP 6: SEPARATE ITEMS BY CATEGORY
 // ================================================================
 $medication_items = [];
 $other_items = [];
@@ -380,7 +451,11 @@ include_once __DIR__ . '/../../components/cashier_header.php';
 include_once __DIR__ . '/../../components/cashier_sidebar.php';
 ?>
 
+<!-- Rest of the HTML stays the same as before -->
+<!-- [All HTML and CSS from the previous version remains unchanged] -->
+
 <style>
+    /* [All styles remain the same as previous version] */
     .receipt-wrapper {
         max-width: 1000px;
         margin: 0 auto;
@@ -1614,9 +1689,11 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         });
     }
 
-    console.log('%c🧾 Braick - Receipt (FIXED OTC)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Checks OTC sales table FIRST (bill_id=216)', 'font-size:13px; color:#8B5CF6;');
-    console.log('%c✅ Gets items from otc_sale_items', 'font-size:13px; color:#34D399;');
+    console.log('%c🧾 Braick - Receipt (FULLY FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Works with payment_id, bill_id, and sale_id', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Checks payments table first to get bill_id', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Then checks otc_sales using bill_id', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ Gets items from otc_sale_items using sale_id', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Shows instructions from otc_sale_items', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Admin banner at bottom', 'font-size:13px; color:#0B5ED7;');
     <?php if ($is_otc): ?>
@@ -1624,6 +1701,7 @@ include_once __DIR__ . '/../../components/cashier_sidebar.php';
         console.log('%c👤 Customer: <?= htmlspecialchars($receipt_data['patient_name'] ?? 'Walk-in') ?>', 'font-size:13px; color:#8B5CF6;');
         console.log('%c📞 Phone: <?= htmlspecialchars($receipt_data['patient_phone'] ?? 'N/A') ?>', 'font-size:13px; color:#8B5CF6;');
         console.log('%c💰 Amount: <?= $currency ?> <?= number_format($receipt_data['paid_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#34D399;');
+        console.log('%c📦 Items: <?= count($otc_items) ?>', 'font-size:13px; color:#64748B;');
     <?php endif; ?>
 </script>
 
