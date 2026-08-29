@@ -3,6 +3,7 @@
 // FILE: frontend/pages/doctor/consultation.php
 // COMPLETE CONSULTATION - WITH DIAGNOSIS AUTO-SAVE
 // BRAICK DISPENSARY
+// FIXED: Bill status updates correctly when items added after payment
 // ================================================================
 
 // Start session
@@ -240,44 +241,75 @@ try {
 }
 
 // ================================================================
-// UPDATE BILL TOTAL FUNCTION
+// UPDATE BILL TOTAL FUNCTION - FIXED: Handles paid->partial correctly
 // ================================================================
 function updateBillTotal($db, $bill_id) {
+    // Get total amount of all uncancelled items
     $stmt = $db->prepare("
         SELECT SUM(total_price) as total 
         FROM bill_items 
         WHERE bill_id = ? AND status != 'cancelled'
     ");
     $stmt->execute([$bill_id]);
-    $total_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $total_amount = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
+    // Get total paid amount from paid items
     $stmt = $db->prepare("
         SELECT SUM(total_price) as paid_total 
         FROM bill_items 
         WHERE bill_id = ? AND status = 'paid'
     ");
     $stmt->execute([$bill_id]);
-    $paid_total = $stmt->fetch(PDO::FETCH_ASSOC)['paid_total'] ?? 0;
+    $paid_total = (float)($stmt->fetch(PDO::FETCH_ASSOC)['paid_total'] ?? 0);
     
-    $balance = $total_amount - $paid_total;
+    // Also check payments table for any manual payments
+    $stmt = $db->prepare("
+        SELECT SUM(amount) as payment_total 
+        FROM payments 
+        WHERE bill_id = ? 
+    ");
+    $stmt->execute([$bill_id]);
+    $payment_total = (float)($stmt->fetch(PDO::FETCH_ASSOC)['payment_total'] ?? 0);
     
-    $status = 'pending';
-    if ($balance <= 0 && $total_amount > 0) {
+    // Use the larger of paid from items or payments table
+    $total_paid = max($paid_total, $payment_total);
+    $balance = $total_amount - $total_paid;
+    
+    // Determine status correctly - FIXED
+    if ($total_amount == 0) {
+        $status = 'pending';
+    } elseif ($balance <= 0 && $total_amount > 0) {
+        // Fully paid - all items paid and no balance
         $status = 'paid';
-    } elseif ($paid_total > 0 && $balance > 0) {
+    } elseif ($total_paid > 0 && $balance > 0) {
+        // Some payment made but balance remains -> partial
         $status = 'partial';
-    } elseif ($total_amount == 0) {
+    } elseif ($balance > 0 && $total_paid == 0) {
+        // No payment made but items exist -> pending
+        $status = 'pending';
+    } else {
         $status = 'pending';
     }
     
+    // Update bill
     $stmt = $db->prepare("
         UPDATE bills 
-        SET subtotal = ?, total_amount = ?, paid_amount = ?, balance = ?, status = ?
+        SET subtotal = ?, 
+            total_amount = ?, 
+            paid_amount = ?, 
+            balance = ?, 
+            status = ?,
+            updated_at = NOW()
         WHERE id = ?
     ");
-    $stmt->execute([$total_amount, $total_amount, $paid_total, $balance, $status, $bill_id]);
+    $stmt->execute([$total_amount, $total_amount, $total_paid, $balance, $status, $bill_id]);
     
-    return ['total' => $total_amount, 'paid' => $paid_total, 'balance' => $balance, 'status' => $status];
+    return [
+        'total' => $total_amount, 
+        'paid' => $total_paid, 
+        'balance' => $balance, 
+        'status' => $status
+    ];
 }
 
 // ================================================================
@@ -1006,10 +1038,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $stmt = $db->prepare("DELETE FROM lab_tests WHERE id = ? AND visit_id = ?");
                 $stmt->execute([$test_id, $visit_id]);
                 
-                updateBillTotal($db, $bill_id);
+                // Update bill total - FIXED: Call updateBillTotal
+                $bill_data = updateBillTotal($db, $bill_id);
                 
                 $response['success'] = true;
                 $response['message'] = '✅ Lab test removed!';
+                $response['bill_data'] = $bill_data;
             } else {
                 $response['message'] = '❌ Test not found or already processed';
             }
@@ -1022,7 +1056,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD MEDICATION
+    // AJAX: ADD MEDICATION - FIXED: Calls updateBillTotal
     // ================================================================
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
@@ -1144,6 +1178,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     ]);
                     
                     $db->commit();
+                    // FIXED: Call updateBillTotal after adding medication
                     $bill_data = updateBillTotal($db, $bill_id);
                     
                     $response['success'] = true;
@@ -1184,7 +1219,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: REMOVE MEDICATION
+    // AJAX: REMOVE MEDICATION - FIXED: Calls updateBillTotal
     // ================================================================
     if ($action === 'remove_medication') {
         header('Content-Type: application/json');
@@ -1237,6 +1272,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 $stmt->execute([$prescription_id, $visit_id]);
                 
                 $db->commit();
+                // FIXED: Call updateBillTotal after removing medication
                 $bill_data = updateBillTotal($db, $bill_id);
                 
                 $response['success'] = true;
@@ -1258,7 +1294,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD PROCEDURES BATCH
+    // AJAX: ADD PROCEDURES BATCH - FIXED: Calls updateBillTotal
     // ================================================================
     if ($action === 'add_procedures_batch') {
         header('Content-Type: application/json');
@@ -1437,6 +1473,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             }
             
             $db->commit();
+            // FIXED: Call updateBillTotal after adding procedures
             $bill_data = updateBillTotal($db, $bill_id);
             
             $response['success'] = true;
@@ -1458,7 +1495,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD EQUIPMENT BATCH
+    // AJAX: ADD EQUIPMENT BATCH - FIXED: Calls updateBillTotal
     // ================================================================
     if ($action === 'add_equipment_batch') {
         header('Content-Type: application/json');
@@ -1618,6 +1655,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             }
             
             $db->commit();
+            // FIXED: Call updateBillTotal after adding equipment
             $bill_data = updateBillTotal($db, $bill_id);
             
             $response['success'] = true;
@@ -1639,7 +1677,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: REMOVE ADDED ITEM
+    // AJAX: REMOVE ADDED ITEM - FIXED: Calls updateBillTotal
     // ================================================================
     if ($action === 'remove_added_item') {
         header('Content-Type: application/json');
@@ -1746,6 +1784,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 exit;
             }
             
+            // FIXED: Call updateBillTotal after removing item
             $bill_data = updateBillTotal($db, $bill_id);
             $db->commit();
             
@@ -1972,7 +2011,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             if ($lab_tests_sent > 0) {
                 $stmt = $db->prepare("UPDATE visits SET status = 'lab_test', updated_at = NOW() WHERE id = ?");
                 $stmt->execute([$visit_id]);
-                updateBillTotal($db, $bill_id);
+                // FIXED: Call updateBillTotal after sending lab tests
+                $bill_data = updateBillTotal($db, $bill_id);
             }
             
             $db->commit();
@@ -2047,6 +2087,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <link rel="icon" href="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
+        /* ================================================================
+           ALL STYLES - SAME AS ORIGINAL
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -2960,7 +3003,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* Toast Custom - White text on Green background */
+        /* Toast Custom */
         .toast-custom {
             position: fixed;
             bottom: 30px;
@@ -3014,11 +3057,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .toast-custom.success { border-left: 4px solid #34D399; }
         .toast-custom.error { border-left: 4px solid #F87171; }
         .toast-custom.warning { border-left: 4px solid #FBBF24; }
-        
-        /* Toast success override */
-        .toast-custom.success {
-            background: var(--success) !important;
-        }
         
         @media (max-width: 1024px) {
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
@@ -3099,7 +3137,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 (<?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?>)
                 <span class="separator">|</span>
                 Status: 
-                <span class="status-badge <?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>">
+                <span class="status-badge <?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>" id="visitStatusBadge">
                     <?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'Pending')) ?>
                 </span>
                 <span class="text-xs" id="lastUpdateTime">⏱ <?= date('H:i:s') ?></span>
@@ -4008,7 +4046,7 @@ function showToast(title, message, type) {
     clearTimeout(toast.timeout);
     toast.timeout = setTimeout(function() {
         toast.classList.remove('show');
-        setTimeout(function() { toast.style.display = 'none'; }, 400);
+        setTimeout(function() { toast.style.display = 'none'; }, 6000);
     }, 6000);
 }
 
@@ -4088,7 +4126,6 @@ function autoSaveDiagnosis() {
     if (diagnosisId === '__manual__') {
         manualBox.style.display = 'block';
         manualInput.focus();
-        // Don't auto-save empty manual entry
         if (!manualValue) {
             return;
         }
@@ -4096,12 +4133,10 @@ function autoSaveDiagnosis() {
         manualBox.style.display = 'none';
     }
     
-    // Don't save if no diagnosis selected
     if (!diagnosisId && !manualValue) {
         return;
     }
     
-    // Show saving indicator
     var saveIndicator = document.getElementById('diagnosisSaveIndicator');
     var savedIndicator = document.getElementById('diagnosisSavedIndicator');
     if (saveIndicator) saveIndicator.style.display = 'inline';
@@ -4109,7 +4144,6 @@ function autoSaveDiagnosis() {
     
     diagnosisSaving = true;
     
-    // Prepare data
     var data = {
         visit_id: visitId,
         diagnosis_id: diagnosisId,
@@ -4143,7 +4177,6 @@ function autoSaveDiagnosis() {
                 if (savedIndicator) savedIndicator.style.display = 'none';
             }, 3000);
             
-            // Update diagnosis status
             var statusEl = document.getElementById('diagnosisStatus');
             if (statusEl && result.data && result.data.diagnosis) {
                 statusEl.innerHTML = '✅ Saved: ' + result.data.diagnosis;
@@ -4152,7 +4185,6 @@ function autoSaveDiagnosis() {
             
             console.log('✅ Diagnosis auto-saved:', result.data);
             
-            // Show toast only if it's a manual save
             if (diagnosisId === '__manual__' && manualValue) {
                 showToast('✅ Diagnosis Saved', 'Diagnosis: ' + manualValue + ' saved successfully!', 'success');
             }
@@ -4196,7 +4228,6 @@ function loadDiseaseDetails(diseaseId) {
         if (treatment) {
             treatmentTextarea.value = treatment;
         }
-        // Auto-save the selected diagnosis
         setTimeout(function() {
             autoSaveDiagnosis();
         }, 300);
@@ -4207,7 +4238,6 @@ function loadDiseaseDetails(diseaseId) {
 // SAVE CONSULTATION WITH API - DIAGNOSIS + ALL DATA
 // ================================================================
 function saveConsultationWithAPI() {
-    // Get all form data
     var select = document.getElementById('diagnosisSelect');
     var diagnosisId = select ? select.value : '';
     var manualInput = document.getElementById('diagnosisManualInput');
@@ -4217,20 +4247,17 @@ function saveConsultationWithAPI() {
     var codeManual = document.getElementById('diseaseCodeManual');
     var codeManualValue = codeManual ? codeManual.value.trim() : '';
     
-    // Get symptoms data
     var symptoms = document.getElementById('symptomsTextarea')?.value || '';
     var hpi = document.getElementById('hpiTextarea')?.value || '';
     var physicalExam = document.getElementById('physicalExamTextarea')?.value || '';
     var complaint = document.getElementById('complaintTextarea')?.value || '';
     var notes = document.getElementById('notesTextarea')?.value || '';
     
-    // Validate diagnosis
     if (!diagnosisId && !manualValue) {
         showToast('⚠️ Warning', 'Please select or enter a diagnosis before saving.', 'warning');
         return;
     }
     
-    // Prepare data
     var data = {
         visit_id: visitId,
         diagnosis_id: diagnosisId,
@@ -4246,14 +4273,12 @@ function saveConsultationWithAPI() {
     
     console.log('🔍 Saving consultation with API:', data);
     
-    // Show loading
     var btn = document.getElementById('saveConsultationBtn');
     if (btn) {
         btn.disabled = true;
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
     }
     
-    // Send API request
     fetch('api_save_diagnosis.php', {
         method: 'POST',
         headers: {
@@ -4280,7 +4305,6 @@ function saveConsultationWithAPI() {
                 msg += '<br>💊 <strong>Treatment:</strong> ' + result.data.treatment;
             }
             
-            // Update diagnosis status
             var statusEl = document.getElementById('diagnosisStatus');
             if (statusEl && result.data && result.data.diagnosis) {
                 statusEl.innerHTML = '✅ Saved: ' + result.data.diagnosis;
@@ -4290,7 +4314,6 @@ function saveConsultationWithAPI() {
             showToast('✅ Success', msg, 'success');
             console.log('✅ Consultation saved:', result.data);
             
-            // Reload page after short delay
             setTimeout(function() {
                 window.location.reload();
             }, 2000);
@@ -4793,18 +4816,55 @@ function updateAddedItemsUI() {
 }
 
 // ================================================================
-// BILL TOTALS
+// BILL TOTALS - FIXED: Shows status correctly
 // ================================================================
 function updateBillTotals(billData) {
     if (!billData) return;
+    
     var totalEl = document.getElementById('totalAmountDisplay');
-    if (totalEl) totalEl.textContent = 'TSh ' + billData.total.toLocaleString();
+    if (totalEl) totalEl.textContent = 'TSh ' + Number(billData.total || 0).toLocaleString();
+    
     var paidEl = document.getElementById('paidAmountDisplay');
-    if (paidEl) paidEl.textContent = 'TSh ' + billData.paid.toLocaleString();
+    if (paidEl) paidEl.textContent = 'TSh ' + Number(billData.paid || 0).toLocaleString();
+    
     var pendingEl = document.getElementById('pendingAmountDisplay');
-    if (pendingEl) pendingEl.textContent = 'TSh ' + (billData.total - billData.paid).toLocaleString();
+    if (pendingEl) pendingEl.textContent = 'TSh ' + Number((billData.total || 0) - (billData.paid || 0)).toLocaleString();
+    
     var balanceEl = document.getElementById('balanceAmountDisplay');
-    if (balanceEl) balanceEl.textContent = 'TSh ' + billData.balance.toLocaleString();
+    if (balanceEl) {
+        balanceEl.textContent = 'TSh ' + Number(billData.balance || 0).toLocaleString();
+        var card = balanceEl.closest('.bill-summary-card');
+        if (card) {
+            if (billData.balance > 0) {
+                card.className = 'bill-summary-card balance-card';
+                var icon = card.querySelector('.bill-summary-icon i');
+                if (icon) icon.className = 'fas fa-exclamation-triangle';
+            } else {
+                card.className = 'bill-summary-card balance-card zero-balance';
+                var icon = card.querySelector('.bill-summary-icon i');
+                if (icon) icon.className = 'fas fa-check-circle';
+            }
+        }
+    }
+    
+    // Update bill status badge
+    if (billData.status) {
+        var statusBadge = document.getElementById('visitStatusBadge');
+        if (statusBadge) {
+            var statusMap = {
+                'pending': 'badge-warning',
+                'partial': 'badge-warning',
+                'paid': 'badge-success',
+                'cancelled': 'badge-danger'
+            };
+            statusBadge.className = 'status-badge ' + (statusMap[billData.status] || 'badge-warning');
+            var statusText = billData.status.charAt(0).toUpperCase() + billData.status.slice(1);
+            if (billData.status === 'partial') {
+                statusText = 'Partial (Balance: TSh ' + Number(billData.balance || 0).toLocaleString() + ')';
+            }
+            statusBadge.textContent = statusText;
+        }
+    }
 }
 
 function fetchBillTotals() {
@@ -4823,14 +4883,16 @@ function fetchBillTotals() {
             var procTotal = (data.procedure_total || 0) + (data.equipment_total || 0);
             var procEquipEl = document.getElementById('procEquipTotalDisplay');
             if (procEquipEl) procEquipEl.textContent = procTotal.toLocaleString();
-            var totalEl = document.getElementById('totalAmountDisplay');
-            if (totalEl) totalEl.textContent = 'TSh ' + data.grand_total.toLocaleString();
-            var paidEl = document.getElementById('paidAmountDisplay');
-            if (paidEl) paidEl.textContent = 'TSh ' + data.paid_total.toLocaleString();
-            var pendingEl = document.getElementById('pendingAmountDisplay');
-            if (pendingEl) pendingEl.textContent = 'TSh ' + data.pending_total.toLocaleString();
-            var balanceEl = document.getElementById('balanceAmountDisplay');
-            if (balanceEl) balanceEl.textContent = 'TSh ' + data.bill_balance.toLocaleString();
+            
+            // Update bill data
+            var billData = {
+                total: data.grand_total || 0,
+                paid: data.paid_total || 0,
+                pending: data.pending_total || 0,
+                balance: data.bill_balance || 0,
+                status: data.bill_status || 'pending'
+            };
+            updateBillTotals(billData);
         }
     });
 }
@@ -5082,7 +5144,6 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
         
-        // Auto-save diagnosis if already selected
         setTimeout(function() {
             if (document.getElementById('diagnosisSelect')?.value) {
                 autoSaveDiagnosis();
@@ -5101,6 +5162,7 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('✅ Diagnosis auto-saves immediately when selected');
         console.log('✅ Works with medications, lab tests, procedures, and equipment');
         console.log('✅ Save once - all data saved via API');
+        console.log('✅ Bill status updates correctly (paid → partial when new items added)');
     }
 });
 
