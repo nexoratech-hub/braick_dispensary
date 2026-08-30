@@ -1,10 +1,14 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_visit.php
-// ADMIN - VIEW VISIT DETAILS (SAME DESIGN AS VISIT_DETAILS)
+// RECEPTION - VIEW VISIT DETAILS (BRANCH FILTERED)
 // WITH PDF GENERATION - Official Stamp Included
 // BRAICK DISPENSARY
 // THEME: BLUE | TABLE HEADERS: GREEN | SPACING: 1cm
+// PDF FONT: 14px | TEXT WRAP: 2 ROWS
+// FIXED: PDF starts at top of page
+// FIXED: All 10 sections appear in PDF (even empty ones)
+// FIXED: Removed Complete Button | Reduced Spacing to 1cm
 // ================================================================
 
 // ================================================================
@@ -18,32 +22,32 @@ if (session_status() === PHP_SESSION_NONE) {
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
-    header('Location: ../login.php');
+    header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
 
 // ================================================================
-// CHECK IF USER HAS ADMIN ACCESS
+// CHECK IF USER HAS ACCESS (Reception or Admin)
 // ================================================================
-if ($_SESSION['role'] !== 'admin') {
+$allowed_roles = ['reception', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
-        default: header('Location: ../login.php'); break;
+        default: header('Location: /dispensary_system/frontend/pages/login.php'); break;
     }
     exit;
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET USER DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'] ?? 0;
-$full_name = $_SESSION['full_name'] ?? 'Admin';
-$role = $_SESSION['role'] ?? 'admin';
+$user_id = $_SESSION['user_id'];
+$full_name = $_SESSION['full_name'] ?? 'User';
+$role = $_SESSION['role'] ?? 'reception';
 $branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
@@ -139,13 +143,13 @@ try {
         LEFT JOIN users u ON v.doctor_id = u.id
         LEFT JOIN branches b ON v.branch_id = b.id
         LEFT JOIN diseases d ON v.disease_id = d.id
-        WHERE v.id = ?
+        WHERE v.id = ? AND v.branch_id = ?
     ");
-    $stmt->execute([$visit_id]);
+    $stmt->execute([$visit_id, $branch_id]);
     $visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$visit) {
-        $error = "Visit not found.";
+        $error = "Visit not found or you don't have permission to view it.";
     }
     
     // ================================================================
@@ -162,6 +166,7 @@ try {
         $stmt->execute([$visit_id]);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
+        // Get prescription items with medication details
         foreach ($prescriptions as $pres) {
             $stmt = $db->prepare("
                 SELECT pi.*, mi.medication_name as inventory_medication_name,
@@ -273,7 +278,7 @@ try {
     }
     
     // ================================================================
-    // GET MEDICAL EQUIPMENT USED FOR THIS VISIT
+    // GET MEDICAL EQUIPMENT USED FOR THIS VISIT (from stock_movements)
     // ================================================================
     $equipment_used = [];
     if ($visit) {
@@ -343,15 +348,16 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/admin_header.php';
-include_once '../../components/admin_sidebar.php';
+include_once '../../components/reception_header.php';
+include_once '../../components/reception_sidebar.php';
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>View Visit - Braick Dispensary</title>
+    <title>Visit Details - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
@@ -361,7 +367,7 @@ include_once '../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BLUE THEME (SAME AS VISIT_DETAILS)
+           ROOT VARIABLES - BLUE THEME
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -912,7 +918,7 @@ include_once '../../components/admin_sidebar.php';
         [data-theme="dark"] .bill-card.cancelled { background: var(--bg-card); }
         
         /* ================================================================
-           TABLE STYLES - GREEN HEADERS (SAME AS VISIT_DETAILS)
+           TABLE STYLES - GREEN HEADERS WITH BEAUTIFUL CSS
            ================================================================ */
         .table-wrapper {
             overflow-x: auto;
@@ -956,35 +962,10 @@ include_once '../../components/admin_sidebar.php';
             max-width: 200px;
         }
         
-        .table-wrapper table tr:nth-child(even) td {
-            background: var(--gray-50);
+        /* Medication table specific styles - Beautiful CSS */
+        .medication-table td {
+            padding: 10px 12px;
         }
-        
-        .table-wrapper table tr:hover td {
-            background: var(--primary-bg);
-        }
-        
-        [data-theme="dark"] .table-wrapper table tr:nth-child(even) td {
-            background: var(--gray-800);
-        }
-        
-        [data-theme="dark"] .table-wrapper table tr:hover td {
-            background: var(--gray-700);
-        }
-        
-        .table-wrapper table .status-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 12px;
-            border-radius: 20px;
-        }
-        .table-wrapper table .status-badge.pending { background: #FEF3C7; color: #D97706; }
-        .table-wrapper table .status-badge.in_progress { background: #E8F0FE; color: #0B5ED7; }
-        .table-wrapper table .status-badge.completed { background: #D1FAE5; color: #059669; }
-        .table-wrapper table .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
-        .table-wrapper table .status-badge.paid { background: #D1FAE5; color: #059669; }
-        .table-wrapper table .status-badge.dispensed { background: #D1FAE5; color: #059669; }
         
         .medication-table .med-name {
             font-weight: 600;
@@ -1042,8 +1023,38 @@ include_once '../../components/admin_sidebar.php';
             font-size: 0.85rem;
         }
         
+        .table-wrapper table tr:nth-child(even) td {
+            background: var(--gray-50);
+        }
+        
+        .table-wrapper table tr:hover td {
+            background: var(--primary-bg);
+        }
+        
+        [data-theme="dark"] .table-wrapper table tr:nth-child(even) td {
+            background: var(--gray-800);
+        }
+        
+        [data-theme="dark"] .table-wrapper table tr:hover td {
+            background: var(--gray-700);
+        }
+        
+        .table-wrapper table .status-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 12px;
+            border-radius: 20px;
+        }
+        .table-wrapper table .status-badge.pending { background: #FEF3C7; color: #D97706; }
+        .table-wrapper table .status-badge.in_progress { background: #E8F0FE; color: #0B5ED7; }
+        .table-wrapper table .status-badge.completed { background: #D1FAE5; color: #059669; }
+        .table-wrapper table .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
+        .table-wrapper table .status-badge.paid { background: #D1FAE5; color: #059669; }
+        .table-wrapper table .status-badge.dispensed { background: #D1FAE5; color: #059669; }
+        
         /* ================================================================
-           TECHNICIAN INFO
+           TECH INFO
            ================================================================ */
         .tech-info {
             display: flex;
@@ -1067,6 +1078,9 @@ include_once '../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
+        /* ================================================================
+           DOCTOR AVATAR
+           ================================================================ */
         .doctor-avatar-lg {
             width: 48px;
             height: 48px;
@@ -1109,7 +1123,7 @@ include_once '../../components/admin_sidebar.php';
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         /* ================================================================
-           BRAND HEADER - BLUE THEME
+           BRAND HEADER - BLUE THEME - FIXED: Logo Centered
            ================================================================ */
         .brand-header {
             text-align: center;
@@ -1726,11 +1740,11 @@ include_once '../../components/admin_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-clinic-medical"></i>
-                View Visit
-                <span class="role-badge-display">ADMIN</span>
+                Visit Details
+                <span class="role-badge-display">RECEPTION</span>
             </h1>
             <p class="page-subtitle">
-                Complete visit information
+                View complete visit information
                 <span class="header-badge">
                     <i class="fas fa-hashtag"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
                 </span>
@@ -2419,7 +2433,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            View Visit
+            Visit Details
             <span class="text-gray-300 mx-2">|</span>
             Logged in as: <strong><?= htmlspecialchars($full_name) ?></strong>
             <span class="text-gray-300 mx-2">|</span>
@@ -2620,18 +2634,6 @@ include_once '../../components/admin_sidebar.php';
         var hasPrescriptions = <?= count($prescriptions) > 0 ? 'true' : 'false' ?>;
         var hasProcedures = <?= (count($procedures) > 0 || count($equipment_used) > 0) ? 'true' : 'false' ?>;
         var hasBills = <?= !empty($bills) ? 'true' : 'false' ?>;
-        
-        var adminPhones = '<?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>';
-        var branchName = '<?= htmlspecialchars($branch_name) ?>';
-        var visitNumber = '<?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>';
-        var patientName = '<?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>';
-        var visitDate = '<?= isset($visit['visit_date']) ? date('F d, Y h:i A', strtotime($visit['visit_date'])) : 'N/A' ?>';
-        var visitStatus = '<?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'N/A')) ?>';
-        var visitType = '<?= htmlspecialchars($visit['visit_type'] ?? 'N/A') ?>';
-        var consultationFee = '<?= number_format($visit['consultation_fee'] ?? 0, 0) ?>';
-        var doctorName = '<?= htmlspecialchars($visit['doctor_name'] ?? 'Not Assigned') ?>';
-        var doctorSpecialty = '<?= htmlspecialchars($visit['specialty'] ?? 'General Practitioner') ?>';
-        var doctorStatus = '<?= ($visit['doctor_is_online'] ?? 0) ? '🟢 Online' : '🔴 Offline' ?>';
         
         var vitalSignsHTML = '';
         if (hasVitalSigns) {
@@ -2896,12 +2898,12 @@ include_once '../../components/admin_sidebar.php';
                     <div style="font-size:0.75rem;color:#64748B;">Tunajali Afya Yako</div>
                 </div>
                 <div style="display:flex;justify-content:center;gap:14px;flex-wrap:wrap;margin-top:4px;padding-top:4px;border-top:1px solid #E2E8F0;font-size:0.6rem;color:#64748B;">
-                    <span>📞 Admin Contacts: <?= htmlspecialchars($adminPhones) ?></span>
-                    <span>🏢 Branch: <?= htmlspecialchars($branchName) ?></span>
-                    <span>📅 <?= date('F d, Y') ?></span>
+                    <span>📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?></span>
+                    <span>🏢 Branch: <?= htmlspecialchars($visit['branch_name'] ?? 'Dodoma') ?></span>
+                    <span>📅 ${new Date().toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })}</span>
                 </div>
                 <div style="font-size:0.8rem;font-weight:600;color:#0B5ED7;margin-top:4px;background:#E8F0FE;padding:4px 14px;border-radius:20px;display:inline-block;">
-                    📋 Visit Details Report - <?= htmlspecialchars($visitNumber) ?>
+                    📋 Visit Details Report - <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
                 </div>
             </div>
             
@@ -2911,12 +2913,15 @@ include_once '../../components/admin_sidebar.php';
                     <i class="fas fa-info-circle"></i> 1. Visit Information
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;font-size:14px;">
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Visit Number</span><span style="font-size:14px;"><strong><?= htmlspecialchars($visitNumber) ?></strong></span></div>
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Status</span><span style="font-size:14px;"><?= htmlspecialchars($visitStatus) ?></span></div>
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Visit Type</span><span style="font-size:14px;"><?= htmlspecialchars($visitType) ?></span></div>
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Date & Time</span><span style="font-size:14px;"><?= htmlspecialchars($visitDate) ?></span></div>
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Branch</span><span style="font-size:14px;"><?= htmlspecialchars($branchName) ?></span></div>
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Consultation Fee</span><span style="font-size:14px;">TSh <?= htmlspecialchars($consultationFee) ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Visit Number</span><span style="font-size:14px;"><strong><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></strong></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Status</span><span style="font-size:14px;"><?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'N/A')) ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Visit Type</span><span style="font-size:14px;"><?= htmlspecialchars($visit['visit_type'] ?? 'N/A') ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Date & Time</span><span style="font-size:14px;"><?= isset($visit['visit_date']) ? date('F d, Y h:i A', strtotime($visit['visit_date'])) : 'N/A' ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Branch</span><span style="font-size:14px;"><?= htmlspecialchars($visit['branch_name'] ?? 'N/A') ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Consultation Fee</span><span style="font-size:14px;">TSh <?= number_format($visit['consultation_fee'] ?? 0, 0) ?></span></div>
+                    <?php if (!empty($visit['follow_up_date'])): ?>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Follow-up Date</span><span style="font-size:14px;"><?= date('F d, Y', strtotime($visit['follow_up_date'])) ?></span></div>
+                    <?php endif; ?>
                 </div>
             </div>
             
@@ -2926,14 +2931,19 @@ include_once '../../components/admin_sidebar.php';
                     <i class="fas fa-user"></i> 2. Patient Information
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px 14px;font-size:14px;">
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 3;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Full Name</span><span style="font-size:14px;"><strong><?= htmlspecialchars($patientName) ?></strong></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 3;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Full Name</span><span style="font-size:14px;"><strong><?= htmlspecialchars($visit['patient_name']) ?></strong></span></div>
                     <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Patient ID</span><span style="font-size:14px;"><?= htmlspecialchars($visit['patient_number'] ?? 'N/A') ?></span></div>
                     <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Phone</span><span style="font-size:14px;"><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
                     <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Email</span><span style="font-size:14px;"><?= htmlspecialchars($visit['email'] ?? 'N/A') ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Emergency Contact</span><span style="font-size:14px;"><?= htmlspecialchars($visit['emergency_contact'] ?? 'N/A') ?></span></div>
                     <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Gender</span><span style="font-size:14px;"><?= ucfirst($visit['gender'] ?? 'N/A') ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Marital Status</span><span style="font-size:14px;"><?= htmlspecialchars($visit['marital_status'] ?? 'N/A') ?></span></div>
                     <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Date of Birth</span><span style="font-size:14px;"><?= !empty($visit['date_of_birth']) ? date('F d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?></span></div>
                     <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Blood Group</span><span style="font-size:14px;"><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
                     <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 3;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Address</span><span style="font-size:14px;"><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
+                    <?php if (!empty($visit['allergies'])): ?>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 3;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Allergies</span><span style="font-size:14px;color:#DC2626;"><?= htmlspecialchars($visit['allergies']) ?></span></div>
+                    <?php endif; ?>
                 </div>
             </div>
             
@@ -2944,9 +2954,10 @@ include_once '../../components/admin_sidebar.php';
                 </div>
                 <?php if ($visit['doctor_id']): ?>
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;font-size:14px;">
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Doctor Name</span><span style="font-size:14px;"><strong>Dr. <?= htmlspecialchars($doctorName) ?></strong></span></div>
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Specialty</span><span style="font-size:14px;"><?= htmlspecialchars($doctorSpecialty) ?></span></div>
-                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Status</span><span style="font-size:14px;"><?= htmlspecialchars($doctorStatus) ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Doctor Name</span><span style="font-size:14px;"><strong>Dr. <?= htmlspecialchars($visit['doctor_name']) ?></strong></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Specialty</span><span style="font-size:14px;"><?= htmlspecialchars($visit['specialty'] ?? 'General Practitioner') ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Phone</span><span style="font-size:14px;"><?= htmlspecialchars($visit['doctor_phone'] ?? 'N/A') ?></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:130px;flex-shrink:0;font-size:14px;">Status</span><span style="font-size:14px;"><?= ($visit['doctor_is_online'] ?? 0) ? '🟢 Online' : '🔴 Offline' ?></span></div>
                 </div>
                 <?php else: ?>
                 <div class="pdf-empty">No doctor assigned to this visit</div>
@@ -3032,6 +3043,7 @@ include_once '../../components/admin_sidebar.php';
         content.innerHTML = html;
         modal.classList.add('active');
         
+        // Scroll to top of modal body
         var modalBody = document.getElementById('pdfModalBody');
         if (modalBody) {
             modalBody.scrollTop = 0;
@@ -3086,13 +3098,10 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    console.log('%c🏥 Braick Dispensary - Admin View Visit (Same Design as Visit Details)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Same design as visit_details.php', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Green table headers', 'font-size:13px; color:#059669;');
-    console.log('%c✅ All 10 sections included', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ PDF with official stamp', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🏥 Braick Dispensary - Complete Visit Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ FIXED: PDF starts at top | All 10 sections included | Empty sections show "No data" message', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:13px; color:#D97706;');
 </script>
 
