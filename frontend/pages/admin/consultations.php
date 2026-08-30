@@ -1,10 +1,8 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/bills.php
-// ADMIN - VIEW ALL BILLS (WITH PAID FILTER)
-// BRAICK DISPENSARY - USING EXISTING DB TABLES
-// FIXED: Total Revenue uses paid_amount from paid bills only
-// FIXED: Excludes OTC bills
+// FILE: frontend/pages/admin/consultations.php
+// ADMIN - VIEW CONSULTATION REVENUE
+// Shows consultation fees from bills table using visit_id
 // ================================================================
 
 // ================================================================
@@ -82,12 +80,14 @@ try {
 }
 
 // ================================================================
-// BUILD QUERY
+// BUILD QUERY - Get consultations from bills with visit_id
 // ================================================================
 $where_conditions = [];
 $params = [];
 
-// Exclude OTC bills (they have bill_number LIKE 'BILL-OTC-%')
+// Only bills with visit_id NOT NULL (consultations)
+$where_conditions[] = "b.visit_id IS NOT NULL";
+$where_conditions[] = "b.patient_id IS NOT NULL";
 $where_conditions[] = "b.bill_number NOT LIKE 'BILL-OTC-%'";
 
 // Branch filter
@@ -130,7 +130,7 @@ if (count($where_conditions) > 0) {
 }
 
 // ================================================================
-// GET BILLS
+// GET CONSULTATION BILLS
 // ================================================================
 $sql = "
     SELECT 
@@ -156,28 +156,34 @@ $sql = "
         p.patient_id as patient_code,
         p.phone as patient_phone,
         u.full_name as cashier_name,
-        br.name as branch_name
+        br.name as branch_name,
+        v.visit_type,
+        v.consultation_fee,
+        v.service_id
     FROM bills b
     LEFT JOIN patients p ON b.patient_id = p.id
     LEFT JOIN users u ON b.created_by = u.id
     LEFT JOIN branches br ON b.branch_id = br.id
+    LEFT JOIN visits v ON b.visit_id = v.id
     $where_clause
     ORDER BY b.created_at DESC
 ";
 
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
-$bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$consultations = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET SUMMARY STATISTICS - FIXED: Separate queries for accurate counts
+// GET SUMMARY STATISTICS
 // ================================================================
 
-// 1. TOTAL BILLS (all, excluding OTC)
+// 1. TOTAL CONSULTATION BILLS
 $total_sql = "
     SELECT COUNT(*) as total
     FROM bills b
-    WHERE b.bill_number NOT LIKE 'BILL-OTC-%'
+    WHERE b.visit_id IS NOT NULL
+    AND b.patient_id IS NOT NULL
+    AND b.bill_number NOT LIKE 'BILL-OTC-%'
 ";
 $total_params = [];
 if ($selected_branch_id > 0) {
@@ -188,11 +194,13 @@ $stmt = $db->prepare($total_sql);
 $stmt->execute($total_params);
 $total_bills = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 2. PAID BILLS COUNT
+// 2. PAID CONSULTATION BILLS
 $paid_sql = "
     SELECT COUNT(*) as total
     FROM bills b
     WHERE b.status = 'paid'
+    AND b.visit_id IS NOT NULL
+    AND b.patient_id IS NOT NULL
     AND b.bill_number NOT LIKE 'BILL-OTC-%'
 ";
 $paid_params = [];
@@ -204,11 +212,13 @@ $stmt = $db->prepare($paid_sql);
 $stmt->execute($paid_params);
 $paid_bills = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 3. PENDING BILLS COUNT
+// 3. PENDING CONSULTATION BILLS
 $pending_sql = "
     SELECT COUNT(*) as total
     FROM bills b
     WHERE b.status = 'pending'
+    AND b.visit_id IS NOT NULL
+    AND b.patient_id IS NOT NULL
     AND b.bill_number NOT LIKE 'BILL-OTC-%'
 ";
 $pending_params = [];
@@ -220,43 +230,13 @@ $stmt = $db->prepare($pending_sql);
 $stmt->execute($pending_params);
 $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 4. PARTIAL BILLS COUNT
-$partial_sql = "
-    SELECT COUNT(*) as total
-    FROM bills b
-    WHERE b.status = 'partial'
-    AND b.bill_number NOT LIKE 'BILL-OTC-%'
-";
-$partial_params = [];
-if ($selected_branch_id > 0) {
-    $partial_sql .= " AND b.branch_id = ?";
-    $partial_params[] = $selected_branch_id;
-}
-$stmt = $db->prepare($partial_sql);
-$stmt->execute($partial_params);
-$partial_bills = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// 5. CANCELLED BILLS COUNT
-$cancelled_sql = "
-    SELECT COUNT(*) as total
-    FROM bills b
-    WHERE b.status = 'cancelled'
-    AND b.bill_number NOT LIKE 'BILL-OTC-%'
-";
-$cancelled_params = [];
-if ($selected_branch_id > 0) {
-    $cancelled_sql .= " AND b.branch_id = ?";
-    $cancelled_params[] = $selected_branch_id;
-}
-$stmt = $db->prepare($cancelled_sql);
-$stmt->execute($cancelled_params);
-$cancelled_bills = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// 6. TOTAL REVENUE - FIXED: Only from PAID bills, using paid_amount
+// 4. TOTAL REVENUE FROM CONSULTATIONS (paid bills only)
 $revenue_sql = "
     SELECT COALESCE(SUM(b.paid_amount), 0) as total
     FROM bills b
     WHERE b.status = 'paid'
+    AND b.visit_id IS NOT NULL
+    AND b.patient_id IS NOT NULL
     AND b.bill_number NOT LIKE 'BILL-OTC-%'
 ";
 $revenue_params = [];
@@ -268,27 +248,49 @@ $stmt = $db->prepare($revenue_sql);
 $stmt->execute($revenue_params);
 $total_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 7. TOTAL PAID AMOUNT (all paid bills)
-$paid_amount_sql = "
-    SELECT COALESCE(SUM(b.paid_amount), 0) as total
-    FROM bills b
+// 5. TOTAL CONSULTATION FEE (from visits table)
+$consultation_fee_sql = "
+    SELECT COALESCE(SUM(v.consultation_fee), 0) as total
+    FROM visits v
+    INNER JOIN bills b ON b.visit_id = v.id
     WHERE b.status = 'paid'
+    AND b.visit_id IS NOT NULL
+    AND b.patient_id IS NOT NULL
     AND b.bill_number NOT LIKE 'BILL-OTC-%'
 ";
-$paid_amount_params = [];
+$cfee_params = [];
 if ($selected_branch_id > 0) {
-    $paid_amount_sql .= " AND b.branch_id = ?";
-    $paid_amount_params[] = $selected_branch_id;
+    $consultation_fee_sql .= " AND b.branch_id = ?";
+    $cfee_params[] = $selected_branch_id;
 }
-$stmt = $db->prepare($paid_amount_sql);
-$stmt->execute($paid_amount_params);
-$total_paid_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+$stmt = $db->prepare($consultation_fee_sql);
+$stmt->execute($cfee_params);
+$consultation_fee_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// 8. TOTAL BALANCE (all bills)
+// 6. TOTAL CONSULTATION REVENUE (total_amount from bills)
+$total_amount_sql = "
+    SELECT COALESCE(SUM(b.total_amount), 0) as total
+    FROM bills b
+    WHERE b.visit_id IS NOT NULL
+    AND b.patient_id IS NOT NULL
+    AND b.bill_number NOT LIKE 'BILL-OTC-%'
+";
+$tamount_params = [];
+if ($selected_branch_id > 0) {
+    $total_amount_sql .= " AND b.branch_id = ?";
+    $tamount_params[] = $selected_branch_id;
+}
+$stmt = $db->prepare($total_amount_sql);
+$stmt->execute($tamount_params);
+$total_amount_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// 7. TOTAL BALANCE
 $balance_sql = "
     SELECT COALESCE(SUM(b.balance), 0) as total
     FROM bills b
-    WHERE b.bill_number NOT LIKE 'BILL-OTC-%'
+    WHERE b.visit_id IS NOT NULL
+    AND b.patient_id IS NOT NULL
+    AND b.bill_number NOT LIKE 'BILL-OTC-%'
 ";
 $balance_params = [];
 if ($selected_branch_id > 0) {
@@ -303,10 +305,9 @@ $summary = [
     'total_bills' => $total_bills,
     'paid_bills' => $paid_bills,
     'pending_bills' => $pending_bills,
-    'partial_bills' => $partial_bills,
-    'cancelled_bills' => $cancelled_bills,
     'total_revenue' => $total_revenue,
-    'total_paid' => $total_paid_amount,
+    'consultation_fee_total' => $consultation_fee_total,
+    'total_amount_all' => $total_amount_all,
     'total_balance' => $total_balance
 ];
 
@@ -379,7 +380,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     
     .page-header {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+        background: linear-gradient(135deg, #059669, #047857);
         border-radius: 18px;
         padding: 24px 32px;
         margin-bottom: 24px;
@@ -388,7 +389,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         justify-content: space-between;
         align-items: center;
         gap: 12px;
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+        box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
         position: relative;
         overflow: hidden;
     }
@@ -536,8 +537,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     
     .filter-input:focus {
-        border-color: #0B5ED7;
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+        border-color: #059669;
+        box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
     }
     
     .filter-select {
@@ -553,13 +554,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     
     .filter-select:focus {
-        border-color: #0B5ED7;
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+        border-color: #059669;
+        box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
     }
     
     .btn-search {
         padding: 6px 16px;
-        background: #0B5ED7;
+        background: #059669;
         color: white;
         border: none;
         border-radius: 12px;
@@ -570,7 +571,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     
     .btn-search:hover {
-        background: #0A4CA8;
+        background: #047857;
         transform: translateY(-1px);
     }
     
@@ -617,8 +618,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         text-transform: uppercase;
         letter-spacing: 0.05em;
         color: #ffffff;
-        background: #0B5ED7;
-        border-bottom: 3px solid #0A4CA8;
+        background: #059669;
+        border-bottom: 3px solid #047857;
         white-space: nowrap;
         position: sticky;
         top: 0;
@@ -685,7 +686,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     
     .footer .footer-brand {
-        color: #0B5ED7;
+        color: #059669;
         font-weight: 600;
     }
     
@@ -734,11 +735,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <div class="page-header animate-fade-in-up">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-file-invoice"></i>
-                Bills
+                <i class="fas fa-stethoscope"></i>
+                Consultation Bills
                 <span class="role-badge-display">ADMIN</span>
                 <?php if ($selected_branch_id > 0): ?>
-                    <span class="role-badge-display" style="background:rgba(96,165,250,0.3);color:#60A5FA;">
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;">
                         <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branches[array_search($selected_branch_id, array_column($branches, 'id'))]['name'] ?? 'Branch') ?>
                     </span>
                 <?php endif; ?>
@@ -750,25 +751,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-arrow-right"></i>
-                <?= number_format($summary['total_bills'] ?? 0) ?> total bills
+                <?= number_format($summary['total_bills'] ?? 0) ?> consultation bills
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;">
                     <i class="fas fa-check-circle"></i> <?= number_format($summary['paid_bills'] ?? 0) ?> Paid
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);color:#FBBF24;">
                     <i class="fas fa-clock"></i> <?= number_format($summary['pending_bills'] ?? 0) ?> Pending
                 </span>
-                <span class="header-badge" style="background:rgba(96,165,250,0.2);color:#60A5FA;">
-                    <i class="fas fa-hourglass-half"></i> <?= number_format($summary['partial_bills'] ?? 0) ?> Partial
-                </span>
-                <span class="header-badge" style="background:rgba(248,113,113,0.2);color:#F87171;">
-                    <i class="fas fa-times-circle"></i> <?= number_format($summary['cancelled_bills'] ?? 0) ?> Cancelled
-                </span>
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-chart-line"></i> Revenue
-            </a>
             <button onclick="window.print()" class="btn-outline-light">
                 <i class="fas fa-print"></i> Print
             </button>
@@ -778,13 +770,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- Stats Cards -->
     <div class="stats-row animate-fade-in-up" style="animation-delay:0.05s;">
         
-        <div class="stat-card" style="background: linear-gradient(135deg, #0B5ED7, #0A4CA8);">
+        <div class="stat-card" style="background: linear-gradient(135deg, #059669, #047857);">
             <div class="stat-icon"><i class="fas fa-file-invoice"></i></div>
             <div class="stat-number"><?= number_format($summary['total_bills'] ?? 0) ?></div>
-            <div class="stat-label">Total Bills</div>
+            <div class="stat-label">Total Consultation Bills</div>
         </div>
         
-        <div class="stat-card" style="background: linear-gradient(135deg, #059669, #047857);">
+        <div class="stat-card" style="background: linear-gradient(135deg, #2563EB, #1D4ED8);">
             <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
             <div class="stat-number"><?= number_format($summary['paid_bills'] ?? 0) ?></div>
             <div class="stat-label">Paid</div>
@@ -797,21 +789,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
         
         <div class="stat-card" style="background: linear-gradient(135deg, #7C3AED, #6D28D9);">
-            <div class="stat-icon"><i class="fas fa-hourglass-half"></i></div>
-            <div class="stat-number"><?= number_format($summary['partial_bills'] ?? 0) ?></div>
-            <div class="stat-label">Partial</div>
-        </div>
-        
-        <div class="stat-card" style="background: linear-gradient(135deg, #DC2626, #B91C1C);">
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-            <div class="stat-number"><?= number_format($summary['cancelled_bills'] ?? 0) ?></div>
-            <div class="stat-label">Cancelled</div>
+            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
+            <div class="stat-number">TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?></div>
+            <div class="stat-label">Revenue (Paid)</div>
         </div>
         
         <div class="stat-card" style="background: linear-gradient(135deg, #0891B2, #0E7490);">
-            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
-            <div class="stat-number">TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?></div>
-            <div class="stat-label">Total Revenue (Paid)</div>
+            <div class="stat-icon"><i class="fas fa-file-invoice"></i></div>
+            <div class="stat-number">TSh <?= formatMoney($summary['total_amount_all'] ?? 0) ?></div>
+            <div class="stat-label">Total Amount (All)</div>
+        </div>
+        
+        <div class="stat-card" style="background: linear-gradient(135deg, #DC2626, #B91C1C);">
+            <div class="stat-icon"><i class="fas fa-balance-scale"></i></div>
+            <div class="stat-number">TSh <?= formatMoney($summary['total_balance'] ?? 0) ?></div>
+            <div class="stat-label">Total Balance</div>
         </div>
         
     </div>
@@ -839,20 +831,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <i class="fas fa-search"></i> Filter
                 </button>
                 
-                <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-reset">
+                <a href="consultations.php?branch=<?= $selected_branch_id ?>" class="btn-reset">
                     <i class="fas fa-times"></i> Reset
                 </a>
             </div>
         </form>
     </div>
 
-    <!-- Bills Table -->
+    <!-- Consultation Bills Table -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.15s;">
         <div style="padding:12px 16px;border-bottom:1px solid var(--border-color);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;">
             <h3 style="font-size:0.85rem;font-weight:700;color:var(--text-primary);">
-                <i class="fas fa-list" style="color:#0B5ED7;"></i> Bills List
+                <i class="fas fa-list" style="color:#059669;"></i> Consultation Bills List
                 <span style="font-weight:400;font-size:0.7rem;color:var(--text-secondary);">
-                    (<?= number_format(count($bills)) ?> bills)
+                    (<?= number_format(count($consultations)) ?> bills)
                 </span>
             </h3>
             <span style="font-size:0.65rem;color:var(--text-secondary);">
@@ -864,6 +856,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <thead>
                     <tr>
                         <th>Bill #</th>
+                        <th>Visit #</th>
                         <th>Patient</th>
                         <th>Branch</th>
                         <th style="text-align:right;">Total</th>
@@ -876,15 +869,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </tr>
                 </thead>
                 <tbody>
-                    <?php if (count($bills) > 0): ?>
-                        <?php foreach ($bills as $bill): 
+                    <?php if (count($consultations) > 0): ?>
+                        <?php foreach ($consultations as $bill): 
                             $balance = (float)($bill['balance'] ?? 0);
                             $total = (float)($bill['total_amount'] ?? 0);
                             $paid = (float)($bill['paid_amount'] ?? 0);
                         ?>
                             <tr>
-                                <td class="font-mono font-semibold text-blue-600" style="font-size:0.65rem;">
+                                <td class="font-mono font-semibold text-green-600" style="font-size:0.65rem;">
                                     <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
+                                </td>
+                                <td class="font-mono" style="font-size:0.6rem;">
+                                    <?= htmlspecialchars($bill['visit_id'] ?? 'N/A') ?>
                                 </td>
                                 <td>
                                     <?php if (!empty($bill['patient_name'])): ?>
@@ -929,10 +925,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="10">
+                            <td colspan="11">
                                 <div style="padding:30px;text-align:center;color:var(--text-secondary);">
-                                    <i class="fas fa-file-invoice" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:8px;"></i>
-                                    <p style="font-size:0.9rem;">No bills found</p>
+                                    <i class="fas fa-stethoscope" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:8px;"></i>
+                                    <p style="font-size:0.9rem;">No consultation bills found</p>
                                     <p style="font-size:0.7rem;">Try adjusting your filters</p>
                                 </div>
                             </td>
@@ -943,9 +939,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
         <div class="table-footer">
             <span>
-                <i class="fas fa-list"></i> Showing <strong><?= number_format(count($bills)) ?></strong> bills
+                <i class="fas fa-list"></i> Showing <strong><?= number_format(count($consultations)) ?></strong> consultation bills
                 <span class="text-xs" style="color:var(--text-secondary);">
-                    Total Revenue: TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>
+                    Revenue: TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>
                 </span>
             </span>
             <span>
@@ -961,7 +957,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Bills
+            Consultation Bills
             <span class="text-gray-300 mx-2">|</span>
             <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1007,7 +1003,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
-        // Ctrl+F to focus search
         if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
             e.preventDefault();
             var searchInput = document.querySelector('input[name="search"]');
@@ -1015,16 +1010,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    console.log('%c📋 Braick - Bills', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🩺 Braick - Consultation Bills', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Total Bills: <?= number_format($summary['total_bills'] ?? 0) ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c   ├─ Paid: <?= number_format($summary['paid_bills'] ?? 0) ?>', 'font-size:11px; color:#059669;');
-    console.log('%c   ├─ Pending: <?= number_format($summary['pending_bills'] ?? 0) ?>', 'font-size:11px; color:#D97706;');
-    console.log('%c   ├─ Partial: <?= number_format($summary['partial_bills'] ?? 0) ?>', 'font-size:11px; color:#0B5ED7;');
-    console.log('%c   └─ Cancelled: <?= number_format($summary['cancelled_bills'] ?? 0) ?>', 'font-size:11px; color:#DC2626;');
-    console.log('%c💰 Total Revenue (Paid): TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>', 'font-size:12px; color:#0891B2;');
-    console.log('%c✅ FIXED: Revenue uses paid_amount from paid bills only', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Excludes OTC bills (bill_number NOT LIKE "BILL-OTC-%")', 'font-size:12px; color:#34D399;');
+    console.log('%c📊 Total Consultation Bills: <?= number_format($summary['total_bills'] ?? 0) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c   ├─ Paid: <?= number_format($summary['paid_bills'] ?? 0) ?>', 'font-size:11px; color:#2563EB;');
+    console.log('%c   └─ Pending: <?= number_format($summary['pending_bills'] ?? 0) ?>', 'font-size:11px; color:#D97706;');
+    console.log('%c💰 Revenue (Paid): TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c💵 Total Amount (All): TSh <?= formatMoney($summary['total_amount_all'] ?? 0) ?>', 'font-size:12px; color:#0891B2;');
+    console.log('%c⚖️ Total Balance: TSh <?= formatMoney($summary['total_balance'] ?? 0) ?>', 'font-size:12px; color:#DC2626;');
+    console.log('%c✅ Uses bills with visit_id NOT NULL', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Excludes OTC bills', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

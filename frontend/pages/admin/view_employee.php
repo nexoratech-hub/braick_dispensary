@@ -3,8 +3,7 @@
 // FILE: frontend/pages/admin/view_employee.php
 // SUPER ADMIN - VIEW EMPLOYEE DETAILS
 // VIEW SINGLE EMPLOYEE INFORMATION
-// BRAICK DISPENSARY - USING YOUR DATABASE
-// FIXED: Proper header & sidebar integration
+// BRAICK DISPENSARY - FIXED: Using existing database tables
 // ================================================================
 
 // ================================================================
@@ -17,13 +16,13 @@ if (session_status() === PHP_SESSION_NONE) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
+require_once '../../../backend/config/database.php';
+require_once '../../../backend/helpers/functions.php';
 
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
-    die("Database connection error: " . $e->getMessage());
+    die("Database connection failed: " . $e->getMessage());
 }
 
 // ================================================================
@@ -90,7 +89,7 @@ try {
 // GET EMPLOYEE ID
 // ================================================================
 $employee_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+$selected_branch_id = $_GET['branch'] ?? 'all';
 
 if ($employee_id <= 0) {
     header('Location: employees.php?branch=' . $selected_branch_id);
@@ -98,7 +97,7 @@ if ($employee_id <= 0) {
 }
 
 // ================================================================
-// FETCH EMPLOYEE DETAILS - USING YOUR DATABASE
+// FETCH EMPLOYEE DETAILS - FIXED: Using COALESCE for NULL handling
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -120,16 +119,13 @@ $stmt = $db->prepare("
         b.name as branch_name,
         b.location as branch_location,
         b.phone as branch_phone,
-        b.email as branch_email,
-        (SELECT COUNT(*) FROM activity_logs WHERE user_id = u.id) as total_activities,
-        (SELECT COUNT(*) FROM patients WHERE created_by = u.id) as total_patients,
-        (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id) as total_visits,
-        (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id) as total_prescriptions,
-        (SELECT COUNT(*) FROM lab_tests WHERE doctor_id = u.id) as total_lab_tests,
-        (SELECT COUNT(*) FROM bills WHERE created_by = u.id) as total_bills
+        COALESCE((SELECT COUNT(*) FROM activity_logs WHERE user_id = u.id), 0) as total_activities,
+        COALESCE((SELECT COUNT(*) FROM patients WHERE created_by = u.id), 0) as total_patients,
+        COALESCE((SELECT COUNT(*) FROM visits WHERE doctor_id = u.id), 0) as total_visits,
+        COALESCE((SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id), 0) as total_prescriptions
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.id
-    WHERE u.id = ? AND u.role != 'admin'
+    WHERE u.id = ?
 ");
 $stmt->execute([$employee_id]);
 $employee = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -143,30 +139,31 @@ if (!$employee) {
 // GET BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
-try {
-    $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
-}
+$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active'");
+$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET RECENT ACTIVITIES
+// GET RECENT ACTIVITIES - FIXED: LIMIT to 10
 // ================================================================
 $recent_activities = [];
-$stmt = $db->prepare("
-    SELECT * FROM activity_logs 
-    WHERE user_id = ? 
-    ORDER BY created_at DESC 
-    LIMIT 10
-");
-$stmt->execute([$employee_id]);
-$recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->prepare("
+        SELECT * FROM activity_logs 
+        WHERE user_id = ? 
+        ORDER BY created_at DESC 
+        LIMIT 10
+    ");
+    $stmt->execute([$employee_id]);
+    $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $recent_activities = [];
+}
 
 // ================================================================
 // GET ROLE LABEL
 // ================================================================
 $role_labels = [
+    'admin' => 'Admin',
     'doctor' => 'Doctor',
     'reception' => 'Receptionist',
     'pharmacy' => 'Pharmacist',
@@ -181,11 +178,6 @@ $role_display = $role_labels[$employee['role']] ?? ucfirst($employee['role']);
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
-// Employee profile pic
-$employee_profile_pic_url = !empty($employee['profile_pic']) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $employee['profile_pic'] 
-    : '';
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
@@ -206,628 +198,849 @@ function time_ago($timestamp) {
 }
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE SHARED HEADER
 // ================================================================
-include_once __DIR__ . '/../../components/admin_header.php';
-include_once __DIR__ . '/../../components/admin_sidebar.php';
+include_once '../../components/admin_header.php';
+
+// ================================================================
+// INCLUDE SHARED SIDEBAR
+// ================================================================
+include_once '../../components/admin_sidebar.php';
 ?>
 
-<!-- ================================================================ -->
-<!-- PAGE SPECIFIC STYLES -->
-<!-- ================================================================ -->
-<style>
-    /* ================================================================
-       ROOT VARIABLES
-       ================================================================ */
-    :root {
-        --bg-body: #F1F5F9;
-        --bg-card: #FFFFFF;
-        --bg-nav: #FFFFFF;
-        --text-primary: #0F172A;
-        --text-secondary: #64748B;
-        --border-color: #E2E8F0;
-        --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
-        --shadow-md: 0 4px 20px rgba(0,0,0,0.08);
-        --radius: 16px;
-        --radius-sm: 10px;
-        --table-hover: #F8FAFC;
-    }
-
-    [data-theme="dark"] {
-        --bg-body: #0F172A;
-        --bg-card: #1E293B;
-        --bg-nav: #1E293B;
-        --text-primary: #F1F5F9;
-        --text-secondary: #94A3B8;
-        --border-color: #334155;
-        --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
-        --shadow-md: 0 4px 20px rgba(0,0,0,0.4);
-        --table-hover: #1E293B;
-    }
-
-    * { margin: 0; padding: 0; box-sizing: border-box; }
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee Details - Braick Dispensary</title>
     
-    body {
-        font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-        background: var(--bg-body);
-        color: var(--text-primary);
-        transition: background 0.3s ease, color 0.3s ease;
-    }
-
-    .main-content {
-        margin-left: 270px;
-        margin-top: 68px;
-        padding: 20px 24px;
-        background: var(--bg-body);
-        min-height: 100vh;
-        transition: all 0.3s ease;
-    }
-
-    /* ================================================================
-       PAGE HEADER
-       ================================================================ */
-    .page-header {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        border-radius: 16px;
-        padding: 24px 32px;
-        margin-bottom: 24px;
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
-        position: relative;
-        overflow: hidden;
-    }
-
-    .page-header::before {
-        content: '';
-        position: absolute;
-        top: -60%;
-        right: -10%;
-        width: 400px;
-        height: 400px;
-        background: rgba(255,255,255,0.05);
-        border-radius: 50%;
-        pointer-events: none;
-    }
-
-    .page-header::after {
-        content: '';
-        position: absolute;
-        bottom: -40%;
-        left: -5%;
-        width: 300px;
-        height: 300px;
-        background: rgba(255,255,255,0.03);
-        border-radius: 50%;
-        pointer-events: none;
-    }
-
-    .page-title {
-        color: white;
-        font-size: 1.5rem;
-        font-weight: 700;
-        margin: 0;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        position: relative;
-        z-index: 1;
-    }
-
-    .page-title i {
-        font-size: 1.8rem;
-        opacity: 0.9;
-    }
-
-    .page-subtitle {
-        color: rgba(255,255,255,0.85);
-        font-size: 0.85rem;
-        margin: 4px 0 0 0;
-        display: flex;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 8px;
-        position: relative;
-        z-index: 1;
-    }
-
-    .page-subtitle strong {
-        color: white;
-    }
-
-    .branch-tag {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        background: rgba(255,255,255,0.2);
-        color: white;
-        padding: 2px 12px;
-        border-radius: 12px;
-        font-size: 0.7rem;
-        font-weight: 500;
-    }
-
-    .role-badge-display {
-        background: rgba(255,255,255,0.2);
-        color: white;
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        backdrop-filter: blur(4px);
-    }
-
-    /* ================================================================
-       BUTTONS
-       ================================================================ */
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-        padding: 8px 16px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.8rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-        box-shadow: var(--shadow-sm);
-    }
-
-    .btn:hover {
-        transform: translateY(-2px);
-        box-shadow: var(--shadow-md);
-    }
-
-    .btn-sm {
-        padding: 5px 10px;
-        font-size: 0.65rem;
-        border-radius: 6px;
-    }
-
-    .btn-edit {
-        background: linear-gradient(135deg, #F59E0B, #D97706);
-        color: white;
-    }
-
-    .btn-edit:hover {
-        background: linear-gradient(135deg, #D97706, #B45309);
-    }
-
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 1.5px solid var(--border-color);
-    }
-
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-    }
-
-    .btn-activity {
-        background: linear-gradient(135deg, #7C3AED, #6D28D9);
-        color: white;
-    }
-
-    .btn-activity:hover {
-        background: linear-gradient(135deg, #6D28D9, #5B21B6);
-    }
-
-    .btn-delete {
-        background: linear-gradient(135deg, #EF4444, #DC2626);
-        color: white;
-    }
-
-    .btn-delete:hover {
-        background: linear-gradient(135deg, #DC2626, #B91C1C);
-    }
-
-    .btn-reactivate {
-        background: linear-gradient(135deg, #059669, #047857);
-        color: white;
-    }
-
-    .btn-reactivate:hover {
-        background: linear-gradient(135deg, #047857, #065F46);
-    }
-
-    .btn-danger {
-        background: #EF4444;
-        color: white;
-    }
-
-    .btn-danger:hover {
-        background: #DC2626;
-    }
-
-    .btn-success {
-        background: #059669;
-        color: white;
-    }
-
-    .btn-success:hover {
-        background: #047857;
-    }
-
-    .btn-outline-light {
-        background: rgba(255,255,255,0.15);
-        color: white;
-        border: 1px solid rgba(255,255,255,0.2);
-    }
-
-    .btn-outline-light:hover {
-        background: rgba(255,255,255,0.25);
-        transform: translateY(-2px);
-    }
-
-    /* ================================================================
-       PROFILE CARD
-       ================================================================ */
-    .profile-card {
-        background: var(--bg-card);
-        border-radius: 16px;
-        border: 1px solid var(--border-color);
-        overflow: hidden;
-        transition: all 0.3s ease;
-        box-shadow: var(--shadow-sm);
-        margin-bottom: 20px;
-    }
-
-    .profile-card:hover {
-        border-color: #0B5ED7;
-        box-shadow: var(--shadow-md);
-    }
-
-    .profile-header {
-        display: flex;
-        align-items: center;
-        gap: 24px;
-        padding: 24px 28px;
-        background: linear-gradient(135deg, #0B5ED7 0%, #1A73E8 100%);
-    }
-
-    [data-theme="dark"] .profile-header {
-        background: linear-gradient(135deg, #0A4CA8 0%, #0B5ED7 100%);
-    }
-
-    .profile-avatar {
-        flex-shrink: 0;
-    }
-
-    .profile-img {
-        width: 100px;
-        height: 100px;
-        border-radius: 50%;
-        object-fit: cover;
-        border: 4px solid rgba(255,255,255,0.3);
-        background: white;
-    }
-
-    .profile-img-placeholder {
-        width: 100px;
-        height: 100px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 3rem;
-        font-weight: 700;
-        color: white;
-        background: rgba(255,255,255,0.2);
-        border: 4px solid rgba(255,255,255,0.3);
-        backdrop-filter: blur(4px);
-    }
-
-    .profile-info h2 {
-        color: white;
-        font-size: 1.8rem;
-        font-weight: 700;
-        margin: 0;
-        line-height: 1.2;
-    }
-
-    .profile-info .profile-username {
-        color: rgba(255,255,255,0.8);
-        font-size: 0.95rem;
-        margin: 2px 0 8px 0;
-    }
-
-    .profile-badges {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-    }
-
-    .profile-badges .role-badge,
-    .profile-badges .status-badge {
-        padding: 4px 14px;
-        font-size: 0.7rem;
-        border-radius: 20px;
-        font-weight: 600;
-        background: rgba(255,255,255,0.2);
-        color: white;
-        backdrop-filter: blur(4px);
-    }
-
-    .profile-badges .status-badge.online {
-        background: rgba(5, 150, 105, 0.3);
-        color: #34D399;
-    }
-
-    .profile-badges .status-badge.offline {
-        background: rgba(100, 116, 139, 0.3);
-        color: #94A3B8;
-    }
-
-    /* ================================================================
-       CARDS
-       ================================================================ */
-    .card {
-        background: var(--bg-card);
-        border-radius: 12px;
-        border: 1px solid var(--border-color);
-        padding: 18px 20px;
-        transition: all 0.3s ease;
-        box-shadow: var(--shadow-sm);
-    }
-
-    .card:hover {
-        border-color: #0B5ED7;
-        box-shadow: var(--shadow-md);
-    }
-
-    .card-title {
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin: 0 0 12px 0;
-        display: flex;
-        align-items: center;
-    }
-
-    .title-blue { color: #0B5ED7; }
-    .title-green { color: #059669; }
-    .title-purple { color: #7C3AED; }
-    .title-orange { color: #F59E0B; }
-
-    /* ================================================================
-       DETAIL ITEMS
-       ================================================================ */
-    .detail-item {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        padding: 8px 0;
-        border-bottom: 1px solid var(--border-color);
-    }
-
-    .detail-item:last-child {
-        border-bottom: none;
-    }
-
-    .detail-label {
-        font-size: 0.75rem;
-        font-weight: 500;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-    }
-
-    .detail-value {
-        font-size: 0.85rem;
-        color: var(--text-primary);
-        font-weight: 500;
-    }
-
-    /* ================================================================
-       ROLE BADGES
-       ================================================================ */
-    .role-badge.role-doctor { background: #E8F0FE; color: #0B5ED7; }
-    .role-badge.role-reception { background: #D1FAE5; color: #059669; }
-    .role-badge.role-pharmacy { background: #FEF3C7; color: #D97706; }
-    .role-badge.role-laboratory { background: #EDE9FE; color: #7B2FBE; }
-    .role-badge.role-cashier { background: #FCE4EC; color: #DC2626; }
-
-    [data-theme="dark"] .role-badge.role-doctor { background: #1E3A5F; color: #6EA8FE; }
-    [data-theme="dark"] .role-badge.role-reception { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .role-badge.role-pharmacy { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .role-badge.role-laboratory { background: #2D1B4E; color: #A78BFA; }
-    [data-theme="dark"] .role-badge.role-cashier { background: #3A1A1A; color: #F87171; }
-
-    /* Status Badges */
-    .status-badge.active { background: #D1FAE5; color: #059669; }
-    .status-badge.inactive { background: #FEE2E2; color: #DC2626; }
-
-    [data-theme="dark"] .status-badge.active { background: #1A3A2A; color: #34D399; }
-    [data-theme="dark"] .status-badge.inactive { background: #3A1A1A; color: #F87171; }
-
-    /* ================================================================
-       MODAL
-       ================================================================ */
-    .modal {
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        z-index: 1000;
-        display: none;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .modal.show {
-        display: flex;
-    }
-
-    .modal-overlay {
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-        background: rgba(0,0,0,0.5);
-        backdrop-filter: blur(4px);
-        cursor: pointer;
-    }
-
-    .modal-content {
-        background: var(--bg-card);
-        border-radius: 16px;
-        max-width: 480px;
-        width: 90%;
-        position: relative;
-        z-index: 1001;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        border: 1px solid var(--border-color);
-        animation: modalSlideIn 0.3s ease;
-    }
-
-    @keyframes modalSlideIn {
-        from { transform: scale(0.9) translateY(20px); opacity: 0; }
-        to { transform: scale(1) translateY(0); opacity: 1; }
-    }
-
-    .modal-header {
-        padding: 16px 20px;
-        border-bottom: 1px solid var(--border-color);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-    }
-
-    .modal-header h3 {
-        font-size: 1rem;
-        font-weight: 600;
-        color: var(--text-primary);
-        margin: 0;
-    }
-
-    .modal-close {
-        background: none;
-        border: none;
-        font-size: 1.5rem;
-        cursor: pointer;
-        color: var(--text-secondary);
-        padding: 0 4px;
-        transition: color 0.3s;
-    }
-
-    .modal-close:hover {
-        color: var(--text-primary);
-    }
-
-    .modal-body {
-        padding: 20px;
-        color: var(--text-primary);
-    }
-
-    .modal-footer {
-        padding: 16px 20px;
-        border-top: 1px solid var(--border-color);
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-    }
-
-    /* ================================================================
-       FOOTER
-       ================================================================ */
-    .footer {
-        margin-top: 30px;
-        padding: 16px 20px;
-        background: var(--bg-card);
-        border-radius: 12px;
-        border: 1px solid var(--border-color);
-        text-align: center;
-    }
-
-    .footer p {
-        margin: 0;
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-
-    .footer-brand {
-        font-weight: 700;
-        color: #0B5ED7;
-    }
-
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
-    @media (max-width: 1024px) {
-        .main-content { margin-left: 0; padding: 16px; }
-        .grid-cols-3 { grid-template-columns: 1fr 1fr !important; }
-    }
-
-    @media (max-width: 768px) {
-        .main-content { padding: 12px; }
-        .page-header { padding: 16px 18px; }
-        .page-title { font-size: 1.2rem; }
-        .profile-header { flex-direction: column; text-align: center; padding: 20px; }
-        .profile-info h2 { font-size: 1.4rem; }
-        .profile-img, .profile-img-placeholder { width: 80px; height: 80px; font-size: 2rem; }
-        .profile-badges { justify-content: center; }
-        .detail-item { flex-direction: column; align-items: flex-start; gap: 2px; }
-        .grid-cols-3 { grid-template-columns: 1fr !important; }
-        .page-header { flex-direction: column; align-items: flex-start !important; }
-        .modal-content { width: 95%; }
-    }
-
-    @media (max-width: 480px) {
-        .main-content { padding: 10px; }
-        .btn { font-size: 0.7rem; padding: 5px 10px; }
-        .btn-sm { font-size: 0.6rem; padding: 3px 6px; }
-        .page-title { font-size: 1rem; }
-        .profile-header { padding: 16px; }
-        .profile-img, .profile-img-placeholder { width: 64px; height: 64px; font-size: 1.5rem; }
-        .profile-info h2 { font-size: 1.2rem; }
-    }
-
-    /* ================================================================
-       ANIMATIONS
-       ================================================================ */
-    @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-
-    .animate-fade-in-up {
-        animation: fadeInUp 0.5s ease forwards;
-        opacity: 0;
-    }
-
-    /* ================================================================
-       PRINT STYLES
-       ================================================================ */
-    @media print {
-        .top-nav, .sidebar, #sidebarToggle, .btn, .dark-toggle-btn,
-        .icon-btn, .search-wrapper, .footer, .profile-card .role-badge,
-        .page-header .flex.gap-2 { display: none !important; }
-        .main-content { padding: 0 !important; background: white !important; }
-        .card { box-shadow: none !important; border: 1px solid #ddd !important; }
-        .profile-card { box-shadow: none !important; border: 1px solid #ddd !important; }
+    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    
+    <style>
+        /* ================================================================
+           ROOT VARIABLES
+           ================================================================ */
+        :root {
+            --bg-body: #F1F5F9;
+            --bg-card: #FFFFFF;
+            --bg-nav: #FFFFFF;
+            --text-primary: #0F172A;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
+            --shadow-md: 0 4px 20px rgba(0,0,0,0.08);
+            --radius: 16px;
+            --radius-sm: 10px;
+            --table-hover: #F8FAFC;
+        }
+
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --bg-nav: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+            --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 20px rgba(0,0,0,0.4);
+            --table-hover: #1E293B;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+
+        /* ================================================================
+           TOP NAV - SHARED HEADER
+           ================================================================ */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: var(--shadow-sm);
+        }
+
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
+        }
+
+        .top-nav .search-wrapper:focus-within {
+            border-color: #0B5ED7;
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+        }
+
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+
+        .top-nav .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        .top-nav .search-wrapper .search-btn {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+
+        .top-nav .search-wrapper .search-btn:hover {
+            transform: scale(1.02);
+        }
+
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .top-nav .datetime i {
+            color: #3B82F6;
+        }
+
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .top-nav .avatar:hover {
+            border-color: #0B5ED7;
+            transform: scale(1.05);
+        }
+
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: #0B5ED7;
+        }
+
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+
+        .notif-dot.has-notif { background: #DC2626; }
+        .notif-dot.no-notif { background: #94A3B8; animation: none; }
+
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .dark-toggle-btn:hover {
+            border-color: #0B5ED7;
+            background: var(--bg-card);
+        }
+
+        .dark-toggle-btn i { font-size: 0.9rem; }
+
+        /* ================================================================
+           MAIN CONTENT
+           ================================================================ */
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 20px 24px;
+            background: var(--bg-body);
+            min-height: 100vh;
+            transition: all 0.3s ease;
+        }
+
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -60%;
+            right: -10%;
+            width: 400px;
+            height: 400px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        .page-header::after {
+            content: '';
+            position: absolute;
+            bottom: -40%;
+            left: -5%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+
+        .page-title {
+            color: white;
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .page-title i {
+            font-size: 1.8rem;
+            opacity: 0.9;
+        }
+
+        .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.85rem;
+            margin: 4px 0 0 0;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            position: relative;
+            z-index: 1;
+        }
+
+        .page-subtitle strong {
+            color: white;
+        }
+
+        .branch-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 500;
+        }
+
+        .date-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            color: rgba(255,255,255,0.8);
+            font-size: 0.75rem;
+        }
+
+        .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            backdrop-filter: blur(4px);
+        }
+
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
+        }
+
+        .btn-sm {
+            padding: 5px 10px;
+            font-size: 0.65rem;
+            border-radius: 6px;
+        }
+
+        .btn-edit {
+            background: linear-gradient(135deg, #F59E0B, #D97706);
+            color: white;
+        }
+
+        .btn-edit:hover {
+            background: linear-gradient(135deg, #D97706, #B45309);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1.5px solid var(--border-color);
+        }
+
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: #0B5ED7;
+            color: #0B5ED7;
+        }
+
+        .btn-activity {
+            background: linear-gradient(135deg, #7C3AED, #6D28D9);
+            color: white;
+        }
+
+        .btn-activity:hover {
+            background: linear-gradient(135deg, #6D28D9, #5B21B6);
+        }
+
+        .btn-delete {
+            background: linear-gradient(135deg, #EF4444, #DC2626);
+            color: white;
+        }
+
+        .btn-delete:hover {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+        }
+
+        .btn-reactivate {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+        }
+
+        .btn-reactivate:hover {
+            background: linear-gradient(135deg, #047857, #065F46);
+        }
+
+        .btn-danger {
+            background: #EF4444;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #DC2626;
+        }
+
+        .btn-success {
+            background: #059669;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #047857;
+        }
+
+        /* ================================================================
+           PROFILE CARD
+           ================================================================ */
+        .profile-card {
+            background: var(--bg-card);
+            border-radius: 16px;
+            border: 1px solid var(--border-color);
+            overflow: hidden;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+            margin-bottom: 20px;
+        }
+
+        .profile-card:hover {
+            border-color: #0B5ED7;
+            box-shadow: var(--shadow-md);
+        }
+
         .profile-header {
-            background: #0B5ED7 !important;
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
+            display: flex;
+            align-items: center;
+            gap: 24px;
+            padding: 24px 28px;
+            background: linear-gradient(135deg, #0B5ED7 0%, #1A73E8 100%);
         }
-        .profile-info h2, .profile-info .profile-username,
-        .profile-badges .role-badge, .profile-badges .status-badge {
-            color: white !important;
+
+        [data-theme="dark"] .profile-header {
+            background: linear-gradient(135deg, #0A4CA8 0%, #0B5ED7 100%);
         }
-    }
-</style>
+
+        .profile-avatar {
+            flex-shrink: 0;
+        }
+
+        .profile-img {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 4px solid rgba(255,255,255,0.3);
+            background: white;
+        }
+
+        .profile-img-placeholder {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 3rem;
+            font-weight: 700;
+            color: white;
+            background: rgba(255,255,255,0.2);
+            border: 4px solid rgba(255,255,255,0.3);
+            backdrop-filter: blur(4px);
+        }
+
+        .profile-info h2 {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            margin: 0;
+            line-height: 1.2;
+        }
+
+        .profile-info .profile-username {
+            color: rgba(255,255,255,0.8);
+            font-size: 0.95rem;
+            margin: 2px 0 8px 0;
+        }
+
+        .profile-badges {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .profile-badges .role-badge,
+        .profile-badges .status-badge {
+            padding: 4px 14px;
+            font-size: 0.7rem;
+            border-radius: 20px;
+            font-weight: 600;
+            background: rgba(255,255,255,0.2);
+            color: white;
+            backdrop-filter: blur(4px);
+        }
+
+        .profile-badges .status-badge.online {
+            background: rgba(5, 150, 105, 0.3);
+            color: #34D399;
+        }
+
+        .profile-badges .status-badge.offline {
+            background: rgba(100, 116, 139, 0.3);
+            color: #94A3B8;
+        }
+
+        /* ================================================================
+           CARDS
+           ================================================================ */
+        .card {
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            padding: 18px 20px;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .card:hover {
+            border-color: #0B5ED7;
+            box-shadow: var(--shadow-md);
+        }
+
+        .card-title {
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 0 0 12px 0;
+            display: flex;
+            align-items: center;
+        }
+
+        .title-blue { color: #0B5ED7; }
+        .title-green { color: #059669; }
+        .title-purple { color: #7C3AED; }
+        .title-orange { color: #F59E0B; }
+
+        /* ================================================================
+           DETAIL ITEMS
+           ================================================================ */
+        .detail-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .detail-item:last-child {
+            border-bottom: none;
+        }
+
+        .detail-label {
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .detail-value {
+            font-size: 0.85rem;
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .detail-value .role-badge,
+        .detail-value .status-badge {
+            font-size: 0.7rem;
+            padding: 2px 12px;
+        }
+
+        /* ================================================================
+           ROLE BADGES
+           ================================================================ */
+        .role-badge.role-admin { background: #E8F0FE; color: #0B5ED7; }
+        .role-badge.role-doctor { background: #E8F0FE; color: #0B5ED7; }
+        .role-badge.role-reception { background: #D1FAE5; color: #059669; }
+        .role-badge.role-pharmacy { background: #FEF3C7; color: #D97706; }
+        .role-badge.role-laboratory { background: #EDE9FE; color: #7B2FBE; }
+        .role-badge.role-cashier { background: #FCE4EC; color: #DC2626; }
+
+        [data-theme="dark"] .role-badge.role-admin { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .role-badge.role-doctor { background: #1E3A5F; color: #6EA8FE; }
+        [data-theme="dark"] .role-badge.role-reception { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .role-badge.role-pharmacy { background: #3D2E0A; color: #FBBF24; }
+        [data-theme="dark"] .role-badge.role-laboratory { background: #2D1B4E; color: #A78BFA; }
+        [data-theme="dark"] .role-badge.role-cashier { background: #3A1A1A; color: #F87171; }
+
+        /* Status Badges */
+        .status-badge.active { background: #D1FAE5; color: #059669; }
+        .status-badge.inactive { background: #FEE2E2; color: #DC2626; }
+
+        [data-theme="dark"] .status-badge.active { background: #1A3A2A; color: #34D399; }
+        [data-theme="dark"] .status-badge.inactive { background: #3A1A1A; color: #F87171; }
+
+        /* ================================================================
+           MODAL
+           ================================================================ */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(4px);
+            cursor: pointer;
+        }
+
+        .modal-content {
+            background: var(--bg-card);
+            border-radius: 16px;
+            max-width: 480px;
+            width: 90%;
+            position: relative;
+            z-index: 1001;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            border: 1px solid var(--border-color);
+            animation: modalSlideIn 0.3s ease;
+        }
+
+        @keyframes modalSlideIn {
+            from { transform: scale(0.9) translateY(20px); opacity: 0; }
+            to { transform: scale(1) translateY(0); opacity: 1; }
+        }
+
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 0;
+        }
+
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 0 4px;
+            transition: color 0.3s;
+        }
+
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+
+        .modal-body {
+            padding: 20px;
+            color: var(--text-primary);
+        }
+
+        .modal-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            margin-top: 30px;
+            padding: 16px 20px;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+            text-align: center;
+        }
+
+        .footer p {
+            margin: 0;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .footer-brand {
+            font-weight: 700;
+            color: #0B5ED7;
+        }
+
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav .search-wrapper { max-width: 300px; }
+            .grid-cols-3 { grid-template-columns: 1fr 1fr !important; }
+        }
+
+        @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
+            .main-content { padding: 12px; }
+            .page-header { padding: 16px 18px; }
+            .page-title { font-size: 1.2rem; }
+            .profile-header { flex-direction: column; text-align: center; padding: 20px; }
+            .profile-info h2 { font-size: 1.4rem; }
+            .profile-img, .profile-img-placeholder { width: 80px; height: 80px; font-size: 2rem; }
+            .profile-badges { justify-content: center; }
+            .detail-item { flex-direction: column; align-items: flex-start; gap: 2px; }
+            .grid-cols-3 { grid-template-columns: 1fr !important; }
+            .page-header { flex-direction: column; align-items: flex-start !important; }
+            .modal-content { width: 95%; }
+        }
+
+        @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+            .btn { font-size: 0.7rem; padding: 5px 10px; }
+            .btn-sm { font-size: 0.6rem; padding: 3px 6px; }
+            .page-title { font-size: 1rem; }
+            .profile-header { padding: 16px; }
+            .profile-img, .profile-img-placeholder { width: 64px; height: 64px; font-size: 1.5rem; }
+            .profile-info h2 { font-size: 1.2rem; }
+        }
+
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+
+        /* ================================================================
+           PRINT STYLES
+           ================================================================ */
+        @media print {
+            .top-nav, .sidebar, #sidebarToggle, .btn, .dark-toggle-btn,
+            .icon-btn, .search-wrapper, .footer, .profile-card .role-badge,
+            .page-header .flex.gap-2 { display: none !important; }
+            .main-content { padding: 0 !important; background: white !important; }
+            .card { box-shadow: none !important; border: 1px solid #ddd !important; }
+            .profile-card { box-shadow: none !important; border: 1px solid #ddd !important; }
+            .profile-header {
+                background: #0B5ED7 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            .profile-info h2, .profile-info .profile-username,
+            .profile-badges .role-badge, .profile-badges .status-badge {
+                color: white !important;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- ================================================================ -->
+<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- ================================================================ -->
+<nav class="top-nav">
+    <div class="flex items-center gap-4 flex-1">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex items-center gap-3">
+        <span class="datetime" id="currentDateTime"></span>
+        
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
+        
+        <button class="icon-btn">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+        </button>
+        
+        <a href="profile.php">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+        </a>
+    </div>
+</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -848,6 +1061,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($employee['branch_name'] ?? 'N/A') ?>
                 </span>
+                <span class="date-badge">
+                    <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
+                </span>
                 <span class="branch-tag" style="background:rgba(255,255,255,0.15);">
                     <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
                 </span>
@@ -857,7 +1073,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <a href="edit_employee.php?id=<?= $employee['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-edit btn-sm">
                 <i class="fas fa-edit"></i> Edit
             </a>
-            <a href="employees.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline-light btn-sm">
+            <a href="employees.php?branch=<?= $selected_branch_id ?>" class="btn btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -869,12 +1085,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <div class="profile-card animate-fade-in-up">
         <div class="profile-header">
             <div class="profile-avatar">
-                <?php if (!empty($employee_profile_pic_url) && file_exists($_SERVER['DOCUMENT_ROOT'] . $employee_profile_pic_url)): ?>
-                    <img src="<?= $employee_profile_pic_url ?>" 
+                <?php 
+                $profile_img = !empty($employee['profile_pic']) ? '/dispensary_system/frontend/assets/uploads/profiles/' . $employee['profile_pic'] : '';
+                if (!empty($profile_img) && file_exists($_SERVER['DOCUMENT_ROOT'] . $profile_img)): 
+                ?>
+                    <img src="<?= $profile_img ?>" 
                          alt="<?= htmlspecialchars($employee['full_name']) ?>" 
                          class="profile-img">
                 <?php else: ?>
-                    <div class="profile-img-placeholder" style="background: <?= '#' . substr(md5($employee['full_name']), 0, 6) ?>;">
+                    <div class="profile-img-placeholder">
                         <?= strtoupper(substr($employee['full_name'], 0, 1)) ?>
                     </div>
                 <?php endif; ?>
@@ -954,10 +1173,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="detail-value"><?= htmlspecialchars($employee['branch_location'] ?? 'N/A') ?></span>
             </div>
             <div class="detail-item">
-                <span class="detail-label">Branch Phone</span>
-                <span class="detail-value"><?= htmlspecialchars($employee['branch_phone'] ?? 'N/A') ?></span>
-            </div>
-            <div class="detail-item">
                 <span class="detail-label">Role</span>
                 <span class="detail-value">
                     <span class="role-badge role-<?= $employee['role'] ?>" style="font-size: 0.75rem;">
@@ -1015,14 +1230,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="detail-item">
                 <span class="detail-label">Prescriptions</span>
                 <span class="detail-value font-bold text-orange-600"><?= number_format($employee['total_prescriptions'] ?? 0) ?></span>
-            </div>
-            <div class="detail-item">
-                <span class="detail-label">Lab Tests</span>
-                <span class="detail-value font-bold text-purple-600"><?= number_format($employee['total_lab_tests'] ?? 0) ?></span>
-            </div>
-            <div class="detail-item">
-                <span class="detail-label">Bills Created</span>
-                <span class="detail-value font-bold text-green-600"><?= number_format($employee['total_bills'] ?? 0) ?></span>
             </div>
             <div class="detail-item">
                 <span class="detail-label">Member Since</span>
@@ -1286,32 +1493,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput?.value?.trim() || '';
-        if (query.length > 0) {
-            window.location.href = 'employees.php?search=' + encodeURIComponent(query) + '&branch=<?= $selected_branch_id ?>';
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    console.log('%c👤 Braick Dispensary - Employee Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Braick Dispensary - Employee Details (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c👤 Employee: <?= htmlspecialchars($employee['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($employee['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🎭 Role: <?= $role_display ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c📊 Activities: <?= number_format($employee['total_activities'] ?? 0) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ Using database tables: users, branches, activity_logs, patients, visits, prescriptions, lab_tests, bills', 'font-size:13px; color:#34D399;');
-    console.log('%c🔑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Using tables: users, branches, activity_logs, patients, visits, prescriptions', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Fixed: COALESCE for NULL handling', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

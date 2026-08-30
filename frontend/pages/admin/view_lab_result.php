@@ -4,6 +4,7 @@
 // ADMIN - VIEW LAB RESULT DETAILS
 // BRAICK DISPENSARY - BLUE THEME
 // USING YOUR DATABASE
+// FIXED: Removed action buttons, added Add Results button
 // ================================================================
 
 // ================================================================
@@ -167,45 +168,6 @@ try {
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $branches = [];
-}
-
-// ================================================================
-// HANDLE DELETE REQUEST
-// ================================================================
-$message = '';
-$message_type = '';
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'delete') {
-    try {
-        // Check if lab test exists
-        $stmt = $db->prepare("SELECT id, test_name FROM lab_tests WHERE id = ?");
-        $stmt->execute([$lab_test_id]);
-        $test = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if ($test) {
-            // Delete the lab test
-            $stmt = $db->prepare("DELETE FROM lab_tests WHERE id = ?");
-            $stmt->execute([$lab_test_id]);
-            
-            // Log activity
-            $details = "Deleted lab test: " . htmlspecialchars($test['test_name']) . " (ID: #$lab_test_id)";
-            $stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
-                VALUES (?, ?, 'lab_test_deleted', ?, NOW())
-            ");
-            $stmt->execute([$user_id, $lab_test['branch_id'] ?? 1, $details]);
-            
-            $_SESSION['toast'] = [
-                'message' => '✅ Lab test deleted successfully!',
-                'type' => 'success'
-            ];
-            header('Location: lab_tests.php?branch=' . urlencode($selected_branch_id));
-            exit;
-        }
-    } catch (Exception $e) {
-        $message = "❌ Error deleting lab test: " . $e->getMessage();
-        $message_type = "danger";
-    }
 }
 
 // ================================================================
@@ -606,6 +568,42 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           ADD RESULTS BUTTON - LARGE AND VISIBLE
+           ================================================================ */
+        .btn-add-results {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            padding: 16px 32px;
+            font-size: 1.1rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.35);
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            font-weight: 700;
+        }
+        
+        .btn-add-results:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.5);
+            background: linear-gradient(135deg, #0A4CA8, #073B8A);
+        }
+        
+        .btn-add-results i {
+            font-size: 1.3rem;
+        }
+        
+        .btn-add-results .sub-text {
+            font-size: 0.65rem;
+            font-weight: 400;
+            opacity: 0.8;
+            display: block;
+        }
+        
+        /* ================================================================
            INFO BOX
            ================================================================ */
         .info-box {
@@ -849,14 +847,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .main-content { margin-left: 0; padding: 16px; }
             .info-box .info-item { flex-direction: column; }
             .result-card { padding: 16px; }
-            .btn-actions { flex-direction: column; }
-            .btn-actions .btn { width: 100%; justify-content: center; }
         }
         
         @media (max-width: 768px) {
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .result-card { padding: 14px; }
+            .btn-add-results {
+                padding: 12px 20px;
+                font-size: 0.95rem;
+                width: 100%;
+                justify-content: center;
+            }
         }
         
         @media (max-width: 480px) {
@@ -938,9 +940,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
-                <i class="fas fa-edit"></i> Edit
-            </a>
             <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
@@ -1134,32 +1133,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ACTION BUTTONS - VIEW, EDIT, DELETE -->
+    <!-- ACTION BUTTONS - ONLY ADD RESULTS -->
     <!-- ================================================================ -->
-    <div class="result-card animate-fade-in-up" style="animation-delay:0.35s;">
+    <div class="result-card animate-fade-in-up" style="animation-delay:0.35s; border: 3px solid var(--primary); background: var(--primary-bg);">
         <h3 class="text-sm font-bold text-primary mb-4">
             <i class="fas fa-bolt"></i> Actions
         </h3>
         <div class="flex flex-wrap gap-3">
-            <!-- Edit Button -->
-            <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-warning">
-                <i class="fas fa-edit"></i> Edit
+            <!-- Add Results Button - Large and Visible -->
+            <a href="add_lab_results.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+               class="btn-add-results">
+                <i class="fas fa-plus-circle"></i>
+                <div>
+                    Add Results
+                    <span class="sub-text">Enter lab test results</span>
+                </div>
             </a>
-            
-            <!-- Complete Button (if not completed) -->
-            <?php if (isset($lab_test['status']) && $lab_test['status'] !== 'completed' && $lab_test['status'] !== 'cancelled'): ?>
-            <a href="edit_lab_test.php?action=complete&id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-success">
-                <i class="fas fa-check-circle"></i> Mark Complete
-            </a>
-            <?php endif; ?>
-            
-            <!-- Delete Button -->
-            <button onclick="confirmDelete()" class="btn btn-danger">
-                <i class="fas fa-trash"></i> Delete
-            </button>
             
             <!-- Back Button -->
-            <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">
+            <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline" style="margin-left:8px;">
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
         </div>
@@ -1181,38 +1173,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </footer>
 
 </main>
-
-<!-- ================================================================ -->
-<!-- DELETE CONFIRMATION MODAL -->
-<!-- ================================================================ -->
-<div id="deleteModal" class="modal">
-    <div class="modal-overlay" onclick="closeDeleteModal()"></div>
-    <div class="modal-content">
-        <div class="modal-header">
-            <h3><i class="fas fa-exclamation-triangle text-red-500 mr-2"></i> Confirm Delete</h3>
-            <button onclick="closeDeleteModal()" class="modal-close">&times;</button>
-        </div>
-        <div class="modal-body">
-            <p>Are you sure you want to delete this lab test?</p>
-            <p class="text-sm text-gray-500 mt-2">
-                <i class="fas fa-info-circle"></i> 
-                <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
-            </p>
-            <p class="text-sm text-red-600 mt-2 font-semibold">
-                ⚠️ This action cannot be undone!
-            </p>
-        </div>
-        <div class="modal-footer">
-            <button onclick="closeDeleteModal()" class="btn btn-outline btn-sm">Cancel</button>
-            <form method="POST" style="display:inline;">
-                <input type="hidden" name="action" value="delete">
-                <button type="submit" class="btn btn-danger btn-sm">
-                    <i class="fas fa-trash"></i> Yes, Delete
-                </button>
-            </form>
-        </div>
-    </div>
-</div>
 
 <!-- ================================================================ -->
 <!-- TOAST -->
@@ -1326,33 +1286,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // DELETE MODAL
-    // ================================================================
-    function confirmDelete() {
-        document.getElementById('deleteModal').classList.add('show');
-        document.body.style.overflow = 'hidden';
-    }
-
-    function closeDeleteModal() {
-        document.getElementById('deleteModal').classList.remove('show');
-        document.body.style.overflow = '';
-    }
-
-    // Close modal on ESC key
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape') {
-            closeDeleteModal();
-        }
-    });
-
-    // Close modal on overlay click
-    document.getElementById('deleteModal')?.addEventListener('click', function(e) {
-        if (e.target === this || e.target.classList.contains('modal-overlay')) {
-            closeDeleteModal();
-        }
-    });
-
-    // ================================================================
     // SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
@@ -1383,10 +1316,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> (ID: <?= $lab_test_id ?>)', 'font-size:13px; color:#7C3AED;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Status: <?= ucfirst($lab_test['status'] ?? 'Pending') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Action buttons removed - Only Add Results button', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Using database tables: lab_tests, visits, patients, users, branches, lab_tests_catalog', 'font-size:13px; color:#34D399;');
     console.log('%c🔵 Blue Theme Applied with beautiful CSS', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Admin has FULL ACCESS: View, Edit, Delete', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

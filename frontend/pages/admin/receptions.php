@@ -4,7 +4,7 @@
 // SUPER ADMIN - VIEW ALL RECEPTIONS (BRANCHES)
 // BRAICK DISPENSARY - BLUE THEME - USING EXISTING DATABASE
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// FIXED: Branch filter error with invalid_id parameter
+// FIXED: Branch filter error with invalid_id parameter - DISPLAY ALL BRANCHES
 // ================================================================
 
 // ================================================================
@@ -71,32 +71,51 @@ try {
 }
 
 // ================================================================
-// GET FILTER PARAMETERS - FIXED
+// GET FILTER PARAMETERS - FIXED: Ignore invalid_id error
 // ================================================================
 $selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : 'all';
-$error_msg = isset($_GET['error']) ? $_GET['error'] : '';
+
+// ✅ FIX: If error parameter exists, reset branch to 'all' and redirect to clean URL
+if (isset($_GET['error']) || isset($_GET['invalid_id'])) {
+    // Redirect to clean URL without error parameter
+    $clean_url = $_SERVER['PHP_SELF'] . '?branch=all';
+    if (!empty($search)) {
+        $clean_url .= '&search=' . urlencode($search);
+    }
+    if ($status_filter !== 'all') {
+        $clean_url .= '&status=' . urlencode($status_filter);
+    }
+    header('Location: ' . $clean_url);
+    exit;
+}
 
 // ================================================================
-// VALIDATE BRANCH ID - FIXED
+// VALIDATE BRANCH ID - If invalid, show all branches
 // ================================================================
 $branch_id_for_query = null;
+$error_msg = '';
+
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $branch_id_for_query = (int)$selected_branch_id;
     
-    // Verify branch exists
+    // Verify branch exists (check both active and inactive)
     try {
-        $stmt = $db->prepare("SELECT id FROM branches WHERE id = ? AND status = 'active'");
+        $stmt = $db->prepare("SELECT id, status FROM branches WHERE id = ?");
         $stmt->execute([$branch_id_for_query]);
         $branch_exists = $stmt->fetch(PDO::FETCH_ASSOC);
+        
         if (!$branch_exists) {
-            $error_msg = 'Branch not found or inactive';
+            // Branch doesn't exist - show all
+            $error_msg = 'Branch not found. Showing all branches.';
             $selected_branch_id = 'all';
             $branch_id_for_query = null;
         }
+        // If branch exists but is inactive, still show it if specifically requested
+        // (status filter will handle it)
     } catch (Exception $e) {
-        $error_msg = 'Error validating branch';
+        $error_msg = 'Error validating branch. Showing all branches.';
         $selected_branch_id = 'all';
         $branch_id_for_query = null;
     }
@@ -116,29 +135,29 @@ $query = "
         b.status,
         b.created_at,
         b.updated_at,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception' AND status = 'active') as active_receptionists,
-        (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception') as total_receptionists,
-        (SELECT COUNT(*) FROM patients WHERE branch_id = b.id) as total_patients,
-        (SELECT COUNT(*) FROM patients WHERE branch_id = b.id AND DATE(created_at) = CURDATE()) as today_patients,
-        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'pending') as pending_visits,
-        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'assigned') as assigned_visits,
-        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'with_doctor') as with_doctor_visits,
-        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'scheduled') as scheduled_appointments,
-        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'confirmed') as confirmed_appointments,
-        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND DATE(appointment_date) = CURDATE()) as today_appointments,
-        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()) as today_visits,
-        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id) as total_appointments,
-        (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
-        (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'partial') as partial_bills,
-        (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE branch_id = b.id AND status = 'paid') as total_revenue
+        COALESCE((SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception' AND status = 'active'), 0) as active_receptionists,
+        COALESCE((SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception'), 0) as total_receptionists,
+        COALESCE((SELECT COUNT(*) FROM patients WHERE branch_id = b.id), 0) as total_patients,
+        COALESCE((SELECT COUNT(*) FROM patients WHERE branch_id = b.id AND DATE(created_at) = CURDATE()), 0) as today_patients,
+        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'pending'), 0) as pending_visits,
+        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'assigned'), 0) as assigned_visits,
+        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'with_doctor'), 0) as with_doctor_visits,
+        COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'scheduled'), 0) as scheduled_appointments,
+        COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'confirmed'), 0) as confirmed_appointments,
+        COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND DATE(appointment_date) = CURDATE()), 0) as today_appointments,
+        COALESCE((SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()), 0) as today_visits,
+        COALESCE((SELECT COUNT(*) FROM appointments WHERE branch_id = b.id), 0) as total_appointments,
+        COALESCE((SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid'), 0) as paid_bills,
+        COALESCE((SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'partial'), 0) as partial_bills,
+        COALESCE((SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending'), 0) as pending_bills,
+        COALESCE((SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE branch_id = b.id AND status = 'paid'), 0) as total_revenue
     FROM branches b
     WHERE 1=1
 ";
 
 $params = [];
 
-// Branch filter - FIXED
+// Branch filter - only if valid branch ID provided
 if ($branch_id_for_query !== null && is_numeric($branch_id_for_query)) {
     $query .= " AND b.id = ?";
     $params[] = $branch_id_for_query;
@@ -148,6 +167,9 @@ if ($branch_id_for_query !== null && is_numeric($branch_id_for_query)) {
 if ($status_filter !== 'all' && in_array($status_filter, ['active', 'inactive'])) {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
+} else {
+    // ✅ FIX: Show ALL branches by default (both active and inactive)
+    // No status filter applied
 }
 
 // Search filter
@@ -1358,11 +1380,11 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- ERROR MESSAGE - FIXED -->
+    <!-- ERROR MESSAGE - SHOW ONLY IF NOT EMPTY -->
     <!-- ================================================================ -->
     <?php if (!empty($error_msg)): ?>
-        <div class="alert alert-error">
-            <i class="fas fa-exclamation-circle"></i>
+        <div class="alert alert-warning">
+            <i class="fas fa-exclamation-triangle"></i>
             <?= htmlspecialchars($error_msg) ?>
         </div>
     <?php endif; ?>
@@ -1443,7 +1465,14 @@ include_once '../../components/admin_sidebar.php';
         <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
         
         <form method="GET" action="" class="flex flex-wrap gap-2 items-center w-full">
-            <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
+            <select name="branch" class="flex-1 min-w-[120px]">
+                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+                <?php foreach ($branches as $b): ?>
+                    <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
+                        🏥 <?= htmlspecialchars($b['name']) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
             
             <select name="status" class="flex-1 min-w-[120px]">
                 <option value="all" <?= $status_filter === 'all' ? 'selected' : '' ?>>All Status</option>
@@ -1458,14 +1487,14 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-search"></i> Apply
             </button>
             
-            <a href="receptions.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-reset">
+            <a href="receptions.php" class="btn-reset">
                 <i class="fas fa-times"></i> Reset
             </a>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECEPTION GRID - FIXED LINKS -->
+    <!-- RECEPTION GRID - DISPLAY ALL BRANCHES -->
     <!-- ================================================================ -->
     <?php if (count($receptions) > 0): ?>
         <div class="reception-grid animate-fade-in-up" style="animation-delay:0.1s;">
@@ -1483,8 +1512,8 @@ include_once '../../components/admin_sidebar.php';
                                 <?= htmlspecialchars($reception['location'] ?? 'N/A') ?>
                             </div>
                         </div>
-                        <span class="status-badge <?= $reception['status'] === 'active' ? 'active' : 'inactive' ?>">
-                            <?= $reception['status'] === 'active' ? 'Active' : 'Inactive' ?>
+                        <span class="status-badge <?= ($reception['status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?>">
+                            <?= ($reception['status'] ?? 'active') === 'active' ? 'Active' : 'Inactive' ?>
                         </span>
                     </div>
                     
@@ -1528,9 +1557,7 @@ include_once '../../components/admin_sidebar.php';
                         </div>
                     </div>
                     
-                    <!-- ================================================================ -->
-                    <!-- CARD ACTIONS - FIXED LINKS -->
-                    <!-- ================================================================ -->
+                    <!-- CARD ACTIONS -->
                     <div class="card-actions">
                         <a href="view_branch.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                            class="btn-action primary">
@@ -1637,8 +1664,8 @@ include_once '../../components/admin_sidebar.php';
     // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
-        var branch = '<?= $selected_branch_id ?>';
-        var status = '<?= $status_filter ?>';
+        var branch = document.querySelector('select[name="branch"]')?.value || 'all';
+        var status = document.querySelector('select[name="status"]')?.value || 'all';
         var url = 'receptions.php?branch=' + encodeURIComponent(branch) + '&status=' + encodeURIComponent(status);
         if (query.length > 0) {
             url += '&search=' + encodeURIComponent(query);
@@ -1682,17 +1709,16 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c📋 Braick Dispensary - Receptions (USING EXISTING DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Braick Dispensary - Receptions (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Total Receptions: <?= $total_receptions ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Total Appointments: <?= number_format($total_appointments) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c🔄 Pending Visits: <?= number_format($pending_visits) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Using tables: branches, users, patients, visits, appointments, bills', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Branch filter with invalid_id parameter', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Links now use view_branch.php, edit_branch.php, branch_dashboard.php', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Branch filter with invalid_id parameter - redirects to clean URL', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Shows ALL branches (both active and inactive)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Links use view_branch.php, edit_branch.php, branch_dashboard.php', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

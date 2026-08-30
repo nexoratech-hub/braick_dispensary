@@ -1,10 +1,8 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/edit_equipment.php
-// ADMIN - EDIT EQUIPMENT
-// EDIT ALL EQUIPMENT DETAILS
-// WITH DARK MODE SUPPORT
-// WITH DATE & TIME IN HEADER
+// FILE: frontend/pages/admin/delete_equipment.php
+// ADMIN - DELETE EQUIPMENT
+// DELETE EQUIPMENT WITH CONFIRMATION
 // BRAICK DISPENSARY - BLUE THEME
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
@@ -65,6 +63,7 @@ try {
 // ================================================================
 $equipment_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $return_branch = isset($_GET['branch']) ? $_GET['branch'] : 'all';
+$confirmed = isset($_GET['confirm']) && $_GET['confirm'] === 'yes';
 
 // ================================================================
 // GET UNREAD NOTIFICATIONS
@@ -83,12 +82,14 @@ try {
 // ================================================================
 $equipment = null;
 $error_message = '';
+$linked_count = 0;
 
 try {
     $stmt = $db->prepare("
         SELECT 
             e.*,
-            b.name as branch_name
+            b.name as branch_name,
+            (SELECT COUNT(*) FROM lab_test_equipment WHERE equipment_id = e.id) as linked_count
         FROM medical_equipment e
         LEFT JOIN branches b ON e.branch_id = b.id
         WHERE e.id = ?
@@ -98,6 +99,8 @@ try {
     
     if (!$equipment) {
         $error_message = "Equipment not found. It may have been deleted.";
+    } else {
+        $linked_count = $equipment['linked_count'] ?? 0;
     }
 } catch (Exception $e) {
     $error_message = "Error loading equipment: " . $e->getMessage();
@@ -105,7 +108,71 @@ try {
 }
 
 // ================================================================
-// GET BRANCHES FOR DROPDOWN
+// PROCESS DELETION
+// ================================================================
+$message = '';
+$message_type = '';
+$deleted = false;
+
+if ($confirmed && $equipment) {
+    // Check if equipment is linked to lab tests
+    if ($linked_count > 0) {
+        // Option 1: Delete links first, then equipment
+        try {
+            $db->beginTransaction();
+            
+            // Delete from lab_test_equipment
+            $stmt = $db->prepare("DELETE FROM lab_test_equipment WHERE equipment_id = ?");
+            $stmt->execute([$equipment_id]);
+            
+            // Delete the equipment
+            $stmt = $db->prepare("DELETE FROM medical_equipment WHERE id = ?");
+            $stmt->execute([$equipment_id]);
+            
+            $db->commit();
+            
+            $deleted = true;
+            $message = "✅ Equipment '<strong>" . htmlspecialchars($equipment['equipment_name']) . "</strong>' deleted successfully!";
+            $message_type = 'success';
+            
+            // Redirect after 2 seconds
+            echo '<script>
+                setTimeout(function() {
+                    window.location.href = "equipment_inventory.php?branch=' . urlencode($return_branch) . '&success=1";
+                }, 2000);
+            </script>';
+            
+        } catch (Exception $e) {
+            if (isset($db)) $db->rollBack();
+            $message = "❌ Error deleting equipment: " . $e->getMessage();
+            $message_type = 'error';
+        }
+    } else {
+        // No links, delete directly
+        try {
+            $stmt = $db->prepare("DELETE FROM medical_equipment WHERE id = ?");
+            $stmt->execute([$equipment_id]);
+            
+            $deleted = true;
+            $message = "✅ Equipment '<strong>" . htmlspecialchars($equipment['equipment_name']) . "</strong>' deleted successfully!";
+            $message_type = 'success';
+            
+            // Redirect after 2 seconds
+            echo '<script>
+                setTimeout(function() {
+                    window.location.href = "equipment_inventory.php?branch=' . urlencode($return_branch) . '&success=1";
+                }, 2000);
+            </script>';
+            
+        } catch (Exception $e) {
+            $message = "❌ Error deleting equipment: " . $e->getMessage();
+            $message_type = 'error';
+        }
+    }
+}
+
+// ================================================================
+// GET BRANCHES FOR BRANCH SELECTOR
 // ================================================================
 $branches = [];
 try {
@@ -113,143 +180,6 @@ try {
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $branches = [];
-}
-
-// ================================================================
-// GET SERVICE CATEGORIES FOR DROPDOWN
-// ================================================================
-$categories = [];
-try {
-    $stmt = $db->query("SELECT id, category_name FROM service_categories ORDER BY category_name");
-    $categories = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $categories = [];
-}
-
-// ================================================================
-// PROCESS FORM SUBMISSION
-// ================================================================
-$message = '';
-$message_type = '';
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_equipment') {
-    $equipment_id = (int)($_POST['equipment_id'] ?? 0);
-    $equipment_name = trim($_POST['equipment_name'] ?? '');
-    $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
-    $category_name = trim($_POST['category_name'] ?? '');
-    $unit = trim($_POST['unit'] ?? 'pcs');
-    $quantity = (int)($_POST['quantity'] ?? 0);
-    $reorder_level = (int)($_POST['reorder_level'] ?? 5);
-    $selling_price = isset($_POST['selling_price']) ? (float)str_replace(',', '', $_POST['selling_price']) : 0;
-    $supplier = trim($_POST['supplier'] ?? '');
-    $expiry_date = $_POST['expiry_date'] ?? '';
-    $status = $_POST['status'] ?? 'active';
-    $branch_id = isset($_POST['branch_id']) ? $_POST['branch_id'] : null;
-    
-    if ($branch_id === 'all' || $branch_id === '' || $branch_id === 'NULL') {
-        $branch_id = null;
-    } elseif (is_numeric($branch_id)) {
-        $branch_id = (int)$branch_id;
-    } else {
-        $branch_id = null;
-    }
-    
-    // Determine category
-    $final_category = '';
-    if ($category_id > 0) {
-        foreach ($categories as $cat) {
-            if ($cat['id'] == $category_id) {
-                $final_category = $cat['category_name'];
-                break;
-            }
-        }
-    } elseif (!empty($category_name)) {
-        $final_category = $category_name;
-    }
-    
-    // Validate
-    $errors = [];
-    if (empty($equipment_name)) { $errors[] = 'Equipment name is required'; }
-    if ($quantity < 0) { $errors[] = 'Quantity cannot be negative'; }
-    if ($selling_price < 0) { $errors[] = 'Selling price cannot be negative'; }
-    if (!empty($expiry_date) && strtotime($expiry_date) < strtotime(date('Y-m-d'))) {
-        $errors[] = 'Expiry date cannot be in the past';
-    }
-    
-    if (empty($errors)) {
-        try {
-            $stmt = $db->prepare("
-                UPDATE medical_equipment 
-                SET 
-                    equipment_name = ?,
-                    category = ?,
-                    unit = ?,
-                    quantity = ?,
-                    reorder_level = ?,
-                    selling_price = ?,
-                    supplier = ?,
-                    expiry_date = ?,
-                    status = ?,
-                    branch_id = ?,
-                    updated_at = NOW()
-                WHERE id = ?
-            ");
-            $stmt->execute([
-                $equipment_name,
-                $final_category,
-                $unit,
-                $quantity,
-                $reorder_level,
-                $selling_price,
-                $supplier,
-                $expiry_date ?: null,
-                $status,
-                $branch_id,
-                $equipment_id
-            ]);
-            
-            $message = "✅ Equipment updated successfully!";
-            $message_type = 'success';
-            
-            // Refresh equipment data
-            $stmt = $db->prepare("
-                SELECT 
-                    e.*,
-                    b.name as branch_name
-                FROM medical_equipment e
-                LEFT JOIN branches b ON e.branch_id = b.id
-                WHERE e.id = ?
-            ");
-            $stmt->execute([$equipment_id]);
-            $equipment = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-        } catch (Exception $e) {
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
-        }
-    } else {
-        $message = implode('<br>', $errors);
-        $message_type = 'error';
-    }
-}
-
-// ================================================================
-// HELPER FUNCTIONS
-// ================================================================
-function getStockStatus($quantity, $reorder_level) {
-    if ($quantity <= 0) return ['class' => 'out', 'label' => 'Out of Stock'];
-    if ($quantity <= $reorder_level) return ['class' => 'low', 'label' => 'Low Stock'];
-    return ['class' => 'ok', 'label' => 'In Stock'];
-}
-
-function getExpiryStatus($expiry_date) {
-    if (empty($expiry_date) || $expiry_date === '0000-00-00') {
-        return ['class' => 'no-expiry', 'label' => 'No Expiry', 'days' => null];
-    }
-    $days = floor((strtotime($expiry_date) - time()) / 86400);
-    if ($days < 0) return ['class' => 'expired', 'label' => 'Expired', 'days' => $days];
-    if ($days <= 30) return ['class' => 'expiring', 'label' => 'Expiring Soon', 'days' => $days];
-    return ['class' => 'valid', 'label' => 'Valid', 'days' => $days];
 }
 
 // ================================================================
@@ -273,7 +203,7 @@ include_once '../../components/admin_sidebar.php';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Edit Equipment - Braick Dispensary</title>
+    <title>Delete Equipment - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     
@@ -703,156 +633,6 @@ include_once '../../components/admin_sidebar.php';
         .expiry-badge.expired { background: var(--danger-bg); color: var(--danger); }
         .expiry-badge.no-expiry { background: var(--gray-200); color: var(--gray-500); }
         
-        .form-group { margin-bottom: 14px; }
-        .form-label {
-            display: block;
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-bottom: 4px;
-        }
-        .form-label .required { color: var(--danger); margin-left: 2px; }
-        
-        .form-control {
-            width: 100%;
-            padding: 8px 12px;
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            font-size: 0.85rem;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s ease;
-            font-family: inherit;
-        }
-        
-        .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
-        }
-        
-        .form-control:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        
-        select.form-control {
-            appearance: auto;
-            cursor: pointer;
-        }
-        
-        .form-row-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 14px;
-        }
-        .form-row-3 {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 14px;
-        }
-        
-        .form-help {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .form-help i { font-size: 0.6rem; }
-        
-        .price-input {
-            font-family: 'Courier New', monospace;
-            font-size: 1rem;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-        }
-        
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 8px 20px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            font-family: inherit;
-        }
-        
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.2);
-        }
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.2);
-        }
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        .btn-outline:hover {
-            background: var(--gray-50);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .btn-danger {
-            background: var(--danger);
-            color: white;
-            box-shadow: 0 2px 8px rgba(220, 38, 38, 0.2);
-        }
-        .btn-danger:hover {
-            background: var(--danger-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.3);
-        }
-        
-        .btn-sm { padding: 4px 12px; font-size: 0.7rem; }
-        
-        .alert {
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            font-size: 0.9rem;
-            border: 1px solid transparent;
-            animation: slideDown 0.3s ease;
-        }
-        
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
-        .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
-        .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
-        .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
-        
         .branch-tag {
             display: inline-block;
             background: var(--primary-bg);
@@ -888,6 +668,89 @@ include_once '../../components/admin_sidebar.php';
             color: #6EA8FE;
         }
         
+        .alert {
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.9rem;
+            border: 1px solid transparent;
+            animation: slideDown 0.3s ease;
+        }
+        
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
+        .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
+        .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
+        .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 20px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            font-family: inherit;
+        }
+        
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.2);
+        }
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+            box-shadow: 0 2px 8px rgba(220, 38, 38, 0.2);
+        }
+        .btn-danger:hover {
+            background: var(--danger-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--gray-50);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-success {
+            background: var(--success);
+            color: white;
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.2);
+        }
+        .btn-success:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-sm { padding: 4px 12px; font-size: 0.7rem; }
+        
         .empty-state {
             text-align: center;
             padding: 40px 20px;
@@ -915,10 +778,70 @@ include_once '../../components/admin_sidebar.php';
         
         [data-theme="dark"] .footer { border-color: var(--gray-700); }
         
+        /* Delete confirmation specific styles */
+        .delete-icon {
+            font-size: 4rem;
+            color: var(--danger);
+            display: block;
+            margin-bottom: 12px;
+        }
+        
+        .warning-box {
+            background: var(--danger-bg);
+            border: 2px solid var(--danger);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            margin: 16px 0;
+        }
+        
+        .warning-box .warning-title {
+            color: var(--danger);
+            font-weight: 700;
+            font-size: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .warning-box .warning-text {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            margin-top: 4px;
+        }
+        
+        .equipment-detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .equipment-detail-row:last-child {
+            border-bottom: none;
+        }
+        
+        .equipment-detail-label {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+        
+        .equipment-detail-value {
+            color: var(--text-primary);
+            font-size: 0.9rem;
+            font-weight: 500;
+        }
+        
+        .btn-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .form-row-2, .form-row-3 { grid-template-columns: 1fr; }
         }
         
         @media (max-width: 768px) {
@@ -932,6 +855,8 @@ include_once '../../components/admin_sidebar.php';
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
             .card { padding: 14px 16px; }
+            .btn-group { flex-direction: column; }
+            .btn-group .btn { justify-content: center; }
         }
         
         @keyframes fadeInUp {
@@ -1004,32 +929,32 @@ include_once '../../components/admin_sidebar.php';
         $expiry = getExpiryStatus($equipment['expiry_date']);
     ?>
         <!-- ================================================================ -->
-        <!-- PAGE HEADER -->
+        <!-- PAGE HEADER - DANGER THEME -->
         <!-- ================================================================ -->
-        <div class="page-header">
+        <div class="page-header" style="background:linear-gradient(135deg, #DC2626, #991B1B);">
             <div>
                 <h1 class="page-title">
-                    <i class="fas fa-edit"></i>
-                    Edit Equipment
+                    <i class="fas fa-trash"></i>
+                    Delete Equipment
                     <span class="role-badge-display">ADMIN</span>
-                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;">
+                    <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:#FCA5A5;">
                         <i class="fas fa-hashtag"></i> #<?= $equipment['id'] ?>
                     </span>
                 </h1>
                 <p class="page-subtitle">
-                    <i class="fas fa-tools"></i>
-                    Editing <strong><?= htmlspecialchars($equipment['equipment_name']) ?></strong>
-                    <span class="header-badge">
-                        <i class="fas fa-boxes"></i> <?= number_format($equipment['quantity']) ?> in stock
-                    </span>
-                    <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                        <i class="fas fa-barcode"></i> <?= htmlspecialchars($equipment['batch_number']) ?>
+                    <i class="fas fa-exclamation-triangle"></i>
+                    <strong>Warning:</strong> This action cannot be undone!
+                    <span class="header-badge" style="background:rgba(255,255,255,0.15);">
+                        <i class="fas fa-link"></i> <?= $linked_count ?> linked lab tests
                     </span>
                 </p>
             </div>
             <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
                 <a href="view_equipment.php?id=<?= $equipment['id'] ?>&branch=<?= urlencode($return_branch) ?>" class="btn-outline-light">
                     <i class="fas fa-eye"></i> View
+                </a>
+                <a href="edit_equipment.php?id=<?= $equipment['id'] ?>&branch=<?= urlencode($return_branch) ?>" class="btn-outline-light">
+                    <i class="fas fa-edit"></i> Edit
                 </a>
                 <a href="equipment_inventory.php?branch=<?= urlencode($return_branch) ?>" class="btn-outline-light">
                     <i class="fas fa-arrow-left"></i> Back to List
@@ -1048,12 +973,13 @@ include_once '../../components/admin_sidebar.php';
         <?php endif; ?>
 
         <!-- ================================================================ -->
-        <!-- EDIT FORM -->
+        <!-- DELETE CONFIRMATION CARD -->
         <!-- ================================================================ -->
         <div class="card animate-fade-in-up">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-pen"></i> Edit Equipment Details
+                    <i class="fas fa-exclamation-triangle" style="color:var(--danger);"></i> 
+                    Confirm Deletion
                 </h3>
                 <div>
                     <span class="status-badge <?= $equipment['status'] === 'active' ? 'active' : 'inactive' ?>">
@@ -1066,164 +992,106 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
             
-            <form method="POST" action="" id="editForm">
-                <input type="hidden" name="action" value="update_equipment">
-                <input type="hidden" name="equipment_id" value="<?= $equipment['id'] ?>">
+            <div style="text-align:center;padding:10px 0;">
+                <i class="fas fa-trash delete-icon"></i>
+                <h2 style="font-size:1.3rem;color:var(--danger);margin-bottom:8px;">
+                    Are you sure you want to delete this equipment?
+                </h2>
+                <p style="color:var(--text-secondary);font-size:0.95rem;">
+                    This action <strong style="color:var(--danger);">cannot be undone</strong>. All data associated with this equipment will be permanently removed.
+                </p>
+            </div>
+            
+            <!-- Equipment Details -->
+            <div style="background:var(--bg-body);border-radius:var(--radius);padding:16px 20px;margin:16px 0;">
+                <h4 style="font-size:0.8rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:0.05em;font-weight:600;margin-bottom:12px;">
+                    <i class="fas fa-info-circle"></i> Equipment Details
+                </h4>
                 
-                <!-- Branch -->
-                <div class="form-group">
-                    <label class="form-label">Branch <span class="required">*</span></label>
-                    <select name="branch_id" class="form-control" required>
-                        <option value="">-- Select Branch --</option>
-                        <option value="all" <?= $equipment['branch_id'] === null ? 'selected' : '' ?>>🌐 All Branches</option>
-                        <?php foreach ($branches as $b): ?>
-                            <option value="<?= $b['id'] ?>" <?= $equipment['branch_id'] == $b['id'] ? 'selected' : '' ?>>
-                                🏥 <?= htmlspecialchars($b['name']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
-                    <div class="form-help">
-                        <i class="fas fa-info-circle"></i> Select "All Branches" if this equipment is available in all branches
-                    </div>
+                <div class="equipment-detail-row">
+                    <span class="equipment-detail-label"><i class="fas fa-tag"></i> Equipment Name</span>
+                    <span class="equipment-detail-value"><strong><?= htmlspecialchars($equipment['equipment_name']) ?></strong></span>
                 </div>
                 
-                <!-- Equipment Name -->
-                <div class="form-group">
-                    <label class="form-label">Equipment Name <span class="required">*</span></label>
-                    <input type="text" name="equipment_name" class="form-control" value="<?= htmlspecialchars($equipment['equipment_name']) ?>" required>
+                <div class="equipment-detail-row">
+                    <span class="equipment-detail-label"><i class="fas fa-tag"></i> Category</span>
+                    <span class="equipment-detail-value"><?= htmlspecialchars($equipment['category'] ?? 'N/A') ?></span>
                 </div>
                 
-                <!-- Category -->
-                <div class="form-group">
-                    <label class="form-label">Category <span class="required">*</span></label>
-                    <select name="category_id" class="form-control" id="categorySelect">
-                        <option value="">-- Select Category --</option>
-                        <?php foreach ($categories as $cat): ?>
-                            <option value="<?= $cat['id'] ?>" <?= $equipment['category'] == $cat['category_name'] ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($cat['category_name']) ?>
-                            </option>
-                        <?php endforeach; ?>
-                        <option value="0">-- Other (Type manually) --</option>
-                    </select>
-                    <input type="text" name="category_name" class="form-control" style="margin-top:6px;display:none;" id="categoryManual" placeholder="Enter custom category..." value="<?= htmlspecialchars($equipment['category'] ?? '') ?>">
-                    <div class="form-help">
-                        <i class="fas fa-info-circle"></i> Select existing category or type a new one
-                    </div>
+                <div class="equipment-detail-row">
+                    <span class="equipment-detail-label"><i class="fas fa-cube"></i> Unit</span>
+                    <span class="equipment-detail-value"><?= htmlspecialchars($equipment['unit'] ?? 'pcs') ?></span>
                 </div>
                 
-                <!-- Unit & Quantity -->
-                <div class="form-row-3">
-                    <div class="form-group">
-                        <label class="form-label">Unit <span class="required">*</span></label>
-                        <select name="unit" class="form-control">
-                            <option value="pcs" <?= $equipment['unit'] === 'pcs' ? 'selected' : '' ?>>Pieces (pcs)</option>
-                            <option value="box" <?= $equipment['unit'] === 'box' ? 'selected' : '' ?>>Box</option>
-                            <option value="pack" <?= $equipment['unit'] === 'pack' ? 'selected' : '' ?>>Pack</option>
-                            <option value="set" <?= $equipment['unit'] === 'set' ? 'selected' : '' ?>>Set</option>
-                            <option value="each" <?= $equipment['unit'] === 'each' ? 'selected' : '' ?>>Each</option>
-                            <option value="roll" <?= $equipment['unit'] === 'roll' ? 'selected' : '' ?>>Roll</option>
-                            <option value="bottle" <?= $equipment['unit'] === 'bottle' ? 'selected' : '' ?>>Bottle</option>
-                            <option value="pair" <?= $equipment['unit'] === 'pair' ? 'selected' : '' ?>>Pair</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Quantity <span class="required">*</span></label>
-                        <input type="number" name="quantity" class="form-control" required min="0" value="<?= $equipment['quantity'] ?>">
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Reorder Level <span class="required">*</span></label>
-                        <input type="number" name="reorder_level" class="form-control" required min="0" value="<?= $equipment['reorder_level'] ?>">
-                        <div class="form-help">
-                            <i class="fas fa-info-circle"></i> Alert when stock falls below this number
-                        </div>
-                    </div>
+                <div class="equipment-detail-row">
+                    <span class="equipment-detail-label"><i class="fas fa-store-alt"></i> Branch</span>
+                    <span class="equipment-detail-value">
+                        <?php if ($equipment['branch_id'] === null): ?>
+                            <span class="branch-tag all-branches">🌐 All Branches</span>
+                        <?php else: ?>
+                            <span class="branch-tag"><?= htmlspecialchars($equipment['branch_name'] ?? 'N/A') ?></span>
+                        <?php endif; ?>
+                    </span>
                 </div>
                 
-                <!-- Price & Supplier -->
-                <div class="form-row-2">
-                    <div class="form-group">
-                        <label class="form-label">Selling Price (TSh)</label>
-                        <input type="text" name="selling_price" class="form-control price-input" value="<?= number_format($equipment['selling_price'] ?? 0, 0) ?>" oninput="formatPriceInput(this)">
-                        <div class="form-help">
-                            <i class="fas fa-info-circle"></i> Leave 0 for FREE equipment
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Supplier</label>
-                        <input type="text" name="supplier" class="form-control" value="<?= htmlspecialchars($equipment['supplier'] ?? '') ?>">
-                    </div>
+                <div class="equipment-detail-row">
+                    <span class="equipment-detail-label"><i class="fas fa-boxes"></i> Quantity</span>
+                    <span class="equipment-detail-value"><?= number_format($equipment['quantity']) ?></span>
                 </div>
                 
-                <!-- Batch Number (Read Only) -->
-                <div class="form-group">
-                    <label class="form-label">Batch Number</label>
-                    <input type="text" class="form-control" value="<?= htmlspecialchars($equipment['batch_number']) ?>" disabled>
-                    <div class="form-help">
-                        <i class="fas fa-info-circle"></i> Batch number cannot be changed
-                    </div>
+                <div class="equipment-detail-row">
+                    <span class="equipment-detail-label"><i class="fas fa-barcode"></i> Batch Number</span>
+                    <span class="equipment-detail-value"><span class="batch-number"><?= htmlspecialchars($equipment['batch_number']) ?></span></span>
                 </div>
                 
-                <!-- Expiry Date & Status -->
-                <div class="form-row-2">
-                    <div class="form-group">
-                        <label class="form-label">Expiry Date</label>
-                        <input type="date" name="expiry_date" class="form-control" value="<?= $equipment['expiry_date'] ?? '' ?>">
-                        <div class="form-help">
-                            <i class="fas fa-info-circle"></i> Leave empty for no expiry (Active Forever)
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Status <span class="required">*</span></label>
-                        <select name="status" class="form-control">
-                            <option value="active" <?= $equipment['status'] === 'active' ? 'selected' : '' ?>>Active</option>
-                            <option value="inactive" <?= $equipment['status'] === 'inactive' ? 'selected' : '' ?>>Inactive</option>
-                        </select>
-                        <div class="form-help">
-                            <i class="fas fa-info-circle"></i> Inactive equipment will not appear in lab test equipment lists
-                        </div>
-                    </div>
+                <div class="equipment-detail-row">
+                    <span class="equipment-detail-label"><i class="fas fa-calendar"></i> Expiry Date</span>
+                    <span class="equipment-detail-value">
+                        <span class="expiry-badge <?= $expiry['class'] ?>">
+                            <i class="fas <?= $expiry['class'] === 'valid' ? 'fa-check' : ($expiry['class'] === 'expiring' ? 'fa-clock' : ($expiry['class'] === 'expired' ? 'fa-skull' : 'fa-infinity')) ?>"></i>
+                            <?= $expiry['label'] ?>
+                        </span>
+                    </span>
                 </div>
                 
-                <!-- Current Status Info -->
-                <div style="background:var(--bg-body);border-radius:var(--radius);padding:12px 16px;margin-top:8px;display:flex;flex-wrap:wrap;gap:16px;">
-                    <div>
-                        <span style="font-size:0.6rem;color:var(--text-secondary);text-transform:uppercase;font-weight:600;">Current Stock</span>
-                        <div style="font-weight:700;font-size:1.1rem;"><?= number_format($equipment['quantity']) ?> <?= $equipment['unit'] ?></div>
+                <div class="equipment-detail-row">
+                    <span class="equipment-detail-label"><i class="fas fa-link"></i> Linked Lab Tests</span>
+                    <span class="equipment-detail-value">
+                        <?php if ($linked_count > 0): ?>
+                            <span style="color:var(--warning);font-weight:700;">
+                                <i class="fas fa-exclamation-triangle"></i> <?= $linked_count ?> test(s) linked
+                            </span>
+                        <?php else: ?>
+                            <span style="color:var(--success);">No tests linked</span>
+                        <?php endif; ?>
+                    </span>
+                </div>
+            </div>
+            
+            <!-- Warning if linked -->
+            <?php if ($linked_count > 0): ?>
+                <div class="warning-box">
+                    <div class="warning-title">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <span>Warning: Equipment is linked to <?= $linked_count ?> lab test(s)</span>
                     </div>
-                    <div>
-                        <span style="font-size:0.6rem;color:var(--text-secondary);text-transform:uppercase;font-weight:600;">Stock Status</span>
-                        <div><span class="stock-badge <?= $stock['class'] ?>"><?= $stock['label'] ?></span></div>
-                    </div>
-                    <div>
-                        <span style="font-size:0.6rem;color:var(--text-secondary);text-transform:uppercase;font-weight:600;">Expiry</span>
-                        <div><span class="expiry-badge <?= $expiry['class'] ?>"><?= $expiry['label'] ?></span></div>
-                    </div>
-                    <div>
-                        <span style="font-size:0.6rem;color:var(--text-secondary);text-transform:uppercase;font-weight:600;">Linked Lab Tests</span>
-                        <div style="font-weight:700;font-size:1.1rem;">
-                            <?php 
-                                $stmt = $db->prepare("SELECT COUNT(*) FROM lab_test_equipment WHERE equipment_id = ?");
-                                $stmt->execute([$equipment['id']]);
-                                $linked_count = $stmt->fetchColumn();
-                                echo $linked_count;
-                            ?>
-                        </div>
+                    <div class="warning-text">
+                        This equipment is currently linked to <?= $linked_count ?> lab test(s). 
+                        Deleting this equipment will also remove it from all linked lab tests.
+                        The lab tests themselves will not be deleted.
                     </div>
                 </div>
-                
-                <!-- Actions -->
-                <div style="display:flex;gap:10px;margin-top:20px;border-top:2px solid var(--border-color);padding-top:16px;flex-wrap:wrap;">
-                    <button type="submit" class="btn btn-success">
-                        <i class="fas fa-save"></i> Save Changes
-                    </button>
-                    <a href="view_equipment.php?id=<?= $equipment['id'] ?>&branch=<?= urlencode($return_branch) ?>" class="btn btn-outline">
-                        <i class="fas fa-times"></i> Cancel
-                    </a>
-                    <a href="equipment_inventory.php?branch=<?= urlencode($return_branch) ?>" class="btn btn-outline">
-                        <i class="fas fa-arrow-left"></i> Back to List
-                    </a>
-                </div>
-            </form>
+            <?php endif; ?>
+            
+            <!-- Action Buttons -->
+            <div class="btn-group">
+                <a href="view_equipment.php?id=<?= $equipment['id'] ?>&branch=<?= urlencode($return_branch) ?>" class="btn btn-outline">
+                    <i class="fas fa-times"></i> Cancel
+                </a>
+                <a href="?id=<?= $equipment['id'] ?>&branch=<?= urlencode($return_branch) ?>&confirm=yes" class="btn btn-danger" style="flex:1;">
+                    <i class="fas fa-trash"></i> Yes, Delete Equipment
+                </a>
+            </div>
         </div>
 
     <?php else: ?>
@@ -1239,7 +1107,7 @@ include_once '../../components/admin_sidebar.php';
                 </h1>
                 <p class="page-subtitle">
                     <i class="fas fa-tools"></i>
-                    The equipment you are trying to edit could not be found.
+                    The equipment you are trying to delete could not be found.
                 </p>
             </div>
             <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
@@ -1269,7 +1137,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Edit Equipment
+            Delete Equipment
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1283,19 +1151,6 @@ include_once '../../components/admin_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // FORMAT PRICE INPUT
-    // ================================================================
-    function formatPriceInput(input) {
-        var raw = input.value.replace(/[^0-9]/g, '');
-        if (raw === '') {
-            input.value = '';
-            return;
-        }
-        var formatted = parseInt(raw).toLocaleString('en-US');
-        input.value = formatted;
-    }
-
     // ================================================================
     // DARK MODE
     // ================================================================
@@ -1379,43 +1234,6 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // CATEGORY - Toggle manual input
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var categorySelect = document.getElementById('categorySelect');
-        var categoryManual = document.getElementById('categoryManual');
-        
-        if (categorySelect && categoryManual) {
-            // Check if current value is custom (not in dropdown)
-            var isCustom = true;
-            var options = categorySelect.options;
-            for (var i = 0; i < options.length; i++) {
-                if (options[i].text === categoryManual.value) {
-                    isCustom = false;
-                    break;
-                }
-            }
-            
-            if (isCustom && categoryManual.value !== '') {
-                categorySelect.value = '0';
-                categoryManual.style.display = 'block';
-            }
-            
-            categorySelect.addEventListener('change', function() {
-                if (this.value === '0') {
-                    categoryManual.style.display = 'block';
-                    categoryManual.required = true;
-                    categoryManual.focus();
-                } else {
-                    categoryManual.style.display = 'none';
-                    categoryManual.required = false;
-                    categoryManual.value = '';
-                }
-            });
-        }
-    });
-
-    // ================================================================
     // DATE & TIME
     // ================================================================
     function updateDateTime() {
@@ -1434,17 +1252,17 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🔧 Braick Dispensary - Edit Equipment', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🗑️ Braick Dispensary - Delete Equipment', 'font-size:18px; font-weight:bold; color:#DC2626;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     <?php if ($equipment): ?>
-        console.log('%c📦 Editing: <?= htmlspecialchars($equipment['equipment_name']) ?> (ID: <?= $equipment['id'] ?>)', 'font-size:13px; color:#0B5ED7;');
+        console.log('%c📦 Deleting: <?= htmlspecialchars($equipment['equipment_name']) ?> (ID: <?= $equipment['id'] ?>)', 'font-size:13px; color:#DC2626;');
         console.log('%c📊 Quantity: <?= $equipment['quantity'] ?> | Batch: <?= htmlspecialchars($equipment['batch_number']) ?>', 'font-size:13px; color:#D97706;');
+        console.log('%c🔗 Linked Lab Tests: <?= $linked_count ?>', 'font-size:13px; color:#7C3AED;');
     <?php else: ?>
         console.log('%c❌ Equipment not found (ID: <?= $equipment_id ?>)', 'font-size:13px; color:#DC2626;');
     <?php endif; ?>
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
-    console.log('%c🌙 Dark mode support: ACTIVE', 'font-size:13px; color:#34D399;');
-    console.log('%c🕐 Date & Time in header: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c⚠️ Warning: This action cannot be undone!', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

@@ -3,7 +3,11 @@
 // FILE: frontend/pages/admin/profit.php
 // ADMIN - PROFIT/REVENUE DASHBOARD
 // PROFIT = REVENUE - EXPENSES
-// FIXED FOR EXISTING DATABASE
+// FIXED: Revenue uses paid_amount from bills (includes discounts)
+// FIXED: Includes OTC revenue from otc_sales
+// FIXED: Includes Prescription revenue from prescription_items
+// FIXED: Column 'branch_id' ambiguous - added table prefix
+// FIXED: Header visible
 // ================================================================
 
 // ================================================================
@@ -92,7 +96,7 @@ if ($selected_branch_id > 0) {
 }
 
 // ================================================================
-// FUNCTION FORMAT CURRENCY
+// FORMAT CURRENCY
 // ================================================================
 function formatMoney($amount) {
     if ($amount === null || $amount === '') {
@@ -102,102 +106,225 @@ function formatMoney($amount) {
 }
 
 // ================================================================
-// BUILD WHERE CLAUSE FOR BRANCH FILTER
+// BUILD PARAMETERS FOR QUERIES
 // ================================================================
-$branch_condition = "";
 $params = [];
+$branch_condition = "";
+$date_condition = "";
 
 if ($selected_branch_id > 0) {
-    $branch_condition = "AND branch_id = ?";
+    $branch_condition = "AND b.branch_id = ?";
     $params[] = $selected_branch_id;
 }
 
-// Date filter
-$date_condition = "";
 if (!empty($date_from) && !empty($date_to)) {
-    $date_condition = "AND DATE(created_at) BETWEEN ? AND ?";
+    $date_condition = "AND DATE(b.created_at) BETWEEN ? AND ?";
     $params[] = $date_from;
     $params[] = $date_to;
 } elseif (!empty($date_from)) {
-    $date_condition = "AND DATE(created_at) >= ?";
+    $date_condition = "AND DATE(b.created_at) >= ?";
     $params[] = $date_from;
 } elseif (!empty($date_to)) {
-    $date_condition = "AND DATE(created_at) <= ?";
+    $date_condition = "AND DATE(b.created_at) <= ?";
     $params[] = $date_to;
 }
 
 // ================================================================
-// 1. GET REVENUE - FROM bill_items WITH bills status = 'paid'
+// 1. PATIENT BILLS REVENUE - Using paid_amount from bills
+//    Excludes OTC bills, only bills with patient_id and visit_id
 // ================================================================
+$patient_bills_revenue = 0;
+$patient_bills_count = 0;
+$patient_bills_params = $params;
 
-$sql = "
-    SELECT 
-        SUM(bi.total_price) as total_revenue,
-        COUNT(DISTINCT bi.bill_id) as total_invoices,
-        COUNT(DISTINCT bi.patient_id) as total_patients,
-        SUM(CASE WHEN bi.item_type = 'consultation' THEN bi.total_price ELSE 0 END) as consultation_revenue,
-        SUM(CASE WHEN bi.item_type = 'medication' THEN bi.total_price ELSE 0 END) as medication_revenue,
-        SUM(CASE WHEN bi.item_type = 'lab_test' THEN bi.total_price ELSE 0 END) as lab_revenue,
-        SUM(CASE WHEN bi.item_type = 'procedure' THEN bi.total_price ELSE 0 END) as procedure_revenue,
-        SUM(CASE WHEN bi.item_type = 'registration' THEN bi.total_price ELSE 0 END) as registration_revenue,
-        SUM(CASE WHEN bi.item_type NOT IN ('consultation','medication','lab_test','procedure','registration') THEN bi.total_price ELSE 0 END) as other_revenue
-    FROM bill_items bi
-    INNER JOIN bills b ON bi.bill_id = b.id
-    WHERE b.status = 'paid'
-    $branch_condition 
-    $date_condition
-";
-
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$revenue_result = $stmt->fetch(PDO::FETCH_ASSOC);
-
-$revenue_data = [
-    'total_revenue' => 0,
-    'consultation_revenue' => 0,
-    'medication_revenue' => 0,
-    'lab_revenue' => 0,
-    'procedure_revenue' => 0,
-    'registration_revenue' => 0,
-    'other_revenue' => 0,
-    'total_invoices' => 0,
-    'total_patients' => 0
-];
-
-if ($revenue_result) {
-    $revenue_data['total_revenue'] = (float)($revenue_result['total_revenue'] ?? 0);
-    $revenue_data['total_invoices'] = (int)($revenue_result['total_invoices'] ?? 0);
-    $revenue_data['total_patients'] = (int)($revenue_result['total_patients'] ?? 0);
-    $revenue_data['consultation_revenue'] = (float)($revenue_result['consultation_revenue'] ?? 0);
-    $revenue_data['medication_revenue'] = (float)($revenue_result['medication_revenue'] ?? 0);
-    $revenue_data['lab_revenue'] = (float)($revenue_result['lab_revenue'] ?? 0);
-    $revenue_data['procedure_revenue'] = (float)($revenue_result['procedure_revenue'] ?? 0);
-    $revenue_data['registration_revenue'] = (float)($revenue_result['registration_revenue'] ?? 0);
-    $revenue_data['other_revenue'] = (float)($revenue_result['other_revenue'] ?? 0);
+try {
+    $sql = "
+        SELECT COALESCE(SUM(b.paid_amount), 0) as total, COUNT(*) as count
+        FROM bills b
+        WHERE b.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        $branch_condition
+        $date_condition
+    ";
+    $stmt = $db->prepare($sql);
+    $stmt->execute($patient_bills_params);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $patient_bills_revenue = (float)($result['total'] ?? 0);
+    $patient_bills_count = (int)($result['count'] ?? 0);
+} catch (Exception $e) {
+    $patient_bills_revenue = 0;
+    $patient_bills_count = 0;
 }
 
 // ================================================================
-// 2. GET EXPENSES
+// 2. OTC REVENUE - from otc_sales table
 // ================================================================
-
-$exp_params = [];
-$exp_branch_condition = "";
-$exp_date_condition = "";
+$otc_revenue = 0;
+$otc_count = 0;
+$otc_params = [];
+$otc_branch = "";
+$otc_date = "";
 
 if ($selected_branch_id > 0) {
-    $exp_branch_condition = "AND branch_id = ?";
+    $otc_branch = "AND branch_id = ?";
+    $otc_params[] = $selected_branch_id;
+}
+
+if (!empty($date_from) && !empty($date_to)) {
+    $otc_date = "AND DATE(created_at) BETWEEN ? AND ?";
+    $otc_params[] = $date_from;
+    $otc_params[] = $date_to;
+} elseif (!empty($date_from)) {
+    $otc_date = "AND DATE(created_at) >= ?";
+    $otc_params[] = $date_from;
+} elseif (!empty($date_to)) {
+    $otc_date = "AND DATE(created_at) <= ?";
+    $otc_params[] = $date_to;
+}
+
+try {
+    $sql_otc = "
+        SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count
+        FROM otc_sales
+        WHERE payment_status = 'paid'
+        $otc_branch
+        $otc_date
+    ";
+    $stmt = $db->prepare($sql_otc);
+    $stmt->execute($otc_params);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $otc_revenue = (float)($result['total'] ?? 0);
+    $otc_count = (int)($result['count'] ?? 0);
+} catch (Exception $e) {
+    $otc_revenue = 0;
+    $otc_count = 0;
+}
+
+// ================================================================
+// 3. PRESCRIPTION REVENUE - from prescription_items table
+// ================================================================
+$prescription_revenue = 0;
+$prescription_count = 0;
+$pres_params = [];
+$pres_branch = "";
+$pres_date = "";
+
+if ($selected_branch_id > 0) {
+    $pres_branch = "AND p.branch_id = ?";
+    $pres_params[] = $selected_branch_id;
+}
+
+if (!empty($date_from) && !empty($date_to)) {
+    $pres_date = "AND DATE(p.created_at) BETWEEN ? AND ?";
+    $pres_params[] = $date_from;
+    $pres_params[] = $date_to;
+} elseif (!empty($date_from)) {
+    $pres_date = "AND DATE(p.created_at) >= ?";
+    $pres_params[] = $date_from;
+} elseif (!empty($date_to)) {
+    $pres_date = "AND DATE(p.created_at) <= ?";
+    $pres_params[] = $date_to;
+}
+
+try {
+    $sql_pres = "
+        SELECT COALESCE(SUM(pi.total_price), 0) as total, COUNT(DISTINCT pi.id) as count
+        FROM prescription_items pi
+        INNER JOIN prescriptions p ON pi.prescription_id = p.id
+        WHERE p.status = 'dispensed'
+        $pres_branch
+        $pres_date
+    ";
+    $stmt = $db->prepare($sql_pres);
+    $stmt->execute($pres_params);
+    $result = $stmt->fetch(PDO::FETCH_ASSOC);
+    $prescription_revenue = (float)($result['total'] ?? 0);
+    $prescription_count = (int)($result['count'] ?? 0);
+} catch (Exception $e) {
+    $prescription_revenue = 0;
+    $prescription_count = 0;
+}
+
+// ================================================================
+// 4. TOTAL REVENUE = Patient Bills + OTC + Prescriptions
+// ================================================================
+$total_revenue = $patient_bills_revenue + $otc_revenue + $prescription_revenue;
+
+// ================================================================
+// 5. BREAKDOWN BY CATEGORY (from bill_items - for display only)
+// ================================================================
+$consultation_revenue = 0;
+$consultation_count = 0;
+$medication_revenue = 0;
+$medication_count = 0;
+$lab_revenue = 0;
+$lab_count = 0;
+$procedure_revenue = 0;
+$procedure_count = 0;
+$registration_revenue = 0;
+$registration_count = 0;
+
+try {
+    $sql_breakdown = "
+        SELECT 
+            bi.item_type,
+            COALESCE(SUM(bi.final_price), 0) as total,
+            COUNT(DISTINCT bi.id) as count
+        FROM bill_items bi
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.status = 'paid'
+        AND bi.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
+        $branch_condition
+        $date_condition
+        GROUP BY bi.item_type
+    ";
+    $stmt = $db->prepare($sql_breakdown);
+    $stmt->execute($params);
+    $breakdown_results = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    foreach ($breakdown_results as $row) {
+        $type = $row['item_type'];
+        $amount = (float)($row['total'] ?? 0);
+        $count = (int)($row['count'] ?? 0);
+        
+        switch ($type) {
+            case 'consultation': $consultation_revenue = $amount; $consultation_count = $count; break;
+            case 'medication': $medication_revenue = $amount; $medication_count = $count; break;
+            case 'lab_test': $lab_revenue = $amount; $lab_count = $count; break;
+            case 'procedure': $procedure_revenue = $amount; $procedure_count = $count; break;
+            case 'registration': $registration_revenue = $amount; $registration_count = $count; break;
+        }
+    }
+} catch (Exception $e) {
+    // Continue with zeros
+}
+
+// ================================================================
+// 6. EXPENSES
+// ================================================================
+$exp_params = [];
+$exp_branch = "";
+$exp_date = "";
+
+if ($selected_branch_id > 0) {
+    $exp_branch = "AND branch_id = ?";
     $exp_params[] = $selected_branch_id;
 }
 
 if (!empty($date_from) && !empty($date_to)) {
-    $exp_date_condition = "AND DATE(created_at) BETWEEN ? AND ?";
+    $exp_date = "AND DATE(created_at) BETWEEN ? AND ?";
     $exp_params[] = $date_from;
     $exp_params[] = $date_to;
 } elseif (!empty($date_from)) {
-    $exp_date_condition = "AND DATE(created_at) >= ?";
+    $exp_date = "AND DATE(created_at) >= ?";
     $exp_params[] = $date_from;
 } elseif (!empty($date_to)) {
-    $exp_date_condition = "AND DATE(created_at) <= ?";
+    $exp_date = "AND DATE(created_at) <= ?";
     $exp_params[] = $date_to;
 }
 
@@ -209,8 +336,8 @@ $sql_exp = "
         SUM(amount) as category_amount
     FROM expenses 
     WHERE status = 'paid'
-    $exp_branch_condition 
-    $exp_date_condition
+    $exp_branch 
+    $exp_date
     GROUP BY category
 ";
 
@@ -238,45 +365,57 @@ usort($expense_data['expense_categories'], function($a, $b) {
 });
 
 // ================================================================
-// 3. CALCULATE PROFIT
+// 7. CALCULATE PROFIT
 // ================================================================
-
-$revenue = $revenue_data['total_revenue'];
-$expenses = $expense_data['total_expenses'];
-$profit = $revenue - $expenses;
+$profit = $total_revenue - $expense_data['total_expenses'];
 
 $profit_data = [
-    'gross_profit' => $revenue,
     'net_profit' => $profit,
     'profit_margin' => 0
 ];
 
-if ($revenue > 0) {
-    $profit_data['profit_margin'] = round(($profit / $revenue) * 100, 2);
+if ($total_revenue > 0) {
+    $profit_data['profit_margin'] = round(($profit / $total_revenue) * 100, 2);
 }
 
 // ================================================================
-// 4. GET MONTHLY PROFIT DATA FOR CHART
+// 8. MONTHLY PROFIT DATA FOR CHART
 // ================================================================
-
 $monthly_data = [];
 
-// Get monthly revenue from bills
+// Get monthly revenue from bills (paid_amount)
 $monthly_params = [];
-if ($selected_branch_id > 0) { $monthly_params[] = $selected_branch_id; }
-if (!empty($date_from) && !empty($date_to)) { $monthly_params[] = $date_from; $monthly_params[] = $date_to; }
-elseif (!empty($date_from)) { $monthly_params[] = $date_from; }
-elseif (!empty($date_to)) { $monthly_params[] = $date_to; }
+$monthly_branch = "";
+$monthly_date = "";
+
+if ($selected_branch_id > 0) {
+    $monthly_branch = "AND b.branch_id = ?";
+    $monthly_params[] = $selected_branch_id;
+}
+
+if (!empty($date_from) && !empty($date_to)) {
+    $monthly_date = "AND DATE(b.created_at) BETWEEN ? AND ?";
+    $monthly_params[] = $date_from;
+    $monthly_params[] = $date_to;
+} elseif (!empty($date_from)) {
+    $monthly_date = "AND DATE(b.created_at) >= ?";
+    $monthly_params[] = $date_from;
+} elseif (!empty($date_to)) {
+    $monthly_date = "AND DATE(b.created_at) <= ?";
+    $monthly_params[] = $date_to;
+}
 
 $sql_monthly_rev = "
     SELECT 
         DATE_FORMAT(b.created_at, '%Y-%m') as month,
-        SUM(bi.total_price) as revenue
-    FROM bill_items bi
-    INNER JOIN bills b ON bi.bill_id = b.id
+        COALESCE(SUM(b.paid_amount), 0) as revenue
+    FROM bills b
     WHERE b.status = 'paid'
-    $branch_condition 
-    $date_condition
+    AND b.patient_id IS NOT NULL
+    AND b.visit_id IS NOT NULL
+    AND b.bill_number NOT LIKE 'BILL-OTC-%'
+    $monthly_branch
+    $monthly_date
     GROUP BY DATE_FORMAT(b.created_at, '%Y-%m')
     ORDER BY month ASC
 ";
@@ -285,24 +424,45 @@ $stmt_monthly = $db->prepare($sql_monthly_rev);
 $stmt_monthly->execute($monthly_params);
 $monthly_revenue = $stmt_monthly->fetchAll(PDO::FETCH_ASSOC);
 
-// Get monthly expenses
-$sql_monthly_exp = "
+// Get monthly OTC
+$monthly_otc_params = [];
+$monthly_otc_branch = "";
+$monthly_otc_date = "";
+
+if ($selected_branch_id > 0) {
+    $monthly_otc_branch = "AND branch_id = ?";
+    $monthly_otc_params[] = $selected_branch_id;
+}
+
+if (!empty($date_from) && !empty($date_to)) {
+    $monthly_otc_date = "AND DATE(created_at) BETWEEN ? AND ?";
+    $monthly_otc_params[] = $date_from;
+    $monthly_otc_params[] = $date_to;
+} elseif (!empty($date_from)) {
+    $monthly_otc_date = "AND DATE(created_at) >= ?";
+    $monthly_otc_params[] = $date_from;
+} elseif (!empty($date_to)) {
+    $monthly_otc_date = "AND DATE(created_at) <= ?";
+    $monthly_otc_params[] = $date_to;
+}
+
+$sql_monthly_otc = "
     SELECT 
         DATE_FORMAT(created_at, '%Y-%m') as month,
-        SUM(amount) as expenses
-    FROM expenses 
-    WHERE status = 'paid'
-    $exp_branch_condition 
-    $exp_date_condition
+        COALESCE(SUM(total_amount), 0) as revenue
+    FROM otc_sales
+    WHERE payment_status = 'paid'
+    $monthly_otc_branch
+    $monthly_otc_date
     GROUP BY DATE_FORMAT(created_at, '%Y-%m')
     ORDER BY month ASC
 ";
 
-$stmt_monthly_exp = $db->prepare($sql_monthly_exp);
-$stmt_monthly_exp->execute($exp_params);
-$monthly_expenses = $stmt_monthly_exp->fetchAll(PDO::FETCH_ASSOC);
+$stmt_monthly_otc = $db->prepare($sql_monthly_otc);
+$stmt_monthly_otc->execute($monthly_otc_params);
+$monthly_otc = $stmt_monthly_otc->fetchAll(PDO::FETCH_ASSOC);
 
-// Merge monthly data
+// Merge monthly revenue (bills + otc)
 $monthly_map = [];
 
 foreach ($monthly_revenue as $row) {
@@ -315,17 +475,69 @@ foreach ($monthly_revenue as $row) {
     ];
 }
 
+foreach ($monthly_otc as $row) {
+    $month = $row['month'];
+    if (isset($monthly_map[$month])) {
+        $monthly_map[$month]['revenue'] += (float)($row['revenue'] ?? 0);
+    } else {
+        $monthly_map[$month] = [
+            'month' => $month,
+            'revenue' => (float)($row['revenue'] ?? 0),
+            'expenses' => 0,
+            'profit' => 0
+        ];
+    }
+}
+
+// Get monthly expenses
+$exp_monthly_params = [];
+$exp_monthly_branch = "";
+$exp_monthly_date = "";
+
+if ($selected_branch_id > 0) {
+    $exp_monthly_branch = "AND branch_id = ?";
+    $exp_monthly_params[] = $selected_branch_id;
+}
+
+if (!empty($date_from) && !empty($date_to)) {
+    $exp_monthly_date = "AND DATE(created_at) BETWEEN ? AND ?";
+    $exp_monthly_params[] = $date_from;
+    $exp_monthly_params[] = $date_to;
+} elseif (!empty($date_from)) {
+    $exp_monthly_date = "AND DATE(created_at) >= ?";
+    $exp_monthly_params[] = $date_from;
+} elseif (!empty($date_to)) {
+    $exp_monthly_date = "AND DATE(created_at) <= ?";
+    $exp_monthly_params[] = $date_to;
+}
+
+$sql_monthly_exp = "
+    SELECT 
+        DATE_FORMAT(created_at, '%Y-%m') as month,
+        COALESCE(SUM(amount), 0) as expenses
+    FROM expenses 
+    WHERE status = 'paid'
+    $exp_monthly_branch
+    $exp_monthly_date
+    GROUP BY DATE_FORMAT(created_at, '%Y-%m')
+    ORDER BY month ASC
+";
+
+$stmt_monthly_exp = $db->prepare($sql_monthly_exp);
+$stmt_monthly_exp->execute($exp_monthly_params);
+$monthly_expenses = $stmt_monthly_exp->fetchAll(PDO::FETCH_ASSOC);
+
 foreach ($monthly_expenses as $row) {
     $month = $row['month'];
-    if (!isset($monthly_map[$month])) {
+    if (isset($monthly_map[$month])) {
+        $monthly_map[$month]['expenses'] = (float)($row['expenses'] ?? 0);
+    } else {
         $monthly_map[$month] = [
             'month' => $month,
             'revenue' => 0,
             'expenses' => (float)($row['expenses'] ?? 0),
             'profit' => 0
         ];
-    } else {
-        $monthly_map[$month]['expenses'] = (float)($row['expenses'] ?? 0);
     }
 }
 
@@ -353,623 +565,345 @@ include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Profit Report - Braick Dispensary</title>
-    
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    
-    <style>
-        :root {
-            --primary: #059669;
-            --primary-dark: #047857;
-            --primary-light: #34D399;
-            --primary-bg: #D1FAE5;
-            --primary-gradient: linear-gradient(135deg, #059669, #047857);
-            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            --success: #059669;
-            --success-bg: #D1FAE5;
-            --danger: #DC2626;
-            --danger-bg: #FEE2E2;
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            --bg-body: #F0FDF4;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #D1FAE5;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --transition: all 0.3s ease;
-        }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #34D399;
-            --primary-bg: #1A3A2A;
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-        }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        .page-header {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 24px 32px;
-            margin-bottom: 24px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            box-shadow: 0 4px 20px rgba(4, 120, 87, 0.25);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.5rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i { font-size: 1.6rem; opacity: 0.9; }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.85rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.55rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }
-        
-        .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            border: 1px solid rgba(255,255,255,0.08);
-        }
-        
-        .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.12);
-            padding: 8px 16px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.8rem;
-            transition: var(--transition);
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-        }
-        
-        .stats-row {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
-        }
-        
-        .stat-card {
-            border-radius: var(--radius-lg);
-            padding: 18px 20px;
-            transition: var(--transition);
-            box-shadow: var(--shadow-sm);
-            border: none;
-            color: white;
-        }
-        
-        .stat-card:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .stat-card .stat-icon {
-            font-size: 1.8rem;
-            margin-bottom: 8px;
-        }
-        
-        .stat-card .stat-number {
-            font-size: 1.6rem;
-            font-weight: 700;
-            color: white;
-        }
-        
-        .stat-card .stat-label {
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 600;
-            margin-top: 4px;
-            opacity: 0.85;
-            color: rgba(255,255,255,0.85);
-        }
-        
-        .filter-section {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            padding: 14px 18px;
-            border: 1px solid var(--border-color);
-            margin-bottom: 20px;
-        }
-        
-        .filter-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            align-items: center;
-        }
-        
-        .filter-input {
-            padding: 6px 12px;
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            font-size: 0.8rem;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: var(--transition);
-        }
-        
-        .filter-input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
-        }
-        
-        .btn-search {
-            padding: 6px 16px;
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.75rem;
-            cursor: pointer;
-            transition: var(--transition);
-        }
-        
-        .btn-search:hover {
-            background: var(--primary-dark);
-            transform: translateY(-1px);
-        }
-        
-        .btn-reset {
-            padding: 6px 14px;
-            border-radius: var(--radius);
-            font-size: 0.7rem;
-            font-weight: 600;
-            border: 2px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: var(--transition);
-            text-decoration: none;
-        }
-        
-        .btn-reset:hover {
-            border-color: var(--danger);
-            color: var(--danger);
-        }
-        
-        .table-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-            margin-bottom: 20px;
-        }
-        
-        .table-scroll { overflow-x: auto; }
-        
-        .data-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.75rem;
-        }
-        
-        .data-table thead th {
-            text-align: left;
-            padding: 10px 14px;
-            font-weight: 700;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: #ffffff;
-            background: var(--primary);
-            border-bottom: 3px solid var(--primary-dark);
-            white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 5;
-        }
-        
-        .data-table tbody td {
-            padding: 8px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        
-        .data-table tbody tr:hover td { background: var(--primary-bg); }
-        .data-table tbody tr:last-child td { border-bottom: none; }
-        .data-table tbody tr:nth-child(even) td { background: var(--gray-50); }
-        
-        [data-theme="dark"] .data-table tbody tr:nth-child(even) td { background: #1A1A2E; }
-        
-        .badge-status {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 16px;
-            font-size: 0.55rem;
-            font-weight: 600;
-            text-transform: capitalize;
-        }
-        
-        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
-        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
-        
-        .table-footer {
-            padding: 10px 16px;
-            border-top: 1px solid var(--border-color);
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            display: flex;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 6px;
-            background: var(--gray-50);
-        }
-        
-        [data-theme="dark"] .table-footer {
-            border-color: var(--gray-700);
-            color: var(--gray-400);
-            background: var(--gray-800);
-        }
-        
-        .footer {
-            padding: 10px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-        }
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        .chart-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-        
-        .chart-container canvas {
-            max-height: 300px;
-            max-width: 100%;
-        }
-        
-        .revenue-breakdown {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 10px;
-            margin-top: 12px;
-        }
-        
-        .breakdown-item {
-            padding: 10px 14px;
-            border-radius: var(--radius);
-            background: var(--bg-body);
-            border: 1px solid var(--border-color);
-        }
-        
-        .breakdown-item .label {
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            color: var(--text-secondary);
-            font-weight: 600;
-        }
-        
-        .breakdown-item .value {
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-        
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 12px 18px;
-            border-radius: 10px;
-            z-index: 999;
-            max-width: 380px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: white;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-            font-size: 0.8rem;
-        }
-        
-        .toast-custom.show { transform: translateY(0); opacity: 1; }
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
-        
-        @media (max-width: 768px) {
-            .filter-row { flex-direction: column; align-items: stretch; }
-            .filter-input { width: 100%; }
-            .stats-row { grid-template-columns: 1fr 1fr; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.1rem; }
-            .revenue-breakdown { grid-template-columns: 1fr 1fr; }
-        }
-        
-        @media (max-width: 480px) {
-            .stats-row { grid-template-columns: 1fr; }
-            .data-table { font-size: 0.6rem; }
-            .data-table thead th, .data-table td { padding: 4px 6px; }
-            .revenue-breakdown { grid-template-columns: 1fr; }
-        }
-    </style>
-</head>
-<body>
-
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- PAGE SPECIFIC STYLES (MINIMAL) -->
 <!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
+<style>
+    /* Override main content to work with header */
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 28px 32px;
+        min-height: calc(100vh - 68px);
+        background: var(--bg-body);
+        transition: background 0.3s ease;
+    }
     
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="0" <?= $selected_branch_id == 0 ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime">
-            <i class="far fa-calendar-alt mr-1"></i>
-            <span id="dateDisplay"><?= date('M d, Y') ?></span>
-            <span class="mx-1">|</span>
-            <i class="far fa-clock mr-1"></i>
-            <span id="timeDisplay"><?= date('h:i:s A') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
+    @media (max-width: 1024px) {
+        .main-content { margin-left: 0; padding: 16px; }
+    }
+    
+    .page-header {
+        background: linear-gradient(135deg, #059669, #047857);
+        border-radius: 18px;
+        padding: 24px 32px;
+        margin-bottom: 24px;
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        box-shadow: 0 4px 20px rgba(4, 120, 87, 0.25);
+        position: relative;
+        overflow: hidden;
+    }
+    
+    .page-header .page-title {
+        color: white;
+        font-size: 1.5rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .page-header .page-title i { font-size: 1.6rem; opacity: 0.9; }
+    
+    .page-header .page-subtitle {
+        color: rgba(255,255,255,0.85);
+        font-size: 0.85rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        position: relative;
+        z-index: 1;
+    }
+    
+    .role-badge-display {
+        background: rgba(255,255,255,0.2);
+        color: white;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.55rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+    
+    .header-badge {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        padding: 3px 12px;
+        border-radius: 20px;
+        font-size: 0.65rem;
+        font-weight: 500;
+        backdrop-filter: blur(4px);
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        border: 1px solid rgba(255,255,255,0.08);
+    }
+    
+    .btn-outline-light {
+        background: rgba(255,255,255,0.12);
+        color: white;
+        border: 1px solid rgba(255,255,255,0.12);
+        padding: 8px 16px;
+        border-radius: 12px;
+        font-weight: 500;
+        font-size: 0.8rem;
+        transition: all 0.3s ease;
+        text-decoration: none;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        backdrop-filter: blur(4px);
+        position: relative;
+        z-index: 1;
+    }
+    
+    .btn-outline-light:hover {
+        background: rgba(255,255,255,0.25);
+        transform: translateY(-2px);
+    }
+    
+    .stats-row {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 16px;
+        margin-bottom: 24px;
+    }
+    
+    .stat-card {
+        border-radius: 18px;
+        padding: 18px 20px;
+        transition: all 0.3s ease;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        border: none;
+        color: white;
+    }
+    
+    .stat-card:hover {
+        transform: translateY(-4px);
+        box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    }
+    
+    .stat-card .stat-icon { font-size: 1.8rem; margin-bottom: 8px; }
+    .stat-card .stat-number { font-size: 1.6rem; font-weight: 700; color: white; }
+    .stat-card .stat-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 600; margin-top: 4px; opacity: 0.85; color: rgba(255,255,255,0.85); }
+    
+    .filter-section {
+        background: var(--bg-card);
+        border-radius: 18px;
+        padding: 14px 18px;
+        border: 1px solid var(--border-color);
+        margin-bottom: 20px;
+    }
+    
+    .filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+    }
+    
+    .filter-input {
+        padding: 6px 12px;
+        border: 2px solid var(--border-color);
+        border-radius: 12px;
+        font-size: 0.8rem;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        outline: none;
+        transition: all 0.3s ease;
+    }
+    
+    .filter-input:focus {
+        border-color: #059669;
+        box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
+    }
+    
+    .btn-search {
+        padding: 6px 16px;
+        background: #059669;
+        color: white;
+        border: none;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.75rem;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    
+    .btn-search:hover {
+        background: #047857;
+        transform: translateY(-1px);
+    }
+    
+    .btn-reset {
+        padding: 6px 14px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        border: 2px solid var(--border-color);
+        background: transparent;
+        color: var(--text-secondary);
+        cursor: pointer;
+        transition: all 0.3s ease;
+        text-decoration: none;
+    }
+    
+    .btn-reset:hover {
+        border-color: #DC2626;
+        color: #DC2626;
+    }
+    
+    .table-container {
+        background: var(--bg-card);
+        border-radius: 18px;
+        border: 1px solid var(--border-color);
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+        margin-bottom: 20px;
+    }
+    
+    .table-scroll { overflow-x: auto; }
+    
+    .data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.75rem;
+    }
+    
+    .data-table thead th {
+        text-align: left;
+        padding: 10px 14px;
+        font-weight: 700;
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: #ffffff;
+        background: #059669;
+        border-bottom: 3px solid #047857;
+        white-space: nowrap;
+        position: sticky;
+        top: 0;
+        z-index: 5;
+    }
+    
+    .data-table tbody td {
+        padding: 8px 14px;
+        border-bottom: 1px solid var(--border-color);
+        color: var(--text-primary);
+        vertical-align: middle;
+    }
+    
+    .data-table tbody tr:hover td { background: var(--primary-bg); }
+    .data-table tbody tr:last-child td { border-bottom: none; }
+    
+    .badge-status {
+        display: inline-block;
+        padding: 2px 10px;
+        border-radius: 16px;
+        font-size: 0.55rem;
+        font-weight: 600;
+        text-transform: capitalize;
+    }
+    
+    .badge-success { background: #D1FAE5; color: #059669; border: 1px solid #059669; }
+    .badge-warning { background: #FEF3C7; color: #D97706; border: 1px solid #D97706; }
+    .badge-danger { background: #FEE2E2; color: #DC2626; border: 1px solid #DC2626; }
+    .badge-blue { background: #DBEAFE; color: #2563EB; border: 1px solid #2563EB; }
+    .badge-purple { background: #EDE9FE; color: #7C3AED; border: 1px solid #7C3AED; }
+    
+    .table-footer {
+        padding: 10px 16px;
+        border-top: 1px solid var(--border-color);
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+        display: flex;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 6px;
+        background: var(--gray-50);
+    }
+    
+    .chart-container {
+        background: var(--bg-card);
+        border-radius: 18px;
+        border: 1px solid var(--border-color);
+        padding: 20px;
+        margin-bottom: 20px;
+    }
+    
+    .chart-container canvas {
+        max-height: 300px;
+        max-width: 100%;
+    }
+    
+    .revenue-breakdown {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+    }
+    
+    .breakdown-item {
+        padding: 10px 14px;
+        border-radius: 12px;
+        background: var(--bg-body);
+        border: 1px solid var(--border-color);
+    }
+    
+    .breakdown-item .label {
+        font-size: 0.6rem;
+        text-transform: uppercase;
+        color: var(--text-secondary);
+        font-weight: 600;
+    }
+    
+    .breakdown-item .value {
+        font-size: 1rem;
+        font-weight: 700;
+        color: var(--text-primary);
+    }
+    
+    .footer {
+        padding: 10px 0;
+        border-top: 1px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: #059669; font-weight: 600; }
+    
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(12px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
+    
+    @media (max-width: 768px) {
+        .filter-row { flex-direction: column; align-items: stretch; }
+        .filter-input { width: 100%; }
+        .stats-row { grid-template-columns: 1fr 1fr; }
+        .page-header { padding: 16px 18px; }
+        .page-header .page-title { font-size: 1.1rem; }
+        .revenue-breakdown { grid-template-columns: 1fr 1fr; }
+    }
+    
+    @media (max-width: 480px) {
+        .stats-row { grid-template-columns: 1fr; }
+        .data-table { font-size: 0.6rem; }
+        .data-table thead th, .data-table td { padding: 4px 6px; }
+        .revenue-breakdown { grid-template-columns: 1fr; }
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -977,7 +911,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header">
+    <div class="page-header animate-fade-in-up">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-chart-line"></i>
@@ -998,7 +932,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <p class="page-subtitle">
                 <i class="fas fa-arrow-right"></i>
                 Profit = Revenue - Expenses
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.2);color:#34D399;">
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;">
                     <i class="fas fa-calendar-alt"></i> <?= date('M d, Y', strtotime($date_from)) ?> - <?= date('M d, Y', strtotime($date_to)) ?>
                 </span>
             </p>
@@ -1039,7 +973,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <!-- Revenue - BLUE -->
         <div class="stat-card" style="background: linear-gradient(135deg, #2563EB, #1D4ED8);">
             <div class="stat-icon"><i class="fas fa-arrow-up" style="color:rgba(255,255,255,0.8);"></i></div>
-            <div class="stat-number">TSh <?= formatMoney($revenue_data['total_revenue']) ?></div>
+            <div class="stat-number">TSh <?= formatMoney($total_revenue) ?></div>
             <div class="stat-label">💰 Total Revenue</div>
         </div>
         
@@ -1069,32 +1003,32 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- Revenue Breakdown -->
     <div class="chart-container animate-fade-in-up" style="animation-delay:0.15s;">
         <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:12px;color:var(--text-primary);">
-            <i class="fas fa-pie-chart" style="color:var(--primary);"></i> Revenue Breakdown
+            <i class="fas fa-pie-chart" style="color:#059669;"></i> Revenue Breakdown
         </h3>
         <div class="revenue-breakdown">
             <div class="breakdown-item">
-                <div class="label">Consultation</div>
-                <div class="value" style="color:#3B82F6;">TSh <?= formatMoney($revenue_data['consultation_revenue']) ?></div>
+                <div class="label">Patient Bills</div>
+                <div class="value" style="color:#2563EB;">TSh <?= formatMoney($patient_bills_revenue) ?></div>
             </div>
             <div class="breakdown-item">
-                <div class="label">Medications</div>
-                <div class="value" style="color:#D97706;">TSh <?= formatMoney($revenue_data['medication_revenue']) ?></div>
+                <div class="label">OTC Sales</div>
+                <div class="value" style="color:#0891B2;">TSh <?= formatMoney($otc_revenue) ?></div>
+            </div>
+            <div class="breakdown-item">
+                <div class="label">Prescriptions</div>
+                <div class="value" style="color:#7C3AED;">TSh <?= formatMoney($prescription_revenue) ?></div>
+            </div>
+            <div class="breakdown-item">
+                <div class="label">Consultation</div>
+                <div class="value" style="color:#059669;">TSh <?= formatMoney($consultation_revenue) ?></div>
             </div>
             <div class="breakdown-item">
                 <div class="label">Lab Tests</div>
-                <div class="value" style="color:#7C3AED;">TSh <?= formatMoney($revenue_data['lab_revenue']) ?></div>
+                <div class="value" style="color:#7C3AED;">TSh <?= formatMoney($lab_revenue) ?></div>
             </div>
             <div class="breakdown-item">
-                <div class="label">Procedures</div>
-                <div class="value" style="color:#0D9488;">TSh <?= formatMoney($revenue_data['procedure_revenue']) ?></div>
-            </div>
-            <div class="breakdown-item">
-                <div class="label">Registration</div>
-                <div class="value" style="color:#059669;">TSh <?= formatMoney($revenue_data['registration_revenue']) ?></div>
-            </div>
-            <div class="breakdown-item">
-                <div class="label">Other</div>
-                <div class="value" style="color:#64748B;">TSh <?= formatMoney($revenue_data['other_revenue']) ?></div>
+                <div class="label">Medications</div>
+                <div class="value" style="color:#D97706;">TSh <?= formatMoney($medication_revenue) ?></div>
             </div>
         </div>
     </div>
@@ -1103,7 +1037,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <?php if (count($monthly_data) > 0): ?>
     <div class="chart-container animate-fade-in-up" style="animation-delay:0.2s;">
         <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:12px;color:var(--text-primary);">
-            <i class="fas fa-chart-bar" style="color:var(--primary);"></i> Monthly Profit Trend
+            <i class="fas fa-chart-bar" style="color:#059669;"></i> Monthly Profit Trend
         </h3>
         <canvas id="profitChart"></canvas>
     </div>
@@ -1113,7 +1047,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <div class="table-container animate-fade-in-up" style="animation-delay:0.25s;">
         <div style="padding:12px 16px;border-bottom:1px solid var(--border-color);">
             <h3 style="font-size:0.85rem;font-weight:700;color:var(--text-primary);">
-                <i class="fas fa-list" style="color:var(--danger);"></i> Expense Breakdown by Category
+                <i class="fas fa-list" style="color:#DC2626;"></i> Expense Breakdown by Category
             </h3>
         </div>
         <div class="table-scroll">
@@ -1135,12 +1069,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         ?>
                             <tr>
                                 <td>
-                                    <span class="badge-status" style="background:var(--warning-bg);color:var(--warning);border-color:var(--warning);">
+                                    <span class="badge-status badge-warning">
                                         <?= htmlspecialchars($cat['category']) ?>
                                     </span>
                                 </td>
                                 <td style="text-align:center;"><?= $cat['count'] ?></td>
-                                <td style="text-align:right;font-weight:600;color:var(--danger);">
+                                <td style="text-align:right;font-weight:600;color:#DC2626;">
                                     TSh <?= formatMoney($cat['amount']) ?>
                                 </td>
                                 <td style="text-align:right;"><?= $percentage ?>%</td>
@@ -1149,7 +1083,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <tr style="font-weight:700;border-top:2px solid var(--border-color);">
                             <td>TOTAL</td>
                             <td style="text-align:center;"><?= array_sum(array_column($expense_data['expense_categories'], 'count')) ?></td>
-                            <td style="text-align:right;color:var(--danger);">TSh <?= formatMoney($total_exp) ?></td>
+                            <td style="text-align:right;color:#DC2626;">TSh <?= formatMoney($total_exp) ?></td>
                             <td style="text-align:right;">100%</td>
                         </tr>
                     <?php else: ?>
@@ -1179,27 +1113,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- Summary -->
     <div class="chart-container animate-fade-in-up" style="animation-delay:0.3s;">
         <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:12px;color:var(--text-primary);">
-            <i class="fas fa-file-alt" style="color:var(--primary);"></i> Summary
+            <i class="fas fa-file-alt" style="color:#059669;"></i> Summary
         </h3>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;">
-            <div style="padding:10px 14px;background:var(--bg-body);border-radius:var(--radius);border:1px solid var(--border-color);">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Total Invoices</div>
-                <div style="font-size:1.2rem;font-weight:700;color:var(--text-primary);"><?= $revenue_data['total_invoices'] ?></div>
+            <div style="padding:10px 14px;background:var(--bg-body);border-radius:12px;border:1px solid var(--border-color);">
+                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Patient Bills</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#2563EB;"><?= number_format($patient_bills_count) ?></div>
             </div>
-            <div style="padding:10px 14px;background:var(--bg-body);border-radius:var(--radius);border:1px solid var(--border-color);">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Total Patients</div>
-                <div style="font-size:1.2rem;font-weight:700;color:var(--text-primary);"><?= $revenue_data['total_patients'] ?></div>
+            <div style="padding:10px 14px;background:var(--bg-body);border-radius:12px;border:1px solid var(--border-color);">
+                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">OTC Transactions</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#0891B2;"><?= number_format($otc_count) ?></div>
             </div>
-            <div style="padding:10px 14px;background:var(--bg-body);border-radius:var(--radius);border:1px solid var(--border-color);">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Avg Revenue/Patient</div>
-                <div style="font-size:1.2rem;font-weight:700;color:var(--primary);">
-                    TSh <?= $revenue_data['total_patients'] > 0 ? formatMoney($revenue_data['total_revenue'] / $revenue_data['total_patients']) : '0' ?>
-                </div>
+            <div style="padding:10px 14px;background:var(--bg-body);border-radius:12px;border:1px solid var(--border-color);">
+                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Prescriptions</div>
+                <div style="font-size:1.2rem;font-weight:700;color:#7C3AED;"><?= number_format($prescription_count) ?></div>
             </div>
-            <div style="padding:10px 14px;background:var(--bg-body);border-radius:var(--radius);border:1px solid var(--border-color);">
+            <div style="padding:10px 14px;background:var(--bg-body);border-radius:12px;border:1px solid var(--border-color);">
                 <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Expense Ratio</div>
-                <div style="font-size:1.2rem;font-weight:700;color:<?= $revenue_data['total_revenue'] > 0 && ($expense_data['total_expenses'] / $revenue_data['total_revenue']) < 0.5 ? 'var(--success)' : 'var(--warning)' ?>;">
-                    <?= $revenue_data['total_revenue'] > 0 ? round(($expense_data['total_expenses'] / $revenue_data['total_revenue']) * 100, 2) : 0 ?>%
+                <div style="font-size:1.2rem;font-weight:700;color:<?= $total_revenue > 0 && ($expense_data['total_expenses'] / $total_revenue) < 0.5 ? '#059669' : '#D97706' ?>;">
+                    <?= $total_revenue > 0 ? round(($expense_data['total_expenses'] / $total_revenue) * 100, 2) : 0 ?>%
                 </div>
             </div>
         </div>
@@ -1221,60 +1153,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:0.9rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
-    </div>
-</div>
-
-<!-- ================================================================ -->
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
-<script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    (function() {
-        var htmlElement = document.documentElement;
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var darkToggle = document.getElementById('darkModeToggle');
-        
-        function applyDarkMode(isDark) {
-            if (isDark) {
-                htmlElement.setAttribute('data-theme', 'dark');
-                document.cookie = "dark_mode=true; path=/";
-                if (darkIcon) { darkIcon.className = 'fas fa-sun'; }
-                if (darkText) { darkText.textContent = 'Light'; }
-                localStorage.setItem('darkMode', 'true');
-            } else {
-                htmlElement.removeAttribute('data-theme');
-                document.cookie = "dark_mode=false; path=/";
-                if (darkIcon) { darkIcon.className = 'fas fa-moon'; }
-                if (darkText) { darkText.textContent = 'Dark'; }
-                localStorage.setItem('darkMode', 'false');
-            }
-        }
-        
-        var saved = localStorage.getItem('darkMode');
-        if (saved === null) {
-            var cookieMatch = document.cookie.match(/dark_mode=([^;]+)/);
-            saved = cookieMatch ? cookieMatch[1] : 'false';
-        }
-        applyDarkMode(saved === 'true');
-        
-        if (darkToggle) {
-            darkToggle.addEventListener('click', function() {
-                var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-                applyDarkMode(!isDark);
-            });
-        }
-    })();
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
+<script>
     // ================================================================
     // DATE & TIME
     // ================================================================
@@ -1413,13 +1296,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c💰 Braick - Profit Report', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= $branch_name ?> (ID: <?= $selected_branch_id ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c🔵 Revenue: TSh <?= formatMoney($revenue_data['total_revenue']) ?>', 'font-size:12px; color:#2563EB;');
+    console.log('%c🔵 Total Revenue: TSh <?= formatMoney($total_revenue) ?>', 'font-size:12px; color:#2563EB;');
+    console.log('%c   ├─ Patient Bills: TSh <?= formatMoney($patient_bills_revenue) ?> (<?= number_format($patient_bills_count) ?> bills)', 'font-size:11px; color:#2563EB;');
+    console.log('%c   ├─ OTC: TSh <?= formatMoney($otc_revenue) ?> (<?= number_format($otc_count) ?> transactions)', 'font-size:11px; color:#0891B2;');
+    console.log('%c   └─ Prescriptions: TSh <?= formatMoney($prescription_revenue) ?> (<?= number_format($prescription_count) ?> items)', 'font-size:11px; color:#7C3AED;');
     console.log('%c🔴 Expenses: TSh <?= formatMoney($expense_data['total_expenses']) ?>', 'font-size:12px; color:#DC2626;');
-    console.log('%c🟢 Profit: TSh <?= formatMoney($profit_data['net_profit']) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🟢 Net Profit: TSh <?= formatMoney($profit_data['net_profit']) ?>', 'font-size:12px; color:#059669;');
     console.log('%c🟣 Profit Margin: <?= $profit_data['profit_margin'] ?>%', 'font-size:12px; color:#7C3AED;');
-    console.log('%c✅ Using tables: bills, bill_items, expenses', 'font-size:12px; color:#34D399;');
-    console.log('%c❌ patient_bills table removed - using bills table', 'font-size:12px; color:#34D399;');
-    console.log('%c❌ is_paid column removed - using bills.status = paid', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: Revenue = Patient Bills (paid_amount) + OTC + Prescriptions', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: Excludes OTC bills from bills table', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: Header included via admin_header.php', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

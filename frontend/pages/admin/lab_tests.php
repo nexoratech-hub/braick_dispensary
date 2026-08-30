@@ -4,6 +4,8 @@
 // ADMIN - VIEW ALL LAB TESTS
 // BRAICK DISPENSARY - USING EXISTING DB TABLES
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// FIXED: Added Edit button - clickable only for 'completed' status
+// Action buttons: 3 rows (View, Edit, Delete)
 // ================================================================
 
 // ================================================================
@@ -85,6 +87,10 @@ if ($error === 'invalid_id') {
     $show_error = true;
 } elseif ($error === 'update_success') {
     $error_message = '✅ Lab test updated successfully!';
+    $show_error = true;
+    $error_message_type = 'success';
+} elseif ($error === 'delete_success') {
+    $error_message = '✅ Lab test deleted successfully!';
     $show_error = true;
     $error_message_type = 'success';
 }
@@ -945,6 +951,167 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           ACTION BUTTONS - 3 ROWS (View, Edit, Delete)
+           Edit button: clickable only for 'completed' status
+           ================================================================ */
+        .action-buttons {
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            align-items: center;
+        }
+        
+        .btn-action {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.62rem;
+            font-weight: 600;
+            text-decoration: none;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 2px solid transparent;
+            cursor: pointer;
+            min-width: 55px;
+            width: 100%;
+            min-height: 26px;
+            white-space: nowrap;
+        }
+        
+        .btn-action i {
+            font-size: 0.65rem;
+        }
+        
+        .btn-action .btn-label {
+            display: inline;
+            font-size: 0.58rem;
+        }
+        
+        .btn-action:hover {
+            transform: translateY(-1px) scale(1.02);
+        }
+        
+        .btn-action:active {
+            transform: scale(0.95);
+        }
+        
+        /* View Button - Top row (Blue) */
+        .btn-view {
+            background: var(--primary-bg);
+            color: var(--primary);
+            border-color: var(--primary);
+        }
+        
+        .btn-view:hover {
+            background: var(--primary-gradient);
+            color: white;
+            border-color: var(--primary);
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
+        }
+        
+        [data-theme="dark"] .btn-view {
+            background: #1E3A5F;
+            color: #3B82F6;
+            border-color: #3B82F6;
+        }
+        
+        [data-theme="dark"] .btn-view:hover {
+            background: linear-gradient(135deg, #2563EB, #1D4ED8);
+            color: white;
+        }
+        
+        /* Edit Button - Middle row (Green) - Only active when completed */
+        .btn-edit {
+            background: var(--success-bg);
+            color: var(--success);
+            border-color: var(--success);
+        }
+        
+        .btn-edit:hover {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
+        }
+        
+        /* Disabled Edit button - Grey, no hover */
+        .btn-edit-disabled {
+            background: var(--gray-100);
+            color: var(--gray-400);
+            border-color: var(--gray-300);
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        
+        .btn-edit-disabled:hover {
+            transform: none !important;
+            box-shadow: none !important;
+            background: var(--gray-100) !important;
+            color: var(--gray-400) !important;
+        }
+        
+        [data-theme="dark"] .btn-edit {
+            background: #064E3B;
+            color: #34D399;
+            border-color: #34D399;
+        }
+        
+        [data-theme="dark"] .btn-edit:hover {
+            background: #059669;
+            color: white;
+        }
+        
+        [data-theme="dark"] .btn-edit-disabled {
+            background: #1E293B;
+            color: #475569;
+            border-color: #334155;
+        }
+        
+        /* Delete Button - Bottom row (Red) */
+        .btn-delete {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+        
+        .btn-delete:hover {
+            background: var(--danger);
+            color: white;
+            border-color: var(--danger);
+            box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+        }
+        
+        [data-theme="dark"] .btn-delete {
+            background: #3A1A1A;
+            color: #F87171;
+            border-color: #F87171;
+        }
+        
+        [data-theme="dark"] .btn-delete:hover {
+            background: #DC2626;
+            color: white;
+        }
+        
+        /* Hide text on very small screens, show only icons */
+        @media (max-width: 480px) {
+            .btn-action .btn-label {
+                display: none;
+            }
+            
+            .btn-action {
+                padding: 3px 5px;
+                min-width: 28px;
+                min-height: 24px;
+            }
+            
+            .btn-action i {
+                font-size: 0.7rem;
+            }
+        }
+        
+        /* ================================================================
            CARD
            ================================================================ */
         .card {
@@ -1050,12 +1217,24 @@ include_once '../../components/admin_sidebar.php';
             .filter-bar select, .filter-bar input { width: 100%; min-width: unset; }
             .data-table { font-size: 0.7rem; }
             .data-table thead th, .data-table td { padding: 6px 8px; }
+            .btn-action {
+                padding: 3px 8px;
+                min-height: 24px;
+                font-size: 0.6rem;
+                min-width: 45px;
+            }
+            .btn-action i {
+                font-size: 0.6rem;
+            }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .action-buttons {
+                gap: 2px;
+            }
         }
         
         /* ================================================================
@@ -1334,7 +1513,7 @@ include_once '../../components/admin_sidebar.php';
                 Lab Tests List
                 <span class="text-xs text-gray-400 font-normal">(<?= $total_tests ?> records)</span>
             </h3>
-            <a href="add_lab_test.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-sm btn-primary">
+            <a href="add_lab_test.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary" style="padding: 8px 18px; font-size: 0.8rem;">
                 <i class="fas fa-plus"></i> Add New Test
             </a>
         </div>
@@ -1350,11 +1529,13 @@ include_once '../../components/admin_sidebar.php';
                             <th>Status</th>
                             <th>Price</th>
                             <th>Created</th>
-                            <th>Action</th>
+                            <th style="text-align:center; min-width:80px;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($lab_tests as $test): ?>
+                        <?php foreach ($lab_tests as $test): 
+                            $is_completed = ($test['status'] ?? '') === 'completed';
+                        ?>
                             <tr>
                                 <td class="font-medium text-sm"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
                                 <td>
@@ -1389,18 +1570,41 @@ include_once '../../components/admin_sidebar.php';
                                 <td class="font-medium">TSh <?= number_format($test['test_price'] ?? 0, 0) ?></td>
                                 <td class="text-xs text-gray-500"><?= date('M d, Y', strtotime($test['created_at'] ?? 'now')) ?></td>
                                 <td>
-                                    <div class="flex gap-1">
-                                        <a href="view_lab_result.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-blue-600 text-xs hover:underline" title="View">
+                                    <!-- ================================================================ -->
+                                    <!-- ACTION BUTTONS - 3 ROWS -->
+                                    <!-- View (top) - Always clickable -->
+                                    <!-- Edit (middle) - Only clickable if status = 'completed' -->
+                                    <!-- Delete (bottom) - Always clickable -->
+                                    <!-- ================================================================ -->
+                                    <div class="action-buttons">
+                                        <!-- View - Always clickable -->
+                                        <a href="view_lab_result.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                                           class="btn-action btn-view" title="View Test">
                                             <i class="fas fa-eye"></i>
+                                            <span class="btn-label">View</span>
                                         </a>
-                                        <a href="edit_lab_test.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="text-green-600 text-xs hover:underline" title="Edit">
-                                            <i class="fas fa-edit"></i>
-                                        </a>
-                                        <?php if (isset($test['status']) && $test['status'] !== 'completed' && $test['status'] !== 'cancelled'): ?>
-                                            <button onclick="markComplete(<?= $test['id'] ?>)" class="text-success text-xs hover:underline" title="Mark Complete">
-                                                <i class="fas fa-check-circle"></i>
-                                            </button>
+                                        
+                                        <!-- Edit - Clickable only if completed -->
+                                        <?php if ($is_completed): ?>
+                                            <a href="edit_lab_test.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                                               class="btn-action btn-edit" title="Edit Test">
+                                                <i class="fas fa-edit"></i>
+                                                <span class="btn-label">Edit</span>
+                                            </a>
+                                        <?php else: ?>
+                                            <span class="btn-action btn-edit-disabled" title="Edit only available for completed tests">
+                                                <i class="fas fa-edit"></i>
+                                                <span class="btn-label">Edit</span>
+                                            </span>
                                         <?php endif; ?>
+                                        
+                                        <!-- Delete - Always clickable -->
+                                        <a href="delete_lab_test.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                                           class="btn-action btn-delete" title="Delete Test" 
+                                           onclick="return confirm('Are you sure you want to delete this lab test?')">
+                                            <i class="fas fa-trash"></i>
+                                            <span class="btn-label">Delete</span>
+                                        </a>
                                     </div>
                                 </td>
                             </tr>
@@ -1550,33 +1754,6 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // MARK AS COMPLETE
-    // ================================================================
-    function markComplete(testId) {
-        if (confirm('Mark this lab test as COMPLETED?')) {
-            var branch = '<?= urlencode($selected_branch_id) ?>';
-            var form = document.createElement('form');
-            form.method = 'POST';
-            form.action = 'edit_lab_test.php?id=' + testId + '&branch=' + branch;
-            
-            var input1 = document.createElement('input');
-            input1.type = 'hidden';
-            input1.name = 'action';
-            input1.value = 'update_lab_test';
-            form.appendChild(input1);
-            
-            var input2 = document.createElement('input');
-            input2.type = 'hidden';
-            input2.name = 'status';
-            input2.value = 'completed';
-            form.appendChild(input2);
-            
-            document.body.appendChild(form);
-            form.submit();
-        }
-    }
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
@@ -1606,6 +1783,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c⏳ In Progress: <?= $in_progress_tests ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c⏰ Pending: <?= $pending_tests ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c🔘 Action buttons: 3 rows (View ↑, Edit (green, only if completed), Delete ↓)', 'font-size:13px; color:#34D399;');
     console.log('%c📊 Tables: lab_tests, visits, patients, users, branches', 'font-size:13px; color:#34D399;');
 </script>
 

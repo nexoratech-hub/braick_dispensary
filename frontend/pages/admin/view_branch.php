@@ -3,6 +3,8 @@
 // FILE: frontend/pages/admin/view_branch.php
 // VIEW BRANCH DETAILS - WITH SHARED HEADER & SIDEBAR
 // BRAICK DISPENSARY - USING EXISTING DATABASE TABLES
+// FIXED: Total Revenue uses paid_amount from paid bills only (no double counting)
+// FIXED: Excludes OTC bills
 // ================================================================
 
 // ================================================================
@@ -78,7 +80,7 @@ $branch_created = $branch['created_at'] ?? date('Y-m-d H:i:s');
 $branch_updated = $branch['updated_at'] ?? date('Y-m-d H:i:s');
 
 // ================================================================
-// GET STATISTICS - USING EXISTING TABLES
+// GET STATISTICS - USING EXISTING TABLES (FIXED)
 // ================================================================
 
 // Total Employees
@@ -129,37 +131,92 @@ $stmt = $db->prepare("SELECT COUNT(*) as total FROM lab_tests WHERE branch_id = 
 $stmt->execute([$branch_id]);
 $total_lab_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-// Total Bills (from bills table)
-$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(total_amount), 0) as total_amount FROM bills WHERE branch_id = ? AND status = 'paid'");
+// ================================================================
+// ✅ BILLS - PAID ONLY (Excludes OTC bills)
+// ================================================================
+$stmt = $db->prepare("
+    SELECT 
+        COUNT(*) as total, 
+        COALESCE(SUM(paid_amount), 0) as total_revenue 
+    FROM bills 
+    WHERE branch_id = ? 
+    AND status = 'paid'
+    AND patient_id IS NOT NULL
+    AND visit_id IS NOT NULL
+    AND bill_number NOT LIKE 'BILL-OTC-%'
+");
 $stmt->execute([$branch_id]);
 $bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
 $total_bills = (int)($bill_data['total'] ?? 0);
-$bill_revenue = (float)($bill_data['total_amount'] ?? 0);
+$bill_revenue = (float)($bill_data['total_revenue'] ?? 0);
 
-// Total Payments (from payments table)
-$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(amount), 0) as total_amount FROM payments WHERE branch_id = ?");
+// ================================================================
+// ✅ OTC REVENUE - from otc_sales table
+// ================================================================
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(total_amount), 0) as total_otc_revenue
+    FROM otc_sales 
+    WHERE branch_id = ? 
+    AND payment_status = 'paid'
+");
 $stmt->execute([$branch_id]);
-$payments_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_payments = (int)($payments_data['total'] ?? 0);
-$payments_amount = (float)($payments_data['total_amount'] ?? 0);
+$otc_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total_otc_revenue'] ?? 0);
 
-// Pending Bills (from bills table)
-$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(total_amount), 0) as pending_amount FROM bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
+// ================================================================
+// ✅ PRESCRIPTION REVENUE - from prescription_items table
+// ================================================================
+$stmt = $db->prepare("
+    SELECT COALESCE(SUM(pi.total_price), 0) as total_prescription_revenue
+    FROM prescription_items pi
+    INNER JOIN prescriptions p ON pi.prescription_id = p.id
+    WHERE p.branch_id = ? 
+    AND p.status = 'dispensed'
+");
+$stmt->execute([$branch_id]);
+$prescription_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total_prescription_revenue'] ?? 0);
+
+// ================================================================
+// ✅ TOTAL REVENUE = Patient Bills + OTC + Prescriptions
+// ================================================================
+$total_revenue = $bill_revenue + $otc_revenue + $prescription_revenue;
+
+// ================================================================
+// PENDING BILLS (from bills table, excludes OTC)
+// ================================================================
+$stmt = $db->prepare("
+    SELECT 
+        COUNT(*) as total, 
+        COALESCE(SUM(total_amount), 0) as pending_amount 
+    FROM bills 
+    WHERE branch_id = ? 
+    AND status IN ('pending', 'partial')
+    AND patient_id IS NOT NULL
+    AND visit_id IS NOT NULL
+    AND bill_number NOT LIKE 'BILL-OTC-%'
+");
 $stmt->execute([$branch_id]);
 $pending_data = $stmt->fetch(PDO::FETCH_ASSOC);
 $pending_bills = (int)($pending_data['total'] ?? 0);
 $pending_revenue = (float)($pending_data['pending_amount'] ?? 0);
 
-// Total Expenses
+// ================================================================
+// TOTAL EXPENSES
+// ================================================================
 $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_expenses FROM expenses WHERE branch_id = ? AND status = 'paid'");
 $stmt->execute([$branch_id]);
 $total_expenses = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total_expenses'] ?? 0);
 
-// Total Revenue (bills paid + payments)
-$total_revenue = $bill_revenue + $payments_amount;
-
-// Net Profit
+// ================================================================
+// NET PROFIT
+// ================================================================
 $net_profit = $total_revenue - $total_expenses;
+
+// ================================================================
+// TOTAL PAYMENTS COUNT (not amount, to avoid double counting)
+// ================================================================
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM payments WHERE branch_id = ?");
+$stmt->execute([$branch_id]);
+$total_payments = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
 // ================================================================
 // GET RECENT DATA
@@ -184,10 +241,13 @@ $stmt->execute([$branch_id]);
 $recent_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $stmt = $db->prepare("
-    SELECT b.id, b.bill_number, b.total_amount, b.status, b.created_at, p.full_name as patient_name 
+    SELECT b.id, b.bill_number, b.total_amount, b.paid_amount, b.balance, b.status, b.created_at, p.full_name as patient_name 
     FROM bills b 
     JOIN patients p ON b.patient_id = p.id 
     WHERE b.branch_id = ? 
+    AND b.patient_id IS NOT NULL
+    AND b.visit_id IS NOT NULL
+    AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ORDER BY b.created_at DESC 
     LIMIT 10
 ");
@@ -204,6 +264,16 @@ try {
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
+}
+
+// ================================================================
+// FORMAT FUNCTIONS
+// ================================================================
+function formatMoney($amount) {
+    if ($amount === null || $amount === '') {
+        return '0';
+    }
+    return number_format((float)$amount, 0, '.', ',');
 }
 
 // ================================================================
@@ -317,7 +387,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* MAIN CONTENT */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -325,7 +394,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             min-height: calc(100vh - 68px);
         }
         
-        /* PAGE HEADER */
         .page-header {
             background: var(--primary-solid);
             border-radius: var(--radius-lg);
@@ -444,10 +512,9 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* STATS CARDS */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             margin-bottom: 28px;
         }
@@ -516,7 +583,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         .stat-card.purple { background: #7C3AED; }
         .stat-card.purple:hover { background: #6D28D9; }
         
-        /* DETAIL CARDS */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -602,7 +668,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             color: var(--warning);
         }
         
-        /* LIST ITEMS */
         .list-item {
             display: flex;
             justify-content: space-between;
@@ -673,7 +738,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             border-radius: 4px;
         }
         
-        /* QUICK ACTIONS */
         .quick-action {
             padding: 16px;
             border-radius: var(--radius);
@@ -704,7 +768,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             color: var(--text-primary);
         }
         
-        /* EMPTY STATE */
         .empty-state {
             text-align: center;
             padding: 30px 20px;
@@ -723,7 +786,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             margin: 0;
         }
         
-        /* FOOTER */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -738,7 +800,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             font-weight: 500;
         }
         
-        /* RESPONSIVE */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
@@ -834,7 +895,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - 6 CARDS -->
+    <!-- STATS CARDS - 6 CARDS (FIXED) -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         
@@ -979,7 +1040,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                     <p style="font-size:1.3rem;font-weight:700;color:var(--success);margin:0;">TSh <?= number_format($total_revenue, 0) ?></p>
                     <div style="display:flex;gap:8px;font-size:0.55rem;color:var(--text-secondary);margin-top:4px;flex-wrap:wrap;">
                         <span>📋 Bills: TSh <?= number_format($bill_revenue, 0) ?></span>
-                        <span>💳 Payments: TSh <?= number_format($payments_amount, 0) ?></span>
+                        <span>💊 Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?></span>
+                        <span>🏪 OTC: TSh <?= number_format($otc_revenue, 0) ?></span>
                     </div>
                 </div>
                 
@@ -1297,11 +1359,16 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     console.log('%c🏢 Braick Dispensary - View Branch (FIXED)', 'font-size:18px; font-weight:bold; color:#1A56DB;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#1A56DB;');
     console.log('%c👥 Employees: <?= $total_employees ?>, Patients: <?= $total_patients ?>', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c💰 Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#16A34A;');
+    console.log('%c💰 Revenue Breakdown:', 'font-size:13px; color:#16A34A;');
+    console.log('%c   ├─ Patient Bills: TSh <?= number_format($bill_revenue, 0) ?>', 'font-size:12px; color:#16A34A;');
+    console.log('%c   ├─ OTC: TSh <?= number_format($otc_revenue, 0) ?>', 'font-size:12px; color:#0891B2;');
+    console.log('%c   └─ Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#16A34A;');
     console.log('%c📤 Expenses: TSh <?= number_format($total_expenses, 0) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit, 0) ?>', 'font-size:13px; color:#16A34A;');
     console.log('%c⏳ Pending: TSh <?= number_format($pending_revenue, 0) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c📊 Using tables: branches, users, patients, visits, prescriptions, lab_tests, bills, payments, expenses', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Revenue = Patient Bills + OTC + Prescriptions (NO DOUBLE COUNTING)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Excludes OTC bills from bills table', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

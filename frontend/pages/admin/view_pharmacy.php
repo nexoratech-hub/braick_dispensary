@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_pharmacy.php
 // SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS
-// FIXED: Using bills and bill_items tables for prescription revenue
+// FIXED: 
+// - Prescription revenue from bill_items (item_type = 'medication') with bill.status = 'paid'
+// - OTC revenue from otc_sales.total_amount (after discount) with payment_status = 'paid'
 // ================================================================
 
 // ================================================================
@@ -81,7 +83,7 @@ if ($pharmacy_id <= 0) {
 }
 
 // ================================================================
-// FETCH PHARMACY DETAILS - USING YOUR DATABASE
+// FETCH PHARMACY DETAILS - WITH FIXED QUERIES
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -96,15 +98,19 @@ $stmt = $db->prepare("
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'confirmed') as confirmed_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'cancelled') as cancelled_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
-        -- FIXED: Prescription revenue from bill_items (medication items)
-        (SELECT COALESCE(SUM(bi.total_price), 0) 
+        -- FIXED: Prescription revenue from bill_items (medication items) with bill.status = 'paid'
+        (SELECT COALESCE(SUM(bi.final_price), 0) 
          FROM bill_items bi
          INNER JOIN bills bl ON bi.bill_id = bl.id
          WHERE bi.item_type = 'medication' 
          AND bl.branch_id = b.id 
-         AND bl.status IN ('paid', 'partial')) as prescription_revenue,
+         AND bl.status = 'paid') as prescription_revenue,
         (SELECT COUNT(*) FROM otc_sales WHERE branch_id = b.id) as total_otc_sales,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid') as otc_revenue,
+        -- FIXED: OTC revenue from otc_sales.total_amount (after discount) with payment_status = 'paid'
+        (SELECT COALESCE(SUM(total_amount), 0) 
+         FROM otc_sales 
+         WHERE branch_id = b.id 
+         AND payment_status = 'paid') as otc_revenue,
         (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND expiry_date < CURDATE()) as expired_medicines,
         (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)) as expiring_soon_medicines,
         (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active') as total_active_medicines
@@ -176,12 +182,12 @@ try {
             pat.full_name as patient_name,
             u.full_name as doctor_name,
             COALESCE((
-                SELECT SUM(bi.total_price) 
+                SELECT SUM(bi.final_price) 
                 FROM bill_items bi
                 INNER JOIN bills bl ON bi.bill_id = bl.id
                 WHERE bi.reference_id = p.id 
                 AND bi.reference_type = 'prescription'
-                AND bl.status IN ('paid', 'partial')
+                AND bl.status = 'paid'
             ), 0) as total_amount
         FROM prescriptions p
         LEFT JOIN patients pat ON p.patient_id = pat.id
@@ -236,6 +242,7 @@ try {
             customer_name,
             total_amount,
             subtotal as net_amount,
+            discount_amount,
             payment_method,
             payment_status,
             created_at
@@ -262,7 +269,8 @@ function getStatusBadge($status) {
         'confirmed' => 'info',
         'cancelled' => 'danger',
         'paid' => 'success',
-        'partial' => 'warning'
+        'partial' => 'warning',
+        'unpaid' => 'danger'
     ];
     return $classes[$status] ?? 'secondary';
 }
@@ -276,7 +284,8 @@ function getStatusIcon($status) {
         'confirmed' => 'fa-check-double',
         'cancelled' => 'fa-times-circle',
         'paid' => 'fa-check-circle',
-        'partial' => 'fa-clock'
+        'partial' => 'fa-clock',
+        'unpaid' => 'fa-times-circle'
     ];
     return $icons[$status] ?? 'fa-circle';
 }
@@ -1007,7 +1016,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <span class="stat-number-small"><?= number_format($pharmacy['total_otc_sales'] ?? 0) ?></span>
                     <span class="stat-amount-large" style="font-size:1.4rem;">TSh <?= number_format($pharmacy['otc_revenue'] ?? 0, 0) ?></span>
                 </div>
-                <p class="stat-sub">💰 Paid OTC revenue</p>
+                <p class="stat-sub">💰 Paid OTC revenue (after discount)</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1064,7 +1073,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PRESCRIPTIONS - FIXED: Using bill_items for amount -->
+    <!-- RECENT PRESCRIPTIONS - FIXED: Using bill_items.final_price (after discount) -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
@@ -1180,7 +1189,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- RECENT OTC SALES -->
+    <!-- RECENT OTC SALES - FIXED: Shows total_amount after discount -->
     <div class="card animate-fade-in-up" style="animation-delay:0.3s;">
         <div class="card-header">
             <h3 class="card-title"><i class="fas fa-shopping-cart"></i> Recent OTC Sales</h3>
@@ -1194,6 +1203,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <th>Sale #</th>
                             <th>Customer</th>
                             <th class="text-right">Net Amount</th>
+                            <th>Discount</th>
                             <th>Status</th>
                             <th>Date</th>
                             <th class="text-center">Action</th>
@@ -1205,7 +1215,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></td>
                                 <td class="text-right font-semibold text-green-600 dark:text-green-400">
-                                    TSh <?= number_format($sale['net_amount'] ?? 0, 0) ?>
+                                    TSh <?= number_format($sale['total_amount'] ?? 0, 0) ?>
+                                </td>
+                                <td class="text-right text-red-600 dark:text-red-400">
+                                    <?php if (($sale['discount_amount'] ?? 0) > 0): ?>
+                                        - TSh <?= number_format($sale['discount_amount'] ?? 0, 0) ?>
+                                    <?php else: ?>
+                                        <span class="text-gray-400">-</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <span class="status-badge <?= getStatusBadge($sale['payment_status'] ?? 'pending') ?>">
@@ -1401,7 +1418,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c💊 Braick Dispensary - View Pharmacy', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: <?= format_currency($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ FIXED: Prescription amount from bill_items (medication items)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Prescription amount from bill_items.final_price (after discount)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: OTC revenue from otc_sales.total_amount (after discount)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Only bills with status = "paid" are counted', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Only OTC sales with payment_status = "paid" are counted', 'font-size:13px; color:#34D399;');
     console.log('%c📊 Using tables: branches, users, medications_inventory, prescriptions, bills, bill_items, otc_sales', 'font-size:13px; color:#64748B;');
 </script>
 
