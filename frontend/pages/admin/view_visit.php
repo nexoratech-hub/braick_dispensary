@@ -348,8 +348,8 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/reception_header.php';
-include_once '../../components/reception_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!DOCTYPE html>

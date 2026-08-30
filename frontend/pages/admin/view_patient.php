@@ -310,8 +310,8 @@ $profile_pic_url = !empty($profile_pic)
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
-include_once __DIR__ . '/../../components/reception_header.php';
-include_once __DIR__ . '/../../components/reception_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!DOCTYPE html>
