@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/view_bill.php
 // ADMIN - VIEW BILL DETAILS
 // BRAICK DISPENSARY - GREEN THEME
+// USING EXISTING DATABASE TABLES (bills, bill_items, payments)
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
@@ -51,7 +52,11 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -65,12 +70,12 @@ if ($bill_id <= 0) {
 }
 
 // ================================================================
-// FETCH BILL DETAILS
+// FETCH BILL DETAILS - FIXED: Using bills table
 // ================================================================
 try {
     $stmt = $db->prepare("
         SELECT 
-            pb.*,
+            b.*,
             p.id as patient_id,
             p.patient_id as patient_number,
             p.full_name as patient_name,
@@ -79,16 +84,16 @@ try {
             p.address as patient_address,
             p.gender as patient_gender,
             u.full_name as created_by_name,
-            b.name as branch_name,
+            br.name as branch_name,
             v.visit_number,
             v.visit_date,
             v.status as visit_status
-        FROM patient_bills pb
-        LEFT JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        LEFT JOIN branches b ON pb.branch_id = b.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        WHERE pb.id = ?
+        FROM bills b
+        LEFT JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        LEFT JOIN branches br ON b.branch_id = br.id
+        LEFT JOIN visits v ON b.visit_id = v.id
+        WHERE b.id = ?
     ");
     $stmt->execute([$bill_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -143,12 +148,14 @@ try {
 }
 
 // ================================================================
-// CALCULATE SUMMARY
+// CALCULATE SUMMARY - FIXED: Using correct field names
 // ================================================================
 $total_bill = $bill['total_amount'] ?? 0;
 $paid_amount = $bill['paid_amount'] ?? 0;
-$discount_amount = $bill['discount_amount'] ?? 0;
-$balance = $total_bill - $paid_amount - $discount_amount;
+$discount_amount = $bill['total_discount'] ?? $bill['discount_amount'] ?? 0;
+$pharmacy_discount = $bill['pharmacy_discount'] ?? 0;
+$cashier_discount = $bill['cashier_discount'] ?? 0;
+$balance = $bill['balance'] ?? 0;
 
 $subtotal = 0;
 foreach ($bill_items as $item) {
@@ -224,6 +231,7 @@ function getItemTypeIcon($type) {
         'lab_test' => 'fa-flask',
         'medication' => 'fa-pills',
         'procedure' => 'fa-syringe',
+        'equipment' => 'fa-tools',
         'tool' => 'fa-tools',
         'other' => 'fa-circle'
     ];
@@ -1201,6 +1209,14 @@ include_once '../../components/admin_sidebar.php';
             <div class="stat-content">
                 <p class="stat-label">Discount</p>
                 <p class="stat-value orange-text">TSh <?= number_format($discount_amount, 0) ?></p>
+                <?php if ($pharmacy_discount > 0 || $cashier_discount > 0): ?>
+                    <p class="text-xs text-gray-400">
+                        Pharm: TSh <?= number_format($pharmacy_discount, 0) ?>
+                        <?php if ($cashier_discount > 0): ?>
+                            | Cashier: TSh <?= number_format($cashier_discount, 0) ?>
+                        <?php endif; ?>
+                    </p>
+                <?php endif; ?>
             </div>
         </div>
         
@@ -1316,9 +1332,9 @@ include_once '../../components/admin_sidebar.php';
                                 <td>TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
                                 <td class="font-semibold">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
                                 <td>
-                                    <span class="badge badge-<?= getStatusBadge($item['payment_status'] ?? 'pending') ?>" style="font-size:0.55rem;padding:2px 10px;">
-                                        <i class="fas <?= getStatusIcon($item['payment_status'] ?? 'pending') ?>"></i>
-                                        <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
+                                    <span class="badge badge-<?= getStatusBadge($item['status'] ?? 'pending') ?>" style="font-size:0.55rem;padding:2px 10px;">
+                                        <i class="fas <?= getStatusIcon($item['status'] ?? 'pending') ?>"></i>
+                                        <?= ucfirst($item['status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
                                 <td>
@@ -1401,7 +1417,7 @@ include_once '../../components/admin_sidebar.php';
         <div class="flex flex-wrap gap-3">
             <!-- Add Payment Button Imetolewa Kabisa -->
             
-            <?php if (($bill['status'] ?? '') === 'pending'): ?>
+            <?php if (($bill['status'] ?? '') === 'pending' || ($bill['status'] ?? '') === 'partial'): ?>
                 <a href="edit_bill.php?id=<?= $bill_id ?>&branch=<?= $branch_id ?>" class="btn btn-primary">
                     <i class="fas fa-edit"></i> Edit Bill
                 </a>
@@ -1542,13 +1558,14 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c💰 Braick Dispensary - View Bill (GREEN THEME)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick Dispensary - View Bill (GREEN THEME - FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c💰 Total: TSh <?= number_format($total_bill, 0) ?>', 'font-size:13px; color:#0D9488;');
     console.log('%c💳 Paid: TSh <?= number_format($paid_amount, 0) ?> | Balance: TSh <?= number_format($balance, 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📦 Items: <?= count($bill_items) ?>', 'font-size:13px; color:#F59E0B;');
+    console.log('%c📊 Using tables: bills, bill_items, payments', 'font-size:13px; color:#34D399;');
     console.log('%c🟢 GREEN THEME Applied', 'font-size:13px; color:#059669;');
     console.log('%c❌ Add Payment buttons removed from Quick Actions and Header', 'font-size:13px; color:#DC2626;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');

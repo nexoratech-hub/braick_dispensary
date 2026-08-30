@@ -3,6 +3,9 @@
 // FILE: frontend/pages/admin/doctor_details.php
 // DOCTOR DETAILS - VIEW ALL DOCTOR INFORMATION
 // BRAICK DISPENSARY
+// FIXED: Uses database columns that exist
+// FIXED: Uses bills table (NOT patient_bills)
+// FIXED: Removed doctor_status table dependency
 // ================================================================
 
 // ================================================================
@@ -48,10 +51,9 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// INCLUDE DATABASE AND HELPERS
+// INCLUDE DATABASE
 // ================================================================
 require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
@@ -59,7 +61,7 @@ $db = Database::getInstance()->getConnection();
 // VARIABLES
 // ================================================================
 $doctor_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 if ($doctor_id <= 0) {
     header('Location: doctors_list.php?branch=' . $selected_branch_id);
@@ -71,11 +73,10 @@ if ($doctor_id <= 0) {
 // ================================================================
 $stmt = $db->prepare("
     SELECT u.*, b.name as branch_name,
-           (SELECT COUNT(*) FROM patients WHERE assigned_doctor_id = u.id) as total_patients,
+           (SELECT COUNT(*) FROM patients WHERE assigned_doctor_id = u.id AND branch_id = u.branch_id) as total_patients,
            (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id) as total_visits,
            (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id) as total_prescriptions,
-           (SELECT COUNT(*) FROM lab_tests WHERE doctor_id = u.id) as total_lab_tests,
-           (SELECT COUNT(*) FROM appointments WHERE doctor_id = u.id AND status != 'cancelled') as total_appointments
+           (SELECT COUNT(*) FROM lab_tests WHERE doctor_id = u.id) as total_lab_tests
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.id
     WHERE u.id = ? AND u.role = 'doctor'
@@ -89,29 +90,12 @@ if (!$doctor) {
 }
 
 // ================================================================
-// GET DOCTOR STATUS HISTORY
-// ================================================================
-$status_history = [];
-try {
-    $stmt = $db->prepare("
-        SELECT * FROM doctor_status 
-        WHERE doctor_id = ? 
-        ORDER BY updated_at DESC 
-        LIMIT 10
-    ");
-    $stmt->execute([$doctor_id]);
-    $status_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $status_history = [];
-}
-
-// ================================================================
-// GET ASSIGNED PATIENTS
+// GET ASSIGNED PATIENTS WITH BILLS COUNT (using bills table)
 // ================================================================
 $stmt = $db->prepare("
     SELECT p.*, 
            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
-           (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status != 'cancelled') as total_bills
+           (SELECT COUNT(*) FROM bills WHERE patient_id = p.id AND status != 'cancelled') as total_bills
     FROM patients p
     WHERE p.assigned_doctor_id = ?
     ORDER BY p.created_at DESC
@@ -182,27 +166,6 @@ $stmt = $db->prepare("
 ");
 $stmt->execute([$doctor_id]);
 $recent_lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// GET RECENT APPOINTMENTS
-// ================================================================
-$stmt = $db->prepare("
-    SELECT a.*, p.full_name as patient_name, p.patient_id as patient_number,
-           CASE 
-               WHEN a.status = 'scheduled' THEN 'warning'
-               WHEN a.status = 'confirmed' THEN 'info'
-               WHEN a.status = 'completed' THEN 'success'
-               WHEN a.status = 'cancelled' THEN 'danger'
-               ELSE 'secondary'
-           END as status_color
-    FROM appointments a
-    INNER JOIN patients p ON a.patient_id = p.id
-    WHERE a.doctor_id = ?
-    ORDER BY a.created_at DESC
-    LIMIT 10
-");
-$stmt->execute([$doctor_id]);
-$recent_appointments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -413,7 +376,6 @@ include_once '../../components/admin_sidebar.php';
         font-size: 0.82rem;
     }
     
-    /* FIXED: Text color in table rows */
     .table-blue tbody td,
     .table-blue tbody td .font-mono,
     .table-blue tbody td .font-semibold,
@@ -812,7 +774,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-3 mb-5">
+    <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3 mb-5">
         
         <div class="stat-card-mini">
             <div class="stat-icon">👤</div>
@@ -836,12 +798,6 @@ include_once '../../components/admin_sidebar.php';
             <div class="stat-icon">🔬</div>
             <p class="stat-number orange"><?= $doctor['total_lab_tests'] ?? 0 ?></p>
             <p class="stat-label">Lab Tests</p>
-        </div>
-        
-        <div class="stat-card-mini">
-            <div class="stat-icon">📅</div>
-            <p class="stat-number"><?= $doctor['total_appointments'] ?? 0 ?></p>
-            <p class="stat-label">Appointments</p>
         </div>
         
     </div>
@@ -944,22 +900,17 @@ include_once '../../components/admin_sidebar.php';
                                 <td class="text-xs"><?= date('M d, Y', strtotime($patient['created_at'])) ?></td>
                                 <td>
                                     <div class="action-buttons">
-                                        <!-- View Button -->
                                         <a href="patient_details.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn-action btn-view" title="View Patient">
                                             <i class="fas fa-eye"></i> View
                                         </a>
-                                        
-                                        <!-- Edit Button -->
                                         <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn-action btn-edit" title="Edit Patient">
                                             <i class="fas fa-edit"></i> Edit
                                         </a>
-                                        
-                                        <!-- Delete Button -->
                                         <a href="patients.php?delete=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn-action btn-delete" 
-                                           onclick="return confirm('Are you sure you want to delete this patient?\n\nPatient: <?= htmlspecialchars($patient['full_name']) ?>\nID: <?= htmlspecialchars($patient['patient_id']) ?>\n\nThis will delete ALL related data including visits, bills, prescriptions, lab tests, appointments, payments and more.')" 
+                                           onclick="return confirm('Are you sure you want to delete this patient?\n\nPatient: <?= htmlspecialchars($patient['full_name']) ?>\nID: <?= htmlspecialchars($patient['patient_id']) ?>\n\nThis will delete ALL related data including visits, bills, prescriptions, lab tests and more.')" 
                                            title="Delete Patient">
                                             <i class="fas fa-trash"></i> Delete
                                         </a>
@@ -976,7 +927,7 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT VISITS - FIXED TEXT COLOR -->
+    <!-- RECENT VISITS -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
@@ -1131,57 +1082,6 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT APPOINTMENTS -->
-    <!-- ================================================================ -->
-    <div class="card mb-5">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-calendar-check title-blue mr-2"></i> Recent Appointments
-                <span class="badge-count">(<?= $doctor['total_appointments'] ?? 0 ?> total)</span>
-            </h3>
-            <a href="appointments.php?doctor=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                View All <i class="fas fa-arrow-right"></i>
-            </a>
-        </div>
-        <div class="overflow-x-auto">
-            <table class="data-table table-blue w-full">
-                <thead>
-                    <tr>
-                        <th>Patient</th>
-                        <th>Appointment Date</th>
-                        <th>Type</th>
-                        <th>Status</th>
-                        <th>Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (count($recent_appointments) > 0): ?>
-                        <?php foreach ($recent_appointments as $appointment): ?>
-                            <tr>
-                                <td><?= htmlspecialchars($appointment['patient_name']) ?></td>
-                                <td class="text-xs"><?= date('M d, Y h:i A', strtotime($appointment['appointment_date'])) ?></td>
-                                <td><span class="badge badge-info"><?= ucfirst($appointment['visit_type'] ?? 'N/A') ?></span></td>
-                                <td>
-                                    <span class="badge badge-<?= $appointment['status_color'] ?? 'secondary' ?>">
-                                        <?= ucfirst($appointment['status'] ?? 'N/A') ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <a href="appointment_details.php?id=<?= $appointment['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary btn-sm">
-                                        <i class="fas fa-eye"></i>
-                                    </a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <tr><td colspan="5" class="text-center py-4 text-gray-400">No appointments found</td></tr>
-                    <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
     <footer class="footer">
@@ -1314,12 +1214,12 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     console.log('%c🏥 Braick Dispensary - Doctor Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ USING: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ REMOVED: doctor_status table dependency', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👨‍⚕️ Doctor: Dr. <?= htmlspecialchars($doctor['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Patients: <?= $doctor['total_patients'] ?? 0 ?> | Visits: <?= $doctor['total_visits'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💊 Prescriptions: <?= $doctor['total_prescriptions'] ?? 0 ?> | 🔬 Lab Tests: <?= $doctor['total_lab_tests'] ?? 0 ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔘 Patient Actions: View | Edit | Delete', 'font-size:13px; color:#EF4444;');
 </script>
 
 </body>

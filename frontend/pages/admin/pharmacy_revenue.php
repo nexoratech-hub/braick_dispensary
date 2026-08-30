@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/pharmacy_revenue.php
-// ADMIN - PHARMACY REVENUE DETAILS (FIXED - White Text & Branch)
-// BRAICK DISPENSARY - GREEN THEME
+// ADMIN - PHARMACY REVENUE DETAILS
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
+// GREEN THEME - WITH WHITE TEXT
 // ================================================================
 
 // ================================================================
@@ -56,7 +57,7 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET BRANCH ID - FIXED: Use the branch from the URL or session
+// GET BRANCH ID
 // ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
 
@@ -66,12 +67,11 @@ if ($branch_id <= 0) {
 }
 
 // ================================================================
-// FETCH BRANCH DETAILS - FIXED: Always get the correct branch
+// FETCH BRANCH DETAILS
 // ================================================================
 $branch = null;
 
 try {
-    // First try to get the branch from the database
     $stmt = $db->prepare("
         SELECT 
             b.id,
@@ -129,7 +129,6 @@ try {
     }
 } catch (Exception $e) {
     error_log("Error fetching branch: " . $e->getMessage());
-    // Fallback branch data
     $branch = [
         'id' => $user_branch_id,
         'name' => $user_branch_name ?? 'Dodoma',
@@ -143,20 +142,24 @@ try {
 }
 
 // ================================================================
-// PHARMACY REVENUE QUERIES
+// PHARMACY REVENUE QUERIES - USING EXISTING TABLES
 // ================================================================
 
-// 1. PRESCRIPTION REVENUE (from prescription_sales)
+// 1. PRESCRIPTION REVENUE (from bills with medication items)
 try {
     $stmt = $db->prepare("
         SELECT 
-            COALESCE(SUM(total_amount), 0) as total_revenue,
-            COUNT(*) as total_prescriptions,
-            COALESCE(AVG(total_amount), 0) as avg_prescription,
-            COALESCE(MAX(total_amount), 0) as max_prescription,
-            COALESCE(MIN(total_amount), 0) as min_prescription
-        FROM prescription_sales 
-        WHERE branch_id = ? AND payment_status = 'paid'
+            COALESCE(SUM(bi.total_price), 0) as total_revenue,
+            COUNT(DISTINCT bi.bill_id) as total_prescriptions,
+            COALESCE(AVG(bi.total_price), 0) as avg_prescription,
+            COALESCE(MAX(bi.total_price), 0) as max_prescription,
+            COALESCE(MIN(bi.total_price), 0) as min_prescription
+        FROM bill_items bi
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE bi.item_type = 'medication' 
+        AND b.branch_id = ?
+        AND b.status = 'paid'
+        AND bi.status != 'cancelled'
     ");
     $stmt->execute([$branch_id]);
     $prescription_stats = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -168,13 +171,14 @@ try {
 try {
     $stmt = $db->prepare("
         SELECT 
-            COALESCE(SUM(net_amount), 0) as total_revenue,
+            COALESCE(SUM(total_amount), 0) as total_revenue,
             COUNT(*) as total_otc_sales,
-            COALESCE(AVG(net_amount), 0) as avg_otc,
-            COALESCE(MAX(net_amount), 0) as max_otc,
-            COALESCE(MIN(net_amount), 0) as min_otc
+            COALESCE(AVG(total_amount), 0) as avg_otc,
+            COALESCE(MAX(total_amount), 0) as max_otc,
+            COALESCE(MIN(total_amount), 0) as min_otc
         FROM otc_sales 
-        WHERE branch_id = ? AND payment_status = 'paid'
+        WHERE branch_id = ? 
+        AND payment_status = 'paid'
     ");
     $stmt->execute([$branch_id]);
     $otc_stats = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -185,20 +189,31 @@ try {
 // 3. TOTAL PHARMACY REVENUE
 $pharmacy_total = ($prescription_stats['total_revenue'] ?? 0) + ($otc_stats['total_revenue'] ?? 0);
 
-// 4. MONTHLY PHARMACY REVENUE (Last 12 months)
+// 4. MONTHLY PHARMACY REVENUE (Last 12 months) - from bills and otc_sales
 $monthly_revenue = [];
 try {
     $stmt = $db->prepare("
         SELECT 
             DATE_FORMAT(created_at, '%Y-%m') as month,
             DATE_FORMAT(created_at, '%b %Y') as month_name,
-            COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN total_amount ELSE 0 END), 0) as prescribe_revenue,
-            COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN net_amount ELSE 0 END), 0) as otc_revenue,
-            COALESCE(SUM(CASE WHEN payment_status = 'paid' THEN total_amount ELSE 0 END) + SUM(CASE WHEN payment_status = 'paid' THEN net_amount ELSE 0 END), 0) as total_revenue
+            COALESCE(SUM(CASE WHEN source = 'prescription' THEN amount ELSE 0 END), 0) as prescribe_revenue,
+            COALESCE(SUM(CASE WHEN source = 'otc' THEN amount ELSE 0 END), 0) as otc_revenue,
+            COALESCE(SUM(amount), 0) as total_revenue
         FROM (
-            SELECT 'prescription' as type, created_at, total_amount as amount, 0 as net_amount, payment_status FROM prescription_sales WHERE branch_id = ?
+            SELECT 'prescription' as source, b.created_at, bi.total_price as amount
+            FROM bill_items bi
+            INNER JOIN bills b ON bi.bill_id = b.id
+            WHERE bi.item_type = 'medication' 
+            AND b.branch_id = ?
+            AND b.status = 'paid'
+            AND bi.status != 'cancelled'
+            
             UNION ALL
-            SELECT 'otc' as type, created_at, 0 as amount, net_amount, payment_status FROM otc_sales WHERE branch_id = ?
+            
+            SELECT 'otc' as source, os.created_at, os.total_amount as amount
+            FROM otc_sales os
+            WHERE os.branch_id = ? 
+            AND os.payment_status = 'paid'
         ) as combined
         WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL 12 MONTH)
         GROUP BY DATE_FORMAT(created_at, '%Y-%m'), DATE_FORMAT(created_at, '%b %Y')
@@ -210,26 +225,28 @@ try {
     $monthly_revenue = [];
 }
 
-// 5. RECENT PRESCRIPTION SALES
+// 5. RECENT PRESCRIPTION SALES (from bills with medication items)
 $recent_prescriptions = [];
 try {
     $stmt = $db->prepare("
         SELECT 
-            ps.id,
-            ps.sale_number,
-            ps.total_amount,
-            ps.discount_amount,
-            ps.net_amount,
-            ps.payment_method,
-            ps.created_at,
+            b.bill_number as sale_number,
+            b.total_amount,
+            b.discount_amount,
+            b.paid_amount as net_amount,
+            b.payment_method,
+            b.created_at,
             p.full_name as patient_name,
             p.patient_id as patient_code,
-            u.full_name as pharmacist_name
-        FROM prescription_sales ps
-        LEFT JOIN patients p ON ps.patient_id = p.id
-        LEFT JOIN users u ON ps.dispensed_by = u.id
-        WHERE ps.branch_id = ?
-        ORDER BY ps.created_at DESC
+            u.full_name as pharmacist_name,
+            (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication') as item_count
+        FROM bills b
+        LEFT JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        WHERE b.branch_id = ?
+        AND b.status = 'paid'
+        AND EXISTS (SELECT 1 FROM bill_items WHERE bill_id = b.id AND item_type = 'medication')
+        ORDER BY b.created_at DESC
         LIMIT 15
     ");
     $stmt->execute([$branch_id]);
@@ -248,13 +265,15 @@ try {
             os.customer_name,
             os.total_amount,
             os.discount_amount,
-            os.net_amount,
+            os.total_amount as net_amount,
             os.payment_method,
             os.created_at,
-            u.full_name as sold_by_name
+            u.full_name as sold_by_name,
+            (SELECT COUNT(*) FROM otc_sale_items WHERE sale_id = os.id) as item_count
         FROM otc_sales os
         LEFT JOIN users u ON os.sold_by = u.id
         WHERE os.branch_id = ?
+        AND os.payment_status = 'paid'
         ORDER BY os.created_at DESC
         LIMIT 15
     ");
@@ -277,6 +296,7 @@ try {
         FROM prescription_items pi
         INNER JOIN prescriptions p ON pi.prescription_id = p.id
         WHERE p.branch_id = ?
+        AND p.status = 'dispensed'
         GROUP BY pi.medication_name
         ORDER BY total_revenue DESC
         LIMIT 10
@@ -285,6 +305,30 @@ try {
     $top_medications = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $top_medications = [];
+}
+
+// 8. OTC TOP ITEMS
+$top_otc_items = [];
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            oi.item_name as medication_name,
+            SUM(oi.quantity) as total_quantity,
+            COUNT(oi.id) as total_sales,
+            COALESCE(AVG(oi.unit_price), 0) as avg_price,
+            SUM(oi.total_price) as total_revenue
+        FROM otc_sale_items oi
+        INNER JOIN otc_sales os ON oi.sale_id = os.id
+        WHERE os.branch_id = ?
+        AND os.payment_status = 'paid'
+        GROUP BY oi.item_name
+        ORDER BY total_revenue DESC
+        LIMIT 10
+    ");
+    $stmt->execute([$branch_id]);
+    $top_otc_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $top_otc_items = [];
 }
 
 // ================================================================
@@ -301,6 +345,10 @@ function getPaymentMethodBadge($method) {
     $classes = [
         'cash' => 'success',
         'm-pesa' => 'info',
+        'airtel_money' => 'info',
+        'tigo_pesa' => 'info',
+        'halopesa' => 'info',
+        'bank' => 'purple',
         'card' => 'purple',
         'insurance' => 'teal',
         'other' => 'secondary'
@@ -312,6 +360,10 @@ function getPaymentMethodIcon($method) {
     $icons = [
         'cash' => 'fa-money-bill-wave',
         'm-pesa' => 'fa-mobile-alt',
+        'airtel_money' => 'fa-mobile-alt',
+        'tigo_pesa' => 'fa-mobile-alt',
+        'halopesa' => 'fa-mobile-alt',
+        'bank' => 'fa-university',
         'card' => 'fa-credit-card',
         'insurance' => 'fa-shield-alt',
         'other' => 'fa-circle'
@@ -329,13 +381,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -1139,13 +1187,13 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TOP MEDICATIONS -->
+    <!-- TOP MEDICATIONS (from prescriptions) -->
     <!-- ================================================================ -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.3s;">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-pills"></i>
-                Top Medications Sold (<?= count($top_medications) ?>)
+                Top Prescription Medications (<?= count($top_medications) ?>)
             </h3>
         </div>
         <?php if (count($top_medications) > 0): ?>
@@ -1155,8 +1203,8 @@ include_once '../../components/admin_sidebar.php';
                         <tr>
                             <th>#</th>
                             <th>Medication Name</th>
-                            <th style="text-align:center;">Total Prescriptions</th>
-                            <th style="text-align:center;">Total Quantity</th>
+                            <th style="text-align:center;">Prescriptions</th>
+                            <th style="text-align:center;">Total Qty</th>
                             <th style="text-align:right;">Avg Price</th>
                             <th style="text-align:right;">Total Revenue</th>
                         </tr>
@@ -1179,7 +1227,53 @@ include_once '../../components/admin_sidebar.php';
         <?php else: ?>
             <div class="text-center py-8 text-gray-400">
                 <i class="fas fa-pills text-3xl block mb-3"></i>
-                <p>No medication sales data found</p>
+                <p>No prescription medication data found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- TOP OTC ITEMS -->
+    <!-- ================================================================ -->
+    <div class="table-container animate-fade-in-up" style="animation-delay:0.35s;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-capsules"></i>
+                Top OTC Items (<?= count($top_otc_items) ?>)
+            </h3>
+        </div>
+        <?php if (count($top_otc_items) > 0): ?>
+            <div class="overflow-x-auto">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Item Name</th>
+                            <th style="text-align:center;">Sales</th>
+                            <th style="text-align:center;">Total Qty</th>
+                            <th style="text-align:right;">Avg Price</th>
+                            <th style="text-align:right;">Total Revenue</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php $rank = 1; ?>
+                        <?php foreach ($top_otc_items as $item): ?>
+                            <tr>
+                                <td class="font-semibold text-gray-400">#<?= $rank++ ?></td>
+                                <td class="font-medium"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></td>
+                                <td style="text-align:center;"><?= $item['total_sales'] ?? 0 ?></td>
+                                <td style="text-align:center;"><?= $item['total_quantity'] ?? 0 ?></td>
+                                <td style="text-align:right;font-family:monospace;"><?= formatCurrency($item['avg_price'] ?? 0) ?></td>
+                                <td style="text-align:right;font-family:monospace;font-weight:700;color:#D97706;"><?= formatCurrency($item['total_revenue'] ?? 0) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="text-center py-8 text-gray-400">
+                <i class="fas fa-capsules text-3xl block mb-3"></i>
+                <p>No OTC item data found</p>
             </div>
         <?php endif; ?>
     </div>
@@ -1187,7 +1281,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- RECENT PRESCRIPTIONS -->
     <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.35s;">
+    <div class="table-container animate-fade-in-up" style="animation-delay:0.4s;">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-prescription"></i>
@@ -1200,8 +1294,9 @@ include_once '../../components/admin_sidebar.php';
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Sale #</th>
+                            <th>Bill #</th>
                             <th>Patient</th>
+                            <th>Items</th>
                             <th>Amount</th>
                             <th>Discount</th>
                             <th>Net</th>
@@ -1215,6 +1310,7 @@ include_once '../../components/admin_sidebar.php';
                             <tr>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($sale['patient_name'] ?? 'Walk-in') ?></td>
+                                <td style="text-align:center;"><?= $sale['item_count'] ?? 0 ?></td>
                                 <td class="font-semibold"><?= formatCurrency($sale['total_amount'] ?? 0) ?></td>
                                 <td class="text-orange-600"><?= formatCurrency($sale['discount_amount'] ?? 0) ?></td>
                                 <td class="font-semibold text-green-600"><?= formatCurrency($sale['net_amount'] ?? 0) ?></td>
@@ -1242,7 +1338,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- RECENT OTC SALES -->
     <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.4s;">
+    <div class="table-container animate-fade-in-up" style="animation-delay:0.45s;">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-shopping-cart"></i>
@@ -1257,6 +1353,7 @@ include_once '../../components/admin_sidebar.php';
                         <tr>
                             <th>Sale #</th>
                             <th>Customer</th>
+                            <th>Items</th>
                             <th>Amount</th>
                             <th>Discount</th>
                             <th>Net</th>
@@ -1270,6 +1367,7 @@ include_once '../../components/admin_sidebar.php';
                             <tr>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></td>
+                                <td style="text-align:center;"><?= $sale['item_count'] ?? 0 ?></td>
                                 <td class="font-semibold"><?= formatCurrency($sale['total_amount'] ?? 0) ?></td>
                                 <td class="text-orange-600"><?= formatCurrency($sale['discount_amount'] ?? 0) ?></td>
                                 <td class="font-semibold text-green-600"><?= formatCurrency($sale['net_amount'] ?? 0) ?></td>
@@ -1482,11 +1580,12 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick Dispensary - Pharmacy Revenue (FIXED - White Text & Branch)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c💊 Braick Dispensary - Pharmacy Revenue', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch['name'] ?? 'Dodoma') ?>', 'font-size:13px; color:#059669;');
     console.log('%c💵 Total Revenue: <?= formatCurrency($pharmacy_total) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💊 Prescriptions: <?= formatCurrency($prescription_stats['total_revenue'] ?? 0) ?> (<?= $prescription_stats['total_prescriptions'] ?? 0 ?> sales)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🛒 OTC Sales: <?= formatCurrency($otc_stats['total_revenue'] ?? 0) ?> (<?= $otc_stats['total_otc_sales'] ?? 0 ?> sales)', 'font-size:13px; color:#D97706;');
+    console.log('%c📊 Tables: bills, bill_items, otc_sales, otc_sale_items, prescriptions, prescription_items', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Fixed: WHITE TEXT on all stat cards', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Fixed: Branch name shows correctly', 'font-size:13px; color:#34D399;');
 </script>

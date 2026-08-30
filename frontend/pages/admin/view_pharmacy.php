@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_pharmacy.php
 // SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS
-// FIXED: Prescription amount from prescription_sales table
+// FIXED: Using bills and bill_items tables for prescription revenue
 // ================================================================
 
 // ================================================================
@@ -63,7 +63,11 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET BRANCH ID
@@ -77,7 +81,7 @@ if ($pharmacy_id <= 0) {
 }
 
 // ================================================================
-// FETCH PHARMACY DETAILS
+// FETCH PHARMACY DETAILS - USING YOUR DATABASE
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -92,9 +96,15 @@ $stmt = $db->prepare("
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'confirmed') as confirmed_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'cancelled') as cancelled_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM prescription_sales WHERE branch_id = b.id AND status = 'dispensed') as prescription_revenue,
+        -- FIXED: Prescription revenue from bill_items (medication items)
+        (SELECT COALESCE(SUM(bi.total_price), 0) 
+         FROM bill_items bi
+         INNER JOIN bills bl ON bi.bill_id = bl.id
+         WHERE bi.item_type = 'medication' 
+         AND bl.branch_id = b.id 
+         AND bl.status IN ('paid', 'partial')) as prescription_revenue,
         (SELECT COUNT(*) FROM otc_sales WHERE branch_id = b.id) as total_otc_sales,
-        (SELECT COALESCE(SUM(net_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid') as otc_revenue,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid') as otc_revenue,
         (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND expiry_date < CURDATE()) as expired_medicines,
         (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)) as expiring_soon_medicines,
         (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active') as total_active_medicines
@@ -153,7 +163,7 @@ try {
 }
 
 // ================================================================
-// ✅ FIXED: GET RECENT PRESCRIPTIONS WITH AMOUNT FROM prescription_sales
+// GET RECENT PRESCRIPTIONS WITH AMOUNT FROM bill_items
 // ================================================================
 $recent_prescriptions = [];
 try {
@@ -165,11 +175,17 @@ try {
             p.created_at,
             pat.full_name as patient_name,
             u.full_name as doctor_name,
-            COALESCE(ps.total_amount, 0) as total_amount
+            COALESCE((
+                SELECT SUM(bi.total_price) 
+                FROM bill_items bi
+                INNER JOIN bills bl ON bi.bill_id = bl.id
+                WHERE bi.reference_id = p.id 
+                AND bi.reference_type = 'prescription'
+                AND bl.status IN ('paid', 'partial')
+            ), 0) as total_amount
         FROM prescriptions p
         LEFT JOIN patients pat ON p.patient_id = pat.id
         LEFT JOIN users u ON p.doctor_id = u.id
-        LEFT JOIN prescription_sales ps ON p.id = ps.prescription_id
         WHERE p.branch_id = ?
         ORDER BY p.created_at DESC
         LIMIT 10
@@ -219,7 +235,7 @@ try {
             sale_number,
             customer_name,
             total_amount,
-            net_amount,
+            subtotal as net_amount,
             payment_method,
             payment_status,
             created_at
@@ -273,9 +289,12 @@ function format_currency($amount) {
 }
 
 // ================================================================
-// SASA NDIO HEADER INAINGIZWA
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -333,147 +352,6 @@ function format_currency($amount) {
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: background 0.3s ease, border-color 0.3s ease;
-        }
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        .top-nav .branch-selector {
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            background: var(--bg-card);
-            font-size: 0.82rem;
-            font-weight: 500;
-            cursor: pointer;
-            outline: none;
-            min-width: 160px;
-            color: var(--text-primary);
-            transition: all 0.3s;
-        }
-        .top-nav .branch-selector:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            background: #059669;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        .notif-dot.has-notif { background: #EF4444; }
-        .notif-dot.no-notif { background: #94A3B8; animation: none; }
-        @keyframes pulse-dot { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -481,103 +359,6 @@ function format_currency($amount) {
             min-height: calc(100vh - 68px);
             transition: background 0.3s ease;
         }
-        
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: 270px;
-            background: #0B4EA8;
-            color: white;
-            z-index: 50;
-            overflow-y: auto;
-            overflow-x: hidden;
-            transition: transform 0.3s ease-in-out;
-            transform: translateX(0);
-            box-shadow: 4px 0 20px rgba(0,0,0,0.15);
-        }
-        .sidebar-brand {
-            padding: 18px 16px 14px;
-            border-bottom: 2px solid #0B3D8A;
-            background: #0B4EA8;
-            position: sticky;
-            top: 0;
-            z-index: 5;
-        }
-        .sidebar-brand .logo {
-            width: 42px;
-            height: 42px;
-            border-radius: 10px;
-            object-fit: cover;
-            background: white;
-            padding: 4px;
-            border: 2px solid rgba(255,255,255,0.1);
-        }
-        .sidebar-brand .brand-text { color: white; font-weight: 700; font-size: 0.95rem; line-height: 1.2; }
-        .sidebar-brand .brand-sub { color: #9EC5FE; font-size: 0.65rem; font-weight: 500; }
-        .sidebar-nav { padding: 10px 8px 20px; }
-        .sidebar-nav .nav-label {
-            font-size: 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: #6EA8FE;
-            padding: 0 10px;
-            margin: 12px 0 4px;
-            font-weight: 700;
-        }
-        .sidebar-link {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            color: #D2E3FC;
-            text-decoration: none;
-            transition: all 0.25s ease;
-            font-size: 0.8rem;
-            font-weight: 500;
-            margin: 1px 0;
-            background: transparent;
-            cursor: pointer;
-            border: none;
-            width: 100%;
-            text-align: left;
-            position: relative;
-        }
-        .sidebar-link:hover {
-            background: #0AA84F;
-            color: white;
-            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
-            transform: translateX(4px);
-        }
-        .sidebar-link.active {
-            background: #0AA84F;
-            color: white;
-            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
-        }
-        .sidebar-link.logout-link {
-            border-top: 2px solid rgba(255,255,255,0.08);
-            padding-top: 10px;
-            margin-top: 6px;
-            color: #FCA5A5;
-        }
-        .sidebar-link.logout-link:hover {
-            background: #DC2626;
-            color: white;
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
-        }
-        
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            transition: border-color 0.3s ease, color 0.3s ease;
-        }
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         .stats-grid-8 {
             display: grid;
@@ -700,10 +481,6 @@ function format_currency($amount) {
             align-items: center;
             gap: 6px;
             flex-wrap: wrap;
-        }
-        .stat-card-8 .stat-sub .highlight {
-            color: rgba(255,255,255,0.95);
-            font-weight: 600;
         }
         .stat-card-8 .stat-arrow {
             position: absolute;
@@ -1068,12 +845,20 @@ function format_currency($amount) {
             color: white;
         }
         
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            transition: border-color 0.3s ease, color 0.3s ease;
+        }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
-            .sidebar { transform: translateX(-100%); }
-            .sidebar.open { transform: translateX(0); }
         }
         @media (max-width: 768px) {
             .stats-grid-8 { grid-template-columns: 1fr 1fr; }
@@ -1123,89 +908,8 @@ function format_currency($amount) {
 <div id="sidebarOverlay"></div>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR -->
+<!-- SIDEBAR - Loaded from admin_sidebar.php -->
 <!-- ================================================================ -->
-<aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-        <div style="display:flex;align-items:center;gap:12px;">
-            <img src="<?= $logo_path ?>" alt="Braick Logo" class="logo" 
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
-            <div>
-                <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub">Super Admin</p>
-            </div>
-        </div>
-    </div>
-    
-    <nav class="sidebar-nav">
-        <div class="nav-label">Main Menu</div>
-        <a href="/dispensary_system/frontend/pages/admin/dashboard.php" class="sidebar-link"><i class="fas fa-home"></i> Dashboard</a>
-        <a href="/dispensary_system/frontend/pages/admin/employees.php" class="sidebar-link"><i class="fas fa-users"></i> Employees</a>
-        <a href="/dispensary_system/frontend/pages/admin/patients.php" class="sidebar-link"><i class="fas fa-user-injured"></i> Patients</a>
-        
-        <div class="nav-label">Modules</div>
-        <a href="/dispensary_system/frontend/pages/admin/doctors_list.php" class="sidebar-link"><i class="fas fa-user-md"></i> Doctors</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php" class="sidebar-link active"><i class="fas fa-prescription"></i> Pharmacy</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_reception.php" class="sidebar-link"><i class="fas fa-headset"></i> Reception</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php" class="sidebar-link"><i class="fas fa-flask"></i> Laboratory</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_cashier.php" class="sidebar-link"><i class="fas fa-cash-register"></i> Cashier</a>
-        
-        <div class="nav-label">Management</div>
-        <a href="/dispensary_system/frontend/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
-        <a href="/dispensary_system/frontend/pages/admin/departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
-        <a href="/dispensary_system/frontend/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
-        
-        <div class="nav-label">Account</div>
-        <a href="/dispensary_system/frontend/pages/admin/profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> Profile</a>
-        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
-    </nav>
-</aside>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="icon-btn lg:hidden">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1360,7 +1064,7 @@ function format_currency($amount) {
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PRESCRIPTIONS - WITH AMOUNT FROM prescription_sales -->
+    <!-- RECENT PRESCRIPTIONS - FIXED: Using bill_items for amount -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
@@ -1697,7 +1401,8 @@ function format_currency($amount) {
     console.log('%c💊 Braick Dispensary - View Pharmacy', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: <?= format_currency($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ FIXED: Prescription amount from prescription_sales table', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Prescription amount from bill_items (medication items)', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 Using tables: branches, users, medications_inventory, prescriptions, bills, bill_items, otc_sales', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

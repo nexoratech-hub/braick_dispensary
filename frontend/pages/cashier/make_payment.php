@@ -95,14 +95,14 @@ try {
                     SELECT b.*, p.full_name as patient_name, p.patient_id as patient_number
                     FROM bills b
                     JOIN patients p ON b.patient_id = p.id
-                    WHERE b.id = ? AND b.branch_id = ? AND b.status != 'paid' AND b.status != 'cancelled'
+                    WHERE b.id = ? AND b.branch_id = ? AND b.status != 'cancelled'
                 ");
                 $stmt->execute([$bill_id, $user_branch_id]);
                 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if (!$bill) {
                     $db->rollBack();
-                    echo json_encode(['success' => false, 'message' => 'Bill not found or already paid']);
+                    echo json_encode(['success' => false, 'message' => 'Bill not found']);
                     exit;
                 }
                 
@@ -111,8 +111,10 @@ try {
                 $pharmacy_discount = (float)($bill['discount_amount'] ?? 0);
                 $existing_cashier_discount = (float)($bill['cashier_discount'] ?? 0);
                 
-                // Calculate total discount (pharmacy + cashier)
+                // FIX: Calculate cashier discount (new discount only)
                 $cashier_discount = $discount_amount > 0 ? min($discount_amount, $balance) : 0;
+                
+                // Total discount = pharmacy discount + cashier discount
                 $total_discount = $pharmacy_discount + $cashier_discount;
                 
                 // Don't discount more than balance
@@ -124,7 +126,7 @@ try {
                 
                 $amount_after_discount = $balance - $total_discount;
                 
-                // FIX: Determine amount to pay based on payment type
+                // Determine amount to pay based on payment type
                 if ($payment_type === 'partial') {
                     // For partial payment, use the entered partial amount
                     $amount_to_pay = min($partial_amount, $amount_after_discount);
@@ -151,19 +153,22 @@ try {
                 
                 $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
                 
-                // Update bill
+                // Calculate new values - FIXED: Use correct discount amounts
                 $new_paid_amount = $paid_amount + $amount_to_pay;
-                $new_balance = $balance - $amount_to_pay;
+                $new_balance = $balance - $amount_to_pay - $cashier_discount;
+                
+                // FIX: new_cashier_discount should be existing + new cashier discount
                 $new_cashier_discount = $existing_cashier_discount + $cashier_discount;
                 $new_total_discount = $pharmacy_discount + $new_cashier_discount;
                 
-                // Determine bill status
+                // FIX: Determine bill status correctly
                 if ($new_balance <= 0.01) {
                     $new_status = 'paid';
                 } else {
                     $new_status = 'partial';
                 }
                 
+                // Update bill
                 $stmt = $db->prepare("
                     UPDATE bills 
                     SET paid_amount = ?,
@@ -184,16 +189,27 @@ try {
                     $user_branch_id
                 ]);
                 
-                // Update paid items (partial - mark some items as paid)
+                // Update paid bill items based on amount paid
+                // Mark items as paid based on the amount
                 $stmt = $db->prepare("
-                    UPDATE bill_items 
-                    SET status = 'paid',
-                        updated_at = NOW()
+                    SELECT id, total_price FROM bill_items 
                     WHERE bill_id = ? AND status != 'cancelled' AND status != 'paid'
                     ORDER BY created_at ASC
-                    LIMIT ?
                 ");
-                $stmt->execute([$bill_id, 100]);
+                $stmt->execute([$bill_id]);
+                $pending_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                $remaining_to_pay = $amount_to_pay;
+                foreach ($pending_items as $item) {
+                    if ($remaining_to_pay <= 0) break;
+                    $item_price = (float)$item['total_price'];
+                    if ($remaining_to_pay >= $item_price) {
+                        // Mark as paid
+                        $stmt_update = $db->prepare("UPDATE bill_items SET status = 'paid', updated_at = NOW() WHERE id = ?");
+                        $stmt_update->execute([$item['id']]);
+                        $remaining_to_pay -= $item_price;
+                    }
+                }
                 
                 // Insert payment record
                 $stmt = $db->prepare("
@@ -209,15 +225,15 @@ try {
                     null,
                     $user_id,
                     $user_branch_id,
-                    'Payment - Pharmacy Discount: ' . $currency . ' ' . number_format($pharmacy_discount, 0) . ' | Cashier Discount: ' . $currency . ' ' . number_format($cashier_discount, 0)
+                    'Payment | Cashier Discount: ' . $currency . ' ' . number_format($cashier_discount, 0)
                 ]);
                 
                 $db->commit();
                 
                 $message = "Payment successful!";
                 $message .= " Amount: " . $currency . " " . number_format($amount_to_pay, 0);
-                if ($total_discount > 0) {
-                    $message .= " | Discount: " . $currency . " " . number_format($total_discount, 0);
+                if ($cashier_discount > 0) {
+                    $message .= " | Discount: " . $currency . " " . number_format($cashier_discount, 0);
                 }
                 if ($new_status === 'paid') {
                     $message .= " | Bill FULLY PAID! 🎉";
@@ -230,9 +246,11 @@ try {
                     'message' => $message,
                     'receipt_number' => $receipt_number,
                     'amount_paid' => $amount_to_pay,
-                    'total_discount' => $total_discount,
+                    'cashier_discount' => $cashier_discount,
+                    'total_discount' => $new_total_discount,
                     'new_balance' => $new_balance,
                     'new_status' => $new_status,
+                    'is_paid' => ($new_status === 'paid'),
                     'receipt' => [
                         'number' => $receipt_number,
                         'patient' => $bill['patient_name'],
@@ -970,6 +988,22 @@ include_once '../../components/cashier_sidebar.php';
         .paid-banner h3 { font-weight: 600; color: var(--success); font-size: 1.2rem; margin: 0; }
         .paid-banner p { font-size: 0.85rem; color: var(--text-secondary); margin: 4px 0 0 0; }
         
+        /* ================================================================
+           PARTIAL PAID BANNER - FIXED: Show remaining balance
+           ================================================================ */
+        .partial-banner {
+            text-align: center;
+            padding: 20px;
+            background: var(--warning-bg);
+            border-radius: 12px;
+            border: 2px solid var(--warning);
+            margin-top: 16px;
+        }
+        .partial-banner i { font-size: 2.5rem; color: var(--warning); display: block; margin-bottom: 8px; }
+        .partial-banner h3 { font-weight: 600; color: var(--warning); font-size: 1.2rem; margin: 0; }
+        .partial-banner p { font-size: 0.85rem; color: var(--text-secondary); margin: 4px 0; }
+        .partial-banner .remaining-amount { font-size: 1.5rem; font-weight: 700; color: var(--danger); }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
@@ -1207,8 +1241,42 @@ include_once '../../components/cashier_sidebar.php';
                 </table>
             </div>
             
-            <!-- Payment Controls -->
-            <?php if (!$is_paid): ?>
+            <!-- FIXED: Show appropriate banner based on bill status -->
+            <?php if ($is_paid): ?>
+                <div class="paid-banner">
+                    <i class="fas fa-check-circle"></i>
+                    <h3>This bill is fully paid! 🎉</h3>
+                    <p>Total: <?= $currency ?> <?= number_format($total_amount, 0) ?> | Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?></p>
+                    <a href="partial_payments.php" class="btn btn-outline btn-sm" style="margin-top:8px;">
+                        <i class="fas fa-arrow-left"></i> Back to Partial Bills
+                    </a>
+                </div>
+            <?php elseif ($balance > 0 && $paid_amount > 0): ?>
+                <!-- FIXED: Show partial banner with remaining balance and continue payment options -->
+                <div class="partial-banner" id="partialBanner">
+                    <i class="fas fa-hand-holding-heart"></i>
+                    <h3>Partial Payment Made</h3>
+                    <p>
+                        Total: <?= $currency ?> <?= number_format($total_amount, 0) ?> | 
+                        Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?> | 
+                        <span class="remaining-amount">Remaining: <?= $currency ?> <?= number_format($balance, 0) ?></span>
+                    </p>
+                    <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:8px;">
+                        <i class="fas fa-info-circle"></i> Continue making payments until balance is zero
+                    </p>
+                    <div style="margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
+                        <a href="make_payment.php?bill_id=<?= $bill_id ?>" class="btn btn-success btn-sm">
+                            <i class="fas fa-money-bill-wave"></i> Continue Payment
+                        </a>
+                        <a href="partial_payments.php" class="btn btn-outline btn-sm">
+                            <i class="fas fa-arrow-left"></i> Back to Partial Bills
+                        </a>
+                    </div>
+                </div>
+            <?php endif; ?>
+            
+            <!-- Payment Controls - FIXED: Show only if not fully paid -->
+            <?php if (!$is_paid && $balance > 0): ?>
             <div class="payment-controls" id="paymentControls">
                 <div class="control-group">
                     <label><i class="fas fa-hand-holding-usd" style="color:var(--primary);"></i> Method:</label>
@@ -1280,15 +1348,6 @@ include_once '../../components/cashier_sidebar.php';
                     </button>
                 </div>
             </div>
-            <?php else: ?>
-                <div class="paid-banner">
-                    <i class="fas fa-check-circle"></i>
-                    <h3>This bill is fully paid! 🎉</h3>
-                    <p>Total: <?= $currency ?> <?= number_format($total_amount, 0) ?> | Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?></p>
-                    <a href="partial_payments.php" class="btn btn-outline btn-sm" style="margin-top:8px;">
-                        <i class="fas fa-arrow-left"></i> Back to Partial Bills
-                    </a>
-                </div>
             <?php endif; ?>
         </div>
     </div>
@@ -1325,7 +1384,7 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - FIXED: Partial payment handling -->
 <!-- ================================================================ -->
 <script>
     var billId = <?= $bill_id ?>;
@@ -1548,9 +1607,10 @@ include_once '../../components/cashier_sidebar.php';
                         window.location.href = 'partial_payments.php?success=paid';
                     }, 2000);
                 } else {
+                    // FIX: Reload the page to show updated balance and partial banner
                     setTimeout(function() {
                         window.location.reload();
-                    }, 2000);
+                    }, 1500);
                 }
             } else {
                 showToast('❌ Error', data.message, 'error');
@@ -1645,12 +1705,12 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c💰 Braick - Make Payment (Single Bill)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick - Make Payment (Single Bill - FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Partial payment - Reduces balance, does NOT complete bill', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Shows partial banner with remaining balance', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Continue Payment button available for partial bills', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Pharmacy Discount + Cashier Discount = Total Discount', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Partial Payment - Reduces balance, does NOT complete bill', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Green Theme Headers & Columns', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Bill ID: <?= $bill_id ?> | Balance: <?= $currency ?> <?= number_format($balance, 0) ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Bill ID: <?= $bill_id ?> | Balance: <?= $currency ?> <?= number_format($balance, 0) ?>', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

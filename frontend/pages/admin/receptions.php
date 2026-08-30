@@ -1,8 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/receptions.php
-// SUPER ADMIN - VIEW ALL RECEPTIONS
-// BRAICK DISPENSARY - BLUE THEME
+// SUPER ADMIN - VIEW ALL RECEPTIONS (BRANCHES)
+// BRAICK DISPENSARY - BLUE THEME - USING EXISTING DATABASE
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
@@ -51,7 +51,23 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
 // GET FILTER PARAMETERS
@@ -61,22 +77,35 @@ $search = $_GET['search'] ?? '';
 $status_filter = $_GET['status'] ?? 'all';
 
 // ================================================================
-// BUILD QUERY WITH FILTERS
+// BUILD QUERY WITH FILTERS - USING EXISTING TABLES
 // ================================================================
 $query = "
     SELECT 
-        b.*,
+        b.id,
+        b.name,
+        b.location,
+        b.phone,
+        b.email,
+        b.logo,
+        b.status,
+        b.created_at,
+        b.updated_at,
         (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception' AND status = 'active') as active_receptionists,
         (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception') as total_receptionists,
         (SELECT COUNT(*) FROM patients WHERE branch_id = b.id) as total_patients,
         (SELECT COUNT(*) FROM patients WHERE branch_id = b.id AND DATE(created_at) = CURDATE()) as today_patients,
         (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'pending') as pending_visits,
         (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'assigned') as assigned_visits,
+        (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'with_doctor') as with_doctor_visits,
         (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'scheduled') as scheduled_appointments,
         (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'confirmed') as confirmed_appointments,
         (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND DATE(appointment_date) = CURDATE()) as today_appointments,
         (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()) as today_visits,
-        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id) as total_appointments
+        (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id) as total_appointments,
+        (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
+        (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'partial') as partial_bills,
+        (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE branch_id = b.id AND status = 'paid') as total_revenue
     FROM branches b
     WHERE 1=1
 ";
@@ -139,12 +168,14 @@ $total_patients = 0;
 $total_appointments = 0;
 $pending_visits = 0;
 $today_visits = 0;
+$total_revenue = 0;
 
 foreach ($receptions as $r) {
     $total_patients += ($r['total_patients'] ?? 0);
     $total_appointments += ($r['total_appointments'] ?? 0);
     $pending_visits += ($r['pending_visits'] ?? 0);
     $today_visits += ($r['today_visits'] ?? 0);
+    $total_revenue += ($r['total_revenue'] ?? 0);
 }
 
 // ================================================================
@@ -157,16 +188,11 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -604,7 +630,6 @@ include_once '../../components/admin_sidebar.php';
             overflow: hidden;
         }
         
-        /* BOLDER BLUE accent line on left */
         .stat-card::before {
             content: '';
             position: absolute;
@@ -755,7 +780,7 @@ include_once '../../components/admin_sidebar.php';
         .stat-card .stat-change.neutral { color: var(--text-secondary); }
         
         /* ================================================================
-           FILTER BAR - BOLDER BLUE
+           FILTER BAR
            ================================================================ */
         .filter-bar {
             background: var(--bg-card);
@@ -772,7 +797,6 @@ include_once '../../components/admin_sidebar.php';
             overflow: hidden;
         }
         
-        /* BOLDER BLUE accent on filter bar */
         .filter-bar::before {
             content: '';
             position: absolute;
@@ -863,7 +887,6 @@ include_once '../../components/admin_sidebar.php';
             position: relative;
         }
         
-        /* BOLDER BLUE accent line on top of card */
         .reception-card::before {
             content: '';
             position: absolute;
@@ -887,7 +910,6 @@ include_once '../../components/admin_sidebar.php';
             height: 6px;
         }
         
-        /* CARD HEADER - BLUE BACKGROUND */
         .reception-card .card-top {
             padding: 16px 18px 12px 18px;
             border-bottom: 2px solid var(--border-color);
@@ -1219,7 +1241,7 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
@@ -1253,6 +1275,9 @@ include_once '../../components/admin_sidebar.php';
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
                     <i class="fas fa-clock"></i> <?= number_format($pending_visits) ?> Pending
+                </span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue, 0) ?> Revenue
                 </span>
             </p>
         </div>
@@ -1318,6 +1343,15 @@ include_once '../../components/admin_sidebar.php';
             </div>
             <p class="stat-label">Today's Visits</p>
             <p class="stat-value teal"><?= number_format($today_visits) ?></p>
+        </div>
+        
+        <div class="stat-card">
+            <div class="stat-icon-wrapper">
+                <div class="stat-icon orange"><i class="fas fa-money-bill-wave"></i></div>
+                <span class="stat-change up"><i class="fas fa-arrow-up"></i> Total</span>
+            </div>
+            <p class="stat-label">Total Revenue</p>
+            <p class="stat-value orange">TSh <?= number_format($total_revenue / 1000, 0) ?>K</p>
         </div>
     </div>
 
@@ -1422,7 +1456,7 @@ include_once '../../components/admin_sidebar.php';
                            class="btn-action">
                             <i class="fas fa-edit"></i> Edit
                         </a>
-                        <a href="reception_dashboard.php?id=<?= $reception['id'] ?>" 
+                        <a href="reception_dashboard.php?id=<?= $reception['id'] ?>&branch=<?= $selected_branch_id ?>" 
                            class="btn-action">
                             <i class="fas fa-chart-bar"></i> Dashboard
                         </a>
@@ -1562,13 +1596,15 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c📋 Braick Dispensary - Receptions (BOLDER BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Braick Dispensary - Receptions (USING EXISTING DATABASE)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Total Receptions: <?= $total_receptions ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Total Appointments: <?= number_format($total_appointments) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c🔄 Pending Visits: <?= number_format($pending_visits) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📊 Using tables: branches, users, patients, visits, appointments, bills', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

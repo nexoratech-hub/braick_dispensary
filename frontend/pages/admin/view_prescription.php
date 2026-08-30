@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_prescription.php
-// SUPER ADMIN - VIEW PRESCRIPTION DETAILS
+// ADMIN - VIEW PRESCRIPTION DETAILS
 // BRAICK DISPENSARY - BLUE THEME
+// WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
 // ================================================================
@@ -18,7 +19,11 @@ if (session_status() === PHP_SESSION_NONE) {
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
@@ -56,39 +61,25 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// VERIFY USER EXISTS IN DATABASE
-// ================================================================
-$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$user || $user['status'] !== 'active') {
-    session_destroy();
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
-
-// ================================================================
-// GET PRESCRIPTION ID
+// GET PARAMETERS
 // ================================================================
 $prescription_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 if ($prescription_id <= 0) {
-    header('Location: prescriptions.php?branch=' . $selected_branch_id . '&error=invalid_id');
+    header('Location: prescriptions.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
     exit;
+}
+
+// ================================================================
+// GET BRANCHES FOR FILTER
+// ================================================================
+$branches = [];
+try {
+    $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
 }
 
 // ================================================================
@@ -126,27 +117,33 @@ $stmt->execute([$prescription_id]);
 $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$prescription) {
-    header('Location: prescriptions.php?branch=' . $selected_branch_id . '&error=notfound');
+    header('Location: prescriptions.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
     exit;
 }
 
 // ================================================================
 // FETCH PRESCRIPTION ITEMS
 // ================================================================
-$stmt = $db->prepare("
-    SELECT 
-        pi.*,
-        mi.medication_name as inventory_name,
-        mi.category,
-        mi.unit,
-        mi.selling_price
-    FROM prescription_items pi
-    LEFT JOIN medications_inventory mi ON pi.inventory_id = mi.id
-    WHERE pi.prescription_id = ?
-    ORDER BY pi.id ASC
-");
-$stmt->execute([$prescription_id]);
-$prescription_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$prescription_items = [];
+try {
+    $stmt = $db->prepare("
+        SELECT 
+            pi.*,
+            mi.medication_name as inventory_name,
+            mi.category,
+            mi.unit,
+            mi.selling_price,
+            mi.batch_number
+        FROM prescription_items pi
+        LEFT JOIN medications_inventory mi ON pi.inventory_id = mi.id
+        WHERE pi.prescription_id = ?
+        ORDER BY pi.id ASC
+    ");
+    $stmt->execute([$prescription_id]);
+    $prescription_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $prescription_items = [];
+}
 
 // ================================================================
 // FETCH BILL INFORMATION
@@ -155,18 +152,21 @@ $bill = null;
 try {
     $stmt = $db->prepare("
         SELECT 
-            id,
-            bill_number,
-            total_amount,
-            paid_amount,
-            balance,
-            status as bill_status,
-            created_at as bill_created_at,
-            (SELECT full_name FROM users WHERE id = patient_bills.created_by) as created_by_name
-        FROM patient_bills
-        WHERE prescription_id = ?
+            b.id,
+            b.bill_number,
+            b.total_amount,
+            b.paid_amount,
+            b.balance,
+            b.status as bill_status,
+            b.created_at as bill_created_at,
+            u.full_name as created_by_name
+        FROM bills b
+        LEFT JOIN users u ON b.created_by = u.id
+        WHERE b.visit_id = ? AND b.patient_id = ?
+        ORDER BY b.created_at DESC
+        LIMIT 1
     ");
-    $stmt->execute([$prescription_id]);
+    $stmt->execute([$prescription['visit_id'], $prescription['patient_id']]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $bill = null;
@@ -183,6 +183,7 @@ if ($bill) {
                 receipt_number,
                 amount,
                 payment_method,
+                reference_number,
                 received_at
             FROM payments
             WHERE bill_id = ?
@@ -196,21 +197,30 @@ if ($bill) {
 }
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// GET UNREAD NOTIFICATIONS
 // ================================================================
-$branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
 
 // ================================================================
-// STATUS BADGE CLASS
+// STATUS FUNCTIONS
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
         'pending' => 'warning',
         'confirmed' => 'info',
         'dispensed' => 'success',
-        'cancelled' => 'danger'
+        'cancelled' => 'danger',
+        'paid' => 'success',
+        'partial' => 'warning',
+        'active' => 'success',
+        'inactive' => 'danger'
     ];
     return $classes[$status] ?? 'secondary';
 }
@@ -220,7 +230,11 @@ function getStatusIcon($status) {
         'pending' => 'fa-clock',
         'confirmed' => 'fa-check-double',
         'dispensed' => 'fa-check-circle',
-        'cancelled' => 'fa-times-circle'
+        'cancelled' => 'fa-times-circle',
+        'paid' => 'fa-check-circle',
+        'partial' => 'fa-clock',
+        'active' => 'fa-check-circle',
+        'inactive' => 'fa-times-circle'
     ];
     return $icons[$status] ?? 'fa-circle';
 }
@@ -230,7 +244,11 @@ function getStatusLabel($status) {
         'pending' => 'Pending',
         'confirmed' => 'Confirmed',
         'dispensed' => 'Dispensed',
-        'cancelled' => 'Cancelled'
+        'cancelled' => 'Cancelled',
+        'paid' => 'Paid',
+        'partial' => 'Partial',
+        'active' => 'Active',
+        'inactive' => 'Inactive'
     ];
     return $labels[$status] ?? ucfirst($status);
 }
@@ -565,18 +583,6 @@ include_once '../../components/admin_sidebar.php';
             pointer-events: none;
         }
         
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -610,7 +616,7 @@ include_once '../../components/admin_sidebar.php';
             font-weight: 600;
         }
         
-        .page-header .role-badge-display {
+        .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 4px 14px;
@@ -667,83 +673,75 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           BUTTONS - FULL CSS STYLED
+           BUTTONS
            ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 10px 20px;
-            border-radius: var(--radius);
+            gap: 6px;
+            padding: 8px 16px;
+            border-radius: 8px;
             font-weight: 600;
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             transition: all 0.3s ease;
             cursor: pointer;
             border: none;
             text-decoration: none;
-            box-shadow: var(--shadow-sm);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            border: 2px solid var(--border-color);
         }
         
         .btn:hover {
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-lg);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-md);
         }
         
-        .btn:active {
-            transform: translateY(0px);
-        }
-        
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none !important;
-            box-shadow: none !important;
+        .btn-sm {
+            padding: 4px 10px;
+            font-size: 0.65rem;
+            border-radius: 6px;
         }
         
         .btn-primary {
             background: var(--primary-gradient);
             color: white;
+            border-color: var(--primary);
         }
         
         .btn-primary:hover {
             background: var(--primary-gradient-hover);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
+            border-color: var(--primary-dark);
+            color: white;
         }
         
         .btn-success {
             background: linear-gradient(135deg, #059669, #047857);
             color: white;
+            border-color: #059669;
         }
         
         .btn-success:hover {
             background: linear-gradient(135deg, #047857, #065F46);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
+            border-color: #047857;
+            color: white;
         }
         
         .btn-danger {
             background: linear-gradient(135deg, #DC2626, #B91C1C);
             color: white;
+            border-color: #DC2626;
         }
         
         .btn-danger:hover {
             background: linear-gradient(135deg, #B91C1C, #991B1B);
-            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
-        }
-        
-        .btn-warning {
-            background: linear-gradient(135deg, #D97706, #B45309);
+            border-color: #B91C1C;
             color: white;
-        }
-        
-        .btn-warning:hover {
-            background: linear-gradient(135deg, #B45309, #92400E);
-            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.35);
         }
         
         .btn-outline {
             background: transparent;
-            color: var(--text-primary);
+            color: var(--text-secondary);
             border: 2px solid var(--border-color);
         }
         
@@ -751,31 +749,6 @@ include_once '../../components/admin_sidebar.php';
             background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
-        }
-        
-        .btn-sm {
-            padding: 5px 12px;
-            font-size: 0.7rem;
-            border-radius: 6px;
-        }
-        
-        .btn-lg {
-            padding: 14px 32px;
-            font-size: 1rem;
-        }
-        
-        .btn-block {
-            width: 100%;
-            justify-content: center;
-        }
-        
-        .btn i {
-            font-size: 0.9rem;
-        }
-        
-        .btn-sm i {
-            font-size: 0.7rem;
         }
         
         /* ================================================================
@@ -811,7 +784,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           STATUS BADGE
+           BADGES
            ================================================================ */
         .badge {
             display: inline-flex;
@@ -926,6 +899,32 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           EMPTY STATE
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 30px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 2.5rem;
+            color: var(--border-color);
+            margin-bottom: 12px;
+        }
+        
+        .empty-state h4 {
+            font-size: 1rem;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .empty-state p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+        
+        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
@@ -957,15 +956,17 @@ include_once '../../components/admin_sidebar.php';
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .detail-card { padding: 16px; }
+            .data-table { font-size: 0.7rem; }
+            .data-table td, .data-table th { padding: 6px 8px; }
+            .btn { padding: 6px 12px; font-size: 0.7rem; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
-            .data-table { font-size: 0.7rem; }
-            .data-table td, .data-table th { padding: 6px 8px; }
-            .btn { padding: 6px 12px; font-size: 0.7rem; }
-            .btn-sm { padding: 3px 8px; font-size: 0.6rem; }
+            .card-header { flex-direction: column; align-items: flex-start; }
+            .btn { width: 100%; justify-content: center; }
+            .grid { grid-template-columns: 1fr !important; }
         }
         
         /* ================================================================
@@ -1174,7 +1175,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list-ul text-blue-600"></i>
+                <i class="fas fa-list-ul" style="color:var(--primary);"></i>
                 Prescription Items (<?= count($prescription_items) ?>)
             </h3>
         </div>
@@ -1205,6 +1206,9 @@ include_once '../../components/admin_sidebar.php';
                                     <?php if (!empty($item['category'])): ?>
                                         <br><span class="text-xs text-gray-400"><?= htmlspecialchars($item['category']) ?></span>
                                     <?php endif; ?>
+                                    <?php if (!empty($item['batch_number'])): ?>
+                                        <br><span class="text-xs text-gray-400">Batch: <?= htmlspecialchars($item['batch_number']) ?></span>
+                                    <?php endif; ?>
                                 </td>
                                 <td><?= htmlspecialchars($item['dosage'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($item['frequency'] ?? 'N/A') ?></td>
@@ -1224,9 +1228,10 @@ include_once '../../components/admin_sidebar.php';
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-prescription text-2xl block mb-2"></i>
-                    <p>No items in this prescription</p>
+                <div class="empty-state">
+                    <i class="fas fa-prescription"></i>
+                    <h4>No Items</h4>
+                    <p>No items in this prescription.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1241,10 +1246,10 @@ include_once '../../components/admin_sidebar.php';
         <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-file-invoice text-blue-600"></i>
+                    <i class="fas fa-file-invoice" style="color:var(--primary);"></i>
                     Bill Information
                 </h3>
-                <a href="bill_details.php?id=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>" class="text-xs text-blue-600 hover:underline">View Bill →</a>
+                <a href="view_bill.php?id=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>" class="text-xs font-medium hover:underline" style="color:var(--primary);">View Bill →</a>
             </div>
             <div class="p-4 space-y-2">
                 <div class="flex justify-between">
@@ -1253,7 +1258,7 @@ include_once '../../components/admin_sidebar.php';
                 </div>
                 <div class="flex justify-between">
                     <span class="text-gray-500">Total Amount</span>
-                    <span class="font-semibold text-blue-600">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></span>
+                    <span class="font-semibold" style="color:var(--primary);">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></span>
                 </div>
                 <div class="flex justify-between">
                     <span class="text-gray-500">Paid Amount</span>
@@ -1288,7 +1293,7 @@ include_once '../../components/admin_sidebar.php';
         <div class="card animate-fade-in-up" style="animation-delay:0.15s;">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-credit-card text-green-600"></i>
+                    <i class="fas fa-credit-card" style="color:var(--success);"></i>
                     Payments (<?= count($payments) ?>)
                 </h3>
             </div>
@@ -1307,9 +1312,10 @@ include_once '../../components/admin_sidebar.php';
                         </div>
                     <?php endforeach; ?>
                 <?php else: ?>
-                    <div class="text-center py-4 text-gray-400">
-                        <i class="fas fa-credit-card text-2xl block mb-2"></i>
-                        <p>No payments recorded</p>
+                    <div class="empty-state">
+                        <i class="fas fa-credit-card"></i>
+                        <h4>No Payments</h4>
+                        <p>No payments recorded for this prescription.</p>
                     </div>
                 <?php endif; ?>
             </div>
@@ -1324,10 +1330,10 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-stethoscope text-purple-600"></i>
+                <i class="fas fa-stethoscope" style="color:var(--purple);"></i>
                 Visit Information
             </h3>
-            <a href="view_visit.php?id=<?= $prescription['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="text-xs text-blue-600 hover:underline">View Visit →</a>
+            <a href="view_visit.php?id=<?= $prescription['visit_id'] ?>&branch=<?= $selected_branch_id ?>" class="text-xs font-medium hover:underline" style="color:var(--primary);">View Visit →</a>
         </div>
         <div class="p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -1357,6 +1363,33 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
     <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- QUICK ACTIONS -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.25s;">
+        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+            <i class="fas fa-bolt" style="color:var(--primary);"></i> Quick Actions
+        </h3>
+        <div class="flex flex-wrap gap-3">
+            <?php if ($prescription['status'] === 'pending' || $prescription['status'] === 'confirmed'): ?>
+                <a href="dispense_prescription.php?id=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-success">
+                    <i class="fas fa-check-circle"></i> Dispense
+                </a>
+            <?php endif; ?>
+            <?php if ($prescription['status'] !== 'cancelled'): ?>
+                <a href="cancel_prescription.php?id=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-danger" onclick="return confirm('Are you sure you want to cancel this prescription?')">
+                    <i class="fas fa-times-circle"></i> Cancel
+                </a>
+            <?php endif; ?>
+            <a href="print_prescription.php?id=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" target="_blank" class="btn btn-primary">
+                <i class="fas fa-print"></i> Print
+            </a>
+            <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                <i class="fas fa-arrow-left"></i> Back to List
+            </a>
+        </div>
+    </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->

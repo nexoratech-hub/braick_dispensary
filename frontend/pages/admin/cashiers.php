@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/admin/cashiers.php
 // SUPER ADMIN - VIEW ALL CASHIERS
-// FIXED: Shows ALL active branches even if they have no cashiers
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
+// FIXED: Invalid ID error removed, Discounts included in calculations
+// FIXED: Uses shared admin_sidebar.php with all menus
 // ================================================================
 
 // ================================================================
@@ -70,24 +72,15 @@ try {
 }
 
 // ================================================================
-// GET FILTER PARAMETERS - FIXED: Properly handle error parameter
+// GET FILTER PARAMETERS - FIXED: Remove invalid_id error
 // ================================================================
 $selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : 'all';
 
-// ===== FIX: If error parameter exists, ignore branch filter =====
+// Remove any error parameter from URL - FIXED
 if (isset($_GET['error'])) {
-    $selected_branch_id = 'all';
-    // Clear the error from URL by redirecting
-    $redirect_url = $_SERVER['PHP_SELF'] . '?branch=all';
-    if (!empty($search)) {
-        $redirect_url .= '&search=' . urlencode($search);
-    }
-    if ($status_filter !== 'all') {
-        $redirect_url .= '&status=' . urlencode($status_filter);
-    }
-    header('Location: ' . $redirect_url);
+    header('Location: cashiers.php?branch=' . $selected_branch_id . '&search=' . urlencode($search) . '&status=' . $status_filter);
     exit;
 }
 
@@ -103,7 +96,7 @@ try {
 }
 
 // ================================================================
-// GET FINANCIAL SUMMARY
+// GET FINANCIAL SUMMARY - INCLUDING DISCOUNTS
 // ================================================================
 function getFinancialSummary($db, $branch_id = 'all') {
     $results = [];
@@ -112,12 +105,12 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $params = [];
     
     if ($branch_id !== 'all' && is_numeric($branch_id)) {
-        $branch_condition = " AND pb.branch_id = ?";
+        $branch_condition = " AND b.branch_id = ?";
         $params[] = (int)$branch_id;
     }
     
     $params_otc = $params;
-    $branch_condition_otc = str_replace('pb.branch_id', 'os.branch_id', $branch_condition);
+    $branch_condition_otc = str_replace('b.branch_id', 'os.branch_id', $branch_condition);
     
     $params_expenses = [];
     $branch_condition_expenses = "";
@@ -126,21 +119,47 @@ function getFinancialSummary($db, $branch_id = 'all') {
         $params_expenses[] = (int)$branch_id;
     }
     
-    // 1. PATIENT BILLS REVENUE
-    $sql_patient = "
-        SELECT COALESCE(SUM(pb.total_amount), 0) as patient_revenue
-        FROM patient_bills pb
-        INNER JOIN patients p ON pb.patient_id = p.id
-        WHERE pb.status = 'paid' $branch_condition
+    // 1. BILLS REVENUE
+    $sql_bills = "
+        SELECT COALESCE(SUM(b.total_amount), 0) as bills_revenue
+        FROM bills b
+        WHERE b.status = 'paid' $branch_condition
     ";
-    $stmt = $db->prepare($sql_patient);
+    $stmt = $db->prepare($sql_bills);
     $stmt->execute($params);
-    $patient_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['patient_revenue'] ?? 0;
-    $results['patient_revenue'] = $patient_revenue;
+    $bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['bills_revenue'] ?? 0;
+    $results['bills_revenue'] = $bills_revenue;
     
-    // 2. OTC REVENUE
+    // 2. BILLS REVENUE WITH DISCOUNTS
+    $sql_bills_paid = "
+        SELECT COALESCE(SUM(b.paid_amount), 0) as bills_paid
+        FROM bills b
+        WHERE b.status IN ('paid', 'partial') $branch_condition
+    ";
+    $stmt = $db->prepare($sql_bills_paid);
+    $stmt->execute($params);
+    $bills_paid = $stmt->fetch(PDO::FETCH_ASSOC)['bills_paid'] ?? 0;
+    $results['bills_paid'] = $bills_paid;
+    
+    // 3. TOTAL DISCOUNT AMOUNT
+    $sql_discounts = "
+        SELECT 
+            COALESCE(SUM(b.discount_amount), 0) as pharmacy_discounts,
+            COALESCE(SUM(b.cashier_discount), 0) as cashier_discounts,
+            COALESCE(SUM(b.total_discount), 0) as total_discounts
+        FROM bills b
+        WHERE b.status IN ('paid', 'partial') $branch_condition
+    ";
+    $stmt = $db->prepare($sql_discounts);
+    $stmt->execute($params);
+    $discounts = $stmt->fetch(PDO::FETCH_ASSOC);
+    $results['pharmacy_discounts'] = $discounts['pharmacy_discounts'] ?? 0;
+    $results['cashier_discounts'] = $discounts['cashier_discounts'] ?? 0;
+    $results['total_discounts'] = $discounts['total_discounts'] ?? 0;
+    
+    // 4. OTC REVENUE
     $sql_otc = "
-        SELECT COALESCE(SUM(os.net_amount), 0) as otc_revenue
+        SELECT COALESCE(SUM(os.total_amount), 0) as otc_revenue
         FROM otc_sales os
         WHERE os.payment_status = 'paid' $branch_condition_otc
     ";
@@ -149,10 +168,10 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
     $results['otc_revenue'] = $otc_revenue;
     
-    // 3. TOTAL REVENUE
-    $results['total_revenue'] = $patient_revenue + $otc_revenue;
+    // 5. TOTAL REVENUE
+    $results['total_revenue'] = $bills_paid + $otc_revenue;
     
-    // 4. REAL EXPENSES FROM DATABASE
+    // 6. EXPENSES
     $sql_expenses = "
         SELECT COALESCE(SUM(amount), 0) as total_expenses
         FROM expenses
@@ -162,61 +181,66 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params_expenses);
     $results['total_expenses'] = $stmt->fetch(PDO::FETCH_ASSOC)['total_expenses'] ?? 0;
     
-    // 5. NET PROFIT
+    // 7. NET PROFIT
     $results['net_profit'] = $results['total_revenue'] - $results['total_expenses'];
     
-    // 6. PRESCRIPTION REVENUE
+    // 8. PRESCRIPTION REVENUE
     $sql_prescription = "
         SELECT COALESCE(SUM(bi.total_price), 0) as prescription_revenue
         FROM bill_items bi
-        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-        INNER JOIN patients p ON pb.patient_id = p.id
+        INNER JOIN bills b ON bi.bill_id = b.id
         WHERE bi.item_type = 'medication' 
-        AND pb.status = 'paid' 
+        AND b.status IN ('paid', 'partial') 
         $branch_condition
     ";
     $stmt = $db->prepare($sql_prescription);
     $stmt->execute($params);
     $results['prescription_revenue'] = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
     
-    // 7. PAID BILLS
+    // 9. PAID BILLS
     $sql_paid = "
         SELECT COUNT(*) as paid_bills
-        FROM patient_bills pb
-        INNER JOIN patients p ON pb.patient_id = p.id
-        WHERE pb.status = 'paid' $branch_condition
+        FROM bills b
+        WHERE b.status = 'paid' $branch_condition
     ";
     $stmt = $db->prepare($sql_paid);
     $stmt->execute($params);
     $results['paid_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['paid_bills'] ?? 0;
     
-    // 8. PENDING BILLS
+    // 10. PENDING BILLS
     $sql_pending = "
         SELECT COUNT(*) as pending_bills
-        FROM patient_bills pb
-        INNER JOIN patients p ON pb.patient_id = p.id
-        WHERE pb.status = 'pending' $branch_condition
+        FROM bills b
+        WHERE b.status = 'pending' $branch_condition
     ";
     $stmt = $db->prepare($sql_pending);
     $stmt->execute($params);
     $results['pending_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['pending_bills'] ?? 0;
     
-    // 9. CANCELLED BILLS
+    // 11. PARTIAL BILLS
+    $sql_partial = "
+        SELECT COUNT(*) as partial_bills
+        FROM bills b
+        WHERE b.status = 'partial' $branch_condition
+    ";
+    $stmt = $db->prepare($sql_partial);
+    $stmt->execute($params);
+    $results['partial_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['partial_bills'] ?? 0;
+    
+    // 12. CANCELLED BILLS
     $sql_cancelled = "
         SELECT COUNT(*) as cancelled_bills
-        FROM patient_bills pb
-        INNER JOIN patients p ON pb.patient_id = p.id
-        WHERE pb.status = 'cancelled' $branch_condition
+        FROM bills b
+        WHERE b.status = 'cancelled' $branch_condition
     ";
     $stmt = $db->prepare($sql_cancelled);
     $stmt->execute($params);
     $results['cancelled_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['cancelled_bills'] ?? 0;
     
-    // 10. TOTAL BILLS
+    // 13. TOTAL BILLS
     $sql_total = "
         SELECT COUNT(*) as total_bills
-        FROM patient_bills pb
-        INNER JOIN patients p ON pb.patient_id = p.id
+        FROM bills b
         WHERE 1=1 $branch_condition
     ";
     $stmt = $db->prepare($sql_total);
@@ -230,8 +254,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
 $financial = getFinancialSummary($db, $selected_branch_id);
 
 // ================================================================
-// BUILD QUERY FOR BRANCHES - SHOW ALL ACTIVE BRANCHES
-// FIXED: Removed the IN clause that was filtering out branches without cashiers
+// BUILD QUERY FOR BRANCHES - WITH DISCOUNTS INCLUDED
 // ================================================================
 $query = "
     SELECT 
@@ -246,48 +269,60 @@ $query = "
         ) as total_cashiers,
         COALESCE(
             (SELECT COUNT(*) 
-             FROM patient_bills pb
-             INNER JOIN patients p ON pb.patient_id = p.id
-             WHERE pb.branch_id = b.id), 
+             FROM bills bl
+             WHERE bl.branch_id = b.id), 
             0
         ) as total_bills,
         COALESCE(
             (SELECT COUNT(*) 
-             FROM patient_bills pb
-             INNER JOIN patients p ON pb.patient_id = p.id
-             WHERE pb.branch_id = b.id AND pb.status = 'pending'), 
+             FROM bills bl
+             WHERE bl.branch_id = b.id AND bl.status = 'pending'), 
             0
         ) as pending_bills,
         COALESCE(
             (SELECT COUNT(*) 
-             FROM patient_bills pb
-             INNER JOIN patients p ON pb.patient_id = p.id
-             WHERE pb.branch_id = b.id AND pb.status = 'paid'), 
+             FROM bills bl
+             WHERE bl.branch_id = b.id AND bl.status = 'paid'), 
             0
         ) as paid_bills,
         COALESCE(
             (SELECT COUNT(*) 
-             FROM patient_bills pb
-             INNER JOIN patients p ON pb.patient_id = p.id
-             WHERE pb.branch_id = b.id AND pb.status = 'partial'), 
+             FROM bills bl
+             WHERE bl.branch_id = b.id AND bl.status = 'partial'), 
             0
         ) as partial_bills,
         COALESCE(
             (SELECT COUNT(*) 
-             FROM patient_bills pb
-             INNER JOIN patients p ON pb.patient_id = p.id
-             WHERE pb.branch_id = b.id AND pb.status = 'cancelled'), 
+             FROM bills bl
+             WHERE bl.branch_id = b.id AND bl.status = 'cancelled'), 
             0
         ) as cancelled_bills,
         COALESCE(
-            (SELECT COALESCE(SUM(pb.total_amount), 0) 
-             FROM patient_bills pb
-             INNER JOIN patients p ON pb.patient_id = p.id
-             WHERE pb.branch_id = b.id AND pb.status = 'paid'), 
+            (SELECT COALESCE(SUM(bl.paid_amount), 0) 
+             FROM bills bl
+             WHERE bl.branch_id = b.id AND bl.status IN ('paid', 'partial')), 
             0
-        ) as patient_bills_revenue,
+        ) as bills_revenue,
         COALESCE(
-            (SELECT COALESCE(SUM(os.net_amount), 0) 
+            (SELECT COALESCE(SUM(bl.discount_amount), 0) 
+             FROM bills bl
+             WHERE bl.branch_id = b.id AND bl.status IN ('paid', 'partial')), 
+            0
+        ) as pharmacy_discounts,
+        COALESCE(
+            (SELECT COALESCE(SUM(bl.cashier_discount), 0) 
+             FROM bills bl
+             WHERE bl.branch_id = b.id AND bl.status IN ('paid', 'partial')), 
+            0
+        ) as cashier_discounts,
+        COALESCE(
+            (SELECT COALESCE(SUM(bl.total_discount), 0) 
+             FROM bills bl
+             WHERE bl.branch_id = b.id AND bl.status IN ('paid', 'partial')), 
+            0
+        ) as total_discounts,
+        COALESCE(
+            (SELECT COALESCE(SUM(os.total_amount), 0) 
              FROM otc_sales os
              WHERE os.branch_id = b.id AND os.payment_status = 'paid'), 
             0
@@ -295,11 +330,10 @@ $query = "
         COALESCE(
             (SELECT COALESCE(SUM(bi.total_price), 0) 
              FROM bill_items bi
-             INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-             INNER JOIN patients p ON pb.patient_id = p.id
+             INNER JOIN bills bl ON bi.bill_id = bl.id
              WHERE bi.item_type = 'medication' 
-             AND pb.status = 'paid' 
-             AND pb.branch_id = b.id), 
+             AND bl.status IN ('paid', 'partial') 
+             AND bl.branch_id = b.id), 
             0
         ) as prescription_revenue,
         COALESCE(
@@ -310,12 +344,11 @@ $query = "
         ) as branch_expenses,
         COALESCE(
             (
-                (SELECT COALESCE(SUM(pb.total_amount), 0) 
-                 FROM patient_bills pb
-                 INNER JOIN patients p ON pb.patient_id = p.id
-                 WHERE pb.branch_id = b.id AND pb.status = 'paid') 
+                (SELECT COALESCE(SUM(bl.paid_amount), 0) 
+                 FROM bills bl
+                 WHERE bl.branch_id = b.id AND bl.status IN ('paid', 'partial'))
                 + 
-                (SELECT COALESCE(SUM(os.net_amount), 0) 
+                (SELECT COALESCE(SUM(os.total_amount), 0) 
                  FROM otc_sales os
                  WHERE os.branch_id = b.id AND os.payment_status = 'paid')
             ), 
@@ -327,36 +360,23 @@ $query = "
 
 $params = [];
 
-// Branch filter - ONLY APPLY IF NOT 'all' AND branch exists
+// Branch filter
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    // Verify branch exists before filtering
     $check_stmt = $db->prepare("SELECT id FROM branches WHERE id = ? AND status = 'active'");
     $check_stmt->execute([(int)$selected_branch_id]);
     if ($check_stmt->fetch()) {
         $query .= " AND b.id = ?";
         $params[] = (int)$selected_branch_id;
     } else {
-        // Branch doesn't exist - reset to all
         $selected_branch_id = 'all';
-        // Remove invalid branch from URL
-        $redirect_url = $_SERVER['PHP_SELF'];
-        $params_redirect = [];
-        if (!empty($search)) $params_redirect[] = 'search=' . urlencode($search);
-        if ($status_filter !== 'all') $params_redirect[] = 'status=' . urlencode($status_filter);
-        if (!empty($params_redirect)) {
-            $redirect_url .= '?' . implode('&', $params_redirect);
-        }
-        header('Location: ' . $redirect_url);
-        exit;
     }
 }
 
-// Status filter - show only branches with specific status
+// Status filter
 if ($status_filter !== 'all') {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
 } else {
-    // Default: show only active branches
     $query .= " AND b.status = 'active'";
 }
 
@@ -384,7 +404,7 @@ try {
 }
 
 // ================================================================
-// GET SUMMARY STATISTICS
+// GET SUMMARY STATISTICS - INCLUDING DISCOUNTS
 // ================================================================
 $total_cashiers = count($cashiers);
 $total_cashiers_count = 0;
@@ -394,10 +414,13 @@ $total_paid = 0;
 $total_partial = 0;
 $total_cancelled = 0;
 $total_revenue = 0;
-$total_patient_bills_revenue = 0;
+$total_bills_revenue = 0;
 $total_otc_revenue = 0;
 $total_prescription_revenue = 0;
 $total_expenses = 0;
+$total_pharmacy_discounts = 0;
+$total_cashier_discounts = 0;
+$total_discounts = 0;
 
 foreach ($cashiers as $c) {
     $total_cashiers_count += ($c['total_cashiers'] ?? 0);
@@ -406,11 +429,14 @@ foreach ($cashiers as $c) {
     $total_paid += ($c['paid_bills'] ?? 0);
     $total_partial += ($c['partial_bills'] ?? 0);
     $total_cancelled += ($c['cancelled_bills'] ?? 0);
-    $total_patient_bills_revenue += ($c['patient_bills_revenue'] ?? 0);
+    $total_bills_revenue += ($c['bills_revenue'] ?? 0);
     $total_otc_revenue += ($c['otc_revenue'] ?? 0);
     $total_prescription_revenue += ($c['prescription_revenue'] ?? 0);
     $total_expenses += ($c['branch_expenses'] ?? 0);
     $total_revenue += ($c['total_revenue'] ?? 0);
+    $total_pharmacy_discounts += ($c['pharmacy_discounts'] ?? 0);
+    $total_cashier_discounts += ($c['cashier_discounts'] ?? 0);
+    $total_discounts += ($c['total_discounts'] ?? 0);
 }
 
 $net_profit = $total_revenue - $total_expenses;
@@ -438,7 +464,7 @@ function format_currency($amount) {
 }
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE SHARED HEADER & SIDEBAR - FIXED: Uses shared admin sidebar
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
@@ -501,147 +527,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: background 0.3s ease, border-color 0.3s ease;
-        }
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
-        }
-        .top-nav .branch-selector {
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            background: var(--bg-card);
-            font-size: 0.82rem;
-            font-weight: 500;
-            cursor: pointer;
-            outline: none;
-            min-width: 160px;
-            color: var(--text-primary);
-            transition: all 0.3s;
-        }
-        .top-nav .branch-selector:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-        }
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            background: #059669;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        .notif-dot.has-notif { background: #EF4444; }
-        .notif-dot.no-notif { background: #94A3B8; animation: none; }
-        @keyframes pulse-dot { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.2); } }
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -649,103 +534,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
             transition: background 0.3s ease;
         }
-        
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: 270px;
-            background: #0B4EA8;
-            color: white;
-            z-index: 50;
-            overflow-y: auto;
-            overflow-x: hidden;
-            transition: transform 0.3s ease-in-out;
-            transform: translateX(0);
-            box-shadow: 4px 0 20px rgba(0,0,0,0.15);
-        }
-        .sidebar-brand {
-            padding: 18px 16px 14px;
-            border-bottom: 2px solid #0B3D8A;
-            background: #0B4EA8;
-            position: sticky;
-            top: 0;
-            z-index: 5;
-        }
-        .sidebar-brand .logo {
-            width: 42px;
-            height: 42px;
-            border-radius: 10px;
-            object-fit: cover;
-            background: white;
-            padding: 4px;
-            border: 2px solid rgba(255,255,255,0.1);
-        }
-        .sidebar-brand .brand-text { color: white; font-weight: 700; font-size: 0.95rem; line-height: 1.2; }
-        .sidebar-brand .brand-sub { color: #9EC5FE; font-size: 0.65rem; font-weight: 500; }
-        .sidebar-nav { padding: 10px 8px 20px; }
-        .sidebar-nav .nav-label {
-            font-size: 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: #6EA8FE;
-            padding: 0 10px;
-            margin: 12px 0 4px;
-            font-weight: 700;
-        }
-        .sidebar-link {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            color: #D2E3FC;
-            text-decoration: none;
-            transition: all 0.25s ease;
-            font-size: 0.8rem;
-            font-weight: 500;
-            margin: 1px 0;
-            background: transparent;
-            cursor: pointer;
-            border: none;
-            width: 100%;
-            text-align: left;
-            position: relative;
-        }
-        .sidebar-link:hover {
-            background: #0AA84F;
-            color: white;
-            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
-            transform: translateX(4px);
-        }
-        .sidebar-link.active {
-            background: #0AA84F;
-            color: white;
-            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
-        }
-        .sidebar-link.logout-link {
-            border-top: 2px solid rgba(255,255,255,0.08);
-            padding-top: 10px;
-            margin-top: 6px;
-            color: #FCA5A5;
-        }
-        .sidebar-link.logout-link:hover {
-            background: #DC2626;
-            color: white;
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
-        }
-        
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            transition: border-color 0.3s ease, color 0.3s ease;
-        }
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         /* ================================================================
            8 CARDS - CUSTOM COLORS
@@ -856,10 +644,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             align-items: center;
             gap: 6px;
             flex-wrap: wrap;
-        }
-        .stat-card-8 .stat-sub .highlight {
-            color: rgba(255,255,255,0.95);
-            font-weight: 600;
         }
         .stat-card-8 .stat-arrow {
             position: absolute;
@@ -1230,6 +1014,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-color: rgba(239, 68, 68, 0.3);
             color: #F87171;
         }
+        .page-header-box .header-badge.discount {
+            background: rgba(251, 191, 36, 0.25);
+            border-color: rgba(251, 191, 36, 0.35);
+            color: #FCD34D;
+        }
         
         .btn-outline-light {
             background: rgba(255,255,255,0.12);
@@ -1254,12 +1043,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            transition: border-color 0.3s ease, color 0.3s ease;
+        }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
-            .sidebar { transform: translateX(-100%); }
-            .sidebar.open { transform: translateX(0); }
         }
         @media (max-width: 768px) {
             .stats-grid-8 { grid-template-columns: 1fr 1fr; }
@@ -1289,114 +1086,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
-        
-        #sidebarOverlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 45;
-            display: none;
-            backdrop-filter: blur(2px);
-        }
-        @media (max-width: 1024px) {
-            #sidebarOverlay.show { display: block; }
-        }
     </style>
 </head>
 <body>
 
-<div id="sidebarOverlay"></div>
-
 <!-- ================================================================ -->
-<!-- SIDEBAR -->
-<!-- ================================================================ -->
-<aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-        <div style="display:flex;align-items:center;gap:12px;">
-            <img src="<?= $logo_url ?>" alt="Braick Logo" class="logo" 
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
-            <div>
-                <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub">Super Admin</p>
-            </div>
-        </div>
-    </div>
-    
-    <nav class="sidebar-nav">
-        <div class="nav-label">Main Menu</div>
-        <a href="/dispensary_system/frontend/pages/admin/dashboard.php" class="sidebar-link"><i class="fas fa-home"></i> Dashboard</a>
-        <a href="/dispensary_system/frontend/pages/admin/employees.php" class="sidebar-link"><i class="fas fa-users"></i> Employees</a>
-        <a href="/dispensary_system/frontend/pages/admin/patients.php" class="sidebar-link"><i class="fas fa-user-injured"></i> Patients</a>
-        
-        <div class="nav-label">Modules</div>
-        <a href="/dispensary_system/frontend/pages/admin/doctors_list.php" class="sidebar-link"><i class="fas fa-user-md"></i> Doctors</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php" class="sidebar-link"><i class="fas fa-prescription"></i> Pharmacy</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_reception.php" class="sidebar-link"><i class="fas fa-headset"></i> Reception</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php" class="sidebar-link"><i class="fas fa-flask"></i> Laboratory</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_cashier.php" class="sidebar-link active"><i class="fas fa-cash-register"></i> Cashier</a>
-        
-        <div class="nav-label">Management</div>
-        <a href="/dispensary_system/frontend/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
-        <a href="/dispensary_system/frontend/pages/admin/departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
-        <a href="/dispensary_system/frontend/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
-        
-        <div class="nav-label">Account</div>
-        <a href="/dispensary_system/frontend/pages/admin/profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> Profile</a>
-        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
-    </nav>
-</aside>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="icon-btn lg:hidden">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search branches..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
+<!-- MAIN CONTENT - Sidebar is loaded from admin_sidebar.php -->
 <!-- ================================================================ -->
 <main class="main-content">
 
@@ -1421,6 +1116,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="header-badge expenses">
                     <i class="fas fa-arrow-up"></i> Expenses: TSh <?= number_format($financial['total_expenses'], 0) ?>
                 </span>
+                <span class="header-badge discount">
+                    <i class="fas fa-tag"></i> Discounts: TSh <?= number_format($total_discounts, 0) ?>
+                </span>
             </p>
         </div>
         <div style="position:relative;z-index:1;">
@@ -1432,7 +1130,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     <!-- ================================================================ -->
     <!-- 8 CARDS - CUSTOM COLORS -->
-    <!-- BLUE, RED, GREEN, BLUE, BLUE, GREEN, ORANGE, RED -->
     <!-- ================================================================ -->
     <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.05s;">
         
@@ -1442,7 +1139,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="stat-content">
                 <p class="stat-label">Total Revenue</p>
                 <p class="stat-number">TSh <?= number_format($financial['total_revenue'], 0) ?></p>
-                <p class="stat-sub">From bills + OTC</p>
+                <p class="stat-sub">From bills + OTC (after discounts)</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
@@ -1469,7 +1166,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 4. Prescription Revenue - BLUE -->
+        <!-- 4. Total Discounts - ORANGE -->
+        <div class="stat-card-8 card-orange">
+            <div class="stat-icon"><i class="fas fa-tag"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Total Discounts</p>
+                <p class="stat-number">TSh <?= number_format($total_discounts, 0) ?></p>
+                <p class="stat-sub">Pharmacy + Cashier discounts</p>
+            </div>
+            <i class="fas fa-arrow-right stat-arrow"></i>
+        </div>
+        
+        <!-- 5. Prescription Revenue - BLUE -->
         <div class="stat-card-8 card-blue">
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div class="stat-content">
@@ -1480,7 +1188,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 5. OTC Revenue - BLUE -->
+        <!-- 6. OTC Revenue - BLUE -->
         <div class="stat-card-8 card-blue">
             <div class="stat-icon"><i class="fas fa-cash-register"></i></div>
             <div class="stat-content">
@@ -1491,7 +1199,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 6. Paid Bills - GREEN -->
+        <!-- 7. Paid Bills - GREEN -->
         <div class="stat-card-8 card-green">
             <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
             <div class="stat-content">
@@ -1502,7 +1210,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 7. Pending Bills - ORANGE -->
+        <!-- 8. Pending Bills - ORANGE -->
         <div class="stat-card-8 card-orange">
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
             <div class="stat-content">
@@ -1513,27 +1221,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 8. Cancelled Bills - RED -->
-        <div class="stat-card-8 card-red">
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Cancelled Bills</p>
-                <p class="stat-number"><?= number_format($financial['cancelled_bills']) ?></p>
-                <p class="stat-sub">❌ Voided transactions</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-        
     </div>
 
     <!-- ================================================================ -->
-    <!-- FILTER BAR - FIXED: Properly handles error parameter -->
+    <!-- FILTER BAR -->
     <!-- ================================================================ -->
     <div class="filter-bar animate-fade-in-up" style="animation-delay:0.1s;">
         <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
         <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
             <?php 
-            // Preserve all GET parameters except 'error' and 'branch' (branch is controlled by select)
             $preserve_params = ['search', 'status'];
             foreach ($_GET as $key => $value) {
                 if (in_array($key, $preserve_params) && !empty($value)) {
@@ -1565,11 +1261,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- BRANCH GRID - SHOWS ALL ACTIVE BRANCHES -->
+    <!-- BRANCH GRID - SHOWS ALL ACTIVE BRANCHES WITH DISCOUNTS -->
     <!-- ================================================================ -->
     <?php if (count($cashiers) > 0): ?>
         <div class="cashier-grid animate-fade-in-up" style="animation-delay:0.15s;">
             <?php foreach ($cashiers as $cashier): ?>
+                <?php 
+                $net = ($cashier['total_revenue'] ?? 0) - ($cashier['branch_expenses'] ?? 0);
+                ?>
                 <div class="cashier-card">
                     <div class="card-top">
                         <div>
@@ -1601,14 +1300,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <?= ($cashier['active_cashiers'] ?? 0) ?> Active / <?= ($cashier['total_cashiers'] ?? 0) ?> Cashiers
                         </div>
                         <div class="info-row">
-                            <i class="fas fa-arrow-up" style="color:#DC2626;"></i>
-                            Expenses: TSh <?= number_format($cashier['branch_expenses'] ?? 0, 0) ?>
+                            <i class="fas fa-tag" style="color:#D97706;"></i>
+                            Discounts: TSh <?= number_format($cashier['total_discounts'] ?? 0, 0) ?>
+                            <span style="font-size:0.55rem;color:var(--text-secondary);margin-left:4px;">
+                                (Pharm: TSh <?= number_format($cashier['pharmacy_discounts'] ?? 0, 0) ?> | Cash: TSh <?= number_format($cashier['cashier_discounts'] ?? 0, 0) ?>)
+                            </span>
                         </div>
                         
                         <div class="revenue-breakdown">
                             <span class="item">
                                 <span class="label">Bills:</span>
-                                <span class="amount blue">TSh <?= number_format($cashier['patient_bills_revenue'] ?? 0, 0) ?></span>
+                                <span class="amount blue">TSh <?= number_format($cashier['bills_revenue'] ?? 0, 0) ?></span>
                             </span>
                             <span class="item">
                                 <span class="label">OTC:</span>
@@ -1620,7 +1322,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             </span>
                             <span class="item" style="font-weight:700;color:var(--primary);">
                                 <span class="label">Net:</span>
-                                <span class="amount teal">TSh <?= number_format(($cashier['total_revenue'] ?? 0) - ($cashier['branch_expenses'] ?? 0), 0) ?></span>
+                                <span class="amount teal">TSh <?= number_format($net, 0) ?></span>
                             </span>
                         </div>
                     </div>
@@ -1646,11 +1348,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </div>
                     </div>
                     
-                    <!-- ============================================================ -->
-                    <!-- CARD ACTIONS - View & Edit ONLY (Dashboard REMOVED) -->
-                    <!-- ============================================================ -->
+                    <!-- CARD ACTIONS -->
                     <div class="card-actions">
-                        <a href="view_cashier.php?id=<?= (int)$cashier['id'] ?>" class="btn-action primary">
+                        <a href="cashiers.php?id=<?= (int)$cashier['id'] ?>" class="btn-action primary">
                             <i class="fas fa-eye"></i> View
                         </a>
                         <a href="edit_cashier.php?id=<?= (int)$cashier['id'] ?>" class="btn-action">
@@ -1720,43 +1420,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    var overlay = document.getElementById('sidebarOverlay');
-    
-    function toggleSidebar() {
-        sidebar.classList.toggle('open');
-        overlay.classList.toggle('show');
-        document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
-    }
-    
-    sidebarToggle?.addEventListener('click', function(e) {
-        e.stopPropagation();
-        toggleSidebar();
-    });
-    
-    overlay?.addEventListener('click', function() {
-        sidebar.classList.remove('open');
-        overlay.classList.remove('show');
-        document.body.style.overflow = '';
-    });
-    
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-            sidebar.classList.remove('open');
-            overlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-    });
-    
-    window.addEventListener('resize', function() {
-        if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-            sidebar.classList.remove('open');
-            overlay.classList.remove('show');
-            document.body.style.overflow = '';
-        }
-    });
-
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
@@ -1800,11 +1463,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c💰 Braick Dispensary - Cashiers', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💰 Braick Dispensary - Cashiers (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Uses shared admin_sidebar.php with ALL menus', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Fixed: invalid_id error removed', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Fixed: Discounts included in calculations', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Total Branches: <?= $total_cashiers ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ FIXED: Shows ALL active branches even without cashiers', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Branches: Dodoma, Arusha, Dar es Salaam, Mbeya', 'font-size:13px; color:#34D399;');
+    console.log('%c💰 Total Discounts: TSh <?= number_format($total_discounts, 0) ?>', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>

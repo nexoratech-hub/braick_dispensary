@@ -3,7 +3,9 @@
 // FILE: frontend/pages/admin/export_pharmacy_pdf.php
 // EXPORT PHARMACY REPORT TO PDF - HTML FALLBACK VERSION
 // BRAICK DISPENSARY - PURPLE THEME
+// FIXED: Uses bills table and medications_inventory
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// WITH OFFICIAL STAMP & ADMIN CONTACTS
 // ================================================================
 
 // ================================================================
@@ -45,25 +47,56 @@ $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // Include database
 require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// GET ADMIN CONTACT NUMBERS
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone FROM users 
+        WHERE role = 'admin' AND branch_id = ? AND status = 'active'
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$user_branch_id]);
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+}
+
+// ================================================================
+// GET BRANCH PHONE
+// ================================================================
+$branch_phone = '';
+try {
+    $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
+    $stmt->execute([$user_branch_id]);
+    $branch_phone = $stmt->fetchColumn();
+} catch (Exception $e) {
+    $branch_phone = '';
+}
+
+$admin_phones_display = !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001');
 
 // ================================================================
 // GET PARAMETERS
 // ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
-$date_from = $_GET['date_from'] ?? '';
-$date_to = $_GET['date_to'] ?? '';
+$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
+$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#0B5ED7"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
+$logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#7C3AED"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
 
 // ================================================================
 // GET BRANCH NAME
@@ -81,115 +114,163 @@ if ($branch_id > 0) {
 // ================================================================
 // BUILD DATE FILTER
 // ================================================================
-$date_filter_os = "";
-$date_filter_ps = "";
-$date_filter_pi = "";
-$date_filter_oi = "";
-
+$date_filter = "";
 if (!empty($date_from) && !empty($date_to)) {
-    $date_filter_os = " AND os.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
-    $date_filter_ps = " AND ps.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
-    $date_filter_pi = " AND pi.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
-    $date_filter_oi = " AND oi.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
+    $date_filter = " AND b.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
 } elseif (!empty($date_from)) {
-    $date_filter_os = " AND os.created_at >= '$date_from 00:00:00'";
-    $date_filter_ps = " AND ps.created_at >= '$date_from 00:00:00'";
-    $date_filter_pi = " AND pi.created_at >= '$date_from 00:00:00'";
-    $date_filter_oi = " AND oi.created_at >= '$date_from 00:00:00'";
+    $date_filter = " AND b.created_at >= '$date_from 00:00:00'";
 } elseif (!empty($date_to)) {
-    $date_filter_os = " AND os.created_at <= '$date_to 23:59:59'";
-    $date_filter_ps = " AND ps.created_at <= '$date_to 23:59:59'";
-    $date_filter_pi = " AND pi.created_at <= '$date_to 23:59:59'";
-    $date_filter_oi = " AND oi.created_at <= '$date_to 23:59:59'";
+    $date_filter = " AND b.created_at <= '$date_to 23:59:59'";
 }
 
 // ================================================================
 // BRANCH FILTER
 // ================================================================
-$branch_filter_os = "";
-$branch_filter_ps = "";
-$branch_filter_pi = "";
-$branch_filter_oi = "";
-
+$branch_filter = "";
 if ($branch_id > 0) {
-    $branch_filter_os = " AND os.branch_id = $branch_id";
-    $branch_filter_ps = " AND ps.branch_id = $branch_id";
-    $branch_filter_pi = " AND pr.branch_id = $branch_id";
-    $branch_filter_oi = " AND os.branch_id = $branch_id";
+    $branch_filter = " AND b.branch_id = $branch_id";
 }
 
 // ================================================================
-// FETCH PHARMACY DATA
+// FETCH PHARMACY DATA - USING bills AND medications_inventory
 // ================================================================
 
-// OTC Sales
+// Get prescription bills (medication items) - USING bills table
 $stmt = $db->query("
-    SELECT os.*, u.full_name as sold_by_name
+    SELECT 
+        b.id as bill_id,
+        b.bill_number,
+        b.patient_id,
+        b.total_amount,
+        b.paid_amount,
+        b.balance,
+        b.status as bill_status,
+        b.payment_method,
+        b.created_at as bill_date,
+        b.branch_id,
+        p.full_name as patient_name,
+        p.patient_id as patient_code,
+        u.full_name as cashier_name,
+        br.name as branch_name,
+        (
+            SELECT COUNT(*) 
+            FROM bill_items bi 
+            WHERE bi.bill_id = b.id 
+            AND bi.item_type = 'medication'
+            AND bi.status != 'cancelled'
+        ) as medication_count,
+        (
+            SELECT COALESCE(SUM(bi.total_price), 0)
+            FROM bill_items bi 
+            WHERE bi.bill_id = b.id 
+            AND bi.item_type = 'medication'
+            AND bi.status != 'cancelled'
+        ) as medication_total
+    FROM bills b
+    LEFT JOIN patients p ON b.patient_id = p.id
+    LEFT JOIN users u ON b.created_by = u.id
+    LEFT JOIN branches br ON b.branch_id = br.id
+    WHERE EXISTS (
+        SELECT 1 
+        FROM bill_items bi 
+        WHERE bi.bill_id = b.id 
+        AND bi.item_type = 'medication'
+        AND bi.status != 'cancelled'
+    )
+    AND b.status = 'paid'
+    $branch_filter $date_filter
+    ORDER BY b.created_at DESC
+");
+$prescription_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Get medication items - FROM bill_items and medications_inventory
+$stmt = $db->query("
+    SELECT 
+        bi.id,
+        bi.bill_id,
+        bi.item_name as medication_name,
+        bi.quantity,
+        bi.unit_price,
+        bi.total_price,
+        bi.status as item_status,
+        bi.created_at,
+        b.bill_number,
+        b.patient_id,
+        p.full_name as patient_name,
+        p.patient_id as patient_code,
+        b.branch_id,
+        br.name as branch_name,
+        mi.batch_number,
+        mi.category,
+        mi.unit,
+        mi.expiry_date
+    FROM bill_items bi
+    LEFT JOIN bills b ON bi.bill_id = b.id
+    LEFT JOIN patients p ON b.patient_id = p.id
+    LEFT JOIN branches br ON b.branch_id = br.id
+    LEFT JOIN medications_inventory mi ON mi.medication_name = bi.item_name AND mi.branch_id = b.branch_id
+    WHERE bi.item_type = 'medication'
+    AND bi.status != 'cancelled'
+    AND b.status = 'paid'
+    $branch_filter $date_filter
+    ORDER BY bi.created_at DESC
+    LIMIT 200
+");
+$medication_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Calculate totals
+$total_prescription_bills = count($prescription_bills);
+$total_prescription_amount = 0;
+$total_medication_items = 0;
+$total_medication_quantity = 0;
+$total_medication_value = 0;
+
+foreach ($prescription_bills as $bill) {
+    $total_prescription_amount += $bill['medication_total'] ?? 0;
+}
+
+foreach ($medication_items as $item) {
+    $total_medication_items++;
+    $total_medication_quantity += $item['quantity'] ?? 0;
+    $total_medication_value += $item['total_price'] ?? 0;
+}
+
+// Get OTC sales - USING otc_sales table (exists in database)
+$stmt = $db->query("
+    SELECT os.*, u.full_name as cashier_name, br.name as branch_name
     FROM otc_sales os
     LEFT JOIN users u ON os.sold_by = u.id
-    WHERE os.payment_status = 'paid' $branch_filter_os $date_filter_os
+    LEFT JOIN branches br ON os.branch_id = br.id
+    WHERE os.payment_status = 'paid'
+    $branch_filter $date_filter
     ORDER BY os.created_at DESC
 ");
 $otc_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Prescription Sales
-$stmt = $db->query("
-    SELECT ps.*, p.full_name as patient_name, u.full_name as dispensed_by_name
-    FROM prescription_sales ps
-    LEFT JOIN patients p ON ps.patient_id = p.id
-    LEFT JOIN users u ON ps.dispensed_by = u.id
-    WHERE ps.payment_status = 'paid' $branch_filter_ps $date_filter_ps
-    ORDER BY ps.created_at DESC
-");
-$prescription_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Calculate totals for cards
-$total_prescription_amount = 0;
+$total_otc_sales = count($otc_sales);
 $total_otc_amount = 0;
-$total_prescription_count = count($prescription_sales);
-$total_otc_count = count($otc_sales);
+$total_otc_items_sold = 0;
 
-foreach ($prescription_sales as $s) {
-    $total_prescription_amount += $s['total_amount'] ?? 0;
-}
-foreach ($otc_sales as $s) {
-    $total_otc_amount += $s['net_amount'] ?? 0;
+foreach ($otc_sales as $sale) {
+    $total_otc_amount += $sale['total_amount'] ?? 0;
 }
 
-// Prescription Items
+// Get OTC items
 $stmt = $db->query("
-    SELECT pi.*, p.patient_id as patient_code, p.full_name as patient_name,
-           pr.prescription_number, pr.diagnosis
-    FROM prescription_items pi
-    LEFT JOIN prescriptions pr ON pi.prescription_id = pr.id
-    LEFT JOIN patients p ON pr.patient_id = p.id
-    WHERE 1=1 $branch_filter_pi $date_filter_pi
-    ORDER BY pi.created_at DESC
-    LIMIT 100
-");
-$prescription_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// OTC Items
-$stmt = $db->query("
-    SELECT oi.*, os.customer_name, os.sale_number, os.created_at as sale_date
+    SELECT oi.*, os.sale_number, os.customer_name, os.created_at as sale_date,
+           br.name as branch_name
     FROM otc_sale_items oi
     LEFT JOIN otc_sales os ON oi.sale_id = os.id
-    WHERE os.payment_status = 'paid' $branch_filter_oi $date_filter_oi
+    LEFT JOIN branches br ON os.branch_id = br.id
+    WHERE os.payment_status = 'paid'
+    $branch_filter $date_filter
     ORDER BY oi.created_at DESC
-    LIMIT 100
+    LIMIT 200
 ");
 $otc_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Total OTC items sold
-$total_otc_items_sold = 0;
 foreach ($otc_items as $item) {
     $total_otc_items_sold += $item['quantity'] ?? 0;
-}
-
-// Total prescription items sold
-$total_prescription_items_sold = 0;
-foreach ($prescription_items as $item) {
-    $total_prescription_items_sold += $item['quantity'] ?? 0;
 }
 
 // ================================================================
@@ -252,25 +333,41 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         /* ================================================================
-           HEADER WITH LOGO - PURPLE THEME
+           HEADER WITH LOGO - PURPLE THEME LIKE EXPENSES
            ================================================================ */
         .report-header {
             background: linear-gradient(135deg, #7C3AED, #6D28D9);
             color: white;
-            padding: 20px 24px;
-            border-radius: 10px;
+            padding: 24px 28px;
+            border-radius: 12px;
             margin-bottom: 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
             gap: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .report-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .report-header .brand {
             display: flex;
             align-items: center;
             gap: 16px;
+            position: relative;
+            z-index: 1;
         }
         
         .report-header .brand .logo-container {
@@ -294,22 +391,26 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .report-header .brand .logo-text h1 {
-            font-size: 22px;
+            font-size: 24px;
             font-weight: 700;
             letter-spacing: 0.5px;
             margin: 0;
+            color: white;
         }
         
         .report-header .brand .logo-text p {
             font-size: 12px;
             opacity: 0.85;
             margin: 2px 0 0 0;
+            color: rgba(255,255,255,0.85);
         }
         
         .report-header .meta-info {
             text-align: right;
             font-size: 12px;
             opacity: 0.9;
+            position: relative;
+            z-index: 1;
         }
         
         .report-header .meta-info .badge-print {
@@ -319,6 +420,32 @@ header('Content-Type: text/html; charset=utf-8');
             font-size: 10px;
             font-weight: 600;
             display: inline-block;
+            color: white;
+        }
+        
+        /* Admin Contact Line */
+        .admin-contact-line {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            font-size: 10px;
+            color: rgba(255,255,255,0.7);
+            margin-top: 4px;
+            padding-top: 4px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .admin-contact-line span {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .admin-contact-line i {
+            color: rgba(255,255,255,0.6);
         }
         
         /* ================================================================
@@ -471,6 +598,64 @@ header('Content-Type: text/html; charset=utf-8');
         .font-bold { font-weight: 700; }
         
         /* ================================================================
+           OFFICIAL STAMP - LIKE EXPENSES PDF
+           ================================================================ */
+        .official-stamp {
+            margin-top: 20px;
+            padding-top: 14px;
+            border-top: 2px solid #E2E8F0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .official-stamp .stamp-left {
+            font-size: 12px;
+            color: #64748B;
+        }
+        
+        .official-stamp .stamp-left strong {
+            color: #1E293B;
+        }
+        
+        .official-stamp .stamp-box {
+            text-align: center;
+            padding: 8px 20px;
+            border: 3px solid #7C3AED;
+            border-radius: 10px;
+            background: #EDE9FE;
+            min-width: 160px;
+        }
+        
+        .official-stamp .stamp-box .stamp-title {
+            font-size: 9px;
+            color: #64748B;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .official-stamp .stamp-box .stamp-name {
+            font-size: 14px;
+            font-weight: 800;
+            color: #7C3AED;
+        }
+        
+        .official-stamp .stamp-box .stamp-line {
+            font-size: 11px;
+            color: #64748B;
+            margin-top: 2px;
+        }
+        
+        .official-stamp .stamp-box .stamp-date {
+            font-size: 9px;
+            color: #94A3B8;
+            margin-top: 2px;
+        }
+        
+        /* ================================================================
            NO DATA
            ================================================================ */
         .no-data {
@@ -550,6 +735,7 @@ header('Content-Type: text/html; charset=utf-8');
             .report-header .meta-info { text-align: center; }
             .data-table { font-size: 8px; }
             .data-table th, .data-table td { padding: 4px 6px; }
+            .official-stamp { flex-direction: column; text-align: center; }
         }
         
         @media (max-width: 480px) {
@@ -594,6 +780,16 @@ header('Content-Type: text/html; charset=utf-8');
             .summary-card {
                 border-color: #ddd !important;
             }
+            .official-stamp .stamp-box {
+                background: #EDE9FE !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                border-color: #7C3AED !important;
+            }
+            .admin-contact-line {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
         }
     </style>
 </head>
@@ -619,7 +815,7 @@ header('Content-Type: text/html; charset=utf-8');
     </div>
 
     <!-- ================================================================ -->
-    <!-- HEADER WITH LOGO - PURPLE THEME -->
+    <!-- HEADER WITH LOGO - PURPLE THEME LIKE EXPENSES -->
     <!-- ================================================================ -->
     <div class="report-header">
         <div class="brand">
@@ -630,7 +826,7 @@ header('Content-Type: text/html; charset=utf-8');
             </div>
             <div class="logo-text">
                 <h1>BRAICK DISPENSARY</h1>
-                <p>Quality Healthcare Services</p>
+                <p>Tunajali Afya Yako</p>
             </div>
         </div>
         <div class="meta-info">
@@ -638,6 +834,13 @@ header('Content-Type: text/html; charset=utf-8');
             <div>Generated: <?= date('M d, Y h:i A') ?></div>
             <span class="badge-print">💊 Pharmacy Report</span>
         </div>
+    </div>
+    
+    <!-- Admin Contact Line -->
+    <div class="admin-contact-line">
+        <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
+        <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($user_branch_name) ?> Branch</span>
+        <span><i class="fas fa-user"></i> Generated by: <?= htmlspecialchars($user_full_name) ?></span>
     </div>
 
     <!-- ================================================================ -->
@@ -656,8 +859,8 @@ header('Content-Type: text/html; charset=utf-8');
         <?php else: ?>
             <span><i class="fas fa-calendar"></i> Period: <strong>All Time</strong></span>
         <?php endif; ?>
-        <span><i class="fas fa-prescription"></i> Prescription Sales: <strong><?= number_format($total_prescription_count) ?></strong></span>
-        <span><i class="fas fa-shopping-cart"></i> OTC Sales: <strong><?= number_format($total_otc_count) ?></strong></span>
+        <span><i class="fas fa-prescription"></i> Prescriptions: <strong><?= number_format($total_prescription_bills) ?></strong></span>
+        <span><i class="fas fa-shopping-cart"></i> OTC Sales: <strong><?= number_format($total_otc_sales) ?></strong></span>
     </div>
 
     <!-- ================================================================ -->
@@ -666,13 +869,13 @@ header('Content-Type: text/html; charset=utf-8');
     <div class="summary-grid">
         <div class="summary-card">
             <div class="number purple">TSh <?= number_format($total_prescription_amount, 0) ?></div>
-            <div class="label">Prescription Sales</div>
-            <div class="sub-label"><?= number_format($total_prescription_count) ?> transactions</div>
+            <div class="label">Prescription Revenue</div>
+            <div class="sub-label"><?= number_format($total_prescription_bills) ?> transactions</div>
         </div>
         <div class="summary-card">
             <div class="number orange">TSh <?= number_format($total_otc_amount, 0) ?></div>
-            <div class="label">OTC Sales</div>
-            <div class="sub-label"><?= number_format($total_otc_count) ?> transactions</div>
+            <div class="label">OTC Revenue</div>
+            <div class="sub-label"><?= number_format($total_otc_sales) ?> transactions</div>
         </div>
         <div class="summary-card">
             <div class="number blue">TSh <?= number_format($total_prescription_amount + $total_otc_amount, 0) ?></div>
@@ -680,60 +883,55 @@ header('Content-Type: text/html; charset=utf-8');
             <div class="sub-label">Prescription + OTC</div>
         </div>
         <div class="summary-card">
-            <div class="number green"><?= number_format($total_prescription_items_sold + $total_otc_items_sold) ?></div>
+            <div class="number green"><?= number_format($total_medication_quantity + $total_otc_items_sold) ?></div>
             <div class="label">Total Items Sold</div>
-            <div class="sub-label"><?= number_format($total_prescription_items_sold) ?> Prescription · <?= number_format($total_otc_items_sold) ?> OTC</div>
+            <div class="sub-label"><?= number_format($total_medication_quantity) ?> Rx · <?= number_format($total_otc_items_sold) ?> OTC</div>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- PRESCRIPTION SALES -->
+    <!-- PRESCRIPTION BILLS -->
     <!-- ================================================================ -->
     <div class="section-title">
-        <i class="fas fa-prescription"></i> Prescription Sales (<?= count($prescription_sales) ?>)
+        <i class="fas fa-prescription"></i> Prescription Bills (<?= count($prescription_bills) ?>)
     </div>
 
-    <?php if (!empty($prescription_sales)): ?>
+    <?php if (!empty($prescription_bills)): ?>
         <table class="data-table">
             <thead>
                 <tr>
-                    <th>Sale #</th>
+                    <th>Bill #</th>
                     <th>Patient</th>
-                    <th style="text-align:right;">Total</th>
-                    <th style="text-align:right;">Discount</th>
-                    <th style="text-align:right;">Net</th>
-                    <th>Dispensed By</th>
+                    <th style="text-align:right;">Items</th>
+                    <th style="text-align:right;">Medication Total</th>
+                    <th>Branch</th>
                     <th>Date</th>
                 </tr>
             </thead>
             <tbody>
                 <?php 
-                $ps_total = 0;
-                $ps_discount = 0;
-                $ps_net = 0;
+                $pb_total = 0;
+                $pb_items = 0;
                 
-                foreach ($prescription_sales as $sale):
-                    $ps_total += $sale['total_amount'] ?? 0;
-                    $ps_discount += $sale['discount_amount'] ?? 0;
-                    $ps_net += $sale['net_amount'] ?? 0;
+                foreach ($prescription_bills as $bill):
+                    $pb_total += $bill['medication_total'] ?? 0;
+                    $pb_items += $bill['medication_count'] ?? 0;
                 ?>
                     <tr>
-                        <td class="font-mono" style="font-size:9px;"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
-                        <td><?= htmlspecialchars($sale['patient_name'] ?? 'Walk-in') ?></td>
-                        <td style="text-align:right;font-weight:bold;">TSh <?= number_format($sale['total_amount'] ?? 0, 0) ?></td>
-                        <td style="text-align:right;">TSh <?= number_format($sale['discount_amount'] ?? 0, 0) ?></td>
-                        <td style="text-align:right;color:#059669;font-weight:bold;">TSh <?= number_format($sale['net_amount'] ?? 0, 0) ?></td>
-                        <td><?= htmlspecialchars($sale['dispensed_by_name'] ?? 'N/A') ?></td>
-                        <td style="font-size:9px;"><?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?></td>
+                        <td class="font-mono" style="font-size:9px;"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
+                        <td><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></td>
+                        <td style="text-align:right;"><?= number_format($bill['medication_count'] ?? 0) ?></td>
+                        <td style="text-align:right;font-weight:bold;color:#7C3AED;">TSh <?= number_format($bill['medication_total'] ?? 0, 0) ?></td>
+                        <td><?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?></td>
+                        <td style="font-size:9px;"><?= date('M d, Y', strtotime($bill['bill_date'] ?? 'now')) ?></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
             <tfoot>
                 <tr style="background:#F8FAFC;font-weight:700;border-top:2px solid #7C3AED;">
                     <td colspan="2" style="text-align:right;">GRAND TOTAL</td>
-                    <td style="text-align:right;">TSh <?= number_format($ps_total, 0) ?></td>
-                    <td style="text-align:right;">TSh <?= number_format($ps_discount, 0) ?></td>
-                    <td style="text-align:right;color:#059669;">TSh <?= number_format($ps_net, 0) ?></td>
+                    <td style="text-align:right;"><?= number_format($pb_items) ?></td>
+                    <td style="text-align:right;color:#7C3AED;">TSh <?= number_format($pb_total, 0) ?></td>
                     <td colspan="2"></td>
                 </tr>
             </tfoot>
@@ -741,7 +939,63 @@ header('Content-Type: text/html; charset=utf-8');
     <?php else: ?>
         <div class="no-data">
             <i class="fas fa-prescription"></i>
-            No prescription sales found
+            No prescription bills found
+        </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- MEDICATION ITEMS -->
+    <!-- ================================================================ -->
+    <div class="section-title" style="margin-top:24px;">
+        <i class="fas fa-pills"></i> Medication Items (<?= count($medication_items) ?>)
+    </div>
+
+    <?php if (!empty($medication_items)): ?>
+        <table class="data-table">
+            <thead>
+                <tr>
+                    <th>Bill #</th>
+                    <th>Patient</th>
+                    <th>Medication</th>
+                    <th>Batch</th>
+                    <th style="text-align:right;">Qty</th>
+                    <th style="text-align:right;">Unit Price</th>
+                    <th style="text-align:right;">Total</th>
+                </tr>
+            </thead>
+            <tbody>
+                <?php 
+                $mi_total = 0;
+                $mi_qty = 0;
+                
+                foreach ($medication_items as $item):
+                    $mi_total += $item['total_price'] ?? 0;
+                    $mi_qty += $item['quantity'] ?? 0;
+                ?>
+                    <tr>
+                        <td style="font-size:8px;"><?= htmlspecialchars($item['bill_number'] ?? 'N/A') ?></td>
+                        <td><?= htmlspecialchars($item['patient_name'] ?? 'N/A') ?></td>
+                        <td><strong><?= htmlspecialchars($item['medication_name']) ?></strong></td>
+                        <td style="font-size:8px;color:#94A3B8;"><?= htmlspecialchars($item['batch_number'] ?? '-') ?></td>
+                        <td style="text-align:right;"><?= number_format($item['quantity']) ?></td>
+                        <td style="text-align:right;">TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
+                        <td style="text-align:right;font-weight:bold;">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
+                    </tr>
+                <?php endforeach; ?>
+            </tbody>
+            <tfoot>
+                <tr style="background:#F8FAFC;font-weight:700;border-top:2px solid #7C3AED;">
+                    <td colspan="4" style="text-align:right;">GRAND TOTAL</td>
+                    <td style="text-align:right;"><?= number_format($mi_qty) ?></td>
+                    <td></td>
+                    <td style="text-align:right;">TSh <?= number_format($mi_total, 0) ?></td>
+                </tr>
+            </tfoot>
+        </table>
+    <?php else: ?>
+        <div class="no-data">
+            <i class="fas fa-pills"></i>
+            No medication items found
         </div>
     <?php endif; ?>
 
@@ -784,7 +1038,7 @@ header('Content-Type: text/html; charset=utf-8');
                         <td style="text-align:right;">TSh <?= number_format($sale['discount_amount'] ?? 0, 0) ?></td>
                         <td style="text-align:right;color:#059669;font-weight:bold;">TSh <?= number_format($sale['net_amount'] ?? 0, 0) ?></td>
                         <td><?= ucfirst($sale['payment_method'] ?? 'N/A') ?></td>
-                        <td><?= htmlspecialchars($sale['sold_by_name'] ?? 'N/A') ?></td>
+                        <td><?= htmlspecialchars($sale['cashier_name'] ?? 'N/A') ?></td>
                         <td style="font-size:9px;"><?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?></td>
                     </tr>
                 <?php endforeach; ?>
@@ -803,62 +1057,6 @@ header('Content-Type: text/html; charset=utf-8');
         <div class="no-data">
             <i class="fas fa-shopping-cart"></i>
             No OTC sales found
-        </div>
-    <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- PRESCRIPTION ITEMS -->
-    <!-- ================================================================ -->
-    <div class="section-title" style="margin-top:24px;">
-        <i class="fas fa-pills"></i> Prescription Items (<?= count($prescription_items) ?>)
-    </div>
-
-    <?php if (!empty($prescription_items)): ?>
-        <table class="data-table">
-            <thead>
-                <tr>
-                    <th>Patient</th>
-                    <th>Prescription #</th>
-                    <th>Medication</th>
-                    <th>Dosage</th>
-                    <th style="text-align:right;">Qty</th>
-                    <th style="text-align:right;">Unit Price</th>
-                    <th style="text-align:right;">Total</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php 
-                $pi_total = 0;
-                $pi_qty = 0;
-                
-                foreach ($prescription_items as $item):
-                    $pi_total += $item['total_price'] ?? 0;
-                    $pi_qty += $item['quantity'] ?? 0;
-                ?>
-                    <tr>
-                        <td><?= htmlspecialchars($item['patient_name'] ?? 'N/A') ?></td>
-                        <td style="font-size:8px;"><?= htmlspecialchars($item['prescription_number'] ?? 'N/A') ?></td>
-                        <td><strong><?= htmlspecialchars($item['medication_name']) ?></strong></td>
-                        <td><?= htmlspecialchars($item['dosage'] ?? '-') ?></td>
-                        <td style="text-align:right;"><?= number_format($item['quantity']) ?></td>
-                        <td style="text-align:right;">TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
-                        <td style="text-align:right;font-weight:bold;">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
-                    </tr>
-                <?php endforeach; ?>
-            </tbody>
-            <tfoot>
-                <tr style="background:#F8FAFC;font-weight:700;border-top:2px solid #7C3AED;">
-                    <td colspan="4" style="text-align:right;">GRAND TOTAL</td>
-                    <td style="text-align:right;"><?= number_format($pi_qty) ?></td>
-                    <td></td>
-                    <td style="text-align:right;">TSh <?= number_format($pi_total, 0) ?></td>
-                </tr>
-            </tfoot>
-        </table>
-    <?php else: ?>
-        <div class="no-data">
-            <i class="fas fa-pills"></i>
-            No prescription items found
         </div>
     <?php endif; ?>
 
@@ -920,6 +1118,25 @@ header('Content-Type: text/html; charset=utf-8');
     <?php endif; ?>
 
     <!-- ================================================================ -->
+    <!-- OFFICIAL STAMP - LIKE EXPENSES PDF -->
+    <!-- ================================================================ -->
+    <div class="official-stamp">
+        <div class="stamp-left">
+            <span>Generated by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
+            <span style="margin-left:14px;">Date: <strong><?= date('F d, Y') ?></strong></span>
+            <span style="margin-left:14px;display:block;font-size:10px;color:#94A3B8;margin-top:4px;">
+                <i class="fas fa-print"></i> Printed: <?= date('h:i A') ?>
+            </span>
+        </div>
+        <div class="stamp-box">
+            <div class="stamp-title">Official Stamp</div>
+            <div class="stamp-name">BRAICK DISPENSARY</div>
+            <div class="stamp-line">Approved By: _________________</div>
+            <div class="stamp-date">Date: <?= date('F d, Y') ?></div>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
     <div class="report-footer">
@@ -941,6 +1158,16 @@ header('Content-Type: text/html; charset=utf-8');
             window.print();
         }, 500);
     }
+    
+    console.log('%c💊 Braick Dispensary - Pharmacy Report (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ USING: bills table + medications_inventory', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Design like expenses with logo & official stamp', 'font-size:13px; color:#34D399;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c💊 Prescription Revenue: TSh <?= number_format($total_prescription_amount, 0) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🛒 OTC Revenue: TSh <?= number_format($total_otc_amount, 0) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c📞 Admin Contacts: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

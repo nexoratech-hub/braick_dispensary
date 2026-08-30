@@ -1,8 +1,8 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/admin/bills.php
-// ADMIN - VIEW ALL BILLS
-// WITH BRANCH FILTER AND STATUS FILTER
+// FILE: frontend/pages/cashier/print_receipt.php
+// CASHIER - PRINT RECEIPT
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -13,7 +13,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -21,30 +21,29 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER IS ADMIN
+// CHECK IF USER IS CASHIER OR ADMIN
 // ================================================================
-if ($_SESSION['role'] !== 'admin') {
+$allowed_roles = ['cashier', 'admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
         case 'reception': header('Location: ../reception/dashboard.php'); break;
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
-        case 'cashier': header('Location: ../cashier/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET USER DATA
 // ================================================================
-$user_id = $_SESSION['user_id'] ?? 0;
-$user_full_name = $_SESSION['full_name'] ?? 'Admin';
-$user_role = $_SESSION['role'] ?? 'admin';
+$user_id = $_SESSION['user_id'];
+$user_full_name = $_SESSION['full_name'] ?? 'Cashier';
+$user_role = $_SESSION['role'] ?? 'cashier';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
@@ -60,40 +59,253 @@ try {
 }
 
 // ================================================================
-// GET FILTER PARAMETERS
+// GET RECEIPT PARAMETERS
 // ================================================================
-$selected_branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
-$filter_status = isset($_GET['status']) ? $_GET['status'] : 'all';
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
-$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
+$receipt_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$payment_id = isset($_GET['payment_id']) ? (int)$_GET['payment_id'] : 0;
+$bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
+$otc_sale_id = isset($_GET['otc_id']) ? (int)$_GET['otc_id'] : 0;
+
+$receipt_type = isset($_GET['type']) ? $_GET['type'] : 'bill'; // bill, payment, otc
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// FETCH RECEIPT DATA BASED ON TYPE
 // ================================================================
-$branches = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
-}
+$receipt_data = null;
+$bill_data = null;
+$payment_data = null;
+$patient_data = null;
+$branch_data = null;
+$items_data = [];
+$otc_data = null;
 
-// ================================================================
-// GET BRANCH NAME
-// ================================================================
-$branch_name = 'All Branches';
-if ($selected_branch_id > 0) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch_id) {
-            $branch_name = $b['name'];
-            break;
+// If receipt ID is provided, fetch from receipts table
+if ($receipt_id > 0) {
+    $stmt = $db->prepare("
+        SELECT r.*, 
+               p.full_name as patient_name,
+               p.patient_id as patient_code,
+               p.phone as patient_phone,
+               u.full_name as cashier_name,
+               b.name as branch_name,
+               b.location as branch_location,
+               b.phone as branch_phone,
+               b.email as branch_email
+        FROM receipts r
+        LEFT JOIN patients p ON r.patient_id = p.id
+        LEFT JOIN users u ON r.printed_by = u.id
+        LEFT JOIN branches b ON r.branch_id = b.id
+        WHERE r.id = ?
+    ");
+    $stmt->execute([$receipt_id]);
+    $receipt_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($receipt_data) {
+        // Decode receipt data
+        $receipt_json = json_decode($receipt_data['receipt_data'], true);
+        if ($receipt_json) {
+            $bill_data = $receipt_json['bill'] ?? null;
+            $payment_data = $receipt_json['payment'] ?? null;
+            $patient_data = $receipt_json['patient'] ?? null;
+            $items_data = $receipt_json['items'] ?? [];
+            $otc_data = $receipt_json['otc'] ?? null;
         }
     }
 }
 
+// If payment ID is provided, fetch payment details
+if ($payment_id > 0 && !$receipt_data) {
+    $stmt = $db->prepare("
+        SELECT 
+            p.*,
+            b.bill_number,
+            b.total_amount,
+            b.subtotal,
+            b.discount_amount,
+            b.balance as bill_balance,
+            b.status as bill_status,
+            pat.full_name as patient_name,
+            pat.patient_id as patient_code,
+            pat.phone as patient_phone,
+            u.full_name as received_by_name,
+            br.name as branch_name
+        FROM payments p
+        LEFT JOIN bills b ON p.bill_id = b.id
+        LEFT JOIN patients pat ON p.patient_id = pat.id
+        LEFT JOIN users u ON p.received_by = u.id
+        LEFT JOIN branches br ON p.branch_id = br.id
+        WHERE p.id = ?
+    ");
+    $stmt->execute([$payment_id]);
+    $payment_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($payment_data) {
+        // Get bill items
+        $stmt = $db->prepare("
+            SELECT * FROM bill_items 
+            WHERE bill_id = ?
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$payment_data['bill_id']]);
+        $items_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        $patient_data = $payment_data;
+        $branch_data = $payment_data;
+    }
+}
+
+// If bill ID is provided, fetch bill details
+if ($bill_id > 0 && !$receipt_data && !$payment_data) {
+    $stmt = $db->prepare("
+        SELECT 
+            b.*,
+            pat.full_name as patient_name,
+            pat.patient_id as patient_code,
+            pat.phone as patient_phone,
+            u.full_name as created_by_name,
+            br.name as branch_name,
+            br.location as branch_location,
+            br.phone as branch_phone,
+            br.email as branch_email
+        FROM bills b
+        LEFT JOIN patients pat ON b.patient_id = pat.id
+        LEFT JOIN users u ON b.created_by = u.id
+        LEFT JOIN branches br ON b.branch_id = br.id
+        WHERE b.id = ?
+    ");
+    $stmt->execute([$bill_id]);
+    $bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($bill_data) {
+        // Get bill items
+        $stmt = $db->prepare("
+            SELECT * FROM bill_items 
+            WHERE bill_id = ?
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$bill_id]);
+        $items_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        // Get latest payment
+        $stmt = $db->prepare("
+            SELECT * FROM payments 
+            WHERE bill_id = ?
+            ORDER BY received_at DESC LIMIT 1
+        ");
+        $stmt->execute([$bill_id]);
+        $payment_data = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        $patient_data = $bill_data;
+        $branch_data = $bill_data;
+    }
+}
+
+// If OTC sale ID is provided
+if ($otc_sale_id > 0 && !$receipt_data) {
+    $stmt = $db->prepare("
+        SELECT 
+            o.*,
+            u.full_name as sold_by_name,
+            b.name as branch_name,
+            b.location as branch_location,
+            b.phone as branch_phone,
+            b.email as branch_email,
+            p.full_name as patient_name,
+            p.patient_id as patient_code,
+            p.phone as patient_phone
+        FROM otc_sales o
+        LEFT JOIN users u ON o.sold_by = u.id
+        LEFT JOIN branches b ON o.branch_id = b.id
+        LEFT JOIN patients p ON o.patient_id = p.id
+        WHERE o.id = ?
+    ");
+    $stmt->execute([$otc_sale_id]);
+    $otc_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($otc_data) {
+        // Get OTC items
+        $stmt = $db->prepare("
+            SELECT oi.*, mi.medication_name, mi.batch_number, mi.unit
+            FROM otc_sale_items oi
+            LEFT JOIN medications_inventory mi ON oi.inventory_id = mi.id
+            WHERE oi.sale_id = ?
+            ORDER BY oi.created_at DESC
+        ");
+        $stmt->execute([$otc_sale_id]);
+        $items_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+}
+
 // ================================================================
-// FUNCTION FORMAT CURRENCY
+// IF NO DATA FOUND, SHOW ERROR
+// ================================================================
+if (!$receipt_data && !$payment_data && !$bill_data && !$otc_data) {
+    ?>
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Receipt Not Found</title>
+        <style>
+            body { font-family: Arial, sans-serif; background: #f5f5f5; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+            .error-box { background: white; padding: 40px; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.1); text-align: center; max-width: 400px; }
+            .error-box i { font-size: 48px; color: #DC2626; margin-bottom: 16px; }
+            .error-box h2 { color: #1E293B; margin: 0 0 8px; }
+            .error-box p { color: #64748B; margin: 0 0 20px; }
+            .btn-back { display: inline-block; padding: 10px 24px; background: #059669; color: white; text-decoration: none; border-radius: 8px; font-weight: 600; }
+            .btn-back:hover { background: #047857; }
+        </style>
+    </head>
+    <body>
+        <div class="error-box">
+            <i class="fas fa-file-invoice"></i>
+            <h2>Receipt Not Found</h2>
+            <p>The receipt you are looking for does not exist or has been removed.</p>
+            <a href="dashboard.php" class="btn-back">Back to Dashboard</a>
+        </div>
+    </body>
+    </html>
+    <?php
+    exit;
+}
+
+// ================================================================
+// DETERMINE WHAT TO DISPLAY
+// ================================================================
+$display_type = 'bill';
+$display_data = null;
+$display_items = $items_data;
+$display_patient = null;
+$display_branch = null;
+$display_payment = null;
+
+if ($otc_data) {
+    $display_type = 'otc';
+    $display_data = $otc_data;
+    $display_patient = $otc_data;
+    $display_branch = $otc_data;
+} elseif ($payment_data && $bill_data) {
+    $display_type = 'payment';
+    $display_data = $bill_data;
+    $display_payment = $payment_data;
+    $display_patient = $patient_data;
+    $display_branch = $branch_data;
+} elseif ($bill_data) {
+    $display_type = 'bill';
+    $display_data = $bill_data;
+    $display_patient = $patient_data;
+    $display_branch = $branch_data;
+    $display_payment = $payment_data;
+} elseif ($receipt_data) {
+    $display_type = 'receipt';
+    $display_data = $receipt_data;
+    $display_patient = $patient_data;
+    $display_branch = $branch_data;
+    $display_payment = $payment_data;
+    $display_items = $items_data;
+}
+
+// ================================================================
+// FORMAT FUNCTIONS
 // ================================================================
 function formatMoney($amount) {
     if ($amount === null || $amount === '') {
@@ -102,14 +314,14 @@ function formatMoney($amount) {
     return number_format((float)$amount, 0, '.', ',');
 }
 
-function getStatusBadgeClass($status) {
-    $map = [
-        'pending' => 'badge-warning',
-        'paid' => 'badge-success',
-        'partial' => 'badge-info',
-        'cancelled' => 'badge-danger'
-    ];
-    return $map[$status] ?? 'badge-warning';
+function formatDate($datetime) {
+    if (empty($datetime)) return 'N/A';
+    return date('d/m/Y H:i', strtotime($datetime));
+}
+
+function formatDateOnly($date) {
+    if (empty($date)) return 'N/A';
+    return date('d/m/Y', strtotime($date));
 }
 
 function getStatusLabel($status) {
@@ -122,1552 +334,793 @@ function getStatusLabel($status) {
     return $map[$status] ?? ucfirst($status);
 }
 
-function formatDateOnly($date) {
-    if (empty($date)) return 'N/A';
-    return date('M d, Y', strtotime($date));
-}
-
-function formatDateTime($datetime) {
-    if (empty($datetime)) return 'N/A';
-    return date('M d, Y h:i A', strtotime($datetime));
+function getPaymentMethodLabel($method) {
+    $map = [
+        'cash' => '💰 Cash',
+        'm-pesa' => '📱 M-Pesa',
+        'airtel_money' => '📱 Airtel Money',
+        'tigo_pesa' => '📱 Tigo Pesa',
+        'halopesa' => '📱 Halo Pesa',
+        'bank' => '🏦 Bank Transfer',
+        'card' => '💳 Card',
+        'insurance' => '🏥 Insurance',
+        'other' => '📦 Other'
+    ];
+    return $map[$method] ?? ucfirst($method);
 }
 
 // ================================================================
-// BUILD QUERY FOR BILLS
+// DETERMINE RECEIPT NUMBER
 // ================================================================
-$conditions = ["1=1"];
-$params = [];
-
-// Branch filter
-if ($selected_branch_id > 0) {
-    $conditions[] = "b.branch_id = ?";
-    $params[] = $selected_branch_id;
+$receipt_number = 'N/A';
+if ($receipt_data && !empty($receipt_data['receipt_number'])) {
+    $receipt_number = $receipt_data['receipt_number'];
+} elseif ($payment_data && !empty($payment_data['receipt_number'])) {
+    $receipt_number = $payment_data['receipt_number'];
+} elseif ($otc_data) {
+    $receipt_number = 'OTC-' . $otc_data['sale_number'];
+} elseif ($bill_data) {
+    $receipt_number = $bill_data['bill_number'];
 }
-
-// Status filter
-if ($filter_status !== 'all') {
-    $conditions[] = "b.status = ?";
-    $params[] = $filter_status;
-}
-
-// Search filter
-if (!empty($search)) {
-    $conditions[] = "(b.bill_number LIKE ? OR p.full_name LIKE ? OR p.patient_id LIKE ?)";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
-}
-
-// Date range filter
-if (!empty($date_from) && !empty($date_to)) {
-    $conditions[] = "DATE(b.created_at) BETWEEN ? AND ?";
-    $params[] = $date_from;
-    $params[] = $date_to;
-} elseif (!empty($date_from)) {
-    $conditions[] = "DATE(b.created_at) >= ?";
-    $params[] = $date_from;
-} elseif (!empty($date_to)) {
-    $conditions[] = "DATE(b.created_at) <= ?";
-    $params[] = $date_to;
-}
-
-$where_clause = implode(" AND ", $conditions);
-
-// Get bills with patient info
-$sql = "
-    SELECT 
-        b.*,
-        p.full_name as patient_name,
-        p.patient_id as patient_number,
-        p.phone as patient_phone,
-        u.full_name as created_by_name,
-        br.name as branch_name
-    FROM patient_bills b
-    LEFT JOIN patients p ON b.patient_id = p.id
-    LEFT JOIN users u ON b.created_by = u.id
-    LEFT JOIN branches br ON b.branch_id = br.id
-    WHERE $where_clause
-    ORDER BY b.created_at DESC
-";
-
-$stmt = $db->prepare($sql);
-$stmt->execute($params);
-$bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET SUMMARY STATISTICS
+// DETERMINE AMOUNTS
 // ================================================================
-$total_bills = 0;
+$subtotal = 0;
 $total_amount = 0;
-$total_pending = 0;
-$total_paid = 0;
-$total_partial = 0;
-$total_cancelled = 0;
+$discount_amount = 0;
+$paid_amount = 0;
+$balance = 0;
 
-foreach ($bills as $bill) {
-    $total_bills++;
-    $total_amount += (float)$bill['total_amount'];
-    if ($bill['status'] === 'pending') $total_pending++;
-    if ($bill['status'] === 'paid') $total_paid++;
-    if ($bill['status'] === 'partial') $total_partial++;
-    if ($bill['status'] === 'cancelled') $total_cancelled++;
+if ($display_type === 'otc' && $otc_data) {
+    $subtotal = $otc_data['subtotal'] ?? 0;
+    $discount_amount = $otc_data['discount_amount'] ?? 0;
+    $total_amount = $otc_data['total_amount'] ?? 0;
+    $paid_amount = $total_amount; // OTC is usually paid in full
+    $balance = 0;
+} elseif ($bill_data) {
+    $subtotal = $bill_data['subtotal'] ?? 0;
+    $discount_amount = $bill_data['discount_amount'] ?? 0;
+    $total_amount = $bill_data['total_amount'] ?? 0;
+    $paid_amount = $bill_data['paid_amount'] ?? 0;
+    $balance = $bill_data['balance'] ?? 0;
+} elseif ($payment_data) {
+    $paid_amount = $payment_data['amount'] ?? 0;
 }
 
 // ================================================================
-// GET BILL ITEMS FOR VIEW MODAL
+// GET CASHIER NAME
 // ================================================================
-$view_bill_id = isset($_GET['view']) ? (int)$_GET['view'] : 0;
-$view_bill = null;
-$view_items = [];
+$cashier_name = $user_full_name;
+if ($payment_data && !empty($payment_data['received_by_name'])) {
+    $cashier_name = $payment_data['received_by_name'];
+} elseif ($otc_data && !empty($otc_data['sold_by_name'])) {
+    $cashier_name = $otc_data['sold_by_name'];
+}
 
-if ($view_bill_id > 0) {
-    // Get bill details
-    $stmt = $db->prepare("
-        SELECT 
-            b.*,
-            p.full_name as patient_name,
-            p.patient_id as patient_number,
-            p.phone as patient_phone,
-            u.full_name as created_by_name,
-            br.name as branch_name
-        FROM patient_bills b
-        LEFT JOIN patients p ON b.patient_id = p.id
-        LEFT JOIN users u ON b.created_by = u.id
-        LEFT JOIN branches br ON b.branch_id = br.id
-        WHERE b.id = ?
-    ");
-    $stmt->execute([$view_bill_id]);
-    $view_bill = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    // Get bill items
-    if ($view_bill) {
-        $stmt = $db->prepare("
-            SELECT * FROM bill_items 
-            WHERE bill_id = ? 
-            ORDER BY created_at DESC
-        ");
-        $stmt->execute([$view_bill_id]);
-        $view_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// ================================================================
+// GET BRANCH INFO
+// ================================================================
+$branch_name = $user_branch_name;
+$branch_location = '';
+$branch_phone = '';
+$branch_email = '';
+
+if ($display_branch) {
+    if (!empty($display_branch['branch_name'])) {
+        $branch_name = $display_branch['branch_name'];
+    }
+    if (!empty($display_branch['branch_location'])) {
+        $branch_location = $display_branch['branch_location'];
+    }
+    if (!empty($display_branch['branch_phone'])) {
+        $branch_phone = $display_branch['branch_phone'];
+    }
+    if (!empty($display_branch['branch_email'])) {
+        $branch_email = $display_branch['branch_email'];
     }
 }
 
 // ================================================================
-// PROFILE PICTURE URL
+// LOGO PATH
 // ================================================================
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
-include_once __DIR__ . '/../../components/admin_header.php';
-include_once __DIR__ . '/../../components/admin_sidebar.php';
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+$logo_html = '<img src="' . $logo_path . '" alt="Braick Dispensary" style="height:60px;width:auto;max-height:60px;object-fit:contain;" onerror="this.style.display=\'none\'">';
 ?>
-
 <!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bills - Braick Dispensary</title>
+    <title>Receipt - <?= htmlspecialchars($receipt_number) ?></title>
     
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     
-    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        :root {
-            --primary: #059669;
-            --primary-dark: #047857;
-            --primary-light: #34D399;
-            --primary-bg: #D1FAE5;
-            --primary-gradient: linear-gradient(135deg, #059669, #047857);
-            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            
-            --success: #059669;
-            --success-dark: #047857;
-            --success-bg: #D1FAE5;
-            
-            --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-bg: #FEE2E2;
-            
-            --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
-            --info: #3B82F6;
-            --info-bg: #DBEAFE;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
-            --bg-body: #F0FDF4;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --border-color: #D1FAE5;
-            --radius: 12px;
-            --radius-lg: 18px;
-            --table-hover: #ECFDF5;
-            --transition: all 0.3s ease;
+        /* ================================================================
+           RECEIPT PRINT STYLES
+           ================================================================ */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-        
-        [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --border-color: #334155;
-            --primary: #34D399;
-            --primary-dark: #059669;
-            --primary-light: #6EE7B7;
-            --primary-bg: #1A3A2A;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1A3A2A;
-        }
-        
-        * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
-        
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
+            font-family: 'Courier New', 'Consolas', monospace;
+            background: #f0f0f0;
             display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            white-space: nowrap;
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
             justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        
+        .receipt-container {
+            background: white;
+            width: 100%;
+            max-width: 400px;
+            padding: 20px 20px 16px;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
             position: relative;
         }
         
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
+        /* ================================================================
+           RECEIPT HEADER
+           ================================================================ */
+        .receipt-header {
+            text-align: center;
+            border-bottom: 2px dashed #ccc;
+            padding-bottom: 12px;
+            margin-bottom: 12px;
         }
         
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
+        .receipt-header .logo {
+            margin-bottom: 6px;
         }
         
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
+        .receipt-header .logo img {
+            height: 50px;
+            width: auto;
+            max-height: 50px;
         }
         
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        .main-content {
-            margin-left: 270px;
-            margin-top: 68px;
-            padding: 28px 32px;
-            min-height: calc(100vh - 68px);
-        }
-        
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .main-content { padding: 12px; }
-        }
-        
-        .page-header {
-            background: var(--primary-gradient-strong);
-            border-radius: var(--radius-lg);
-            padding: 24px 32px;
-            margin-bottom: 24px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-            box-shadow: 0 4px 20px rgba(4, 120, 87, 0.25);
-            position: relative;
-            overflow: hidden;
-        }
-        
-        .page-header .page-title {
-            color: white;
-            font-size: 1.5rem;
+        .receipt-header .brand-name {
+            font-size: 1.1rem;
             font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header .page-title i {
-            font-size: 1.6rem;
-            opacity: 0.9;
-        }
-        
-        .page-header .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.85rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.55rem;
-            font-weight: 600;
-            text-transform: uppercase;
             letter-spacing: 0.05em;
+            color: #059669;
+            text-transform: uppercase;
         }
         
-        .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            border: 1px solid rgba(255,255,255,0.08);
-        }
-        
-        .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.12);
-            padding: 8px 16px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.8rem;
-            transition: var(--transition);
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        
-        .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-        }
-        
-        .stats-row {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 12px;
-            margin-bottom: 20px;
-        }
-        
-        .stat-card {
-            border-radius: var(--radius-lg);
-            padding: 14px 18px;
-            border: none;
-            transition: var(--transition);
-            color: white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-            text-decoration: none;
-            display: block;
-        }
-        
-        .stat-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(0,0,0,0.12);
-        }
-        
-        .stat-card .stat-number {
-            font-size: 1.3rem;
-            font-weight: 700;
-            line-height: 1.2;
-        }
-        
-        .stat-card .stat-label {
+        .receipt-header .brand-sub {
             font-size: 0.6rem;
-            font-weight: 500;
+            color: #64748B;
+            letter-spacing: 0.1em;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
-            opacity: 0.85;
+        }
+        
+        .receipt-header .branch-info {
+            font-size: 0.65rem;
+            color: #64748B;
             margin-top: 2px;
         }
         
-        .stat-card .stat-icon {
-            font-size: 0.9rem;
-            opacity: 0.8;
-        }
-        
-        .stat-card.total { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .stat-card.pending { background: linear-gradient(135deg, #D97706, #B45309); }
-        .stat-card.paid { background: linear-gradient(135deg, #059669, #047857); }
-        .stat-card.partial { background: linear-gradient(135deg, #3B82F6, #1D4ED8); }
-        .stat-card.cancelled { background: linear-gradient(135deg, #DC2626, #991B1B); }
-        .stat-card.amount { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        
-        .filter-section {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            padding: 14px 18px;
-            border: 1px solid var(--border-color);
-            margin-bottom: 20px;
-        }
-        
-        .filter-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            align-items: center;
-        }
-        
-        .filter-btn {
-            padding: 4px 12px;
-            border-radius: 16px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            border: 2px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: var(--transition);
-            text-decoration: none;
-        }
-        
-        .filter-btn:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-            background: var(--primary-bg);
-        }
-        
-        .filter-btn.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .filter-input {
-            padding: 5px 10px;
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            font-size: 0.75rem;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: var(--transition);
-        }
-        
-        .filter-input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(5, 150, 105, 0.1);
-        }
-        
-        .btn-search {
-            padding: 5px 14px;
-            background: var(--primary);
-            color: white;
+        .receipt-header .divider-line {
             border: none;
-            border-radius: var(--radius);
+            border-top: 1px dashed #ccc;
+            margin: 6px 0;
+        }
+        
+        .receipt-title {
+            text-align: center;
+            font-size: 0.8rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #1E293B;
+            margin: 4px 0;
+        }
+        
+        /* ================================================================
+           RECEIPT BODY
+           ================================================================ */
+        .receipt-body {
+            padding: 4px 0;
+        }
+        
+        .receipt-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+            font-size: 0.65rem;
+        }
+        
+        .receipt-row .label {
+            color: #64748B;
+        }
+        
+        .receipt-row .value {
+            color: #1E293B;
             font-weight: 600;
-            font-size: 0.7rem;
-            cursor: pointer;
-            transition: var(--transition);
         }
         
-        .btn-search:hover {
-            background: var(--primary-dark);
-            transform: translateY(-1px);
+        .receipt-divider {
+            border: none;
+            border-top: 1px dashed #e2e8f0;
+            margin: 6px 0;
         }
         
-        .btn-reset {
-            padding: 5px 12px;
-            border-radius: var(--radius);
-            font-size: 0.7rem;
-            font-weight: 600;
-            border: 2px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: var(--transition);
-            text-decoration: none;
+        .receipt-divider-thick {
+            border: none;
+            border-top: 2px dashed #ccc;
+            margin: 8px 0;
         }
         
-        .btn-reset:hover {
-            border-color: var(--danger);
-            color: var(--danger);
-        }
-        
-        .table-container {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
-        }
-        
-        .table-scroll {
-            overflow-x: auto;
-        }
-        
-        .data-table {
+        /* ================================================================
+           ITEMS TABLE
+           ================================================================ */
+        .items-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.75rem;
-        }
-        
-        .data-table thead th {
-            text-align: left;
-            padding: 8px 12px;
-            font-weight: 700;
             font-size: 0.6rem;
+            margin: 6px 0;
+        }
+        
+        .items-table thead th {
+            text-align: left;
+            padding: 3px 2px;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 0.5rem;
             text-transform: uppercase;
+            color: #64748B;
+            font-weight: 700;
             letter-spacing: 0.05em;
-            color: #ffffff;
-            background: var(--primary);
-            border-bottom: 3px solid var(--primary-dark);
-            white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 5;
         }
         
-        .data-table thead th i {
-            margin-right: 4px;
-            opacity: 0.7;
+        .items-table tbody td {
+            padding: 3px 2px;
+            border-bottom: 1px solid #f1f5f9;
+            color: #1E293B;
         }
         
-        .data-table tbody td {
-            padding: 6px 12px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        
-        .data-table tbody tr:hover td {
-            background: var(--primary-bg);
-        }
-        
-        .data-table tbody tr:last-child td {
+        .items-table tbody tr:last-child td {
             border-bottom: none;
         }
         
-        .data-table tbody tr:nth-child(even) td {
-            background: var(--gray-50);
+        .items-table .item-name {
+            font-weight: 500;
         }
         
-        [data-theme="dark"] .data-table tbody tr:nth-child(even) td {
-            background: #1A1A2E;
+        .items-table .item-qty {
+            text-align: center;
         }
         
-        .badge-status {
+        .items-table .item-price {
+            text-align: right;
+            font-weight: 600;
+        }
+        
+        .items-table .item-total {
+            text-align: right;
+            font-weight: 700;
+        }
+        
+        /* ================================================================
+           TOTALS
+           ================================================================ */
+        .totals-section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 2px dashed #ccc;
+        }
+        
+        .totals-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 0;
+            font-size: 0.7rem;
+        }
+        
+        .totals-row .label {
+            color: #64748B;
+        }
+        
+        .totals-row .value {
+            font-weight: 700;
+        }
+        
+        .totals-row.total {
+            border-top: 2px solid #1E293B;
+            padding-top: 4px;
+            margin-top: 2px;
+            font-size: 0.8rem;
+        }
+        
+        .totals-row.total .value {
+            color: #059669;
+            font-size: 0.9rem;
+        }
+        
+        .totals-row.balance .value {
+            color: #DC2626;
+        }
+        
+        .totals-row.balance.zero .value {
+            color: #059669;
+        }
+        
+        /* ================================================================
+           PAYMENT INFO
+           ================================================================ */
+        .payment-info {
+            background: #f8fafc;
+            border-radius: 6px;
+            padding: 8px 12px;
+            margin: 8px 0;
+            border: 1px solid #e2e8f0;
+        }
+        
+        .payment-info .payment-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.6rem;
+            padding: 2px 0;
+        }
+        
+        .payment-info .payment-row .label {
+            color: #64748B;
+        }
+        
+        .payment-info .payment-row .value {
+            font-weight: 600;
+            color: #1E293B;
+        }
+        
+        /* ================================================================
+           RECEIPT FOOTER
+           ================================================================ */
+        .receipt-footer {
+            text-align: center;
+            border-top: 2px dashed #ccc;
+            padding-top: 10px;
+            margin-top: 12px;
+        }
+        
+        .receipt-footer .footer-text {
+            font-size: 0.55rem;
+            color: #64748B;
+            line-height: 1.4;
+        }
+        
+        .receipt-footer .footer-text strong {
+            color: #1E293B;
+        }
+        
+        .receipt-footer .thank-you {
+            font-size: 0.7rem;
+            font-weight: 700;
+            color: #059669;
+            margin: 4px 0;
+        }
+        
+        /* ================================================================
+           STATUS BADGE
+           ================================================================ */
+        .status-badge {
             display: inline-block;
             padding: 2px 10px;
-            border-radius: 16px;
-            font-size: 0.55rem;
+            border-radius: 12px;
+            font-size: 0.6rem;
             font-weight: 600;
             text-transform: capitalize;
         }
         
-        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
-        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-        .badge-info { background: var(--info-bg); color: var(--info); border: 1px solid var(--info); }
-        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+        .status-badge.pending { background: #FEF3C7; color: #D97706; }
+        .status-badge.paid { background: #D1FAE5; color: #059669; }
+        .status-badge.partial { background: #DBEAFE; color: #3B82F6; }
+        .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
         
-        .btn {
+        /* ================================================================
+           PRINT BUTTON
+           ================================================================ */
+        .print-btn {
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 4px 10px;
-            border-radius: 5px;
-            font-weight: 600;
-            font-size: 0.6rem;
-            transition: var(--transition);
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-view {
-            background: var(--gray-500);
+            gap: 8px;
+            padding: 10px 24px;
+            background: #059669;
             color: white;
-            padding: 3px 10px;
-            border-radius: 5px;
-            font-weight: 600;
-            font-size: 0.55rem;
-            transition: var(--transition);
             border: none;
-            cursor: pointer;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-        }
-        
-        .btn-view:hover {
-            background: var(--gray-600);
-            transform: translateY(-1px);
-        }
-        
-        .action-buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 3px;
-            align-items: center;
-            justify-content: center;
-        }
-        
-        .table-footer {
-            padding: 8px 14px;
-            border-top: 1px solid var(--border-color);
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            display: flex;
-            justify-content: space-between;
-            flex-wrap: wrap;
-            gap: 6px;
-            background: var(--gray-50);
-        }
-        
-        [data-theme="dark"] .table-footer {
-            border-color: var(--gray-700);
-            color: var(--gray-400);
-            background: var(--gray-800);
-        }
-        
-        .count-badge {
-            background: var(--primary);
-            color: white;
-            padding: 1px 10px;
-            border-radius: 16px;
-            font-size: 0.6rem;
-            font-weight: 600;
-        }
-        
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        
-        .empty-state i {
-            font-size: 3rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 12px;
-        }
-        
-        .empty-state p {
-            font-size: 0.9rem;
-        }
-        
-        .empty-state .sub {
+            border-radius: 8px;
             font-size: 0.8rem;
-            color: var(--text-muted);
-            margin-top: 4px;
-        }
-        
-        .footer {
-            padding: 10px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
-        
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-            animation: fadeIn 0.3s ease;
-        }
-        
-        .modal-overlay.show {
-            display: flex;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        
-        .modal-content {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 24px 28px;
-            max-width: 700px;
-            width: 95%;
-            max-height: 90vh;
-            overflow-y: auto;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-lg);
-            animation: slideUp 0.3s ease;
-        }
-        
-        @keyframes slideUp {
-            from { transform: translateY(30px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-bottom: 12px;
-            border-bottom: 2px solid var(--border-color);
-            margin-bottom: 16px;
-        }
-        
-        .modal-header .modal-title {
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .modal-header .modal-title i {
-            color: var(--primary);
-        }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
+            font-weight: 600;
             cursor: pointer;
-            color: var(--text-secondary);
             transition: all 0.3s ease;
+            margin-top: 12px;
+            width: 100%;
+            justify-content: center;
         }
         
-        .modal-close:hover {
-            color: var(--danger);
-            transform: rotate(90deg);
+        .print-btn:hover {
+            background: #047857;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
         
-        .filter-divider {
-            width: 1px;
-            height: 28px;
-            background: var(--border-color);
-            margin: 0 4px;
+        .back-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: transparent;
+            color: #64748B;
+            border: 2px solid #e2e8f0;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            margin-top: 8px;
+            width: 100%;
+            justify-content: center;
         }
         
-        @media (max-width: 768px) {
-            .filter-divider { display: none; }
-            .filter-row { flex-direction: column; align-items: stretch; }
-            .filter-input { width: 100%; }
-            .stats-row { grid-template-columns: 1fr 1fr; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.1rem; }
+        .back-btn:hover {
+            border-color: #059669;
+            color: #059669;
         }
         
-        @media (max-width: 480px) {
-            .stats-row { grid-template-columns: 1fr; }
-            .data-table { font-size: 0.6rem; }
-            .data-table thead th, .data-table td { padding: 4px 6px; }
+        /* ================================================================
+           PRINT STYLES
+           ================================================================ */
+        @media print {
+            body {
+                background: white;
+                padding: 0;
+                margin: 0;
+                display: block;
+            }
+            
+            .receipt-container {
+                max-width: 100%;
+                border-radius: 0;
+                box-shadow: none;
+                padding: 12px 16px;
+            }
+            
+            .no-print {
+                display: none !important;
+            }
+            
+            .print-only {
+                display: block !important;
+            }
+            
+            .receipt-container {
+                page-break-after: avoid;
+            }
+        }
+        
+        @media screen and (max-width: 480px) {
+            body {
+                padding: 10px;
+            }
+            .receipt-container {
+                padding: 14px 14px 12px;
+            }
+        }
+        
+        .print-only {
+            display: none;
+        }
+        
+        /* OTC specific */
+        .otc-customer {
+            background: #ECFDF5;
+            border-radius: 6px;
+            padding: 6px 12px;
+            margin: 6px 0;
+            border: 1px solid #D1FAE5;
         }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search bills..." value="<?= htmlspecialchars($search) ?>">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
+<div class="receipt-container" id="receiptContainer">
     
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="0" <?= $selected_branch_id == 0 ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime">
-            <i class="far fa-calendar-alt mr-1"></i>
-            <span id="dateDisplay"><?= date('M d, Y') ?></span>
-            <span class="mx-1">|</span>
-            <i class="far fa-clock mr-1"></i>
-            <span id="timeDisplay"><?= date('h:i:s A') ?></span>
-        </span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas <?= (isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true') ? 'fa-sun' : 'fa-moon' ?>"></i>
-            <span id="darkText"><?= (isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true') ? 'Light' : 'Dark' ?></span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
-        </button>
-        
-        <a href="../admin/profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
-<main class="main-content">
-
     <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- RECEIPT HEADER -->
     <!-- ================================================================ -->
-    <div class="page-header">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-file-invoice"></i>
-                Bills
-                <span class="role-badge-display">ADMIN</span>
-                <?php if ($selected_branch_id > 0): ?>
-                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;">
-                        <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
-                    </span>
-                <?php endif; ?>
-                <?php if ($filter_status !== 'all'): ?>
-                    <span class="role-badge-display" style="background:rgba(255,255,255,0.15);">
-                        <?= ucfirst($filter_status) ?>
-                    </span>
-                <?php endif; ?>
-                <span class="header-badge">
-                    <i class="fas fa-list"></i> <?= $total_bills ?> Total
-                </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.2);color:#34D399;">
-                    <i class="fas fa-money-bill-wave"></i> TSh <?= formatMoney($total_amount) ?>
-                </span>
-            </h1>
-            <p class="page-subtitle">
-                <i class="fas fa-arrow-right"></i>
-                Manage all patient bills
-                <span class="header-badge" style="background:rgba(251,191,36,0.15);border-color:rgba(251,191,36,0.1);font-size:0.55rem;">
-                    <i class="fas fa-clock"></i> Pending: <?= $total_pending ?>
-                </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.15);border-color:rgba(52,211,153,0.1);font-size:0.55rem;">
-                    <i class="fas fa-check-circle"></i> Paid: <?= $total_paid ?>
-                </span>
-                <span class="header-badge" style="background:rgba(59,130,246,0.15);border-color:rgba(59,130,246,0.1);font-size:0.55rem;">
-                    <i class="fas fa-adjust"></i> Partial: <?= $total_partial ?>
-                </span>
-                <span class="header-badge" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.1);font-size:0.55rem;">
-                    <i class="fas fa-times-circle"></i> Cancelled: <?= $total_cancelled ?>
-                </span>
-            </p>
+    <div class="receipt-header">
+        <div class="logo">
+            <?= $logo_html ?>
         </div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
-            <button onclick="window.print()" class="btn-outline-light">
-                <i class="fas fa-print"></i> Print
-            </button>
+        <div class="brand-name">Braick Dispensary</div>
+        <div class="brand-sub">Quality Healthcare Services</div>
+        <div class="branch-info">
+            <?= htmlspecialchars($branch_name) ?>
+            <?php if (!empty($branch_location)): ?>
+                <br><?= htmlspecialchars($branch_location) ?>
+            <?php endif; ?>
+            <?php if (!empty($branch_phone)): ?>
+                <br>Tel: <?= htmlspecialchars($branch_phone) ?>
+            <?php endif; ?>
+            <?php if (!empty($branch_email)): ?>
+                <br>Email: <?= htmlspecialchars($branch_email) ?>
+            <?php endif; ?>
+        </div>
+        <hr class="divider-line">
+        <div class="receipt-title">
+            <?php if ($display_type === 'otc'): ?>
+                Over-The-Counter Sale
+            <?php elseif ($display_type === 'payment'): ?>
+                Payment Receipt
+            <?php else: ?>
+                Bill Receipt
+            <?php endif; ?>
+        </div>
+        <div style="font-size:0.55rem;color:#64748B;text-align:center;">
+            <?= formatDate(date('Y-m-d H:i:s')) ?>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
+    <!-- RECEIPT BODY -->
     <!-- ================================================================ -->
-    <div class="stats-row animate-fade-in-up">
-        <a href="bills.php?branch=<?= $selected_branch_id ?>&status=all" class="stat-card total">
-            <div class="stat-icon"><i class="fas fa-file-invoice"></i></div>
-            <div class="stat-number"><?= $total_bills ?></div>
-            <div class="stat-label">Total Bills</div>
-        </a>
-        <a href="bills.php?branch=<?= $selected_branch_id ?>&status=pending" class="stat-card pending">
-            <div class="stat-icon"><i class="fas fa-clock"></i></div>
-            <div class="stat-number"><?= $total_pending ?></div>
-            <div class="stat-label">⏳ Pending</div>
-        </a>
-        <a href="bills.php?branch=<?= $selected_branch_id ?>&status=paid" class="stat-card paid">
-            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
-            <div class="stat-number"><?= $total_paid ?></div>
-            <div class="stat-label">✅ Paid</div>
-        </a>
-        <a href="bills.php?branch=<?= $selected_branch_id ?>&status=partial" class="stat-card partial">
-            <div class="stat-icon"><i class="fas fa-adjust"></i></div>
-            <div class="stat-number"><?= $total_partial ?></div>
-            <div class="stat-label">🔄 Partial</div>
-        </a>
-        <a href="bills.php?branch=<?= $selected_branch_id ?>&status=cancelled" class="stat-card cancelled">
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-            <div class="stat-number"><?= $total_cancelled ?></div>
-            <div class="stat-label">❌ Cancelled</div>
-        </a>
-        <a href="bills.php?branch=<?= $selected_branch_id ?>" class="stat-card amount">
-            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
-            <div class="stat-number">TSh <?= formatMoney($total_amount) ?></div>
-            <div class="stat-label">Total Amount</div>
-        </a>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- FILTERS -->
-    <!-- ================================================================ -->
-    <div class="filter-section animate-fade-in-up" style="animation-delay:0.05s;">
-        <form method="GET" action="" id="filterForm" class="w-full">
-            <div class="filter-row">
-                <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
-                
-                <a href="?branch=<?= $selected_branch_id ?>&status=all&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="filter-btn <?= $filter_status === 'all' ? 'active' : '' ?>">📋 All</a>
-                <a href="?branch=<?= $selected_branch_id ?>&status=pending&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="filter-btn <?= $filter_status === 'pending' ? 'active' : '' ?>">⏳ Pending</a>
-                <a href="?branch=<?= $selected_branch_id ?>&status=paid&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="filter-btn <?= $filter_status === 'paid' ? 'active' : '' ?>">✅ Paid</a>
-                <a href="?branch=<?= $selected_branch_id ?>&status=partial&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="filter-btn <?= $filter_status === 'partial' ? 'active' : '' ?>">🔄 Partial</a>
-                <a href="?branch=<?= $selected_branch_id ?>&status=cancelled&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="filter-btn <?= $filter_status === 'cancelled' ? 'active' : '' ?>">❌ Cancelled</a>
-                
-                <span class="filter-divider"></span>
-                
-                <input type="date" name="date_from" class="filter-input" style="min-width:130px;" value="<?= $date_from ?>" placeholder="From">
-                <span style="font-size:0.7rem;color:var(--text-secondary);">to</span>
-                <input type="date" name="date_to" class="filter-input" style="min-width:130px;" value="<?= $date_to ?>" placeholder="To">
-                
-                <span class="filter-divider"></span>
-                
-                <input type="text" name="search" class="filter-input" style="min-width:150px;flex:1;" placeholder="Search bill #, patient..." value="<?= htmlspecialchars($search) ?>">
-                
-                <button type="submit" class="btn-search">
-                    <i class="fas fa-search"></i> Filter
-                </button>
-                
-                <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-reset">
-                    <i class="fas fa-times"></i> Reset
-                </a>
+    <div class="receipt-body">
+        
+        <!-- Receipt Number & Status -->
+        <div class="receipt-row">
+            <span class="label">Receipt #</span>
+            <span class="value" style="color:#059669;"><?= htmlspecialchars($receipt_number) ?></span>
+        </div>
+        
+        <?php if ($display_type === 'otc'): ?>
+            <div class="receipt-row">
+                <span class="label">Sale #</span>
+                <span class="value"><?= htmlspecialchars($otc_data['sale_number'] ?? 'N/A') ?></span>
             </div>
-        </form>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- BILLS TABLE -->
-    <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="table-scroll">
-            <table class="data-table">
+        <?php endif; ?>
+        
+        <?php if ($display_type === 'bill' || $display_type === 'payment'): ?>
+            <div class="receipt-row">
+                <span class="label">Bill #</span>
+                <span class="value"><?= htmlspecialchars($bill_data['bill_number'] ?? 'N/A') ?></span>
+            </div>
+        <?php endif; ?>
+        
+        <?php if ($display_type === 'payment' && $payment_data): ?>
+            <div class="receipt-row">
+                <span class="label">Payment #</span>
+                <span class="value"><?= htmlspecialchars($payment_data['receipt_number'] ?? 'N/A') ?></span>
+            </div>
+        <?php endif; ?>
+        
+        <hr class="receipt-divider">
+        
+        <!-- Patient / Customer Info -->
+        <?php if ($display_type === 'otc' && $otc_data): ?>
+            <div class="otc-customer">
+                <div class="receipt-row">
+                    <span class="label">Customer</span>
+                    <span class="value"><?= htmlspecialchars($otc_data['customer_name'] ?? 'Walk-in Customer') ?></span>
+                </div>
+                <?php if (!empty($otc_data['customer_phone'])): ?>
+                    <div class="receipt-row">
+                        <span class="label">Phone</span>
+                        <span class="value"><?= htmlspecialchars($otc_data['customer_phone']) ?></span>
+                    </div>
+                <?php endif; ?>
+            </div>
+        <?php elseif ($display_patient): ?>
+            <div class="receipt-row">
+                <span class="label">Patient</span>
+                <span class="value"><?= htmlspecialchars($display_patient['patient_name'] ?? 'Unknown') ?></span>
+            </div>
+            <div class="receipt-row">
+                <span class="label">Patient ID</span>
+                <span class="value"><?= htmlspecialchars($display_patient['patient_code'] ?? $display_patient['patient_id'] ?? 'N/A') ?></span>
+            </div>
+            <?php if (!empty($display_patient['patient_phone'])): ?>
+                <div class="receipt-row">
+                    <span class="label">Phone</span>
+                    <span class="value"><?= htmlspecialchars($display_patient['patient_phone']) ?></span>
+                </div>
+            <?php endif; ?>
+        <?php endif; ?>
+        
+        <hr class="receipt-divider">
+        
+        <!-- Items -->
+        <?php if (!empty($display_items)): ?>
+            <table class="items-table">
                 <thead>
                     <tr>
-                        <th style="width:30px;"><i class="fas fa-hashtag"></i></th>
-                        <th><i class="fas fa-receipt"></i> Bill #</th>
-                        <th><i class="fas fa-user"></i> Patient</th>
-                        <th><i class="fas fa-store-alt"></i> Branch</th>
-                        <th style="text-align:center;"><i class="fas fa-money-bill"></i> Amount</th>
-                        <th style="text-align:center;"><i class="fas fa-money-bill-wave"></i> Paid</th>
-                        <th style="text-align:center;"><i class="fas fa-calendar"></i> Date</th>
-                        <th style="text-align:center;"><i class="fas fa-info-circle"></i> Status</th>
-                        <th style="text-align:center;"><i class="fas fa-cog"></i> Actions</th>
+                        <th style="width:50%;">Item</th>
+                        <th style="width:15%;text-align:center;">Qty</th>
+                        <th style="width:17%;text-align:right;">Price</th>
+                        <th style="width:18%;text-align:right;">Total</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php if (count($bills) > 0): ?>
-                        <?php $i = 1; foreach ($bills as $bill): ?>
-                            <tr>
-                                <td style="text-align:center;"><?= $i++ ?></td>
-                                <td>
-                                    <span class="font-mono font-semibold" style="color:var(--primary);font-size:0.7rem;">
-                                        <?= htmlspecialchars($bill['bill_number']) ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <div style="font-weight:600;font-size:0.75rem;color:var(--text-primary);">
-                                        <?= htmlspecialchars($bill['patient_name'] ?? 'Unknown') ?>
-                                    </div>
-                                    <div style="font-size:0.6rem;color:var(--text-secondary);">
-                                        <?= htmlspecialchars($bill['patient_number'] ?? '') ?>
-                                    </div>
-                                </td>
-                                <td>
-                                    <span style="font-size:0.65rem;color:var(--teal);">
-                                        <?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?>
-                                    </span>
-                                </td>
-                                <td style="text-align:center;font-weight:700;color:var(--text-primary);">
-                                    TSh <?= formatMoney($bill['total_amount']) ?>
-                                </td>
-                                <td style="text-align:center;font-weight:600;color:var(--success);">
-                                    TSh <?= formatMoney($bill['paid_amount'] ?? 0) ?>
-                                </td>
-                                <td style="text-align:center;">
-                                    <span class="text-xs"><?= formatDateOnly($bill['created_at']) ?></span>
-                                </td>
-                                <td style="text-align:center;">
-                                    <span class="badge-status <?= getStatusBadgeClass($bill['status']) ?>">
-                                        <?= getStatusLabel($bill['status']) ?>
-                                    </span>
-                                </td>
-                                <td style="text-align:center;">
-                                    <div class="action-buttons">
-                                        <a href="bills.php?view=<?= $bill['id'] ?>&branch=<?= $selected_branch_id ?>&status=<?= $filter_status ?>&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="btn-view" title="View Details">
-                                            <i class="fas fa-eye"></i> View
-                                        </a>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
+                    <?php foreach ($display_items as $item): ?>
                         <tr>
-                            <td colspan="9">
-                                <div class="empty-state">
-                                    <i class="fas fa-file-invoice"></i>
-                                    <p>No bills found</p>
-                                    <?php if (!empty($search) || !empty($date_from) || !empty($date_to) || $filter_status !== 'all'): ?>
-                                        <p class="sub">Try adjusting your filters</p>
-                                    <?php else: ?>
-                                        <p class="sub">No bills have been created yet</p>
-                                    <?php endif; ?>
-                                </div>
+                            <td class="item-name">
+                                <?php 
+                                    $item_name = $item['item_name'] ?? $item['medicine_name'] ?? $item['test_name'] ?? 'Item';
+                                    echo htmlspecialchars($item_name);
+                                    if (!empty($item['medication_name'])) {
+                                        echo ' (' . htmlspecialchars($item['medication_name']) . ')';
+                                    }
+                                ?>
+                                <?php if (!empty($item['batch_number'])): ?>
+                                    <div style="font-size:0.5rem;color:#94A3B8;">Batch: <?= htmlspecialchars($item['batch_number']) ?></div>
+                                <?php endif; ?>
                             </td>
+                            <td class="item-qty"><?= $item['quantity'] ?? 1 ?></td>
+                            <td class="item-price"><?= formatMoney($item['unit_price'] ?? 0) ?></td>
+                            <td class="item-total"><?= formatMoney($item['total_price'] ?? ($item['unit_price'] * $item['quantity'] ?? 0)) ?></td>
                         </tr>
-                    <?php endif; ?>
+                    <?php endforeach; ?>
                 </tbody>
             </table>
-        </div>
-        
-        <div class="table-footer">
-            <span>
-                <i class="fas fa-list"></i> Showing <strong><?= count($bills) ?></strong> bills
-                <span class="text-xs" style="color:var(--text-secondary);">Total: TSh <?= formatMoney($total_amount) ?></span>
-            </span>
-            <span>
-                <span class="count-badge"><?= $total_bills ?></span> Total bills
-                <span class="text-xs" style="color:var(--text-secondary);" id="updateTimeDisplay">Last update: <?= date('H:i:s') ?></span>
-            </span>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
-    <footer class="footer">
-        <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Bills
-            <span class="text-gray-300 mx-2">|</span>
-            <span class="text-gray-400">👤 <?= htmlspecialchars($user_full_name) ?></span>
-            <span class="text-gray-300 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
-        </p>
-    </footer>
-
-</main>
-
-<!-- ================================================================ -->
-<!-- VIEW BILL MODAL -->
-<!-- ================================================================ -->
-<?php if ($view_bill): ?>
-<div class="modal-overlay show" id="viewModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-file-invoice"></i> Bill Details
-                <span style="font-size:0.6rem;font-weight:400;color:var(--text-secondary);margin-left:8px;">
-                    #<?= htmlspecialchars($view_bill['bill_number']) ?>
-                </span>
+        <?php else: ?>
+            <div style="text-align:center;padding:8px 0;color:#94A3B8;font-size:0.65rem;">
+                No items found
             </div>
-            <a href="bills.php?branch=<?= $selected_branch_id ?>&status=<?= $filter_status ?>&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="modal-close">&times;</a>
-        </div>
-        
-        <!-- Bill Summary -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;">
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Patient</div>
-                <div style="font-size:0.85rem;font-weight:600;color:var(--text-primary);">
-                    <?= htmlspecialchars($view_bill['patient_name'] ?? 'Unknown') ?>
-                </div>
-                <div style="font-size:0.6rem;color:var(--text-secondary);">
-                    <?= htmlspecialchars($view_bill['patient_number'] ?? '') ?>
-                </div>
-            </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Branch</div>
-                <div style="font-size:0.85rem;font-weight:600;color:var(--text-primary);">
-                    <?= htmlspecialchars($view_bill['branch_name'] ?? 'N/A') ?>
-                </div>
-            </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Total Amount</div>
-                <div style="font-size:0.9rem;font-weight:700;color:var(--text-primary);">
-                    TSh <?= formatMoney($view_bill['total_amount']) ?>
-                </div>
-            </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Status</div>
-                <div style="font-size:0.85rem;font-weight:600;">
-                    <span class="badge-status <?= getStatusBadgeClass($view_bill['status']) ?>">
-                        <?= getStatusLabel($view_bill['status']) ?>
-                    </span>
-                </div>
-            </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Paid Amount</div>
-                <div style="font-size:0.85rem;font-weight:600;color:var(--success);">
-                    TSh <?= formatMoney($view_bill['paid_amount'] ?? 0) ?>
-                </div>
-            </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;">
-                <div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Balance</div>
-                <div style="font-size:0.85rem;font-weight:600;color:<?= ($view_bill['balance'] ?? 0) > 0 ? 'var(--danger)' : 'var(--success)' ?>;">
-                    TSh <?= formatMoney($view_bill['balance'] ?? 0) ?>
-                </div>
-            </div>
-            <div style="padding:8px 12px;background:var(--bg-body);border-radius:8px;grid-column:1/-1;">
-                <div style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Created By</div>
-                <div style="font-size:0.85rem;font-weight:600;color:var(--text-primary);">
-                    <?= htmlspecialchars($view_bill['created_by_name'] ?? 'Unknown') ?>
-                </div>
-                <div style="font-size:0.6rem;color:var(--text-secondary);">
-                    <?= formatDateTime($view_bill['created_at']) ?>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Bill Items -->
-        <?php if (count($view_items) > 0): ?>
-        <div style="border-top:2px solid var(--border-color);padding-top:12px;">
-            <h4 style="font-size:0.75rem;font-weight:700;color:var(--text-primary);margin-bottom:8px;">
-                <i class="fas fa-list-ul" style="color:var(--primary);"></i> Bill Items
-            </h4>
-            <div style="overflow-x:auto;">
-                <table style="width:100%;border-collapse:collapse;font-size:0.7rem;">
-                    <thead>
-                        <tr style="background:var(--gray-50);">
-                            <th style="text-align:left;padding:4px 8px;font-weight:600;font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);">Item</th>
-                            <th style="text-align:center;padding:4px 8px;font-weight:600;font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);">Qty</th>
-                            <th style="text-align:right;padding:4px 8px;font-weight:600;font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);">Unit Price</th>
-                            <th style="text-align:right;padding:4px 8px;font-weight:600;font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);">Total</th>
-                            <th style="text-align:center;padding:4px 8px;font-weight:600;font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($view_items as $item): ?>
-                        <tr style="border-bottom:1px solid var(--border-color);">
-                            <td style="padding:4px 8px;font-weight:500;color:var(--text-primary);">
-                                <?= htmlspecialchars($item['item_name']) ?>
-                                <div style="font-size:0.55rem;color:var(--text-secondary);">
-                                    <?= ucfirst($item['item_type']) ?>
-                                </div>
-                            </td>
-                            <td style="text-align:center;padding:4px 8px;color:var(--text-primary);">
-                                <?= $item['quantity'] ?? 1 ?>
-                            </td>
-                            <td style="text-align:right;padding:4px 8px;color:var(--text-primary);">
-                                TSh <?= formatMoney($item['unit_price']) ?>
-                            </td>
-                            <td style="text-align:right;padding:4px 8px;font-weight:600;color:var(--text-primary);">
-                                TSh <?= formatMoney($item['total_price']) ?>
-                            </td>
-                            <td style="text-align:center;padding:4px 8px;">
-                                <span class="badge-status <?= ($item['is_paid'] ?? 0) ? 'badge-success' : 'badge-warning' ?>">
-                                    <?= ($item['is_paid'] ?? 0) ? '✅ Paid' : '⏳ Pending' ?>
-                                </span>
-                            </td>
-                        </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
         <?php endif; ?>
         
-        <div class="form-actions" style="display:flex;gap:12px;margin-top:16px;padding-top:12px;border-top:2px solid var(--border-color);">
-            <a href="bills.php?branch=<?= $selected_branch_id ?>&status=<?= $filter_status ?>&search=<?= urlencode($search) ?>&date_from=<?= $date_from ?>&date_to=<?= $date_to ?>" class="btn-cancel-modal" style="background:transparent;color:var(--text-secondary);border:2px solid var(--border-color);padding:8px 20px;border-radius:10px;font-weight:600;font-size:0.85rem;cursor:pointer;transition:all 0.3s ease;text-decoration:none;">
-                <i class="fas fa-times"></i> Close
-            </a>
+        <hr class="receipt-divider-thick">
+        
+        <!-- Totals -->
+        <div class="totals-section">
+            <div class="totals-row">
+                <span class="label">Subtotal</span>
+                <span class="value">TSh <?= formatMoney($subtotal) ?></span>
+            </div>
+            
+            <?php if ($discount_amount > 0): ?>
+                <div class="totals-row" style="color:#D97706;">
+                    <span class="label">Discount</span>
+                    <span class="value">- TSh <?= formatMoney($discount_amount) ?></span>
+                </div>
+            <?php endif; ?>
+            
+            <div class="totals-row total">
+                <span class="label">Total</span>
+                <span class="value">TSh <?= formatMoney($total_amount) ?></span>
+            </div>
+            
+            <?php if ($display_type === 'bill' || $display_type === 'payment'): ?>
+                <div class="totals-row" style="color:#059669;">
+                    <span class="label">Paid</span>
+                    <span class="value">TSh <?= formatMoney($paid_amount) ?></span>
+                </div>
+                
+                <?php if ($balance > 0): ?>
+                    <div class="totals-row balance">
+                        <span class="label">Balance</span>
+                        <span class="value">TSh <?= formatMoney($balance) ?></span>
+                    </div>
+                <?php else: ?>
+                    <div class="totals-row balance zero">
+                        <span class="label">Balance</span>
+                        <span class="value" style="color:#059669;">TSh 0 - Paid in Full</span>
+                    </div>
+                <?php endif; ?>
+            <?php endif; ?>
+        </div>
+        
+        <!-- Payment Info -->
+        <?php if ($payment_data || $otc_data): ?>
+            <div class="payment-info">
+                <div class="payment-row">
+                    <span class="label">Payment Method</span>
+                    <span class="value">
+                        <?php 
+                            $method = $payment_data['payment_method'] ?? $otc_data['payment_method'] ?? 'cash';
+                            echo getPaymentMethodLabel($method);
+                        ?>
+                    </span>
+                </div>
+                <?php if ($payment_data && !empty($payment_data['reference_number'])): ?>
+                    <div class="payment-row">
+                        <span class="label">Reference</span>
+                        <span class="value"><?= htmlspecialchars($payment_data['reference_number']) ?></span>
+                    </div>
+                <?php endif; ?>
+                <div class="payment-row">
+                    <span class="label">Received By</span>
+                    <span class="value"><?= htmlspecialchars($cashier_name) ?></span>
+                </div>
+                <?php if ($payment_data && !empty($payment_data['received_at'])): ?>
+                    <div class="payment-row">
+                        <span class="label">Date/Time</span>
+                        <span class="value"><?= formatDate($payment_data['received_at']) ?></span>
+                    </div>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+        
+        <!-- Status -->
+        <div style="text-align:center;margin:6px 0;">
+            <?php if ($display_type === 'otc'): ?>
+                <span class="status-badge <?= ($otc_data['payment_status'] ?? 'pending') === 'paid' ? 'paid' : 'pending' ?>">
+                    <?= $otc_data['payment_status'] === 'paid' ? '✅ Paid' : '⏳ Pending' ?>
+                </span>
+            <?php elseif ($bill_data): ?>
+                <span class="status-badge <?= $bill_data['status'] ?? 'pending' ?>">
+                    <?= getStatusLabel($bill_data['status'] ?? 'pending') ?>
+                </span>
+            <?php elseif ($payment_data): ?>
+                <span class="status-badge paid">✅ Payment Received</span>
+            <?php endif; ?>
+        </div>
+        
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- RECEIPT FOOTER -->
+    <!-- ================================================================ -->
+    <div class="receipt-footer">
+        <div class="thank-you">Thank You for Your Payment!</div>
+        <div class="footer-text">
+            <strong>Braick Dispensary</strong><br>
+            Quality Healthcare Services<br>
+            <?= htmlspecialchars($branch_name) ?>
+            <?php if (!empty($branch_phone)): ?>
+                <br>Tel: <?= htmlspecialchars($branch_phone) ?>
+            <?php endif; ?>
+        </div>
+        <div class="footer-text" style="margin-top:4px;font-size:0.5rem;color:#94A3B8;">
+            This is a system generated receipt.<br>
+            Printed on <?= date('d/m/Y H:i:s') ?>
         </div>
     </div>
-</div>
-<?php endif; ?>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;">
-    <i class="fas fa-info-circle" style="font-size:0.9rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.8rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.7rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+    <!-- ================================================================ -->
+    <!-- BUTTONS (No Print) -->
+    <!-- ================================================================ -->
+    <div class="no-print" style="margin-top:12px;">
+        <button onclick="window.print()" class="print-btn">
+            <i class="fas fa-print"></i> Print Receipt
+        </button>
+        <a href="dashboard.php" class="back-btn">
+            <i class="fas fa-arrow-left"></i> Back to Dashboard
+        </a>
     </div>
+
 </div>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
-    (function() {
-        var htmlElement = document.documentElement;
-        var darkIcon = document.getElementById('darkIcon');
-        var darkText = document.getElementById('darkText');
-        var darkToggle = document.getElementById('darkModeToggle');
-        
-        function applyDarkMode(isDark) {
-            if (isDark) {
-                htmlElement.setAttribute('data-theme', 'dark');
-                document.cookie = "dark_mode=true; path=/";
-                if (darkIcon) { darkIcon.className = 'fas fa-sun'; }
-                if (darkText) { darkText.textContent = 'Light'; }
-                localStorage.setItem('darkMode', 'true');
-            } else {
-                htmlElement.removeAttribute('data-theme');
-                document.cookie = "dark_mode=false; path=/";
-                if (darkIcon) { darkIcon.className = 'fas fa-moon'; }
-                if (darkText) { darkText.textContent = 'Dark'; }
-                localStorage.setItem('darkMode', 'false');
-            }
-        }
-        
-        var saved = localStorage.getItem('darkMode');
-        if (saved === null) {
-            var cookieMatch = document.cookie.match(/dark_mode=([^;]+)/);
-            saved = cookieMatch ? cookieMatch[1] : 'false';
-        }
-        applyDarkMode(saved === 'true');
-        
-        if (darkToggle) {
-            darkToggle.addEventListener('click', function() {
-                var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-                applyDarkMode(!isDark);
-                window.dispatchEvent(new StorageEvent('storage', {
-                    key: 'darkMode',
-                    newValue: isDark ? 'false' : 'true'
-                }));
-            });
-        }
-        
-        window.addEventListener('storage', function(e) {
-            if (e.key === 'darkMode') {
-                applyDarkMode(e.newValue === 'true');
-            }
-        });
-    })();
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var options = { year: 'numeric', month: 'short', day: 'numeric' };
-        var dateStr = now.toLocaleDateString('en-US', options);
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        
-        var dateDisplay = document.getElementById('dateDisplay');
-        var timeDisplay = document.getElementById('timeDisplay');
-        var updateTimeDisplay = document.getElementById('updateTimeDisplay');
-        
-        if (dateDisplay) dateDisplay.textContent = dateStr;
-        if (timeDisplay) timeDisplay.textContent = timeStr;
-        if (updateTimeDisplay) updateTimeDisplay.textContent = 'Last update: ' + timeStr;
-    }
-    
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    if (sidebarToggle && sidebar) {
-        sidebarToggle.addEventListener('click', function() {
-            sidebar.classList.toggle('open');
-        });
-    }
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
-
-    // ================================================================
-    // BRANCH SWITCH
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('view');
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchInput = document.getElementById('searchInput');
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                document.getElementById('filterForm').submit();
-            }
-        });
-    }
-    
-    var searchBtn = document.getElementById('searchBtn');
-    if (searchBtn) {
-        searchBtn.addEventListener('click', function() {
-            document.getElementById('filterForm').submit();
-        });
-    }
-
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
+    // Auto print on load if print parameter is set
+    <?php if (isset($_GET['print']) && $_GET['print'] == 1): ?>
+        window.onload = function() {
             setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
+                window.print();
+            }, 500);
+        };
+    <?php endif; ?>
+    
+    // Keyboard shortcut: Ctrl+P to print
     document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
             e.preventDefault();
-            var searchInput = document.getElementById('searchInput');
-            if (searchInput) {
-                searchInput.focus();
-                searchInput.select();
-            }
-        }
-        if (e.key === 'Escape') {
-            var viewModal = document.getElementById('viewModal');
-            if (viewModal) {
-                viewModal.classList.remove('show');
-            }
+            window.print();
         }
     });
-
-    console.log('%c📄 Braick - Bills Management', 'font-size:16px; font-weight:bold; color:#059669;');
-    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c🏢 Branch: <?= $branch_name ?> (ID: <?= $selected_branch_id ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Total Bills: <?= $total_bills ?>', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Total Amount: TSh <?= formatMoney($total_amount) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c⏳ Pending: <?= $total_pending ?> | ✅ Paid: <?= $total_paid ?> | 🔄 Partial: <?= $total_partial ?> | ❌ Cancelled: <?= $total_cancelled ?>', 'font-size:12px; color:#64748B;');
+    
+    console.log('%c🧾 Braick - Receipt Print', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c📋 Receipt #: <?= htmlspecialchars($receipt_number) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c👤 Cashier: <?= htmlspecialchars($cashier_name) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c💰 Total: TSh <?= formatMoney($total_amount) ?>', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/revenue.php
 // SUPER ADMIN - REVENUE REPORT PAGE
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - USING EXISTING DATABASE TABLES
 // WITH HEADER, SIDEBAR, CLOCK & DATE
 // ================================================================
 
@@ -54,7 +54,11 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // BRANCH SELECTION
@@ -91,89 +95,138 @@ try {
 // BRANCH FILTER FOR QUERIES
 // ================================================================
 $branch_filter = "";
+$branch_params = [];
+
 if ($selected_branch_id !== 'all') {
-    $branch_filter = " AND branch_id = " . (int)$selected_branch_id;
+    $branch_filter = " AND branch_id = ?";
+    $branch_params[] = (int)$selected_branch_id;
 }
 
 // ================================================================
-// GET REVENUE DATA - PATIENT BILLS
+// GET REVENUE DATA - BILLS TABLE (ALL PAID BILLS)
 // ================================================================
-$patient_bills_revenue = 0;
-$patient_bills_count = 0;
+$total_revenue = 0;
+$total_bills_count = 0;
 try {
-    $stmt = $db->query("
-        SELECT 
-            COALESCE(SUM(total_amount), 0) as total,
-            COUNT(*) as count
-        FROM patient_bills 
-        WHERE status = 'paid'
-        $branch_filter
-    ");
+    $sql = "SELECT COALESCE(SUM(total_amount), 0) as total, COUNT(*) as count FROM bills WHERE status = 'paid'";
+    if (!empty($branch_filter)) {
+        $sql .= $branch_filter;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params);
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $patient_bills_revenue = $data['total'] ?? 0;
-    $patient_bills_count = $data['count'] ?? 0;
+    $total_revenue = $data['total'] ?? 0;
+    $total_bills_count = $data['count'] ?? 0;
 } catch (Exception $e) {
-    $patient_bills_revenue = 0;
-    $patient_bills_count = 0;
+    $total_revenue = 0;
+    $total_bills_count = 0;
 }
 
 // ================================================================
-// GET REVENUE DATA - OTC SALES
+// GET REVENUE DATA - CONSULTATION FEES (from visits)
 // ================================================================
-$otc_revenue = 0;
-$otc_count = 0;
+$consultation_revenue = 0;
+$consultation_count = 0;
 try {
-    $stmt = $db->query("
-        SELECT 
-            COALESCE(SUM(net_amount), 0) as total,
-            COUNT(*) as count
-        FROM otc_sales 
-        WHERE payment_status = 'paid'
-        $branch_filter
-    ");
+    $sql = "SELECT COALESCE(SUM(consultation_fee), 0) as total, COUNT(*) as count FROM visits WHERE status = 'completed'";
+    if (!empty($branch_filter)) {
+        $sql .= $branch_filter;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params);
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $otc_revenue = $data['total'] ?? 0;
-    $otc_count = $data['count'] ?? 0;
+    $consultation_revenue = $data['total'] ?? 0;
+    $consultation_count = $data['count'] ?? 0;
 } catch (Exception $e) {
-    $otc_revenue = 0;
-    $otc_count = 0;
+    $consultation_revenue = 0;
+    $consultation_count = 0;
 }
 
 // ================================================================
-// GET REVENUE DATA - PRESCRIPTION SALES
+// GET REVENUE DATA - LAB TESTS (from lab_tests with price)
 // ================================================================
-$prescription_revenue = 0;
-$prescription_count = 0;
+$lab_revenue = 0;
+$lab_count = 0;
 try {
-    $stmt = $db->query("
-        SELECT 
-            COALESCE(SUM(total_amount), 0) as total,
-            COUNT(*) as count
-        FROM prescription_sales 
-        WHERE status = 'dispensed'
-        $branch_filter
-    ");
+    $sql = "SELECT COALESCE(SUM(test_price), 0) as total, COUNT(*) as count FROM lab_tests WHERE status = 'completed'";
+    if (!empty($branch_filter)) {
+        $sql .= $branch_filter;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params);
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $prescription_revenue = $data['total'] ?? 0;
-    $prescription_count = $data['count'] ?? 0;
+    $lab_revenue = $data['total'] ?? 0;
+    $lab_count = $data['count'] ?? 0;
 } catch (Exception $e) {
-    $prescription_revenue = 0;
-    $prescription_count = 0;
+    $lab_revenue = 0;
+    $lab_count = 0;
+}
+
+// ================================================================
+// GET REVENUE DATA - MEDICATIONS (from bill_items)
+// ================================================================
+$medication_revenue = 0;
+$medication_count = 0;
+try {
+    $sql = "
+        SELECT COALESCE(SUM(bi.total_price), 0) as total, COUNT(DISTINCT bi.id) as count 
+        FROM bill_items bi
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE bi.item_type = 'medication' AND b.status = 'paid'
+    ";
+    if (!empty($branch_filter)) {
+        $sql .= " AND b.branch_id = ?";
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $medication_revenue = $data['total'] ?? 0;
+    $medication_count = $data['count'] ?? 0;
+} catch (Exception $e) {
+    $medication_revenue = 0;
+    $medication_count = 0;
+}
+
+// ================================================================
+// GET REVENUE DATA - PROCEDURES (from bill_items)
+// ================================================================
+$procedure_revenue = 0;
+$procedure_count = 0;
+try {
+    $sql = "
+        SELECT COALESCE(SUM(bi.total_price), 0) as total, COUNT(DISTINCT bi.id) as count 
+        FROM bill_items bi
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE bi.item_type = 'procedure' AND b.status = 'paid'
+    ";
+    if (!empty($branch_filter)) {
+        $sql .= " AND b.branch_id = ?";
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($branch_params);
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $procedure_revenue = $data['total'] ?? 0;
+    $procedure_count = $data['count'] ?? 0;
+} catch (Exception $e) {
+    $procedure_revenue = 0;
+    $procedure_count = 0;
 }
 
 // ================================================================
 // CALCULATE TOTALS
 // ================================================================
-$total_revenue = $patient_bills_revenue + $otc_revenue + $prescription_revenue;
-$total_transactions = $patient_bills_count + $otc_count + $prescription_count;
+$total_revenue_all = $total_revenue + $consultation_revenue + $lab_revenue + $medication_revenue + $procedure_revenue;
+$total_transactions = $total_bills_count + $consultation_count + $lab_count + $medication_count + $procedure_count;
 
 // ================================================================
 // GET MONTHLY REVENUE DATA (Last 12 months)
 // ================================================================
 $monthly_labels = [];
-$monthly_patient = [];
-$monthly_otc = [];
-$monthly_prescription = [];
+$monthly_bills = [];
+$monthly_consultation = [];
+$monthly_lab = [];
+$monthly_medication = [];
+$monthly_procedure = [];
 $monthly_total = [];
 
 for ($i = 11; $i >= 0; $i--) {
@@ -181,40 +234,89 @@ for ($i = 11; $i >= 0; $i--) {
     $month_label = date('M Y', strtotime("-$i months"));
     $monthly_labels[] = $month_label;
     
-    // Patient Bills
-    $stmt = $db->query("
+    // Bills
+    $sql = "
         SELECT COALESCE(SUM(total_amount), 0) as total 
-        FROM patient_bills 
-        WHERE status = 'paid' 
-        AND DATE_FORMAT(created_at, '%Y-%m') = '$month'
-        $branch_filter
-    ");
-    $pt = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    $monthly_patient[] = (float)$pt;
+        FROM bills 
+        WHERE status = 'paid' AND DATE_FORMAT(created_at, '%Y-%m') = ?
+    ";
+    $params = [$month];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $bills_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $monthly_bills[] = (float)$bills_total;
     
-    // OTC Sales
-    $stmt = $db->query("
-        SELECT COALESCE(SUM(net_amount), 0) as total 
-        FROM otc_sales 
-        WHERE payment_status = 'paid' 
-        AND DATE_FORMAT(created_at, '%Y-%m') = '$month'
-        $branch_filter
-    ");
-    $ot = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    $monthly_otc[] = (float)$ot;
+    // Consultation
+    $sql = "
+        SELECT COALESCE(SUM(consultation_fee), 0) as total 
+        FROM visits 
+        WHERE status = 'completed' AND DATE_FORMAT(created_at, '%Y-%m') = ?
+    ";
+    $params = [$month];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $consult_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $monthly_consultation[] = (float)$consult_total;
     
-    // Prescription Sales
-    $stmt = $db->query("
-        SELECT COALESCE(SUM(total_amount), 0) as total 
-        FROM prescription_sales 
-        WHERE status = 'dispensed' 
-        AND DATE_FORMAT(created_at, '%Y-%m') = '$month'
-        $branch_filter
-    ");
-    $pr = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    $monthly_prescription[] = (float)$pr;
+    // Lab Tests
+    $sql = "
+        SELECT COALESCE(SUM(test_price), 0) as total 
+        FROM lab_tests 
+        WHERE status = 'completed' AND DATE_FORMAT(created_at, '%Y-%m') = ?
+    ";
+    $params = [$month];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $lab_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $monthly_lab[] = (float)$lab_total;
     
-    $monthly_total[] = (float)($pt + $ot + $pr);
+    // Medications (from bill_items)
+    $sql = "
+        SELECT COALESCE(SUM(bi.total_price), 0) as total 
+        FROM bill_items bi
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE bi.item_type = 'medication' AND b.status = 'paid' AND DATE_FORMAT(b.created_at, '%Y-%m') = ?
+    ";
+    $params = [$month];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND b.branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $med_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $monthly_medication[] = (float)$med_total;
+    
+    // Procedures (from bill_items)
+    $sql = "
+        SELECT COALESCE(SUM(bi.total_price), 0) as total 
+        FROM bill_items bi
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE bi.item_type = 'procedure' AND b.status = 'paid' AND DATE_FORMAT(b.created_at, '%Y-%m') = ?
+    ";
+    $params = [$month];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND b.branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $proc_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $monthly_procedure[] = (float)$proc_total;
+    
+    $monthly_total[] = (float)($bills_total + $consult_total + $lab_total + $med_total + $proc_total);
 }
 
 // ================================================================
@@ -222,48 +324,99 @@ for ($i = 11; $i >= 0; $i--) {
 // ================================================================
 $daily_labels = [];
 $daily_values = [];
-$daily_patient = [];
-$daily_otc = [];
-$daily_prescription = [];
+$daily_bills = [];
+$daily_consultation = [];
+$daily_lab = [];
+$daily_medication = [];
+$daily_procedure = [];
 
 for ($i = 29; $i >= 0; $i--) {
     $date = date('Y-m-d', strtotime("-$i days"));
     $daily_labels[] = date('d M', strtotime($date));
     
-    // Patient Bills
-    $stmt = $db->query("
+    // Bills
+    $sql = "
         SELECT COALESCE(SUM(total_amount), 0) as total 
-        FROM patient_bills 
-        WHERE status = 'paid' 
-        AND DATE(created_at) = '$date'
-        $branch_filter
-    ");
-    $pt = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    $daily_patient[] = (float)$pt;
+        FROM bills 
+        WHERE status = 'paid' AND DATE(created_at) = ?
+    ";
+    $params = [$date];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $bills_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $daily_bills[] = (float)$bills_total;
     
-    // OTC Sales
-    $stmt = $db->query("
-        SELECT COALESCE(SUM(net_amount), 0) as total 
-        FROM otc_sales 
-        WHERE payment_status = 'paid' 
-        AND DATE(created_at) = '$date'
-        $branch_filter
-    ");
-    $ot = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    $daily_otc[] = (float)$ot;
+    // Consultation
+    $sql = "
+        SELECT COALESCE(SUM(consultation_fee), 0) as total 
+        FROM visits 
+        WHERE status = 'completed' AND DATE(created_at) = ?
+    ";
+    $params = [$date];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $consult_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $daily_consultation[] = (float)$consult_total;
     
-    // Prescription Sales
-    $stmt = $db->query("
-        SELECT COALESCE(SUM(total_amount), 0) as total 
-        FROM prescription_sales 
-        WHERE status = 'dispensed' 
-        AND DATE(created_at) = '$date'
-        $branch_filter
-    ");
-    $pr = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    $daily_prescription[] = (float)$pr;
+    // Lab Tests
+    $sql = "
+        SELECT COALESCE(SUM(test_price), 0) as total 
+        FROM lab_tests 
+        WHERE status = 'completed' AND DATE(created_at) = ?
+    ";
+    $params = [$date];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $lab_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $daily_lab[] = (float)$lab_total;
     
-    $daily_values[] = (float)($pt + $ot + $pr);
+    // Medications
+    $sql = "
+        SELECT COALESCE(SUM(bi.total_price), 0) as total 
+        FROM bill_items bi
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE bi.item_type = 'medication' AND b.status = 'paid' AND DATE(b.created_at) = ?
+    ";
+    $params = [$date];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND b.branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $med_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $daily_medication[] = (float)$med_total;
+    
+    // Procedures
+    $sql = "
+        SELECT COALESCE(SUM(bi.total_price), 0) as total 
+        FROM bill_items bi
+        JOIN bills b ON bi.bill_id = b.id
+        WHERE bi.item_type = 'procedure' AND b.status = 'paid' AND DATE(b.created_at) = ?
+    ";
+    $params = [$date];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND b.branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $proc_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $daily_procedure[] = (float)$proc_total;
+    
+    $daily_values[] = (float)($bills_total + $consult_total + $lab_total + $med_total + $proc_total);
 }
 
 // ================================================================
@@ -592,9 +745,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     
     /* Card Colors */
     .stat-card.card-total { background: var(--primary-gradient); }
-    .stat-card.card-patient { background: #059669; }
-    .stat-card.card-otc { background: #D97706; }
-    .stat-card.card-prescription { background: #7C3AED; }
+    .stat-card.card-consultation { background: #059669; }
+    .stat-card.card-lab { background: #7C3AED; }
+    .stat-card.card-medication { background: #D97706; }
+    .stat-card.card-procedure { background: #0D9488; }
     
     /* ================================================================
        FILTER BAR
@@ -894,7 +1048,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <i class="fas fa-store-alt"></i>
                 <strong><?= htmlspecialchars($branch_name_display) ?></strong>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue, 0) ?> Total Revenue
+                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue_all, 0) ?> Total Revenue
                 </span>
                 <span class="header-badge" style="background:rgba(96,165,250,0.2);border-color:rgba(96,165,250,0.3);color:#60A5FA;">
                     <i class="fas fa-receipt"></i> <?= number_format($total_transactions) ?> Transactions
@@ -905,8 +1059,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <button onclick="window.print()" class="btn-outline-light">
                 <i class="fas fa-print"></i> Print
             </button>
-            <a href="reports.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back to Reports
+            <a href="dashboard.php" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Back to Dashboard
             </a>
         </div>
     </div>
@@ -917,32 +1071,48 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
             <div>
                 <p class="stat-label">Total Revenue</p>
-                <p class="stat-value">TSh <?= number_format($total_revenue, 0) ?></p>
+                <p class="stat-value">TSh <?= number_format($total_revenue_all, 0) ?></p>
                 <p class="stat-sub">All sources combined</p>
             </div>
         </div>
-        <div class="stat-card card-patient">
-            <div class="stat-icon"><i class="fas fa-user-injured"></i></div>
+        <div class="stat-card card-consultation">
+            <div class="stat-icon"><i class="fas fa-stethoscope"></i></div>
             <div>
-                <p class="stat-label">Patient Bills</p>
-                <p class="stat-value">TSh <?= number_format($patient_bills_revenue, 0) ?></p>
-                <p class="stat-sub"><?= number_format($patient_bills_count) ?> transactions</p>
+                <p class="stat-label">Consultation</p>
+                <p class="stat-value">TSh <?= number_format($consultation_revenue, 0) ?></p>
+                <p class="stat-sub"><?= number_format($consultation_count) ?> consultations</p>
             </div>
         </div>
-        <div class="stat-card card-otc">
-            <div class="stat-icon"><i class="fas fa-cash-register"></i></div>
+        <div class="stat-card card-lab">
+            <div class="stat-icon"><i class="fas fa-flask"></i></div>
             <div>
-                <p class="stat-label">OTC Sales</p>
-                <p class="stat-value">TSh <?= number_format($otc_revenue, 0) ?></p>
-                <p class="stat-sub"><?= number_format($otc_count) ?> transactions</p>
+                <p class="stat-label">Lab Tests</p>
+                <p class="stat-value">TSh <?= number_format($lab_revenue, 0) ?></p>
+                <p class="stat-sub"><?= number_format($lab_count) ?> tests</p>
             </div>
         </div>
-        <div class="stat-card card-prescription">
-            <div class="stat-icon"><i class="fas fa-prescription"></i></div>
+        <div class="stat-card card-medication">
+            <div class="stat-icon"><i class="fas fa-pills"></i></div>
             <div>
-                <p class="stat-label">Prescription Sales</p>
-                <p class="stat-value">TSh <?= number_format($prescription_revenue, 0) ?></p>
-                <p class="stat-sub"><?= number_format($prescription_count) ?> transactions</p>
+                <p class="stat-label">Medications</p>
+                <p class="stat-value">TSh <?= number_format($medication_revenue, 0) ?></p>
+                <p class="stat-sub"><?= number_format($medication_count) ?> items</p>
+            </div>
+        </div>
+        <div class="stat-card card-procedure">
+            <div class="stat-icon"><i class="fas fa-syringe"></i></div>
+            <div>
+                <p class="stat-label">Procedures</p>
+                <p class="stat-value">TSh <?= number_format($procedure_revenue, 0) ?></p>
+                <p class="stat-sub"><?= number_format($procedure_count) ?> procedures</p>
+            </div>
+        </div>
+        <div class="stat-card" style="background: #0891B2;">
+            <div class="stat-icon"><i class="fas fa-file-invoice"></i></div>
+            <div>
+                <p class="stat-label">Total Bills</p>
+                <p class="stat-value">TSh <?= number_format($total_revenue, 0) ?></p>
+                <p class="stat-sub"><?= number_format($total_bills_count) ?> paid bills</p>
             </div>
         </div>
     </div>
@@ -1038,32 +1208,48 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </thead>
                     <tbody>
                         <tr style="border-bottom:1px solid var(--border-color);">
-                            <td style="padding:8px 0;"><span style="color:#059669;">●</span> Patient Bills</td>
-                            <td style="padding:8px 0;text-align:right;font-weight:600;color:#059669;">TSh <?= number_format($patient_bills_revenue, 0) ?></td>
+                            <td style="padding:8px 0;"><span style="color:#059669;">●</span> Consultation</td>
+                            <td style="padding:8px 0;text-align:right;font-weight:600;color:#059669;">TSh <?= number_format($consultation_revenue, 0) ?></td>
                             <td style="padding:8px 0;text-align:right;color:var(--text-secondary);">
-                                <?= $total_revenue > 0 ? round(($patient_bills_revenue / $total_revenue) * 100, 1) : 0 ?>%
+                                <?= $total_revenue_all > 0 ? round(($consultation_revenue / $total_revenue_all) * 100, 1) : 0 ?>%
                             </td>
-                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);"><?= number_format($patient_bills_count) ?></td>
+                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);"><?= number_format($consultation_count) ?></td>
                         </tr>
                         <tr style="border-bottom:1px solid var(--border-color);">
-                            <td style="padding:8px 0;"><span style="color:#D97706;">●</span> OTC Sales</td>
-                            <td style="padding:8px 0;text-align:right;font-weight:600;color:#D97706;">TSh <?= number_format($otc_revenue, 0) ?></td>
+                            <td style="padding:8px 0;"><span style="color:#7C3AED;">●</span> Lab Tests</td>
+                            <td style="padding:8px 0;text-align:right;font-weight:600;color:#7C3AED;">TSh <?= number_format($lab_revenue, 0) ?></td>
                             <td style="padding:8px 0;text-align:right;color:var(--text-secondary);">
-                                <?= $total_revenue > 0 ? round(($otc_revenue / $total_revenue) * 100, 1) : 0 ?>%
+                                <?= $total_revenue_all > 0 ? round(($lab_revenue / $total_revenue_all) * 100, 1) : 0 ?>%
                             </td>
-                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);"><?= number_format($otc_count) ?></td>
+                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);"><?= number_format($lab_count) ?></td>
                         </tr>
-                        <tr>
-                            <td style="padding:8px 0;"><span style="color:#7C3AED;">●</span> Prescription Sales</td>
-                            <td style="padding:8px 0;text-align:right;font-weight:600;color:#7C3AED;">TSh <?= number_format($prescription_revenue, 0) ?></td>
+                        <tr style="border-bottom:1px solid var(--border-color);">
+                            <td style="padding:8px 0;"><span style="color:#D97706;">●</span> Medications</td>
+                            <td style="padding:8px 0;text-align:right;font-weight:600;color:#D97706;">TSh <?= number_format($medication_revenue, 0) ?></td>
                             <td style="padding:8px 0;text-align:right;color:var(--text-secondary);">
-                                <?= $total_revenue > 0 ? round(($prescription_revenue / $total_revenue) * 100, 1) : 0 ?>%
+                                <?= $total_revenue_all > 0 ? round(($medication_revenue / $total_revenue_all) * 100, 1) : 0 ?>%
                             </td>
-                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);"><?= number_format($prescription_count) ?></td>
+                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);"><?= number_format($medication_count) ?></td>
+                        </tr>
+                        <tr style="border-bottom:1px solid var(--border-color);">
+                            <td style="padding:8px 0;"><span style="color:#0D9488;">●</span> Procedures</td>
+                            <td style="padding:8px 0;text-align:right;font-weight:600;color:#0D9488;">TSh <?= number_format($procedure_revenue, 0) ?></td>
+                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);">
+                                <?= $total_revenue_all > 0 ? round(($procedure_revenue / $total_revenue_all) * 100, 1) : 0 ?>%
+                            </td>
+                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);"><?= number_format($procedure_count) ?></td>
+                        </tr>
+                        <tr style="border-bottom:1px solid var(--border-color);">
+                            <td style="padding:8px 0;"><span style="color:#0891B2;">●</span> Bills (Other)</td>
+                            <td style="padding:8px 0;text-align:right;font-weight:600;color:#0891B2;">TSh <?= number_format($total_revenue, 0) ?></td>
+                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);">
+                                <?= $total_revenue_all > 0 ? round(($total_revenue / $total_revenue_all) * 100, 1) : 0 ?>%
+                            </td>
+                            <td style="padding:8px 0;text-align:right;color:var(--text-secondary);"><?= number_format($total_bills_count) ?></td>
                         </tr>
                         <tr style="border-top:2px solid var(--border-color);">
                             <td style="padding:10px 0;font-weight:700;font-size:0.95rem;">TOTAL</td>
-                            <td style="padding:10px 0;text-align:right;font-weight:700;font-size:0.95rem;color:var(--primary);">TSh <?= number_format($total_revenue, 0) ?></td>
+                            <td style="padding:10px 0;text-align:right;font-weight:700;font-size:0.95rem;color:var(--primary);">TSh <?= number_format($total_revenue_all, 0) ?></td>
                             <td style="padding:10px 0;text-align:right;font-weight:700;font-size:0.95rem;color:var(--primary);">100%</td>
                             <td style="padding:10px 0;text-align:right;font-weight:700;font-size:0.95rem;color:var(--primary);"><?= number_format($total_transactions) ?></td>
                         </tr>
@@ -1107,7 +1293,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             htmlElement.removeAttribute('data-theme');
         }
         
-        // Listen for dark mode changes from other pages
         window.addEventListener('storage', function(e) {
             if (e.key === 'darkMode') {
                 if (e.newValue === 'true') {
@@ -1120,7 +1305,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     })();
 
     // ================================================================
-    // SIDEBAR TOGGLE - For mobile
+    // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
@@ -1140,7 +1325,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // DATE & TIME - SAA NA TAREHE (Shared with header)
+    // DATE & TIME
     // ================================================================
     function updateDateTime() {
         var now = new Date();
@@ -1157,11 +1342,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             hour12: true
         });
         
-        // Update header clock (shared header)
         var dtEl = document.getElementById('currentDateTime');
         if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
         
-        // Update footer time
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
     }
@@ -1193,7 +1376,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // CHARTS - REVENUE CHARTS
+    // CHARTS - REVENUE CHARTS (USING EXISTING DATABASE)
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -1204,9 +1387,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var ctxMonthly = document.getElementById('monthlyChart')?.getContext('2d');
         if (ctxMonthly && typeof Chart !== 'undefined') {
             var monthlyLabels = <?= json_encode($monthly_labels) ?>;
-            var monthlyPatient = <?= json_encode($monthly_patient) ?>;
-            var monthlyOtc = <?= json_encode($monthly_otc) ?>;
-            var monthlyPrescription = <?= json_encode($monthly_prescription) ?>;
+            var monthlyBills = <?= json_encode($monthly_bills) ?>;
+            var monthlyConsultation = <?= json_encode($monthly_consultation) ?>;
+            var monthlyLab = <?= json_encode($monthly_lab) ?>;
+            var monthlyMedication = <?= json_encode($monthly_medication) ?>;
+            var monthlyProcedure = <?= json_encode($monthly_procedure) ?>;
             
             new Chart(ctxMonthly, {
                 type: 'bar',
@@ -1214,25 +1399,39 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     labels: monthlyLabels,
                     datasets: [
                         {
-                            label: 'Patient Bills',
-                            data: monthlyPatient,
+                            label: 'Consultation',
+                            data: monthlyConsultation,
                             backgroundColor: '#059669',
                             borderRadius: 3,
-                            barPercentage: 0.3
+                            barPercentage: 0.25
                         },
                         {
-                            label: 'OTC Sales',
-                            data: monthlyOtc,
-                            backgroundColor: '#D97706',
-                            borderRadius: 3,
-                            barPercentage: 0.3
-                        },
-                        {
-                            label: 'Prescription Sales',
-                            data: monthlyPrescription,
+                            label: 'Lab Tests',
+                            data: monthlyLab,
                             backgroundColor: '#7C3AED',
                             borderRadius: 3,
-                            barPercentage: 0.3
+                            barPercentage: 0.25
+                        },
+                        {
+                            label: 'Medications',
+                            data: monthlyMedication,
+                            backgroundColor: '#D97706',
+                            borderRadius: 3,
+                            barPercentage: 0.25
+                        },
+                        {
+                            label: 'Procedures',
+                            data: monthlyProcedure,
+                            backgroundColor: '#0D9488',
+                            borderRadius: 3,
+                            barPercentage: 0.25
+                        },
+                        {
+                            label: 'Bills',
+                            data: monthlyBills,
+                            backgroundColor: '#0891B2',
+                            borderRadius: 3,
+                            barPercentage: 0.25
                         }
                     ]
                 },
@@ -1243,9 +1442,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         legend: {
                             position: 'top',
                             labels: {
-                                font: { size: 9, weight: '600' },
-                                boxWidth: 12,
-                                padding: 8,
+                                font: { size: 8, weight: '600' },
+                                boxWidth: 10,
+                                padding: 6,
                                 color: textColor
                             }
                         },
@@ -1282,9 +1481,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var ctxDaily = document.getElementById('dailyChart')?.getContext('2d');
         if (ctxDaily && typeof Chart !== 'undefined') {
             var dailyLabels = <?= json_encode($daily_labels) ?>;
-            var dailyPatient = <?= json_encode($daily_patient) ?>;
-            var dailyOtc = <?= json_encode($daily_otc) ?>;
-            var dailyPrescription = <?= json_encode($daily_prescription) ?>;
+            var dailyBills = <?= json_encode($daily_bills) ?>;
+            var dailyConsultation = <?= json_encode($daily_consultation) ?>;
+            var dailyLab = <?= json_encode($daily_lab) ?>;
+            var dailyMedication = <?= json_encode($daily_medication) ?>;
+            var dailyProcedure = <?= json_encode($daily_procedure) ?>;
             
             new Chart(ctxDaily, {
                 type: 'line',
@@ -1292,36 +1493,58 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     labels: dailyLabels,
                     datasets: [
                         {
-                            label: 'Patient Bills',
-                            data: dailyPatient,
+                            label: 'Consultation',
+                            data: dailyConsultation,
                             borderColor: '#059669',
                             backgroundColor: 'rgba(5, 150, 105, 0.08)',
                             fill: true,
                             tension: 0.4,
-                            pointRadius: 2,
+                            pointRadius: 1.5,
                             pointBackgroundColor: '#059669',
                             borderWidth: 2
                         },
                         {
-                            label: 'OTC Sales',
-                            data: dailyOtc,
-                            borderColor: '#D97706',
-                            backgroundColor: 'rgba(217, 119, 6, 0.08)',
-                            fill: true,
-                            tension: 0.4,
-                            pointRadius: 2,
-                            pointBackgroundColor: '#D97706',
-                            borderWidth: 2
-                        },
-                        {
-                            label: 'Prescription Sales',
-                            data: dailyPrescription,
+                            label: 'Lab Tests',
+                            data: dailyLab,
                             borderColor: '#7C3AED',
                             backgroundColor: 'rgba(124, 58, 237, 0.08)',
                             fill: true,
                             tension: 0.4,
-                            pointRadius: 2,
+                            pointRadius: 1.5,
                             pointBackgroundColor: '#7C3AED',
+                            borderWidth: 2
+                        },
+                        {
+                            label: 'Medications',
+                            data: dailyMedication,
+                            borderColor: '#D97706',
+                            backgroundColor: 'rgba(217, 119, 6, 0.08)',
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 1.5,
+                            pointBackgroundColor: '#D97706',
+                            borderWidth: 2
+                        },
+                        {
+                            label: 'Procedures',
+                            data: dailyProcedure,
+                            borderColor: '#0D9488',
+                            backgroundColor: 'rgba(13, 148, 136, 0.08)',
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 1.5,
+                            pointBackgroundColor: '#0D9488',
+                            borderWidth: 2
+                        },
+                        {
+                            label: 'Bills',
+                            data: dailyBills,
+                            borderColor: '#0891B2',
+                            backgroundColor: 'rgba(8, 145, 178, 0.08)',
+                            fill: true,
+                            tension: 0.4,
+                            pointRadius: 1.5,
+                            pointBackgroundColor: '#0891B2',
                             borderWidth: 2
                         }
                     ]
@@ -1333,9 +1556,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         legend: {
                             position: 'top',
                             labels: {
-                                font: { size: 9, weight: '600' },
-                                boxWidth: 12,
-                                padding: 8,
+                                font: { size: 8, weight: '600' },
+                                boxWidth: 10,
+                                padding: 6,
                                 color: textColor
                             }
                         },
@@ -1372,17 +1595,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         // Pie Chart
         var ctxPie = document.getElementById('pieChart')?.getContext('2d');
         if (ctxPie && typeof Chart !== 'undefined') {
-            var patientRev = <?= $patient_bills_revenue ?>;
-            var otcRev = <?= $otc_revenue ?>;
-            var prescriptionRev = <?= $prescription_revenue ?>;
+            var consultationRev = <?= $consultation_revenue ?>;
+            var labRev = <?= $lab_revenue ?>;
+            var medicationRev = <?= $medication_revenue ?>;
+            var procedureRev = <?= $procedure_revenue ?>;
+            var billsRev = <?= $total_revenue ?>;
             
             new Chart(ctxPie, {
                 type: 'doughnut',
                 data: {
-                    labels: ['Patient Bills', 'OTC Sales', 'Prescription Sales'],
+                    labels: ['Consultation', 'Lab Tests', 'Medications', 'Procedures', 'Bills'],
                     datasets: [{
-                        data: [patientRev, otcRev, prescriptionRev],
-                        backgroundColor: ['#059669', '#D97706', '#7C3AED'],
+                        data: [consultationRev, labRev, medicationRev, procedureRev, billsRev],
+                        backgroundColor: ['#059669', '#7C3AED', '#D97706', '#0D9488', '#0891B2'],
                         borderWidth: 2,
                         borderColor: isDark ? '#1E293B' : '#FFFFFF'
                     }]
@@ -1394,8 +1619,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         legend: {
                             position: 'bottom',
                             labels: {
-                                font: { size: 11, weight: '500' },
-                                padding: 12,
+                                font: { size: 10, weight: '500' },
+                                padding: 10,
                                 color: textColor
                             }
                         },
@@ -1415,16 +1640,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // CONSOLE LOG - DEBUG
+    // CONSOLE LOG
     // ================================================================
     console.log('%c🏥 Braick Dispensary - Revenue Report', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c💊 Patient Bills: TSh <?= number_format($patient_bills_revenue, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🛒 OTC Sales: TSh <?= number_format($otc_revenue, 0) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c💊 Prescription Sales: TSh <?= number_format($prescription_revenue, 0) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Using SHARED HEADER & SIDEBAR', 'font-size:13px; color:#34D399;');
-    console.log('%c🕐 Clock & Date: Active - Updates every second', 'font-size:13px; color:#34D399;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue_all, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🩺 Consultation: TSh <?= number_format($consultation_revenue, 0) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🔬 Lab Tests: TSh <?= number_format($lab_revenue, 0) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💊 Medications: TSh <?= number_format($medication_revenue, 0) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c🛠️ Procedures: TSh <?= number_format($procedure_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c📋 Bills: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0891B2;');
+    console.log('%c✅ Using tables: bills, bill_items, visits, lab_tests', 'font-size:13px; color:#34D399;');
+    console.log('%c🕐 Clock & Date: Active', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

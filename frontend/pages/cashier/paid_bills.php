@@ -3,7 +3,8 @@
 // FILE: frontend/pages/cashier/paid_bills.php
 // CASHIER - PAID BILLS LIST WITH PDF EXPORT
 // FIXED: Shows regular bills (with visit_id) AND OTC sales
-// FIXED: Excludes payments without visit_id from regular bills
+// FIXED: View buttons for BOTH Regular and OTC (vertical layout)
+// FIXED: Direct links to print_receipt.php
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -342,6 +343,14 @@ include_once '../../components/cashier_sidebar.php';
             --table-hover: #D1FAE5;
             --otc-color: #8B5CF6;
             --otc-bg: #EDE9FE;
+            --btn-view-bg: #0B5ED7;
+            --btn-view-color: #FFFFFF;
+            --btn-print-bg: #059669;
+            --btn-print-color: #FFFFFF;
+            --btn-otc-view-bg: #7C3AED;
+            --btn-otc-view-color: #FFFFFF;
+            --btn-otc-print-bg: #059669;
+            --btn-otc-print-color: #FFFFFF;
         }
         
         [data-theme="dark"] {
@@ -669,15 +678,15 @@ include_once '../../components/cashier_sidebar.php';
         .data-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.8rem;
+            font-size: 0.78rem;
             min-width: 750px;
         }
         
         .data-table thead th {
             text-align: left;
-            padding: 10px 14px;
+            padding: 8px 10px;
             font-weight: 700;
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: white;
@@ -690,7 +699,7 @@ include_once '../../components/cashier_sidebar.php';
         .data-table thead th:last-child { border-radius: 0 8px 0 0; }
         
         .data-table td {
-            padding: 10px 14px;
+            padding: 7px 10px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
@@ -700,11 +709,24 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--table-hover);
         }
         
+        /* Column widths */
+        .data-table .col-date { width: 8%; min-width: 70px; }
+        .data-table .col-items { width: 5%; min-width: 40px; text-align: center; }
+        .data-table .col-bill { width: 10%; min-width: 100px; }
+        .data-table .col-type { width: 6%; min-width: 60px; }
+        .data-table .col-patient { width: 17%; min-width: 140px; }
+        .data-table .col-visit { width: 7%; min-width: 70px; }
+        .data-table .col-amount { width: 9%; min-width: 80px; text-align: right; }
+        .data-table .col-paid { width: 9%; min-width: 80px; text-align: right; }
+        .data-table .col-cashier { width: 9%; min-width: 80px; }
+        .data-table .col-status { width: 6%; min-width: 60px; }
+        .data-table .col-actions { width: 14%; min-width: 70px; }
+        
         .status-badge {
             display: inline-block;
-            padding: 3px 14px;
+            padding: 2px 10px;
             border-radius: 12px;
-            font-size: 0.6rem;
+            font-size: 0.55rem;
             font-weight: 600;
             text-transform: uppercase;
         }
@@ -721,9 +743,9 @@ include_once '../../components/cashier_sidebar.php';
         
         .bill-type-badge {
             display: inline-block;
-            padding: 2px 10px;
+            padding: 2px 8px;
             border-radius: 10px;
-            font-size: 0.55rem;
+            font-size: 0.5rem;
             font-weight: 600;
             text-transform: uppercase;
         }
@@ -738,54 +760,86 @@ include_once '../../components/cashier_sidebar.php';
             color: #6D28D9;
         }
         
-        .btn {
+        /* ================================================================
+           VERTICAL BUTTONS - View on top, Print below
+           ================================================================ */
+        .btn-group-vertical {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            align-items: center;
+        }
+        
+        .btn-group-vertical .btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 6px 14px;
-            border-radius: 8px;
+            justify-content: center;
+            gap: 4px;
+            padding: 4px 12px;
+            border-radius: 6px;
             font-weight: 600;
-            font-size: 0.72rem;
+            font-size: 0.6rem;
             transition: all 0.3s;
             cursor: pointer;
             border: none;
             text-decoration: none;
+            width: 100%;
+            min-width: 55px;
+            white-space: nowrap;
         }
         
-        .btn-primary {
-            background: var(--success);
-            color: white;
+        .btn-group-vertical .btn i {
+            font-size: 0.7rem;
         }
-        .btn-primary:hover {
+        
+        /* View Button */
+        .btn-group-vertical .btn-view {
+            background: var(--btn-view-bg);
+            color: var(--btn-view-color);
+        }
+        .btn-group-vertical .btn-view:hover {
+            background: var(--primary-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
+        }
+        
+        /* Print Button */
+        .btn-group-vertical .btn-print {
+            background: var(--btn-print-bg);
+            color: var(--btn-print-color);
+        }
+        .btn-group-vertical .btn-print:hover {
             background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
         }
         
-        .btn-success {
-            background: var(--success);
-            color: white;
+        /* OTC View Button */
+        .btn-group-vertical .btn-view-otc {
+            background: var(--btn-otc-view-bg);
+            color: var(--btn-otc-view-color);
         }
-        .btn-success:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-otc {
-            background: var(--otc-color);
-            color: white;
-        }
-        .btn-otc:hover {
+        .btn-group-vertical .btn-view-otc:hover {
             background: #6D28D9;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
+        }
+        
+        /* OTC Print Button */
+        .btn-group-vertical .btn-print-otc {
+            background: var(--btn-otc-print-bg);
+            color: var(--btn-otc-print-color);
+        }
+        .btn-group-vertical .btn-print-otc:hover {
+            background: var(--success-dark);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
         }
         
         .btn-sm { 
-            padding: 4px 10px; 
-            font-size: 0.65rem; 
-            border-radius: 6px; 
+            padding: 3px 8px; 
+            font-size: 0.55rem; 
+            border-radius: 4px; 
         }
         
         .stat-card {
@@ -883,7 +937,6 @@ include_once '../../components/cashier_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* PDF MODAL */
         .pdf-modal-overlay {
             display: none;
             position: fixed;
@@ -988,7 +1041,6 @@ include_once '../../components/cashier_sidebar.php';
             padding-top: 28px;
         }
         
-        /* PDF Styles */
         .pdf-content .pdf-header {
             text-align: center;
             padding-bottom: 12px;
@@ -1056,16 +1108,16 @@ include_once '../../components/cashier_sidebar.php';
         .pdf-content .pdf-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 13px;
+            font-size: 12px;
             margin: 4px 0;
         }
         
         .pdf-content .pdf-table th {
             background: #059669;
             color: white;
-            padding: 4px 10px;
+            padding: 3px 6px;
             text-align: left;
-            font-size: 12px;
+            font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             font-weight: 700;
@@ -1073,9 +1125,9 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .pdf-content .pdf-table td {
-            padding: 4px 10px;
+            padding: 3px 6px;
             border-bottom: 1px solid #E2E8F0;
-            font-size: 13px;
+            font-size: 11px;
             word-wrap: break-word;
         }
         
@@ -1185,6 +1237,8 @@ include_once '../../components/cashier_sidebar.php';
             .filter-section { padding: 12px 14px; }
             .filter-btn { font-size: 0.6rem; padding: 3px 10px; }
             .card { padding: 14px 16px; }
+            .btn-group-vertical .btn { font-size: 0.5rem; padding: 3px 6px; min-width: 40px; }
+            .btn-group-vertical .btn i { font-size: 0.6rem; }
         }
         
         @media (max-width: 640px) {
@@ -1194,8 +1248,9 @@ include_once '../../components/cashier_sidebar.php';
             .date-picker-group .form-control { width: 100%; }
             .date-picker-group .btn-apply { width: 100%; justify-content: center; }
             .card { padding: 10px 12px; }
-            .btn { padding: 4px 8px; font-size: 0.6rem; }
-            .data-table { font-size: 0.65rem; min-width: 600px; }
+            .data-table { font-size: 0.6rem; min-width: 500px; }
+            .btn-group-vertical .btn { font-size: 0.45rem; padding: 2px 5px; min-width: 35px; }
+            .btn-group-vertical .btn i { font-size: 0.5rem; }
         }
     </style>
     
@@ -1368,18 +1423,17 @@ include_once '../../components/cashier_sidebar.php';
             <table class="data-table">
                 <thead>
                     <tr>
-                        <th>#</th>
-                        <th>Bill / Sale #</th>
-                        <th>Type</th>
-                        <th>Patient / Customer</th>
-                        <th>Visit #</th>
-                        <th>Total Amount</th>
-                        <th>Paid Amount</th>
-                        <th>Items</th>
-                        <th>Paid By</th>
-                        <th>Status</th>
-                        <th>Paid Date</th>
-                        <th>Actions</th>
+                        <th class="col-bill">Bill #</th>
+                        <th class="col-type">Type</th>
+                        <th class="col-patient">Patient</th>
+                        <th class="col-visit">Visit</th>
+                        <th class="col-amount">Total</th>
+                        <th class="col-paid">Paid</th>
+                        <th class="col-items">Items</th>
+                        <th class="col-cashier">Received By</th>
+                        <th class="col-status">Status</th>
+                        <th class="col-date">Date</th>
+                        <th class="col-actions">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1388,7 +1442,6 @@ include_once '../../components/cashier_sidebar.php';
                             $is_otc = ($bill['bill_type'] ?? '') === 'OTC';
                         ?>
                             <tr>
-                                <td><?= $i++ ?></td>
                                 <td>
                                     <span class="font-mono text-xs font-bold <?= $is_otc ? 'text-purple-600' : 'text-gray-700' ?>">
                                         <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
@@ -1401,7 +1454,7 @@ include_once '../../components/cashier_sidebar.php';
                                         </span>
                                     <?php else: ?>
                                         <span class="bill-type-badge regular">
-                                            <i class="fas fa-file-invoice"></i> Regular
+                                            <i class="fas fa-file-invoice"></i> Reg
                                         </span>
                                     <?php endif; ?>
                                 </td>
@@ -1409,9 +1462,6 @@ include_once '../../components/cashier_sidebar.php';
                                     <div class="font-medium text-sm"><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></div>
                                     <div class="text-xs text-gray-400">
                                         <?= htmlspecialchars($bill['patient_phone'] ?? 'No phone') ?>
-                                        <?php if (!empty($bill['patient_code']) && $bill['patient_code'] !== 'N/A'): ?>
-                                            <span class="ml-1">| <?= htmlspecialchars($bill['patient_code']) ?></span>
-                                        <?php endif; ?>
                                     </div>
                                 </td>
                                 <td>
@@ -1421,54 +1471,56 @@ include_once '../../components/cashier_sidebar.php';
                                         <span class="text-xs font-mono"><?= htmlspecialchars($bill['visit_number'] ?? 'N/A') ?></span>
                                     <?php endif; ?>
                                 </td>
-                                <td>
+                                <td class="text-right">
                                     <span class="font-semibold text-gray-800">
                                         <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
                                     </span>
                                 </td>
-                                <td>
+                                <td class="text-right">
                                     <span class="font-semibold <?= $is_otc ? 'text-purple-600' : 'text-green-600' ?>">
                                         <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
                                     </span>
                                 </td>
                                 <td class="text-center">
                                     <span class="text-xs font-semibold"><?= $bill['item_count'] ?? 0 ?></span>
-                                    <?php if (($bill['med_count'] ?? 0) > 0 && !$is_otc): ?>
-                                        <br><span style="font-size:0.55rem;color:var(--text-secondary);">💊 <?= $bill['med_count'] ?> meds</span>
-                                    <?php endif; ?>
                                 </td>
                                 <td>
-                                    <span class="text-sm"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></span>
+                                    <span class="text-xs"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></span>
                                 </td>
                                 <td>
                                     <?php if ($is_otc): ?>
-                                        <span class="status-badge otc">OTC Paid</span>
+                                        <span class="status-badge otc">OTC</span>
                                     <?php else: ?>
                                         <span class="status-badge paid">Paid</span>
                                     <?php endif; ?>
                                 </td>
                                 <td class="text-xs">
-                                    <?= isset($bill['paid_date']) ? date('d/m/Y', strtotime($bill['paid_date'])) : 'N/A' ?>
+                                    <?= isset($bill['paid_date']) ? date('d/m/y', strtotime($bill['paid_date'])) : 'N/A' ?>
                                     <br>
-                                    <span class="text-gray-400 text-[0.6rem]">
+                                    <span class="text-gray-400 text-[0.55rem]">
                                         <?= isset($bill['paid_date']) ? date('h:i A', strtotime($bill['paid_date'])) : '' ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <div class="flex flex-wrap gap-1">
+                                    <!-- ============================================================
+                                         VERTICAL BUTTONS: View on top, Print below
+                                         ============================================================ -->
+                                    <div class="btn-group-vertical">
                                         <?php if ($is_otc): ?>
-                                            <a href="receipt.php?sale_id=<?= $bill['reference_id'] ?>" class="btn btn-otc btn-sm" title="View OTC Receipt">
-                                                <i class="fas fa-receipt"></i>
+                                            <!-- OTC: View OTC Sale + Print OTC Receipt -->
+                                            <a href="view_otc_sale.php?id=<?= $bill['reference_id'] ?>" class="btn btn-view-otc" title="View OTC Sale">
+                                                <i class="fas fa-eye"></i> View
                                             </a>
-                                            <a href="print_receipt.php?type=otc&sale_id=<?= $bill['reference_id'] ?>&print=1" class="btn btn-success btn-sm" title="Print OTC Receipt" target="_blank">
-                                                <i class="fas fa-print"></i>
+                                            <a href="print_receipt.php?type=otc&sale_id=<?= $bill['reference_id'] ?>&print=1" class="btn btn-print-otc" title="Print OTC Receipt" target="_blank">
+                                                <i class="fas fa-print"></i> Print
                                             </a>
                                         <?php else: ?>
-                                            <a href="view_bill.php?id=<?= $bill['bill_id'] ?>" class="btn btn-primary btn-sm" title="View Bill">
-                                                <i class="fas fa-eye"></i>
+                                            <!-- Regular: View Bill + Print Receipt -->
+                                            <a href="view_bill.php?id=<?= $bill['bill_id'] ?>" class="btn btn-view" title="View Bill">
+                                                <i class="fas fa-eye"></i> View
                                             </a>
-                                            <a href="receipt.php?bill_id=<?= $bill['bill_id'] ?>&print=1" class="btn btn-success btn-sm" title="Print Receipt" target="_blank">
-                                                <i class="fas fa-print"></i>
+                                            <a href="print_receipt.php?bill_id=<?= $bill['bill_id'] ?>&print=1" class="btn btn-print" title="Print Receipt" target="_blank">
+                                                <i class="fas fa-print"></i> Print
                                             </a>
                                         <?php endif; ?>
                                     </div>
@@ -1477,7 +1529,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="12" class="text-center py-8 text-gray-400">
+                            <td colspan="11" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
                                 <p class="text-lg">No paid bills or OTC sales found</p>
                                 <p class="text-sm">
@@ -1560,7 +1612,6 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     // DARK MODE
     // ================================================================
-    // Note: Dark mode is controlled by header.
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1675,7 +1726,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // PDF GENERATION - With "ALL PAID" Stamp
+    // PDF GENERATION
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -1693,39 +1744,38 @@ include_once '../../components/cashier_sidebar.php';
         var counter = 1;
         <?php foreach ($paid_bills as $bill): 
             $is_otc = ($bill['bill_type'] ?? '') === 'OTC';
-            $typeLabel = $is_otc ? 'OTC' : 'Regular';
+            $typeLabel = $is_otc ? 'OTC' : 'Reg';
         ?>
             billsHtml += `
                 <tr>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:13px;">${counter}</td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;font-weight:600;<?= $is_otc ? 'color:#6D28D9;' : 'color:#0B5ED7;' ?>"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:12px;text-align:center;"><span style="background:<?= $is_otc ? '#EDE9FE;color:#6D28D9;' : '#E8F0FE;color:#0B5ED7;' ?>padding:2px 10px;border-radius:10px;font-weight:600;">${typeLabel}</span></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><strong><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></strong><br><span style="font-size:12px;color:#64748B;"><?= htmlspecialchars($bill['patient_phone'] ?? 'N/A') ?></span></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:12px;text-align:center;"><?= $is_otc ? '—' : htmlspecialchars($bill['visit_number'] ?? 'N/A') ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:13px;">${currency} <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:13px;<?= $is_otc ? 'color:#6D28D9;' : 'color:#059669;' ?>">${currency} <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:13px;"><?= $bill['item_count'] ?? 0 ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;"><?= isset($bill['paid_date']) ? date('d/m/Y h:i A', strtotime($bill['paid_date'])) : 'N/A' ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:11px;font-weight:600;<?= $is_otc ? 'color:#6D28D9;' : 'color:#0B5ED7;' ?>"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:10px;text-align:center;"><span style="background:<?= $is_otc ? '#EDE9FE;color:#6D28D9;' : '#E8F0FE;color:#0B5ED7;' ?>padding:1px 8px;border-radius:8px;font-weight:600;">${typeLabel}</span></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:11px;"><strong><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></strong></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:10px;text-align:center;"><?= $is_otc ? '—' : htmlspecialchars($bill['visit_number'] ?? 'N/A') ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:11px;">${currency} <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:11px;<?= $is_otc ? 'color:#6D28D9;' : 'color:#059669;' ?>">${currency} <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:11px;"><?= $bill['item_count'] ?? 0 ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:11px;"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:11px;"><?= isset($bill['paid_date']) ? date('d/m/y h:i A', strtotime($bill['paid_date'])) : 'N/A' ?></td>
                 </tr>
             `;
             counter++;
         <?php endforeach; ?>
         
         if (!billsHtml) {
-            billsHtml = `<tr><td colspan="10" style="text-align:center;padding:20px;font-size:14px;color:#64748B;">No paid bills or OTC sales found</td></tr>`;
+            billsHtml = `<tr><td colspan="9" style="text-align:center;padding:20px;font-size:14px;color:#64748B;">No paid bills or OTC sales found</td></tr>`;
         }
         
         var html = `
             <!-- PDF HEADER -->
             <div class="pdf-header">
                 <div class="pdf-logo">
-                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" style="height:55px;width:auto;object-fit:contain;display:block;margin:0 auto;" onerror="this.style.display='none'">
+                    <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" style="height:50px;width:auto;object-fit:contain;display:block;margin:0 auto;" onerror="this.style.display='none'">
                     <div class="clinic-name">BRAICK DISPENSARY</div>
                     <div class="clinic-sub">Tunajali Afya Yako</div>
                 </div>
                 <div style="display:flex;justify-content:center;gap:14px;flex-wrap:wrap;margin-top:4px;padding-top:4px;border-top:1px solid #E2E8F0;font-size:0.6rem;color:#64748B;">
-                    <span>📞 Admin Contacts: ${adminPhones}</span>
+                    <span>📞 Admin: ${adminPhones}</span>
                     <span>🏢 Branch: ${branchName}</span>
                     <span>📅 ${new Date().toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' })}</span>
                 </div>
@@ -1735,47 +1785,46 @@ include_once '../../components/cashier_sidebar.php';
             </div>
             
             <!-- SUMMARY -->
-            <div style="margin-bottom:8px;">
+            <div style="margin-bottom:6px;">
                 <div class="pdf-section-title"><i class="fas fa-chart-bar"></i> Summary</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:4px 0;">
-                    <div style="background:#D1FAE5;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #059669;">
-                        <div style="font-size:20px;font-weight:700;color:#059669;">${totalBills}</div>
-                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">📋 Total Records</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:4px 0;">
+                    <div style="background:#D1FAE5;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #059669;">
+                        <div style="font-size:18px;font-weight:700;color:#059669;">${totalBills}</div>
+                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">📋 Total Records</div>
                     </div>
-                    <div style="background:#E8F0FE;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #0B5ED7;">
-                        <div style="font-size:20px;font-weight:700;color:#0B5ED7;">${filterDisplay}</div>
-                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">📅 Date Range</div>
+                    <div style="background:#E8F0FE;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #0B5ED7;">
+                        <div style="font-size:18px;font-weight:700;color:#0B5ED7;">${filterDisplay}</div>
+                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">📅 Date Range</div>
                     </div>
-                    <div style="background:#D1FAE5;padding:8px 12px;border-radius:8px;text-align:center;border:1px solid #059669;">
-                        <div style="font-size:20px;font-weight:700;color:#059669;">${currency} <?= number_format($total_paid_amount, 0) ?></div>
-                        <div style="font-size:10px;color:#64748B;text-transform:uppercase;font-weight:600;">💰 Total Paid</div>
+                    <div style="background:#D1FAE5;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #059669;">
+                        <div style="font-size:18px;font-weight:700;color:#059669;">${currency} <?= number_format($total_paid_amount, 0) ?></div>
+                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">💰 Total Paid</div>
                     </div>
                 </div>
             </div>
             
             <!-- PAID BILLS TABLE -->
-            <div style="margin-bottom:8px;">
+            <div style="margin-bottom:6px;">
                 <div class="pdf-section-title"><i class="fas fa-list"></i> Paid Records (${totalBills})</div>
                 <div class="pdf-table-wrap" style="position:relative;">
-                    <div class="all-paid-stamp" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:72px;font-weight:900;color:rgba(5,150,105,0.12);text-transform:uppercase;letter-spacing:8px;border:8px solid rgba(5,150,105,0.08);padding:20px 40px;border-radius:20px;pointer-events:none;z-index:10;font-family:'Inter',sans-serif;white-space:nowrap;">
-                        <div style="position:relative;z-index:2;color:rgba(5,150,105,0.15);font-size:64px;">
-                            ALL <span style="color:rgba(220,38,38,0.12);font-weight:300;margin:0 4px;">//</span> PAID
+                    <div class="all-paid-stamp" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:60px;font-weight:900;color:rgba(5,150,105,0.12);text-transform:uppercase;letter-spacing:8px;border:8px solid rgba(5,150,105,0.08);padding:15px 30px;border-radius:16px;pointer-events:none;z-index:10;font-family:'Inter',sans-serif;white-space:nowrap;">
+                        <div style="position:relative;z-index:2;color:rgba(5,150,105,0.15);font-size:54px;">
+                            ALL <span style="color:rgba(220,38,38,0.10);font-weight:300;margin:0 4px;">//</span> PAID
                         </div>
-                        <div style="position:absolute;top:-10%;left:-10%;width:120%;height:120%;border:4px solid rgba(5,150,105,0.05);transform:rotate(-45deg);border-radius:20px;pointer-events:none;"></div>
+                        <div style="position:absolute;top:-10%;left:-10%;width:120%;height:120%;border:4px solid rgba(5,150,105,0.04);transform:rotate(-45deg);border-radius:16px;pointer-events:none;"></div>
                     </div>
-                    <table class="pdf-table" style="font-size:13px;width:100%;border-collapse:collapse;position:relative;">
+                    <table class="pdf-table" style="font-size:11px;width:100%;border-collapse:collapse;position:relative;">
                         <thead>
                             <tr>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">#</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Bill / Sale #</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">Type</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Patient / Customer</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">Visit #</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:11px;">Total</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:11px;">Paid</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:11px;">Items</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Received By</th>
-                                <th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:11px;">Date</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:left;font-size:9px;">Bill #</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:center;font-size:9px;">Type</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:left;font-size:9px;">Patient</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:center;font-size:9px;">Visit</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:right;font-size:9px;">Total</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:right;font-size:9px;">Paid</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:center;font-size:9px;">Items</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:left;font-size:9px;">Received By</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:left;font-size:9px;">Date</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1824,7 +1873,7 @@ include_once '../../components/cashier_sidebar.php';
     function downloadPDF() {
         var element = document.getElementById('pdfContent');
         var opt = {
-            margin: [8, 8, 8, 8],
+            margin: [6, 6, 6, 6],
             filename: 'Paid_Bills_OTC_<?= date('Y-m-d') ?>.pdf',
             image: { type: 'jpeg', quality: 0.98 },
             html2canvas: { 
@@ -1864,8 +1913,9 @@ include_once '../../components/cashier_sidebar.php';
 
     console.log('%c✅ Braick - Paid Bills & OTC Sales', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c✅ Shows BOTH regular bills (with visit_id) AND OTC paid sales', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Regular bills from bills table (status=paid, visit_id IS NOT NULL)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ OTC sales from otc_sales table (payment_status=paid)', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ Vertical buttons: View on top, Print below', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ View buttons for BOTH Regular and OTC', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Direct links to print_receipt.php', 'font-size:13px; color:#059669;');
     console.log('%c📋 Total Records: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total Amount: <?= $currency ?> <?= number_format($total_paid_amount, 0) ?>', 'font-size:13px; color:#34D399;');
 </script>

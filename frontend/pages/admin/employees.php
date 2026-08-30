@@ -5,7 +5,7 @@
 // WITH SOFT DELETE - User remains in database but cannot login
 // VIEW ALL EMPLOYEES BY BRANCH
 // ACTION BUTTONS: View, Edit, Deactivate (3 buttons only)
-// BRAICK DISPENSARY - WITH LOGIN SESSION
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -51,49 +51,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -105,18 +67,6 @@ try {
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
 $branch_name = 'All Branches';
-
-// ================================================================
-// FUNCTION TO CHECK IF COLUMN EXISTS
-// ================================================================
-function columnExists($db, $table, $column) {
-    try {
-        $stmt = $db->query("SHOW COLUMNS FROM $table LIKE '$column'");
-        return $stmt->rowCount() > 0;
-    } catch (Exception $e) {
-        return false;
-    }
-}
 
 // ================================================================
 // BRANCH NAME
@@ -137,7 +87,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 // GET BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active'");
+$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
@@ -161,7 +111,7 @@ $message_type = '';
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $user_id_to_delete = (int)$_GET['delete'];
     
-    $stmt = $db->prepare("SELECT id, role, full_name FROM users WHERE id = ? AND role != 'admin'");
+    $stmt = $db->prepare("SELECT id, role, full_name, branch_id FROM users WHERE id = ? AND role != 'admin'");
     $stmt->execute([$user_id_to_delete]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     
@@ -284,13 +234,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
@@ -495,11 +441,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <td><?= $i++ ?></td>
                                 <td>
                                     <div class="flex items-center gap-3">
-                                        <?php if (!empty($emp['profile_pic']) && file_exists($_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $emp['profile_pic'])): ?>
+                                        <?php if (!empty($emp['profile_pic'])): ?>
                                             <img src="/dispensary_system/frontend/assets/uploads/profiles/<?= $emp['profile_pic'] ?>" 
                                                  alt="<?= htmlspecialchars($emp['full_name']) ?>" 
-                                                 class="w-8 h-8 rounded-full object-cover">
-                                        <?php else: ?>
+                                                 class="w-8 h-8 rounded-full object-cover"
+                                                 onerror="this.style.display='none'">
+                                        <?php endif; ?>
+                                        <?php if (empty($emp['profile_pic'])): ?>
                                             <div class="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 flex items-center justify-center text-sm font-bold">
                                                 <?= strtoupper(substr($emp['full_name'], 0, 1)) ?>
                                             </div>
@@ -1253,13 +1201,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    console.log('%c👥 Braick Dispensary - Employees Management (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👥 Braick Dispensary - Employees Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Active Employees: <?= number_format($total_active) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🚫 Inactive Employees: <?= number_format($total_inactive) ?>', 'font-size:13px; color:#EF4444;');
     console.log('%c🔒 Soft Delete: Users remain in database but cannot login', 'font-size:13px; color:#7B2FBE;');
     console.log('%c📌 Action Buttons: 3 buttons (View, Edit, Deactivate/Reactivate)', 'font-size:13px; color:#F59E0B;');
+    console.log('%c📊 Tables: users, branches, activity_logs, notifications', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 

@@ -2,8 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/doctors_list.php
 // DOCTORS LIST - VIEW ALL DOCTORS
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -25,7 +24,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // CHECK IF USER HAS ADMIN ACCESS
 // ================================================================
 if ($_SESSION['role'] !== 'admin') {
-    // Redirect based on role
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
@@ -50,49 +48,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($user_username) && !empty($user_username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$user_username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -109,7 +69,7 @@ $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
 $offset = ($page - 1) * $per_page;
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? trim($_GET['status']) : '';
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -124,7 +84,6 @@ $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 if (isset($_GET['toggle']) && is_numeric($_GET['toggle'])) {
     $doctor_id = (int)$_GET['toggle'];
     
-    // Get current status
     $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ? AND role = 'doctor'");
     $stmt->execute([$doctor_id]);
     $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -133,21 +92,8 @@ if (isset($_GET['toggle']) && is_numeric($_GET['toggle'])) {
         $new_status = $doctor['is_online'] == 1 ? 0 : 1;
         $action_text = $new_status == 1 ? 'online' : 'offline';
         
-        // Update doctor status
         $stmt = $db->prepare("UPDATE users SET is_online = ?, last_online = NOW() WHERE id = ?");
         $stmt->execute([$new_status, $doctor_id]);
-        
-        // Also update doctor_status table if exists
-        try {
-            $stmt = $db->prepare("
-                INSERT INTO doctor_status (doctor_id, is_online, updated_at) 
-                VALUES (?, ?, NOW()) 
-                ON DUPLICATE KEY UPDATE is_online = ?, updated_at = NOW()
-            ");
-            $stmt->execute([$doctor_id, $new_status, $new_status]);
-        } catch (Exception $e) {
-            // Table might not exist, ignore
-        }
         
         // Log activity
         try {
@@ -162,10 +108,31 @@ if (isset($_GET['toggle']) && is_numeric($_GET['toggle'])) {
             ]);
         } catch (Exception $e) {}
         
+        // Create notification for receptionists
+        try {
+            $stmt = $db->prepare("SELECT id FROM users WHERE role = 'reception' AND status = 'active'");
+            $stmt->execute();
+            $receptionists = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            $icon = $new_status == 1 ? '🟢' : '🔴';
+            $status_text = $new_status == 1 ? 'ONLINE' : 'OFFLINE';
+            
+            foreach ($receptionists as $rec) {
+                $stmt = $db->prepare("
+                    INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at)
+                    VALUES (?, ?, 'Doctor Status: $status_text', ?, 'info', 'assign_doctor.php', 0, NOW())
+                ");
+                $stmt->execute([
+                    $rec['id'],
+                    $user_branch_id,
+                    "Dr. {$doctor['full_name']} is now $status_text"
+                ]);
+            }
+        } catch (Exception $e) {}
+        
         $message = "Dr. {$doctor['full_name']} is now " . ($new_status == 1 ? '🟢 ONLINE' : '🔴 OFFLINE');
         $message_type = 'success';
         
-        // Redirect to remove toggle parameter
         header("Location: doctors_list.php?page=$page" . ($search ? "&search=" . urlencode($search) : "") . ($status_filter ? "&status=" . urlencode($status_filter) : "") . "&branch=" . $selected_branch_id);
         exit();
     }
@@ -216,8 +183,8 @@ $total_pages = ceil($total_doctors / $per_page);
 // Get doctors for current page
 $sql = "
     SELECT u.*, b.name as branch_name,
-           (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id) as total_visits,
-           (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id) as total_prescriptions,
+           (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id AND status != 'cancelled') as total_visits,
+           (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id AND status != 'cancelled') as total_prescriptions,
            (SELECT COUNT(*) FROM patients WHERE assigned_doctor_id = u.id) as total_patients
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.id
@@ -274,9 +241,6 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -284,11 +248,6 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
-
-// ================================================================
-// PAGE TITLE
-// ================================================================
-$page_title = 'Doctors';
 ?>
 
 <!DOCTYPE html>
@@ -998,9 +957,7 @@ $page_title = 'Doctors';
         
         .btn-action i { font-size: 0.7rem; }
         
-        /* ================================================================
-           VIEW Button - Blue
-           ================================================================ */
+        /* VIEW Button - Blue */
         .btn-view {
             background: #E8F0FE;
             color: #0B5ED7;
@@ -1024,9 +981,7 @@ $page_title = 'Doctors';
             color: white;
         }
         
-        /* ================================================================
-           DASHBOARD Button - Purple
-           ================================================================ */
+        /* DASHBOARD Button - Purple */
         .btn-dashboard {
             background: #EDE9FE;
             color: #7C3AED;
@@ -1050,25 +1005,7 @@ $page_title = 'Doctors';
             color: white;
         }
         
-        /* ================================================================
-           EDIT Button - Orange (REMOVED - Kept for reference)
-           ================================================================ */
-        /* .btn-edit {
-            background: #FEF3C7;
-            color: #D97706;
-            border: 2px solid rgba(217, 119, 6, 0.2);
-        }
-        
-        .btn-edit:hover {
-            background: #D97706;
-            color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.3);
-        } */
-        
-        /* ================================================================
-           TOGGLE ONLINE Button - Green
-           ================================================================ */
+        /* TOGGLE ONLINE Button - Green */
         .btn-toggle-online {
             background: #D1FAE5;
             color: #059669;
@@ -1092,9 +1029,7 @@ $page_title = 'Doctors';
             color: white;
         }
         
-        /* ================================================================
-           TOGGLE OFFLINE Button - Red
-           ================================================================ */
+        /* TOGGLE OFFLINE Button - Red */
         .btn-toggle-offline {
             background: #FEE2E2;
             color: #DC2626;
@@ -1117,22 +1052,6 @@ $page_title = 'Doctors';
             background: #DC2626;
             color: white;
         }
-        
-        /* ================================================================
-           ADD Button - Green (REMOVED - Kept for reference)
-           ================================================================ */
-        /* .btn-add {
-            background: #059669;
-            color: white;
-            border: 2px solid #059669;
-        }
-        
-        .btn-add:hover {
-            background: #047857;
-            border-color: #047857;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
-        } */
         
         /* ================================================================
            PAGINATION
@@ -1373,7 +1292,6 @@ $page_title = 'Doctors';
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
-            <!-- Add Doctor Button REMOVED -->
         </div>
     </div>
 
@@ -1464,7 +1382,6 @@ $page_title = 'Doctors';
                     <?php if (count($doctors) > 0): ?>
                         <?php $i = $offset + 1; foreach ($doctors as $doctor): ?>
                             <?php 
-                                // Get avatar color based on name
                                 $colors = ['blue', 'green', 'purple', 'orange', 'red', 'pink', 'teal'];
                                 $color_index = abs(crc32($doctor['full_name'])) % count($colors);
                                 $avatar_color = $colors[$color_index];
@@ -1515,7 +1432,7 @@ $page_title = 'Doctors';
                                         </a>
                                         
                                         <!-- View Doctor Dashboard Button - PURPLE -->
-                                        <a href="view_doctor.php?id=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                        <a href="view_doctor_dashboard.php?id=<?= $doctor['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                            class="btn-action btn-dashboard" title="View Doctor Dashboard">
                                             <i class="fas fa-chart-bar"></i> Dashboard
                                         </a>
@@ -1536,8 +1453,6 @@ $page_title = 'Doctors';
                                                 <i class="fas fa-power-off"></i> Online
                                             </a>
                                         <?php endif; ?>
-                                        
-                                        <!-- Edit Button REMOVED -->
                                     </div>
                                 </td>
                             </tr>

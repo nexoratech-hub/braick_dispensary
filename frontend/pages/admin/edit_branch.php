@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_branch.php
 // SUPER ADMIN - EDIT BRANCH
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
@@ -83,7 +83,7 @@ if (!$branch) {
 // GET STATISTICS FOR SIDEBAR
 // ================================================================
 $total_employees = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active'");
 $total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 $total_doctors = 0;
@@ -118,6 +118,13 @@ $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER 
 $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
+// GET BRANCH STAFF COUNT
+// ================================================================
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE branch_id = ? AND status = 'active'");
+$stmt->execute([$branch_id]);
+$staff_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+
+// ================================================================
 // HANDLE FORM SUBMISSION
 // ================================================================
 $message = '';
@@ -148,9 +155,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = "Another branch with this name already exists!";
             $message_type = 'error';
         } else {
-            $stmt = $db->prepare("UPDATE branches SET name = ?, location = ?, phone = ?, email = ?, status = ? WHERE id = ?");
+            $stmt = $db->prepare("UPDATE branches SET name = ?, location = ?, phone = ?, email = ?, status = ?, updated_at = NOW() WHERE id = ?");
             
             if ($stmt->execute([$form_data['name'], $form_data['location'], $form_data['phone'], $form_data['email'], $form_data['status'], $branch_id])) {
+                // Log activity
+                try {
+                    $stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                        VALUES (?, ?, 'branch_updated', ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $user_id,
+                        $branch_id,
+                        "Branch updated: {$form_data['name']} (ID: $branch_id)"
+                    ]);
+                } catch (Exception $e) {}
+                
                 $message = "Branch updated successfully!";
                 $message_type = 'success';
                 // Refresh branch data
@@ -339,6 +359,43 @@ include_once '../../components/admin_sidebar.php';
         color: #0B5ED7;
     }
     
+    /* Info Card */
+    .info-card {
+        background: var(--bg-body);
+        border-radius: 12px;
+        padding: 14px 18px;
+        border: 2px solid var(--border-color);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+    }
+    
+    .info-card .info-icon {
+        width: 40px;
+        height: 40px;
+        border-radius: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1rem;
+        flex-shrink: 0;
+        background: var(--primary-bg);
+        color: #0B5ED7;
+    }
+    
+    .info-card .info-text h4 {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin: 0;
+    }
+    
+    .info-card .info-text p {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        margin: 0;
+    }
+    
     /* Buttons */
     .btn {
         display: inline-flex;
@@ -497,6 +554,9 @@ include_once '../../components/admin_sidebar.php';
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch['name']) ?>
                 </span>
+                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
+                    <i class="fas fa-users mr-1"></i> <?= $staff_count ?> Staff
+                </span>
             </p>
         </div>
         <div>
@@ -615,6 +675,39 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 </div>
                 
+            </div>
+            
+            <!-- ================================================================ -->
+            <!-- BRANCH INFO CARD -->
+            <!-- ================================================================ -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
+                <div class="info-card">
+                    <div class="info-icon">
+                        <i class="fas fa-users"></i>
+                    </div>
+                    <div class="info-text">
+                        <h4><?= $staff_count ?></h4>
+                        <p>Staff Members</p>
+                    </div>
+                </div>
+                <div class="info-card">
+                    <div class="info-icon">
+                        <i class="fas fa-calendar-check"></i>
+                    </div>
+                    <div class="info-text">
+                        <h4><?= $created_date ?></h4>
+                        <p>Created Date</p>
+                    </div>
+                </div>
+                <div class="info-card">
+                    <div class="info-icon">
+                        <i class="fas fa-hashtag"></i>
+                    </div>
+                    <div class="info-text">
+                        <h4>#<?= $branch_id ?></h4>
+                        <p>Branch ID</p>
+                    </div>
+                </div>
             </div>
             
             <!-- Form Actions -->
@@ -788,7 +881,9 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Branch: <?= htmlspecialchars($branch['name']) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c👥 Staff: <?= $staff_count ?> members', 'font-size:13px; color:#64748B;');
     console.log('%c📅 Created: <?= $created_date ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Using branches table', 'font-size:13px; color:#34D399;');
     console.log('%c🔗 Shared Header & Sidebar: ACTIVE', 'font-size:13px; color:#64748B;');
     console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
 </script>

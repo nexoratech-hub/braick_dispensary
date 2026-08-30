@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/settings.php
 // SUPER ADMIN - SYSTEM SETTINGS
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DATABASE
 // WITH SHARED HEADER & SIDEBAR
 // FOCUSED ON GENERAL SETTINGS (NO SERVICES)
 // FIXED: Edit branch buttons now work properly
@@ -52,7 +52,11 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // BRANCH SELECTION
@@ -65,16 +69,28 @@ $edit_branch_id = isset($_GET['edit_branch']) ? (int)$_GET['edit_branch'] : 0;
 // GET STATISTICS FOR SIDEBAR
 // ================================================================
 $total_employees = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-$total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+    $total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $total_employees = 0;
+}
 
 $total_doctors = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-$total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+    $total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $total_doctors = 0;
+}
 
 $total_branches = 0;
-$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-$total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+    $total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $total_branches = 0;
+}
 
 $pending_lab_tests = 0;
 try {
@@ -96,18 +112,26 @@ try {
 // GET BRANCHES FOR SELECTOR
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name, location, phone, email, status FROM branches WHERE status = 'active' ORDER BY name");
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $branches[] = $row;
+try {
+    $stmt = $db->query("SELECT id, name, location, phone, email, status FROM branches WHERE status = 'active' ORDER BY name");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $branches[] = $row;
+    }
+} catch (Exception $e) {
+    $branches = [];
 }
 
 // ================================================================
 // GET ALL BRANCHES (INCLUDING INACTIVE FOR EDIT)
 // ================================================================
 $all_branches = [];
-$stmt = $db->query("SELECT id, name, location, phone, email, status FROM branches ORDER BY name");
-while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    $all_branches[] = $row;
+try {
+    $stmt = $db->query("SELECT id, name, location, phone, email, status FROM branches ORDER BY name");
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $all_branches[] = $row;
+    }
+} catch (Exception $e) {
+    $all_branches = [];
 }
 
 // ================================================================
@@ -131,7 +155,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $timezone = trim($_POST['timezone'] ?? 'Africa/Dar_es_Salaam');
         
         try {
-            $settings = [
+            $settings_data = [
                 'site_name' => $site_name,
                 'site_phone' => $site_phone,
                 'site_email' => $site_email,
@@ -140,7 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'timezone' => $timezone
             ];
             
-            foreach ($settings as $key => $value) {
+            foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'general', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
@@ -149,6 +173,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             $message = "✅ General settings updated successfully!";
             $message_type = 'success';
+            
+            // Refresh settings
+            $settings = [];
+            $stmt = $db->query("SELECT setting_key, setting_value, category FROM system_settings");
+            while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                $settings[$row['setting_key']] = $row['setting_value'];
+            }
+            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
@@ -166,7 +198,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $consultation_fee = (float)($_POST['consultation_fee'] ?? 0);
         
         try {
-            $settings = [
+            $settings_data = [
                 'currency' => $currency_symbol,
                 'tax_percent' => $tax_percent,
                 'max_discount_percent' => $max_discount_percent,
@@ -174,7 +206,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'consultation_fee' => $consultation_fee
             ];
             
-            foreach ($settings as $key => $value) {
+            foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'financial', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
@@ -183,6 +215,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             $message = "✅ Financial settings updated successfully!";
             $message_type = 'success';
+            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
@@ -198,13 +231,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $weekend_days = isset($_POST['weekend_days']) ? implode(',', $_POST['weekend_days']) : '';
         
         try {
-            $settings = [
+            $settings_data = [
                 'business_hours_start' => $business_hours_start,
                 'business_hours_end' => $business_hours_end,
                 'weekend_days' => $weekend_days
             ];
             
-            foreach ($settings as $key => $value) {
+            foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'hours', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
@@ -213,6 +246,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             $message = "✅ Business hours updated successfully!";
             $message_type = 'success';
+            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
@@ -247,6 +281,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 // Clear edit mode after successful update
                 $edit_branch_id = 0;
+                $edit_branch = null;
                 
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
@@ -267,13 +302,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $log_activities = isset($_POST['log_activities']) ? 1 : 0;
         
         try {
-            $settings = [
+            $settings_data = [
                 'maintenance_mode' => $maintenance_mode,
                 'debug_mode' => $debug_mode,
                 'log_activities' => $log_activities
             ];
             
-            foreach ($settings as $key => $value) {
+            foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'system', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
@@ -282,6 +317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             $message = "✅ System settings updated successfully!";
             $message_type = 'success';
+            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
@@ -298,14 +334,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $two_factor_auth = isset($_POST['two_factor_auth']) ? 1 : 0;
         
         try {
-            $settings = [
+            $settings_data = [
                 'password_policy' => $password_policy,
                 'session_timeout' => $session_timeout,
                 'max_login_attempts' => $max_login_attempts,
                 'two_factor_auth' => $two_factor_auth
             ];
             
-            foreach ($settings as $key => $value) {
+            foreach ($settings_data as $key => $value) {
                 $stmt = $db->prepare("INSERT INTO system_settings (setting_key, setting_value, category, updated_at) 
                                        VALUES (?, ?, 'security', NOW()) 
                                        ON DUPLICATE KEY UPDATE setting_value = ?, updated_at = NOW()");
@@ -314,6 +350,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             $message = "✅ Security settings updated successfully!";
             $message_type = 'success';
+            
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
@@ -413,6 +450,13 @@ include_once '../../components/admin_sidebar.php';
         border: 2px solid var(--border-color);
         position: sticky;
         top: 80px;
+        box-shadow: var(--shadow-sm);
+        transition: all 0.3s ease;
+    }
+    
+    .settings-sidebar:hover {
+        border-color: var(--primary-light);
+        box-shadow: var(--shadow-md);
     }
     
     .settings-sidebar .nav-link {
@@ -432,14 +476,14 @@ include_once '../../components/admin_sidebar.php';
     
     .settings-sidebar .nav-link:hover {
         background: var(--bg-body);
-        color: #0B5ED7;
-        border-color: #E8F0FE;
+        color: var(--primary);
+        border-color: var(--primary-bg);
     }
     
     .settings-sidebar .nav-link.active {
-        background: #E8F0FE;
-        color: #0B5ED7;
-        border-color: #0B5ED7;
+        background: var(--primary-bg);
+        color: var(--primary);
+        border-color: var(--primary);
         font-weight: 600;
     }
     
@@ -457,7 +501,7 @@ include_once '../../components/admin_sidebar.php';
     
     .settings-sidebar .nav-link .badge {
         margin-left: auto;
-        background: #0B5ED7;
+        background: var(--primary);
         color: white;
         font-size: 0.6rem;
         padding: 2px 8px;
@@ -469,6 +513,13 @@ include_once '../../components/admin_sidebar.php';
         border-radius: 16px;
         padding: 24px;
         border: 2px solid var(--border-color);
+        box-shadow: var(--shadow-sm);
+        transition: all 0.3s ease;
+    }
+    
+    .settings-content:hover {
+        border-color: var(--primary-light);
+        box-shadow: var(--shadow-md);
     }
     
     .settings-content .section-header {
@@ -492,7 +543,7 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .settings-content .section-header h2 i {
-        color: #0B5ED7;
+        color: var(--primary);
     }
     
     .form-label {
@@ -522,7 +573,7 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .form-control:focus {
-        border-color: #0B5ED7;
+        border-color: var(--primary);
         box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
     }
     
@@ -563,12 +614,12 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .btn-primary {
-        background: #0B5ED7;
+        background: var(--primary);
         color: white;
         box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
     }
     .btn-primary:hover {
-        background: #0A4CA8;
+        background: var(--primary-dark);
         transform: translateY(-2px);
         box-shadow: 0 8px 20px rgba(11, 94, 215, 0.4);
     }
@@ -580,8 +631,8 @@ include_once '../../components/admin_sidebar.php';
     }
     .btn-secondary:hover {
         background: var(--bg-card);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
+        border-color: var(--primary);
+        color: var(--primary);
     }
     
     .btn-success {
@@ -620,7 +671,7 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .branch-card:hover {
-        border-color: #0B5ED7;
+        border-color: var(--primary);
         box-shadow: 0 4px 12px rgba(11, 94, 215, 0.06);
     }
     
@@ -689,7 +740,7 @@ include_once '../../components/admin_sidebar.php';
     }
     
     .edit-branch-form .form-title i {
-        color: #0B5ED7;
+        color: var(--primary);
     }
     
     .toast-custom {
@@ -712,10 +763,23 @@ include_once '../../components/admin_sidebar.php';
     .toast-custom.show { transform: translateY(0); opacity: 1; }
     .toast-custom.success { background: #059669; }
     .toast-custom.error { background: #EF4444; }
-    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.info { background: var(--primary); }
     .toast-custom.warning { background: #D97706; }
     
     .text-danger { color: #EF4444; }
+    
+    .main-content {
+        margin-left: 270px;
+        margin-top: 68px;
+        padding: 28px 32px;
+        min-height: calc(100vh - 68px);
+        background: var(--bg-body);
+        transition: background 0.3s ease;
+    }
+    
+    @media (max-width: 1024px) {
+        .main-content { margin-left: 0; padding: 16px; }
+    }
     
     @media (max-width: 768px) {
         .settings-sidebar {
@@ -730,6 +794,28 @@ include_once '../../components/admin_sidebar.php';
             flex-direction: column;
             align-items: flex-start;
         }
+    }
+    
+    @media (max-width: 480px) {
+        .main-content { padding: 10px; }
+        .settings-content { padding: 12px; }
+    }
+    
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    
+    .animate-fade-in-up {
+        animation: fadeInUp 0.5s ease forwards;
+        opacity: 0;
+    }
+    
+    @media print {
+        .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
+        .search-wrapper, .footer, #sidebarToggle { display: none !important; }
+        .main-content { margin: 0; padding: 20px; }
+        .settings-content, .settings-sidebar { border: 1px solid #ddd !important; box-shadow: none !important; }
     }
 </style>
 
@@ -786,23 +872,29 @@ include_once '../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-cog mr-2" style="color: var(--blue-600);"></i> System Settings
+    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5" style="background:var(--primary-gradient);border-radius:16px;padding:28px 36px;margin-bottom:28px;display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:16px;box-shadow:0 8px 32px rgba(11,94,215,0.25);position:relative;overflow:hidden;">
+        <div style="position:relative;z-index:1;">
+            <h1 class="page-title" style="font-size:1.8rem;font-weight:700;color:white;display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:0;">
+                <i class="fas fa-cog" style="opacity:0.9;"></i> System Settings
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;padding:4px 14px;border-radius:20px;font-size:0.65rem;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;backdrop-filter:blur(4px);">ADMIN</span>
             </h1>
-            <p class="page-subtitle">
+            <p class="page-subtitle" style="color:rgba(255,255,255,0.85);font-size:0.95rem;display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0;">
                 Manage system configurations
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-store-alt"></i> <?= $selected_branch_id === 'all' ? 'All Branches' : 'Branch' ?>
+                <span class="header-badge" style="background:rgba(255,255,255,0.12);color:white;padding:4px 14px;border-radius:20px;font-size:0.7rem;font-weight:500;backdrop-filter:blur(4px);display:inline-flex;align-items:center;gap:6px;border:1px solid rgba(255,255,255,0.1);">
+                    <i class="fas fa-store-alt"></i> <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($user_branch_name) ?>
                 </span>
             </p>
+        </div>
+        <div style="position:relative;z-index:1;display:flex;gap:8px;flex-wrap:wrap;">
+            <a href="dashboard.php" class="btn-outline-light" style="background:rgba(255,255,255,0.12);color:white;border:1px solid rgba(255,255,255,0.2);padding:8px 18px;border-radius:10px;font-weight:500;font-size:0.82rem;transition:all 0.3s;text-decoration:none;display:inline-flex;align-items:center;gap:8px;backdrop-filter:blur(4px);">
+                <i class="fas fa-arrow-left"></i> Dashboard
+            </a>
         </div>
     </div>
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>" style="position:relative;z-index:1;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
@@ -848,7 +940,7 @@ include_once '../../components/admin_sidebar.php';
         
         <!-- Settings Content -->
         <div class="lg:col-span-3">
-            <div class="settings-content">
+            <div class="settings-content animate-fade-in-up">
                 
                 <!-- ================================================================ -->
                 <!-- GENERAL TAB -->
@@ -903,7 +995,7 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     
                     <div class="form-actions">
-                        <button type="submit" class="btn btn-success">Save Changes</button>
+                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
                     </div>
                 </form>
                 
@@ -950,7 +1042,7 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     
                     <div class="form-actions">
-                        <button type="submit" class="btn btn-success">Save Changes</button>
+                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
                     </div>
                 </form>
                 
@@ -989,7 +1081,7 @@ include_once '../../components/admin_sidebar.php';
                             $all_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
                             foreach ($all_days as $day):
                             ?>
-                                <label class="flex items-center gap-2">
+                                <label class="flex items-center gap-2" style="cursor:pointer;font-size:0.85rem;">
                                     <input type="checkbox" name="weekend_days[]" value="<?= $day ?>" <?= in_array($day, $weekend_days) ? 'checked' : '' ?>>
                                     <?= $day ?>
                                 </label>
@@ -998,7 +1090,7 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     
                     <div class="form-actions">
-                        <button type="submit" class="btn btn-success">Save Changes</button>
+                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
                     </div>
                 </form>
                 
@@ -1013,7 +1105,7 @@ include_once '../../components/admin_sidebar.php';
                     <h2>
                         <i class="fas fa-store-alt"></i>
                         Branches
-                        <span class="text-sm font-normal text-gray-400">(<?= count($all_branches) ?> branches)</span>
+                        <span class="text-sm font-normal text-gray-400" style="color:var(--text-secondary);font-weight:400;">(<?= count($all_branches) ?> branches)</span>
                     </h2>
                 </div>
                 
@@ -1025,7 +1117,7 @@ include_once '../../components/admin_sidebar.php';
                                     <div class="branch-name">
                                         <?= htmlspecialchars($branch['name']) ?>
                                         <span class="badge-status <?= ($branch['status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?> ml-2">
-                                            <?= ($branch['status'] ?? 'active') === 'active' ? 'Active' : 'Inactive' ?>
+                                            <?= ($branch['status'] ?? 'active') === 'active' ? '✅ Active' : '❌ Inactive' ?>
                                         </span>
                                     </div>
                                     <?php if (!empty($branch['location'])): ?>
@@ -1046,7 +1138,7 @@ include_once '../../components/admin_sidebar.php';
                                         <?php endif; ?>
                                     </div>
                                 </div>
-                                <div>
+                                <div style="display:flex;gap:6px;flex-wrap:wrap;">
                                     <a href="?tab=branches&branch=<?= $selected_branch_id ?>&edit_branch=<?= $branch['id'] ?>" class="btn btn-primary btn-sm">
                                         <i class="fas fa-edit"></i> Edit
                                     </a>
@@ -1066,7 +1158,7 @@ include_once '../../components/admin_sidebar.php';
                 <div class="edit-branch-form">
                     <div class="form-title">
                         <i class="fas fa-edit"></i> Edit Branch: <?= htmlspecialchars($edit_branch['name']) ?>
-                        <a href="?tab=branches&branch=<?= $selected_branch_id ?>" class="text-sm text-gray-400 hover:text-red-500 ml-2">
+                        <a href="?tab=branches&branch=<?= $selected_branch_id ?>" class="text-sm text-gray-400 hover:text-red-500 ml-2" style="font-size:0.8rem;color:var(--text-secondary);text-decoration:none;">
                             <i class="fas fa-times"></i> Cancel
                         </a>
                     </div>
@@ -1148,14 +1240,14 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     
                     <div class="form-row">
-                        <label class="form-label">
+                        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                             <input type="checkbox" name="two_factor_auth" value="1" <?= ($settings['two_factor_auth'] ?? 0) ? 'checked' : '' ?>>
                             Enable Two-Factor Authentication
                         </label>
                     </div>
                     
                     <div class="form-actions">
-                        <button type="submit" class="btn btn-success">Save Changes</button>
+                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
                     </div>
                 </form>
                 
@@ -1177,28 +1269,28 @@ include_once '../../components/admin_sidebar.php';
                     <input type="hidden" name="action" value="update_system">
                     
                     <div class="form-row">
-                        <label class="form-label">
+                        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                             <input type="checkbox" name="maintenance_mode" value="1" <?= ($settings['maintenance_mode'] ?? 0) ? 'checked' : '' ?>>
                             Maintenance Mode (site will be inaccessible to non-admin users)
                         </label>
                     </div>
                     
                     <div class="form-row">
-                        <label class="form-label">
+                        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                             <input type="checkbox" name="debug_mode" value="1" <?= ($settings['debug_mode'] ?? 0) ? 'checked' : '' ?>>
                             Debug Mode (show detailed error messages)
                         </label>
                     </div>
                     
                     <div class="form-row">
-                        <label class="form-label">
+                        <label class="form-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
                             <input type="checkbox" name="log_activities" value="1" <?= ($settings['log_activities'] ?? 1) ? 'checked' : '' ?>>
                             Log User Activities
                         </label>
                     </div>
                     
                     <div class="form-actions">
-                        <button type="submit" class="btn btn-success">Save Changes</button>
+                        <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Save Changes</button>
                     </div>
                 </form>
                 
@@ -1211,12 +1303,14 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
-    <footer class="footer mt-5">
+    <footer class="footer mt-5" style="padding:14px 0;border-top:2px solid var(--border-color);margin-top:24px;text-align:center;font-size:0.7rem;color:var(--text-secondary);transition:border-color 0.3s ease,color 0.3s ease;">
         <p>
-            <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="footer-brand" style="color:var(--primary);font-weight:600;">Braick Dispensary</span> Management System
+            <span class="text-gray-300 mx-2" style="color:var(--text-secondary);opacity:0.3;">|</span>
             System Settings
-            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-300 mx-2" style="color:var(--text-secondary);opacity:0.3;">|</span>
+            <span id="footerTime"><?= date('H:i:s') ?></span>
+            <span class="text-gray-300 mx-2" style="color:var(--text-secondary);opacity:0.3;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
@@ -1260,11 +1354,13 @@ include_once '../../components/admin_sidebar.php';
             darkIcon.className = 'fas fa-moon';
             darkText.textContent = 'Dark';
             localStorage.setItem('darkMode', 'false');
+            document.cookie = "dark_mode=false; path=/";
         } else {
             htmlElement.setAttribute('data-theme', 'dark');
             darkIcon.className = 'fas fa-sun';
             darkText.textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
+            document.cookie = "dark_mode=true; path=/";
         }
     });
 
@@ -1348,13 +1444,18 @@ include_once '../../components/admin_sidebar.php';
         var timeStr = now.toLocaleTimeString('en-US', {
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
-        document.getElementById('currentDateTime').textContent = dateStr + ' • ' + timeStr;
+        var dtEl = document.getElementById('currentDateTime');
+        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+        
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) ftEl.textContent = timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c⚙️ Braick - System Settings (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c⚙️ Braick - System Settings', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Using existing database tables: system_settings, branches, users', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Edit branch buttons now work properly', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Tab: <?= ucfirst($active_tab) ?>', 'font-size:13px; color:#64748B;');

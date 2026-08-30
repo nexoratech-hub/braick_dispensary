@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/add_branch.php
 // SUPER ADMIN - ADD NEW BRANCH
-// BRAICK DISPENSARY - FIXED
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -61,17 +61,10 @@ $db = Database::getInstance()->getConnection();
 $errors = [];
 $success = false;
 $form_data = [];
-
-// Get branch columns
-try {
-    $stmt = $db->query("SHOW COLUMNS FROM branches");
-    $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
-} catch (Exception $e) {
-    $columns = ['id', 'name', 'location', 'phone', 'email', 'logo', 'status', 'created_at', 'updated_at'];
-}
+$branch_id = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    // Get form data
+    // Get form data - MATCHING DATABASE COLUMNS
     $form_data = [
         'name' => trim($_POST['name'] ?? ''),
         'location' => trim($_POST['location'] ?? ''),
@@ -81,15 +74,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         'logo' => trim($_POST['logo'] ?? '')
     ];
 
-    // Validate
+    // ================================================================
+    // VALIDATION
+    // ================================================================
+
+    // Branch name - required
     if (empty($form_data['name'])) {
         $errors['name'] = 'Branch name is required';
     }
 
+    // Location - required
     if (empty($form_data['location'])) {
         $errors['location'] = 'Location is required';
     }
 
+    // Phone - optional but validate format if provided
+    if (!empty($form_data['phone']) && !preg_match('/^[0-9+\-\s()]{7,20}$/', $form_data['phone'])) {
+        $errors['phone'] = 'Please enter a valid phone number';
+    }
+
+    // Email - optional but validate if provided
     if (!empty($form_data['email']) && !filter_var($form_data['email'], FILTER_VALIDATE_EMAIL)) {
         $errors['email'] = 'Please enter a valid email address';
     }
@@ -103,7 +107,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // Check if email already exists
+    // Check if email already exists (only if email is provided)
     if (empty($errors['email']) && !empty($form_data['email'])) {
         $stmt = $db->prepare("SELECT id FROM branches WHERE email = ?");
         $stmt->execute([$form_data['email']]);
@@ -112,37 +116,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
-    // If no errors, insert
+    // ================================================================
+    // INSERT INTO DATABASE
+    // ================================================================
     if (empty($errors)) {
         try {
-            // Build insert query dynamically based on available columns
-            $insert_fields = [];
-            $placeholders = [];
-            $params = [];
-
-            // Always include these fields
-            $fields_to_insert = ['name', 'location', 'phone', 'email', 'status'];
-            
-            foreach ($fields_to_insert as $field) {
-                if (in_array($field, $columns) && $field !== 'id' && $field !== 'created_at' && $field !== 'updated_at') {
-                    $insert_fields[] = $field;
-                    $placeholders[] = ":$field";
-                    $params[":$field"] = $form_data[$field] ?? null;
-                }
-            }
-
-            // Add created_at and updated_at
-            $insert_fields[] = 'created_at';
-            $placeholders[] = 'NOW()';
-            $insert_fields[] = 'updated_at';
-            $placeholders[] = 'NOW()';
-
-            $sql = "INSERT INTO branches (" . implode(", ", $insert_fields) . ") VALUES (" . implode(", ", $placeholders) . ")";
+            // Direct INSERT with known columns
+            $sql = "INSERT INTO branches (name, location, phone, email, logo, status, created_at, updated_at) 
+                    VALUES (:name, :location, :phone, :email, :logo, :status, NOW(), NOW())";
             
             $stmt = $db->prepare($sql);
             
-            // Execute with parameters
-            $stmt->execute($params);
+            $stmt->execute([
+                ':name' => $form_data['name'],
+                ':location' => $form_data['location'],
+                ':phone' => $form_data['phone'] ?: null,
+                ':email' => $form_data['email'] ?: null,
+                ':logo' => $form_data['logo'] ?: null,
+                ':status' => $form_data['status']
+            ]);
 
             $branch_id = $db->lastInsertId();
             $success = true;
@@ -150,16 +142,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Clear form data on success
             $form_data = [];
             
-            // Log activity
+            // ================================================================
+            // LOG ACTIVITY
+            // ================================================================
             try {
                 $stmt = $db->prepare("
                     INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
                     VALUES (?, ?, 'branch_added', ?, NOW())
                 ");
-                $details = "New branch created: " . $form_data['name'] . " (ID: $branch_id)";
+                $details = "New branch created: " . $form_data['name'] . " (ID: $branch_id) by user: $user_full_name";
                 $stmt->execute([$user_id, $branch_id, $details]);
             } catch (Exception $log_error) {
-                // Ignore logging errors
+                // Ignore logging errors - don't break the main flow
+                error_log('Activity log error: ' . $log_error->getMessage());
             }
             
         } catch (PDOException $e) {
@@ -255,10 +250,14 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- SUCCESS MESSAGE -->
     <!-- ================================================================ -->
-    <?php if ($success): ?>
+    <?php if ($success && $branch_id): ?>
         <div class="alert alert-success mb-5">
             <i class="fas fa-check-circle"></i>
-            <span>✅ Branch created successfully! <a href="branches.php?branch=all" class="alert-link">View all branches</a></span>
+            <span>✅ Branch created successfully! 
+                <strong><?= htmlspecialchars($form_data['name'] ?? '') ?></strong> 
+                (ID: <?= $branch_id ?>)
+                <a href="branches.php?branch=all" class="alert-link">View all branches</a>
+            </span>
             <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
         </div>
     <?php endif; ?>
@@ -275,7 +274,7 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ADD BRANCH FORM - FIXED -->
+    <!-- ADD BRANCH FORM - MATCHING DATABASE -->
     <!-- ================================================================ -->
     <div class="form-card">
         <div class="form-card-header">
@@ -285,7 +284,7 @@ include_once '../../components/admin_sidebar.php';
             <p class="form-card-subtitle">Fill in the details to create a new branch</p>
         </div>
         
-        <form method="POST" action="" class="form-container" id="branchForm">
+        <form method="POST" action="" class="form-container" id="branchForm" novalidate>
             <!-- Row 1: Branch Name & Location -->
             <div class="form-row">
                 <div class="form-group <?= isset($errors['name']) ? 'has-error' : '' ?>">
@@ -325,9 +324,9 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
 
-            <!-- Row 2: Phone & Email - FIXED column names -->
+            <!-- Row 2: Phone & Email -->
             <div class="form-row">
-                <div class="form-group">
+                <div class="form-group <?= isset($errors['phone']) ? 'has-error' : '' ?>">
                     <label for="phone" class="form-label">
                         <i class="fas fa-phone"></i> Phone Number
                     </label>
@@ -339,7 +338,10 @@ include_once '../../components/admin_sidebar.php';
                         placeholder="Enter phone number (e.g. +255 700 000 000)"
                         value="<?= htmlspecialchars($form_data['phone'] ?? '') ?>"
                     >
-                    <span class="form-help">Contact phone number for the branch</span>
+                    <?php if (isset($errors['phone'])): ?>
+                        <span class="form-error"><?= htmlspecialchars($errors['phone']) ?></span>
+                    <?php endif; ?>
+                    <span class="form-help">Contact phone number for the branch (optional)</span>
                 </div>
 
                 <div class="form-group <?= isset($errors['email']) ? 'has-error' : '' ?>">
@@ -357,11 +359,11 @@ include_once '../../components/admin_sidebar.php';
                     <?php if (isset($errors['email'])): ?>
                         <span class="form-error"><?= htmlspecialchars($errors['email']) ?></span>
                     <?php endif; ?>
-                    <span class="form-help">Contact email for the branch</span>
+                    <span class="form-help">Contact email for the branch (optional)</span>
                 </div>
             </div>
 
-            <!-- Row 3: Status (full width) -->
+            <!-- Row 3: Status -->
             <div class="form-row single">
                 <div class="form-group">
                     <label for="status" class="form-label required">
@@ -375,7 +377,7 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
 
-            <!-- Row 4: Logo URL (full width) - Optional -->
+            <!-- Row 4: Logo URL -->
             <div class="form-row single">
                 <div class="form-group">
                     <label for="logo" class="form-label">
@@ -395,7 +397,7 @@ include_once '../../components/admin_sidebar.php';
 
             <!-- Form Actions -->
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">
+                <button type="submit" class="btn btn-primary" id="submitBtn">
                     <i class="fas fa-save"></i> Create Branch
                 </button>
                 <a href="branches.php?branch=all" class="btn btn-outline">
@@ -523,7 +525,7 @@ include_once '../../components/admin_sidebar.php';
     }
 
     /* ================================================================
-       FORM ROWS - TWO COLUMNS
+       FORM ROWS
        ================================================================ */
     .form-row {
         display: grid;
@@ -602,11 +604,6 @@ include_once '../../components/admin_sidebar.php';
     .form-control::placeholder {
         color: var(--text-muted);
         font-size: 0.85rem;
-    }
-
-    textarea.form-control {
-        resize: vertical;
-        min-height: 80px;
     }
 
     select.form-control {
@@ -815,6 +812,12 @@ include_once '../../components/admin_sidebar.php';
         background: var(--bg-body);
         border-color: #0B5ED7;
         color: #0B5ED7;
+    }
+
+    .btn:disabled {
+        opacity: 0.6;
+        cursor: not-allowed;
+        transform: none !important;
     }
 
     /* ================================================================
@@ -1044,6 +1047,8 @@ include_once '../../components/admin_sidebar.php';
     var sidebarToggle = document.getElementById('sidebarToggle');
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
+    var submitBtn = document.getElementById('submitBtn');
+    var branchForm = document.getElementById('branchForm');
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1078,15 +1083,16 @@ include_once '../../components/admin_sidebar.php';
     // ================================================================
     // FORM VALIDATION
     // ================================================================
-    document.getElementById('branchForm')?.addEventListener('submit', function(e) {
+    branchForm?.addEventListener('submit', function(e) {
         var name = document.getElementById('name').value.trim();
         var location = document.getElementById('location').value.trim();
         var email = document.getElementById('email').value.trim();
+        var phone = document.getElementById('phone').value.trim();
         var isValid = true;
 
         // Clear previous errors
-        document.querySelectorAll('.form-error').forEach(el => el.remove());
-        document.querySelectorAll('.has-error').forEach(el => el.classList.remove('has-error'));
+        document.querySelectorAll('.form-error').forEach(function(el) { el.remove(); });
+        document.querySelectorAll('.has-error').forEach(function(el) { el.classList.remove('has-error'); });
 
         // Validate name
         if (!name) {
@@ -1100,7 +1106,13 @@ include_once '../../components/admin_sidebar.php';
             isValid = false;
         }
 
-        // Validate email
+        // Validate phone format if provided
+        if (phone && !/^[0-9+\-\s()]{7,20}$/.test(phone)) {
+            showError('phone', 'Please enter a valid phone number');
+            isValid = false;
+        }
+
+        // Validate email if provided
         if (email && !isValidEmail(email)) {
             showError('email', 'Please enter a valid email address');
             isValid = false;
@@ -1108,12 +1120,25 @@ include_once '../../components/admin_sidebar.php';
 
         if (!isValid) {
             e.preventDefault();
+            // Scroll to first error
+            var firstError = document.querySelector('.has-error');
+            if (firstError) {
+                firstError.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        } else {
+            // Show loading state
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Creating...';
+            }
         }
     });
 
     function showError(fieldId, message) {
         var field = document.getElementById(fieldId);
+        if (!field) return;
         var group = field.closest('.form-group');
+        if (!group) return;
         group.classList.add('has-error');
         var error = document.createElement('span');
         error.className = 'form-error';
@@ -1123,6 +1148,17 @@ include_once '../../components/admin_sidebar.php';
 
     function isValidEmail(email) {
         return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+
+    // ================================================================
+    // PHONE NUMBER FORMAT HELP
+    // ================================================================
+    var phoneInput = document.getElementById('phone');
+    if (phoneInput) {
+        phoneInput.addEventListener('input', function() {
+            // Remove any non-digit characters except +, -, space, (, )
+            this.value = this.value.replace(/[^0-9+\-\s()]/g, '');
+        });
     }
 
     // ================================================================
@@ -1145,11 +1181,14 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏢 Braick Dispensary - Add New Branch (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // CONSOLE
+    // ================================================================
+    console.log('%c🏢 Braick Dispensary - Add New Branch', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📝 Fixed: Using correct column names (phone, email, not contact_phone, contact_email)', 'font-size:13px; color:#059669;');
-    console.log('%c📝 No description column - removed', 'font-size:13px; color:#059669;');
+    console.log('%c📊 Database: dispensary_db | Table: branches', 'font-size:13px; color:#059669;');
+    console.log('%c📝 Columns: id, name, location, phone, email, logo, status, created_at, updated_at', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

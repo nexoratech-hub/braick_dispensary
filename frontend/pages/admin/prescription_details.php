@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/prescription_details.php
 // PRESCRIPTION DETAILS - VIEW ALL PRESCRIPTION INFORMATION
-// BRAICK DISPENSARY - WITH LOGIN SESSION
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -13,7 +13,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -48,49 +48,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
 // INCLUDE DATABASE AND HELPERS
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -170,40 +132,6 @@ $stmt->execute([$prescription_id]);
 $prescription_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET PRESCRIPTION SALE (if dispensed)
-// ================================================================
-$stmt = $db->prepare("
-    SELECT ps.*, u.full_name as dispensed_by_name
-    FROM prescription_sales ps
-    LEFT JOIN users u ON ps.dispensed_by = u.id
-    WHERE ps.prescription_id = ?
-    ORDER BY ps.created_at DESC
-    LIMIT 1
-");
-$stmt->execute([$prescription_id]);
-$prescription_sale = $stmt->fetch(PDO::FETCH_ASSOC);
-
-// ================================================================
-// GET BILL FOR THIS PRESCRIPTION
-// ================================================================
-$stmt = $db->prepare("
-    SELECT pb.*,
-           CASE 
-               WHEN pb.status = 'pending' THEN 'warning'
-               WHEN pb.status = 'paid' THEN 'success'
-               WHEN pb.status = 'partial' THEN 'info'
-               WHEN pb.status = 'cancelled' THEN 'danger'
-               ELSE 'secondary'
-           END as status_color
-    FROM patient_bills pb
-    WHERE pb.prescription_id = ?
-    ORDER BY pb.created_at DESC
-    LIMIT 1
-");
-$stmt->execute([$prescription_id]);
-$prescription_bill = $stmt->fetch(PDO::FETCH_ASSOC);
-
-// ================================================================
 // GET PATIENT STATISTICS
 // ================================================================
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE patient_id = ? AND status != 'cancelled'");
@@ -213,6 +141,44 @@ $total_patient_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?");
 $stmt->execute([$patient_id]);
 $total_patient_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// ================================================================
+// GET BILL FOR THIS PRESCRIPTION - FIXED: using bills table
+// ================================================================
+$prescription_bill = null;
+$stmt = $db->prepare("
+    SELECT b.*,
+           CASE 
+               WHEN b.status = 'pending' THEN 'warning'
+               WHEN b.status = 'paid' THEN 'success'
+               WHEN b.status = 'partial' THEN 'info'
+               WHEN b.status = 'cancelled' THEN 'danger'
+               ELSE 'secondary'
+           END as status_color
+    FROM bills b
+    WHERE b.visit_id = (SELECT visit_id FROM prescriptions WHERE id = ?)
+    ORDER BY b.created_at DESC
+    LIMIT 1
+");
+$stmt->execute([$prescription_id]);
+$prescription_bill = $stmt->fetch(PDO::FETCH_ASSOC);
+
+// ================================================================
+// GET DISPENSING INFO - from prescription_items (dispensed_by and dispensed_at)
+// ================================================================
+$dispensed_info = null;
+if ($prescription['status'] === 'dispensed') {
+    // Get first dispensed item info
+    $stmt = $db->prepare("
+        SELECT pi.dispensed_by, pi.dispensed_at, u.full_name as dispensed_by_name
+        FROM prescription_items pi
+        LEFT JOIN users u ON pi.dispensed_by = u.id
+        WHERE pi.prescription_id = ? AND pi.dispensed_by IS NOT NULL
+        LIMIT 1
+    ");
+    $stmt->execute([$prescription_id]);
+    $dispensed_info = $stmt->fetch(PDO::FETCH_ASSOC);
+}
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -231,18 +197,13 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE HEADERS
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <style>
-    /* ================================================================
-       ADDITIONAL STYLES
-       ================================================================ */
-    
-    /* Status Badges */
     .status-badge {
         padding: 4px 16px;
         border-radius: 20px;
@@ -252,7 +213,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         align-items: center;
         gap: 6px;
     }
-    
     .status-badge.warning { background: #FEF3C7; color: #D97706; }
     .status-badge.success { background: #D1FAE5; color: #059669; }
     .status-badge.danger { background: #FEE2E2; color: #EF4444; }
@@ -265,7 +225,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     [data-theme="dark"] .status-badge.info { background: #1E3A5F; color: #6EA8FE; }
     [data-theme="dark"] .status-badge.secondary { background: #2D3748; color: #94A3B8; }
     
-    /* Prescription Header */
     .prescription-header {
         background: linear-gradient(135deg, #7B2FBE, #6B21A8);
         border-radius: 16px;
@@ -274,7 +233,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         position: relative;
         overflow: hidden;
     }
-    
     .prescription-header::before {
         content: '';
         position: absolute;
@@ -285,19 +243,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         background: rgba(255,255,255,0.05);
         border-radius: 50%;
     }
-    
     .prescription-header .prescription-number {
         font-size: 1.4rem;
         font-weight: 700;
         font-family: monospace;
     }
-    
     .prescription-header .prescription-meta {
         font-size: 0.85rem;
         opacity: 0.85;
     }
     
-    /* Stat Cards */
     .stat-card-mini {
         background: var(--bg-card);
         border-radius: 12px;
@@ -306,23 +261,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         transition: all 0.3s ease;
         text-align: center;
     }
-    
     .stat-card-mini:hover {
         transform: translateY(-3px);
         box-shadow: 0 8px 25px rgba(0,0,0,0.08);
         border-color: #7B2FBE;
     }
-    
     .stat-card-mini .stat-number {
         font-size: 1.8rem;
         font-weight: 700;
         color: #7B2FBE;
     }
-    
     .stat-card-mini .stat-number.green { color: #059669; }
     .stat-card-mini .stat-number.orange { color: #F59E0B; }
     .stat-card-mini .stat-number.blue { color: #0B5ED7; }
-    
     .stat-card-mini .stat-label {
         font-size: 0.7rem;
         color: var(--text-secondary);
@@ -330,26 +281,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         text-transform: uppercase;
         letter-spacing: 0.03em;
     }
+    .stat-card-mini .stat-icon { font-size: 1.5rem; margin-bottom: 4px; }
     
-    .stat-card-mini .stat-icon {
-        font-size: 1.5rem;
-        margin-bottom: 4px;
-    }
+    [data-theme="dark"] .stat-card-mini { background: #1E293B; border-color: #334155; }
+    [data-theme="dark"] .stat-card-mini:hover { border-color: #7B2FBE; }
+    [data-theme="dark"] .stat-card-mini .stat-number { color: #A78BFA; }
     
-    [data-theme="dark"] .stat-card-mini {
-        background: #1E293B;
-        border-color: #334155;
-    }
-    
-    [data-theme="dark"] .stat-card-mini:hover {
-        border-color: #7B2FBE;
-    }
-    
-    [data-theme="dark"] .stat-card-mini .stat-number {
-        color: #A78BFA;
-    }
-    
-    /* Table Header - Purple Theme */
     .table-purple thead th {
         background: linear-gradient(135deg, #7B2FBE, #6B21A8) !important;
         color: #FFFFFF !important;
@@ -361,15 +298,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         border-bottom: 3px solid #6B21A8 !important;
         white-space: nowrap !important;
     }
-    
-    .table-purple thead th:first-child {
-        border-radius: 8px 0 0 0 !important;
-    }
-    
-    .table-purple thead th:last-child {
-        border-radius: 0 8px 0 0 !important;
-    }
-    
+    .table-purple thead th:first-child { border-radius: 8px 0 0 0 !important; }
+    .table-purple thead th:last-child { border-radius: 0 8px 0 0 !important; }
     .table-purple tbody td {
         padding: 8px 14px !important;
         border-bottom: 1px solid #E2E8F0 !important;
@@ -377,21 +307,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         vertical-align: middle !important;
         font-size: 0.82rem;
     }
+    .table-purple tbody tr:hover td { background: #F3E8FF !important; }
+    [data-theme="dark"] .table-purple tbody td { color: #F1F5F9 !important; border-bottom-color: #334155 !important; }
+    [data-theme="dark"] .table-purple tbody tr:hover td { background: #2A1A3A !important; }
     
-    .table-purple tbody tr:hover td {
-        background: #F3E8FF !important;
-    }
-    
-    [data-theme="dark"] .table-purple tbody td {
-        color: #F1F5F9 !important;
-        border-bottom-color: #334155 !important;
-    }
-    
-    [data-theme="dark"] .table-purple tbody tr:hover td {
-        background: #2A1A3A !important;
-    }
-    
-    /* Card */
     .card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -399,12 +318,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         border: 1px solid var(--border-color);
         transition: all 0.3s;
     }
-    
     .card:hover {
         border-color: #7B2FBE;
         box-shadow: 0 4px 12px rgba(123, 47, 190, 0.05);
     }
-    
     .card-header {
         display: flex;
         justify-content: space-between;
@@ -413,24 +330,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         flex-wrap: wrap;
         gap: 8px;
     }
-    
     .card-title {
         font-size: 0.9rem;
         font-weight: 600;
         color: var(--text-primary);
     }
-    
     .title-purple { color: #7B2FBE; }
     .title-blue { color: #0B5ED7; }
     .title-green { color: #059669; }
     
-    /* Info Row */
     .info-row {
         display: flex;
         padding: 6px 0;
         border-bottom: 1px solid var(--border-color);
     }
-    
     .info-row .info-label {
         width: 140px;
         font-weight: 600;
@@ -438,46 +351,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         font-size: 0.82rem;
         flex-shrink: 0;
     }
-    
     .info-row .info-value {
         flex: 1;
         color: var(--text-primary);
         font-size: 0.85rem;
     }
     
-    /* Medication Item Card */
-    .medication-item {
-        background: var(--bg-body);
-        border-radius: 10px;
-        padding: 12px 16px;
-        border: 1px solid var(--border-color);
-        transition: all 0.3s;
-    }
-    
-    .medication-item:hover {
-        border-color: #7B2FBE;
-        box-shadow: 0 2px 8px rgba(123, 47, 190, 0.08);
-    }
-    
-    [data-theme="dark"] .medication-item {
-        background: #0F172A;
-    }
-    
-    /* Dispensing Info Card - Special Highlight */
     .dispensing-card {
         border-left: 4px solid #059669 !important;
         background: var(--bg-card);
     }
+    .dispensing-card .card-title { color: #059669; }
+    [data-theme="dark"] .dispensing-card { border-left-color: #34D399 !important; }
     
-    .dispensing-card .card-title {
-        color: #059669;
-    }
-    
-    [data-theme="dark"] .dispensing-card {
-        border-left-color: #34D399 !important;
-    }
-    
-    /* Toast */
     .toast-custom {
         position: fixed;
         bottom: 24px;
@@ -495,38 +381,124 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: white;
         box-shadow: 0 8px 30px rgba(0,0,0,0.15);
     }
-    .toast-custom.show {
-        transform: translateY(0);
-        opacity: 1;
-    }
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
     .toast-custom.success { background: #059669; }
     .toast-custom.error { background: #DC2626; }
     .toast-custom.info { background: #0B5ED7; }
     .toast-custom.warning { background: #D97706; }
     
-    /* Responsive */
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 2px 10px;
+        border-radius: 20px;
+        font-size: 0.6rem;
+        font-weight: 600;
+        color: white;
+    }
+    .badge-info { background: #0B5ED7; }
+    
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.75rem;
+        transition: all 0.3s;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+    }
+    .btn-primary { background: #0B5ED7; color: white; }
+    .btn-primary:hover { background: #0A4CA8; transform: translateY(-2px); }
+    .btn-sm { padding: 4px 10px; font-size: 0.65rem; border-radius: 6px; }
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+    }
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+        transform: translateY(-2px);
+    }
+    
+    .grid { display: grid; }
+    .grid-cols-1 { grid-template-columns: 1fr; }
+    .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+    .grid-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+    .lg\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+    .sm\:grid-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+    .gap-2 { gap: 8px; }
+    .gap-3 { gap: 12px; }
+    .gap-4 { gap: 16px; }
+    .gap-5 { gap: 20px; }
+    .mb-5 { margin-bottom: 20px; }
+    .mt-1 { margin-top: 4px; }
+    .mt-2 { margin-top: 8px; }
+    .mt-3 { margin-top: 12px; }
+    .p-3 { padding: 12px; }
+    .py-6 { padding-top: 24px; padding-bottom: 24px; }
+    .text-center { text-align: center; }
+    .text-xs { font-size: 0.65rem; }
+    .text-sm { font-size: 0.75rem; }
+    .text-lg { font-size: 1.1rem; }
+    .text-2xl { font-size: 1.5rem; }
+    .text-3xl { font-size: 1.875rem; }
+    .font-bold { font-weight: 700; }
+    .font-semibold { font-weight: 600; }
+    .font-mono { font-family: monospace; }
+    .text-gray-400 { color: var(--text-secondary); }
+    .text-gray-500 { color: var(--text-secondary); }
+    .text-blue-600 { color: #0B5ED7; }
+    .text-purple-600 { color: #7B2FBE; }
+    .text-green-600 { color: #059669; }
+    .text-orange-600 { color: #D97706; }
+    .bg-blue-50 { background: #EFF6FF; }
+    .bg-green-50 { background: #D1FAE5; }
+    .bg-orange-50 { background: #FFFBEB; }
+    .bg-purple-50 { background: #F5F3FF; }
+    .bg-gray-50 { background: #F8FAFC; }
+    
+    [data-theme="dark"] .bg-blue-50 { background: #1E3A5F; }
+    [data-theme="dark"] .bg-green-50 { background: #1A3A2A; }
+    [data-theme="dark"] .bg-orange-50 { background: #3D2E0A; }
+    [data-theme="dark"] .bg-purple-50 { background: #2D1B4E; }
+    [data-theme="dark"] .bg-gray-50 { background: #0F172A; }
+    
+    .rounded-lg { border-radius: 8px; }
+    .overflow-x-auto { overflow-x: auto; }
+    .w-full { width: 100%; }
+    .block { display: block; }
+    .flex { display: flex; }
+    .flex-wrap { flex-wrap: wrap; }
+    .items-center { align-items: center; }
+    .justify-between { justify-content: space-between; }
+    .mr-2 { margin-right: 8px; }
+    .mx-2 { margin-left: 8px; margin-right: 8px; }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
+    
     @media (max-width: 640px) {
-        .prescription-header {
-            padding: 16px 18px;
-        }
-        .prescription-header .prescription-number {
-            font-size: 1rem;
-        }
-        .info-row {
-            flex-direction: column;
-            gap: 2px;
-        }
-        .info-row .info-label {
-            width: 100%;
-            font-size: 0.75rem;
-        }
-        .stat-card-mini .stat-number {
-            font-size: 1.4rem;
-        }
-        .btn {
-            font-size: 0.7rem;
-            padding: 4px 10px;
-        }
+        .prescription-header { padding: 16px 18px; }
+        .prescription-header .prescription-number { font-size: 1rem; }
+        .info-row { flex-direction: column; gap: 2px; }
+        .info-row .info-label { width: 100%; font-size: 0.75rem; }
+        .stat-card-mini .stat-number { font-size: 1.4rem; }
+        .grid-cols-2 { grid-template-columns: 1fr; }
+        .sm\:grid-cols-4 { grid-template-columns: 1fr 1fr; }
     }
 </style>
 
@@ -587,9 +559,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PRESCRIPTION HEADER -->
-    <!-- ================================================================ -->
+    <!-- Prescription Header -->
     <div class="prescription-header mb-5">
         <div class="flex flex-wrap items-center justify-between gap-3" style="position:relative;z-index:1;">
             <div>
@@ -629,41 +599,32 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
-    <!-- ================================================================ -->
+    <!-- Statistics Cards -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-        
         <div class="stat-card-mini">
             <div class="stat-icon">💊</div>
             <p class="stat-number"><?= count($prescription_items) ?></p>
             <p class="stat-label">Medications</p>
         </div>
-        
         <div class="stat-card-mini">
             <div class="stat-icon">📋</div>
             <p class="stat-number blue"><?= $total_patient_prescriptions ?></p>
             <p class="stat-label">Patient Prescriptions</p>
         </div>
-        
         <div class="stat-card-mini">
             <div class="stat-icon">👤</div>
             <p class="stat-number green"><?= $total_patient_visits ?></p>
             <p class="stat-label">Patient Visits</p>
         </div>
-        
         <div class="stat-card-mini">
             <div class="stat-icon">💰</div>
             <p class="stat-number orange">TSh <?= number_format($prescription_bill['total_amount'] ?? 0) ?></p>
             <p class="stat-label">Bill Amount</p>
         </div>
-        
     </div>
 
-    <!-- ================================================================ -->
-    <!-- DISPENSING INFORMATION - PLACED HERE (JUU) -->
-    <!-- ================================================================ -->
-    <?php if ($prescription_sale): ?>
+    <!-- Dispensing Information -->
+    <?php if ($prescription['status'] === 'dispensed' && $dispensed_info): ?>
     <div class="card dispensing-card mb-5">
         <div class="card-header">
             <h3 class="card-title">
@@ -672,35 +633,26 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
         <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div class="text-center p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                <p class="text-xs text-gray-500">Sale Number</p>
-                <p class="font-bold text-lg"><?= htmlspecialchars($prescription_sale['sale_number']) ?></p>
+                <p class="text-xs text-gray-500">Status</p>
+                <p class="font-bold text-lg text-green-600">Dispensed ✅</p>
             </div>
             <div class="text-center p-3 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
-                <p class="text-xs text-gray-500">Total Amount</p>
-                <p class="font-bold text-lg text-blue-600">TSh <?= number_format($prescription_sale['total_amount'] ?? 0) ?></p>
+                <p class="text-xs text-gray-500">Dispensed By</p>
+                <p class="font-bold text-lg text-blue-600"><?= htmlspecialchars($dispensed_info['dispensed_by_name'] ?? 'N/A') ?></p>
             </div>
             <div class="text-center p-3 bg-purple-50 dark:bg-purple-900/20 rounded-lg">
-                <p class="text-xs text-gray-500">Payment Method</p>
-                <p class="font-bold text-lg"><?= ucfirst($prescription_sale['payment_method'] ?? 'N/A') ?></p>
+                <p class="text-xs text-gray-500">Date Dispensed</p>
+                <p class="font-bold text-lg"><?= date('M d, Y h:i A', strtotime($dispensed_info['dispensed_at'] ?? $prescription['dispensed_at'] ?? 'now')) ?></p>
             </div>
-            <div class="text-center p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
-                <p class="text-xs text-gray-500">Payment Status</p>
-                <span class="status-badge <?= $prescription_sale['payment_status'] === 'paid' ? 'success' : 'warning' ?>">
-                    <?= ucfirst($prescription_sale['payment_status'] ?? 'N/A') ?>
-                </span>
+            <div class="text-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <p class="text-xs text-gray-500">Total Items</p>
+                <p class="font-bold text-lg"><?= count($prescription_items) ?></p>
             </div>
-        </div>
-        <div class="mt-3 text-sm text-gray-500">
-            <i class="fas fa-user"></i> Dispensed by: <?= htmlspecialchars($prescription_sale['dispensed_by_name'] ?? 'N/A') ?>
-            <span class="mx-2">|</span>
-            <i class="fas fa-calendar-alt"></i> <?= date('M d, Y h:i A', strtotime($prescription_sale['dispensed_at'])) ?>
         </div>
     </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- PRESCRIPTION INFORMATION -->
-    <!-- ================================================================ -->
+    <!-- Prescription Information -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
         
         <!-- Prescription Details -->
@@ -764,6 +716,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <span class="info-value"><?= date('M d, Y h:i A', strtotime($prescription['dispensed_at'])) ?></span>
                     </div>
                 <?php endif; ?>
+                <?php if ($prescription['diagnosis']): ?>
+                    <div class="info-row">
+                        <span class="info-label">Diagnosis</span>
+                        <span class="info-value"><?= htmlspecialchars($prescription['diagnosis']) ?></span>
+                    </div>
+                <?php endif; ?>
             </div>
         </div>
         
@@ -811,14 +769,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
     </div>
 
-    <!-- ================================================================ -->
-    <!-- MEDICATIONS LIST -->
-    <!-- ================================================================ -->
+    <!-- Medications List -->
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-pills title-purple mr-2"></i> Medications
-                <span class="badge-count">(<?= count($prescription_items) ?> items)</span>
+                <span class="badge-count" style="font-size:0.7rem;font-weight:400;color:var(--text-secondary);">(<?= count($prescription_items) ?> items)</span>
             </h3>
             <?php if ($prescription['status'] !== 'dispensed'): ?>
                 <a href="edit_prescription.php?id=<?= $prescription['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary btn-sm">
@@ -896,15 +852,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- BILL INFORMATION -->
-    <!-- ================================================================ -->
+    <!-- Bill Information -->
     <?php if ($prescription_bill): ?>
     <div class="card mb-5">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-file-invoice title-blue mr-2"></i> Bill Information
-                <span class="badge-count">(<?= $prescription_bill['bill_number'] ?>)</span>
+                <span class="badge-count" style="font-size:0.7rem;font-weight:400;color:var(--text-secondary);">(<?= $prescription_bill['bill_number'] ?>)</span>
             </h3>
             <a href="bill_details.php?id=<?= $prescription_bill['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary btn-sm">
                 <i class="fas fa-external-link-alt"></i> View Bill
@@ -934,9 +888,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -964,9 +916,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -996,15 +945,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1017,18 +960,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1047,9 +984,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1066,14 +1000,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Prescription Details (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#7B2FBE;');
+    console.log('%c🏥 Braick Dispensary - Prescription Details', 'font-size:18px; font-weight:bold; color:#7B2FBE;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💊 Prescription: <?= htmlspecialchars($prescription['prescription_number']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($prescription['patient_name']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Status: <?= ucfirst($prescription['status'] ?? 'N/A') ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c💊 Medications: <?= count($prescription_items) ?> items', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📦 Dispensing Info: ' + (<?= $prescription_sale ? 'true' : 'false' ?> ? 'Available' : 'Not dispensed'), 'font-size:13px; color:#059669;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Using tables: prescriptions, prescription_items, patients, users, branches, bills', 'font-size:13px; color:#34D399;');
+    console.log('%c❌ prescription_sales table removed - using prescription_items for dispensed info', 'font-size:13px; color:#34D399;');
+    console.log('%c❌ patient_bills table removed - using bills table', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

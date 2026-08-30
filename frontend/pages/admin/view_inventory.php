@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_inventory.php
-// SUPER ADMIN - VIEW INVENTORY ITEM DETAILS
+// ADMIN - VIEW INVENTORY ITEM DETAILS
 // BRAICK DISPENSARY - BLUE THEME
+// WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
 // ================================================================
@@ -18,7 +19,11 @@ if (session_status() === PHP_SESSION_NONE) {
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
@@ -56,39 +61,25 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// VERIFY USER EXISTS IN DATABASE
-// ================================================================
-$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$user || $user['status'] !== 'active') {
-    session_destroy();
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
-
-// ================================================================
 // GET PARAMETERS
 // ================================================================
 $inventory_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 if ($inventory_id <= 0) {
-    header('Location: pharmacies.php?branch=' . $selected_branch_id . '&error=invalid_id');
+    header('Location: pharmacy_inventory.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
     exit;
+}
+
+// ================================================================
+// GET BRANCHES FOR FILTER
+// ================================================================
+$branches = [];
+try {
+    $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
 }
 
 // ================================================================
@@ -112,16 +103,9 @@ $stmt->execute([$inventory_id]);
 $item = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$item) {
-    header('Location: pharmacy_inventory.php?branch=' . $selected_branch_id . '&error=notfound');
+    header('Location: pharmacy_inventory.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
     exit;
 }
-
-// ================================================================
-// GET BRANCHES FOR FILTER
-// ================================================================
-$branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // GET STOCK MOVEMENT HISTORY
@@ -145,7 +129,7 @@ try {
 }
 
 // ================================================================
-// GET RELATED SALES
+// GET RELATED SALES (OTC)
 // ================================================================
 $related_sales = [];
 try {
@@ -155,14 +139,15 @@ try {
             os.sale_number,
             os.customer_name,
             os.total_amount,
-            os.net_amount,
+            os.discount_amount,
             os.payment_method,
             os.payment_status,
             os.created_at,
             osi.quantity,
             osi.unit_price,
             osi.total_price,
-            'otc' as sale_type
+            'OTC' as sale_type,
+            osi.instructions
         FROM otc_sale_items osi
         LEFT JOIN otc_sales os ON osi.sale_id = os.id
         WHERE osi.inventory_id = ?
@@ -171,38 +156,7 @@ try {
     ");
     $stmt->execute([$inventory_id]);
     $otc_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Prescription Sales
-    $stmt = $db->prepare("
-        SELECT 
-            ps.sale_number,
-            p.patient_id,
-            pat.full_name as patient_name,
-            ps.total_amount,
-            ps.net_amount,
-            ps.payment_method,
-            ps.payment_status,
-            ps.created_at,
-            psi.quantity,
-            psi.unit_price,
-            psi.total_price,
-            'prescription' as sale_type
-        FROM prescription_sale_items psi
-        LEFT JOIN prescription_sales ps ON psi.sale_id = ps.id
-        LEFT JOIN prescriptions p ON ps.prescription_id = p.id
-        LEFT JOIN patients pat ON p.patient_id = pat.id
-        WHERE psi.inventory_id = ?
-        ORDER BY ps.created_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$inventory_id]);
-    $prescription_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    $related_sales = array_merge($otc_sales, $prescription_sales);
-    usort($related_sales, function($a, $b) {
-        return strtotime($b['created_at'] ?? '') - strtotime($a['created_at'] ?? '');
-    });
-    $related_sales = array_slice($related_sales, 0, 10);
+    $related_sales = $otc_sales;
 } catch (Exception $e) {
     $related_sales = [];
 }
@@ -217,23 +171,21 @@ $expiry_date = $item['expiry_date'] ?? null;
 $is_out_of_stock = $quantity <= 0;
 $is_low_stock = $quantity > 0 && $quantity <= $reorder_level;
 $is_in_stock = $quantity > $reorder_level;
-$is_expired = !empty($expiry_date) && strtotime($expiry_date) < time();
-$is_expiring_soon = !empty($expiry_date) && strtotime($expiry_date) > time() && strtotime($expiry_date) < strtotime('+30 days');
+$is_expired = !empty($expiry_date) && $expiry_date !== '0000-00-00' && strtotime($expiry_date) < time();
+$is_expiring_soon = !empty($expiry_date) && $expiry_date !== '0000-00-00' && strtotime($expiry_date) > time() && strtotime($expiry_date) < strtotime('+30 days');
 $is_healthy = $is_in_stock && !$is_expired && !$is_expiring_soon;
 
 // ================================================================
-// STATUS BADGE CLASS
+// FUNCTION: GET STATUS BADGE
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
         'active' => 'success',
         'inactive' => 'danger',
         'pending' => 'warning',
-        'dispensed' => 'success',
-        'confirmed' => 'info',
-        'cancelled' => 'danger',
         'paid' => 'success',
         'partial' => 'warning',
+        'cancelled' => 'danger',
         'otc' => 'info',
         'prescription' => 'purple'
     ];
@@ -245,15 +197,25 @@ function getStatusIcon($status) {
         'active' => 'fa-check-circle',
         'inactive' => 'fa-times-circle',
         'pending' => 'fa-clock',
-        'dispensed' => 'fa-check-circle',
-        'confirmed' => 'fa-check-double',
-        'cancelled' => 'fa-times-circle',
         'paid' => 'fa-check-circle',
         'partial' => 'fa-clock',
+        'cancelled' => 'fa-times-circle',
         'otc' => 'fa-shopping-cart',
         'prescription' => 'fa-prescription'
     ];
     return $icons[$status] ?? 'fa-circle';
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -588,18 +550,6 @@ include_once '../../components/admin_sidebar.php';
             pointer-events: none;
         }
         
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -633,7 +583,7 @@ include_once '../../components/admin_sidebar.php';
             font-weight: 600;
         }
         
-        .page-header .role-badge-display {
+        .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 4px 14px;
@@ -902,6 +852,30 @@ include_once '../../components/admin_sidebar.php';
             color: white;
         }
         
+        .btn-success {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+            border-color: #059669;
+        }
+        
+        .btn-success:hover {
+            background: linear-gradient(135deg, #047857, #065F46);
+            border-color: #047857;
+            color: white;
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+            border-color: #DC2626;
+        }
+        
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #B91C1C, #991B1B);
+            border-color: #B91C1C;
+            color: white;
+        }
+        
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
@@ -933,6 +907,11 @@ include_once '../../components/admin_sidebar.php';
             font-size: 1rem;
             color: var(--text-primary);
             margin-bottom: 4px;
+        }
+        
+        .empty-state p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
         }
         
         /* ================================================================
@@ -968,12 +947,17 @@ include_once '../../components/admin_sidebar.php';
             .page-header .page-title { font-size: 1.3rem; }
             .detail-card { padding: 16px; }
             .detail-card .grid { grid-template-columns: 1fr 1fr; }
+            .data-table { font-size: 0.7rem; }
+            .data-table thead th, .data-table td { padding: 6px 8px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
             .detail-card .grid { grid-template-columns: 1fr; }
+            .card-header { flex-direction: column; align-items: flex-start; }
+            .btn { width: 100%; justify-content: center; }
+            .flex-wrap.gap-3 .btn { width: 100%; }
         }
         
         /* ================================================================
@@ -1108,7 +1092,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="flex flex-wrap items-center justify-between gap-4">
             <div>
-                <h2 class="text-xl font-bold text-primary"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></h2>
+                <h2 class="text-xl font-bold" style="color:var(--primary);"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></h2>
                 <p class="text-sm text-gray-500 dark:text-gray-400">
                     <i class="fas fa-tag mr-1"></i> <?= htmlspecialchars($item['category'] ?? 'Uncategorized') ?>
                     <span class="mx-2">|</span>
@@ -1174,7 +1158,7 @@ include_once '../../components/admin_sidebar.php';
             </div>
             <div>
                 <p class="detail-label"><i class="fas fa-money-bill-wave mr-1"></i> Selling Price</p>
-                <p class="detail-value text-primary">TSh <?= number_format($item['selling_price'] ?? 0, 0) ?></p>
+                <p class="detail-value" style="color:var(--primary);">TSh <?= number_format($item['selling_price'] ?? 0, 0) ?></p>
             </div>
             <div>
                 <p class="detail-label"><i class="fas fa-coins mr-1"></i> Unit Cost</p>
@@ -1183,7 +1167,13 @@ include_once '../../components/admin_sidebar.php';
             <div>
                 <p class="detail-label"><i class="fas fa-calendar-alt mr-1"></i> Expiry Date</p>
                 <p class="detail-value <?= $is_expired ? 'text-red-600' : ($is_expiring_soon ? 'text-amber-600' : '') ?>">
-                    <?= !empty($item['expiry_date']) ? date('M d, Y', strtotime($item['expiry_date'])) : 'N/A' ?>
+                    <?php 
+                    if (!empty($item['expiry_date']) && $item['expiry_date'] !== '0000-00-00') {
+                        echo date('M d, Y', strtotime($item['expiry_date']));
+                    } else {
+                        echo 'N/A';
+                    }
+                    ?>
                     <?php if ($is_expired): ?>
                         <span class="text-red-600 text-xs block">(Expired)</span>
                     <?php elseif ($is_expiring_soon): ?>
@@ -1228,7 +1218,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-history text-blue-600"></i>
+                <i class="fas fa-history" style="color:var(--primary);"></i>
                 Stock Movement History
             </h3>
             <span class="text-xs text-gray-500">Last 20 movements</span>
@@ -1262,7 +1252,7 @@ include_once '../../components/admin_sidebar.php';
                                 <td><?= number_format($movement['previous_stock'] ?? 0) ?></td>
                                 <td><?= number_format($movement['new_stock'] ?? 0) ?></td>
                                 <td><?= htmlspecialchars($movement['performed_by_name'] ?? 'System') ?></td>
-                                <td class="text-xs"><?= htmlspecialchars($movement['notes'] ?? '') ?></td>
+                                <td class="text-xs"><?= htmlspecialchars(substr($movement['notes'] ?? '', 0, 50)) ?></td>
                                 <td class="text-xs"><?= date('M d, Y h:i A', strtotime($movement['created_at'] ?? 'now')) ?></td>
                             </tr>
                         <?php endforeach; ?>
@@ -1279,13 +1269,13 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RELATED SALES -->
+    <!-- RELATED SALES (OTC) -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-receipt text-green-600"></i>
-                Related Sales
+                <i class="fas fa-receipt" style="color:var(--success);"></i>
+                Related OTC Sales
             </h3>
             <span class="text-xs text-gray-500">Last 10 sales</span>
         </div>
@@ -1294,10 +1284,9 @@ include_once '../../components/admin_sidebar.php';
                 <table class="data-table">
                     <thead>
                         <tr>
-                            <th>Type</th>
                             <th>Sale #</th>
-                            <th>Customer / Patient</th>
-                            <th>Quantity</th>
+                            <th>Customer</th>
+                            <th>Qty</th>
                             <th>Unit Price</th>
                             <th>Total</th>
                             <th>Payment</th>
@@ -1308,14 +1297,8 @@ include_once '../../components/admin_sidebar.php';
                     <tbody>
                         <?php foreach ($related_sales as $sale): ?>
                             <tr>
-                                <td>
-                                    <span class="badge badge-<?= getStatusBadge($sale['sale_type'] ?? 'otc') ?>" style="font-size:0.6rem;padding:2px 10px;">
-                                        <i class="fas <?= getStatusIcon($sale['sale_type'] ?? 'otc') ?>"></i>
-                                        <?= ucfirst($sale['sale_type'] ?? 'OTC') ?>
-                                    </span>
-                                </td>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($sale['customer_name'] ?? $sale['patient_name'] ?? 'Walk-in') ?></td>
+                                <td><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></td>
                                 <td><?= number_format($sale['quantity'] ?? 0) ?></td>
                                 <td>TSh <?= number_format($sale['unit_price'] ?? 0, 0) ?></td>
                                 <td class="font-semibold">TSh <?= number_format($sale['total_price'] ?? 0, 0) ?></td>
@@ -1334,7 +1317,7 @@ include_once '../../components/admin_sidebar.php';
                 <div class="empty-state">
                     <i class="fas fa-receipt"></i>
                     <h4>No Related Sales</h4>
-                    <p>This item has no sales records yet.</p>
+                    <p>This item has no OTC sales records yet.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1345,16 +1328,16 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.25s;">
         <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-            <i class="fas fa-bolt text-primary mr-2"></i> Quick Actions
+            <i class="fas fa-bolt" style="color:var(--primary);"></i> Quick Actions
         </h3>
         <div class="flex flex-wrap gap-3">
             <a href="edit_inventory.php?id=<?= $item['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary">
                 <i class="fas fa-edit"></i> Edit Item
             </a>
-            <a href="add_stock.php?id=<?= $item['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary" style="background: linear-gradient(135deg, #059669, #047857); border-color: #059669;">
+            <a href="add_stock.php?id=<?= $item['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-success">
                 <i class="fas fa-plus-circle"></i> Add Stock
             </a>
-            <a href="remove_stock.php?id=<?= $item['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary" style="background: linear-gradient(135deg, #DC2626, #B91C1C); border-color: #DC2626;">
+            <a href="remove_stock.php?id=<?= $item['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-danger">
                 <i class="fas fa-minus-circle"></i> Remove Stock
             </a>
             <a href="pharmacy_inventory.php?id=<?= $item['branch_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
@@ -1490,7 +1473,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🏥 Branch: <?= htmlspecialchars($item['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📊 Quantity: <?= number_format($item['quantity'] ?? 0) ?> <?= htmlspecialchars($item['unit'] ?? '') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Price: TSh <?= number_format($item['selling_price'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c⏰ Expiry: <?= !empty($item['expiry_date']) ? date('M d, Y', strtotime($item['expiry_date'])) : 'N/A' ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c⏰ Expiry: <?= !empty($item['expiry_date']) && $item['expiry_date'] !== '0000-00-00' ? date('M d, Y', strtotime($item['expiry_date'])) : 'N/A' ?>', 'font-size:13px; color:#D97706;');
     console.log('%c📋 Total Movements: <?= number_format($item['total_movements'] ?? 0) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
     console.log('%c🔑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#7C3AED;');

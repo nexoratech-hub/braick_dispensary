@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_patient.php
 // EDIT PATIENT - UPDATE PATIENT INFORMATION
-// BRAICK DISPENSARY - WITH LOGIN SESSION
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -48,49 +48,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
-// INCLUDE DATABASE AND HELPERS
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -270,7 +232,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 UPDATE patients 
                 SET full_name = ?, date_of_birth = ?, gender = ?, marital_status = ?, 
                     phone = ?, email = ?, address = ?, emergency_contact = ?, 
-                    blood_group = ?, allergies = ?, branch_id = ?, assigned_doctor_id = ?
+                    blood_group = ?, allergies = ?, branch_id = ?, assigned_doctor_id = ?,
+                    updated_at = NOW()
                 WHERE id = ?
             ");
             
@@ -290,7 +253,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $patient_id
             ]);
             
-            // Log activity with user_id
+            // Log activity
             try {
                 $stmt = $db->prepare("
                     INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
@@ -368,6 +331,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         padding: 24px 28px;
         border: 1px solid var(--border-color);
         transition: all 0.3s;
+        max-width: 900px;
+        margin: 0 auto;
     }
     
     .form-card:hover {
@@ -432,15 +397,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         font-size: 0.85rem;
         transition: all 0.3s ease;
         outline: none;
-        background: #FFFFFF !important;
-        color: #1E293B !important;
+        background: var(--bg-card);
+        color: var(--text-primary);
         font-family: 'Inter', 'Segoe UI', sans-serif;
-    }
-    
-    [data-theme="dark"] .form-control {
-        background: #1E293B !important;
-        color: #F1F5F9 !important;
-        border-color: #334155 !important;
     }
     
     .form-control:focus {
@@ -454,18 +413,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     
     .form-control:disabled {
-        background: var(--bg-body) !important;
+        background: var(--bg-body);
         cursor: not-allowed;
         opacity: 0.7;
-    }
-    
-    .form-control option {
-        color: #1E293B;
-    }
-    
-    [data-theme="dark"] .form-control option {
-        color: #F1F5F9;
-        background: #1E293B;
     }
     
     select.form-control {
@@ -633,6 +583,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         gap: 8px;
         flex-wrap: wrap;
         align-items: center;
+        margin-top: 8px;
     }
     
     .allergy-select-container select {
@@ -797,10 +748,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 Update patient information
-                <span class="branch-tag ml-2" style="background: #0B5ED7;">
-                    <i class="fas fa-user"></i> <?= htmlspecialchars($patient['full_name']) ?>
-                </span>
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                    <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($patient['full_name']) ?>
+                </span>
+                <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-id-card mr-1"></i> <?= htmlspecialchars($patient['patient_id']) ?>
                 </span>
             </p>
@@ -814,7 +765,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>">
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
@@ -1414,13 +1365,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         return true;
     });
 
-    console.log('%c🏥 Braick Dispensary - Edit Patient (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Edit Patient', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💊 Allergies: <?= count($current_allergies) ?> items (pick + custom)', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors filtered by branch', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 Tables: patients, branches, users', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

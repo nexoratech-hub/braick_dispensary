@@ -3,9 +3,8 @@
 // FILE: frontend/pages/admin/dashboard.php
 // SUPER ADMIN DASHBOARD - MODERN DESIGN
 // 8 CARDS ONLY: Revenue, Expenses, Profit, Prescriptions, OTC, Stock, Expiry, Patients
-// FIXED: Only bills from existing patients
-// FIXED: Column 'branch_id' ambiguous - added table prefixes
-// FIXED: Prescription sales from prescription_sales table
+// FIXED: Using correct tables: bills, otc_sales, prescriptions, prescription_items
+// FIXED: Column 'branch_id' ambiguous - added table prefixes for ALL queries
 // SOLID COLORS - CLEAN MODERN LOOK
 // BRAICK DISPENSARY
 // ================================================================
@@ -106,16 +105,28 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
-// ✅ BRANCH FILTERS - WITH TABLE PREFIXES
+// ✅ BRANCH FILTERS - WITH TABLE PREFIXES (FIXED)
 // ================================================================
 
-// For patient_bills (pb)
-$branch_filter_pb = "";
+// For bills table (b)
+$branch_filter_b = "";
 if ($selected_branch_id !== 'all') {
-    $branch_filter_pb = " AND pb.branch_id = " . (int)$selected_branch_id;
+    $branch_filter_b = " AND b.branch_id = " . (int)$selected_branch_id;
 }
 
-// For other tables (no prefix needed, or use correct prefix)
+// For prescriptions table (p)
+$branch_filter_p = "";
+if ($selected_branch_id !== 'all') {
+    $branch_filter_p = " AND p.branch_id = " . (int)$selected_branch_id;
+}
+
+// For prescription_items table (pi) - if needed
+$branch_filter_pi = "";
+if ($selected_branch_id !== 'all') {
+    $branch_filter_pi = " AND pi.branch_id = " . (int)$selected_branch_id;
+}
+
+// For other tables (single table)
 $branch_filter = "";
 if ($selected_branch_id !== 'all') {
     $branch_filter = " AND branch_id = " . (int)$selected_branch_id;
@@ -124,23 +135,23 @@ if ($selected_branch_id !== 'all') {
 $today = date('Y-m-d');
 
 // ================================================================
-// ✅ 1. PATIENT BILLS REVENUE - ONLY EXISTING PATIENTS
-// ✅ FIXED: Uses pb.branch_id
+// ✅ 1. PATIENT BILLS REVENUE - FROM bills TABLE
+// ✅ FIXED: Uses b.branch_id, b.patient_id IS NOT NULL
 // ================================================================
 $stmt = $db->query("
-    SELECT COALESCE(SUM(pb.total_amount), 0) as total 
-    FROM patient_bills pb
-    INNER JOIN patients p ON pb.patient_id = p.id
-    WHERE pb.status = 'paid'
-    $branch_filter_pb
+    SELECT COALESCE(SUM(b.total_amount), 0) as total 
+    FROM bills b
+    WHERE b.status = 'paid'
+    AND b.patient_id IS NOT NULL
+    $branch_filter_b
 ");
 $patient_bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 2. OTC REVENUE - ALL OTC (walk-in customers)
+// ✅ 2. OTC REVENUE - FROM otc_sales
 // ================================================================
 $stmt = $db->query("
-    SELECT COALESCE(SUM(net_amount), 0) as total 
+    SELECT COALESCE(SUM(total_amount), 0) as total 
     FROM otc_sales 
     WHERE payment_status = 'paid'
     $branch_filter
@@ -148,23 +159,24 @@ $stmt = $db->query("
 $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 2.5. PRESCRIPTION SALES REVENUE - ADDED
+// ✅ 3. PRESCRIPTION REVENUE - FIXED AMBIGUOUS branch_id
 // ================================================================
 $stmt = $db->query("
-    SELECT COALESCE(SUM(total_amount), 0) as total 
-    FROM prescription_sales 
-    WHERE status = 'dispensed'
-    $branch_filter
+    SELECT COALESCE(SUM(pi.total_price), 0) as total 
+    FROM prescription_items pi
+    INNER JOIN prescriptions p ON pi.prescription_id = p.id
+    WHERE p.status = 'dispensed'
+    $branch_filter_p
 ");
 $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 3. TOTAL REVENUE (Includes Patient Bills + OTC + Prescription Sales)
+// ✅ 4. TOTAL REVENUE
 // ================================================================
 $total_revenue = $patient_bills_revenue + $otc_revenue + $prescription_revenue;
 
 // ================================================================
-// ✅ 4. TOTAL EXPENSES
+// ✅ 5. TOTAL EXPENSES
 // ================================================================
 $expenses_table_exists = false;
 try {
@@ -188,33 +200,28 @@ if ($expenses_table_exists) {
 }
 
 // ================================================================
-// ✅ 5. NET PROFIT
+// ✅ 6. NET PROFIT
 // ================================================================
 $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
 // ================================================================
-// ✅ 6. PRESCRIPTION SALES - FROM prescription_sales TABLE
-// ✅ FIXED: Direct query from prescription_sales
+// ✅ 7. PRESCRIPTION COUNT - FIXED AMBIGUOUS branch_id
 // ================================================================
 $stmt = $db->query("
-    SELECT 
-        COALESCE(SUM(total_amount), 0) as total,
-        COUNT(*) as count
-    FROM prescription_sales 
-    WHERE status = 'dispensed'
-    $branch_filter
+    SELECT COUNT(*) as count 
+    FROM prescriptions p
+    WHERE p.status = 'dispensed'
+    $branch_filter_p
 ");
-$prescription_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$prescription_amount = $prescription_data['total'] ?? 0;
-$prescription_count = $prescription_data['count'] ?? 0;
+$prescription_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // ================================================================
-// ✅ 7. OTC SALES DETAILS
+// ✅ 8. OTC SALES DETAILS
 // ================================================================
 $stmt = $db->query("
     SELECT COUNT(*) as count, 
-           COALESCE(SUM(net_amount), 0) as total
+           COALESCE(SUM(total_amount), 0) as total
     FROM otc_sales 
     WHERE payment_status = 'paid'
     $branch_filter
@@ -224,7 +231,7 @@ $otc_count = $otc_data['count'] ?? 0;
 $otc_total = $otc_data['total'] ?? 0;
 
 // ================================================================
-// ✅ 8. STOCK - Out of Stock & Low Stock
+// ✅ 9. STOCK - Out of Stock & Low Stock
 // ================================================================
 $stmt = $db->query("
     SELECT 
@@ -239,7 +246,7 @@ $out_of_stock = $stock_data['out_of_stock'] ?? 0;
 $low_stock = $stock_data['low_stock'] ?? 0;
 
 // ================================================================
-// ✅ 9. EXPIRY - Expired & Expiring Soon
+// ✅ 10. EXPIRY - Expired & Expiring Soon
 // ================================================================
 $today_date = date('Y-m-d');
 $stmt = $db->query("
@@ -255,7 +262,7 @@ $expired = $expiry_data['expired'] ?? 0;
 $expiring_soon = $expiry_data['expiring_soon'] ?? 0;
 
 // ================================================================
-// ✅ 10. PATIENTS - Total Patients
+// ✅ 11. PATIENTS - Total Patients
 // ================================================================
 $stmt = $db->query("
     SELECT COUNT(*) as count 
@@ -287,21 +294,21 @@ for ($i = 6; $i >= 0; $i--) {
     
     $daily_total = 0;
     
-    // Patient bills - ONLY EXISTING PATIENTS
+    // Bills (patient bills only)
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(pb.total_amount), 0) as total 
-        FROM patient_bills pb
-        INNER JOIN patients p ON pb.patient_id = p.id
-        WHERE DATE(pb.created_at) = ? 
-        AND pb.status = 'paid'
-        $branch_filter_pb
+        SELECT COALESCE(SUM(b.total_amount), 0) as total 
+        FROM bills b
+        WHERE DATE(b.created_at) = ? 
+        AND b.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        $branch_filter_b
     ");
     $stmt->execute([$date]);
     $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
     // OTC Sales
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(net_amount), 0) as total 
+        SELECT COALESCE(SUM(total_amount), 0) as total 
         FROM otc_sales 
         WHERE DATE(created_at) = ? 
         AND payment_status = 'paid'
@@ -310,13 +317,14 @@ for ($i = 6; $i >= 0; $i--) {
     $stmt->execute([$date]);
     $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // Prescription Sales - ADDED
+    // Prescription Sales - FIXED AMBIGUOUS branch_id
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as total 
-        FROM prescription_sales 
-        WHERE DATE(created_at) = ? 
-        AND status = 'dispensed'
-        $branch_filter
+        SELECT COALESCE(SUM(pi.total_price), 0) as total 
+        FROM prescription_items pi
+        INNER JOIN prescriptions p ON pi.prescription_id = p.id
+        WHERE DATE(p.created_at) = ? 
+        AND p.status = 'dispensed'
+        $branch_filter_p
     ");
     $stmt->execute([$date]);
     $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
@@ -1565,12 +1573,12 @@ include_once '../../components/admin_sidebar.php';
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Prescription Sales</p>
-                        <p class="stat-number">TSh <?= number_format($prescription_amount) ?></p>
-                        <p class="stat-sub"><?= $prescription_count ?> sales</p>
+                        <p class="stat-number">TSh <?= number_format($prescription_revenue) ?></p>
+                        <p class="stat-sub"><?= $prescription_count ?> prescriptions</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-prescription"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-pills"></i> Dispensed prescriptions</div>
+                <div class="stat-trend"><i class="fas fa-pills"></i> Dispensed</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1978,16 +1986,16 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💸 Total Expenses: TSh <?= number_format($total_expenses) ?>', 'font-size:13px; color:#E11D48;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit) ?> (<?= $profit_percentage ?>%)', 'font-size:13px; color:<?= $net_profit >= 0 ? '#059669' : '#EF4444' ?>;');
-    console.log('%c💊 Prescription Sales: TSh <?= number_format($prescription_amount) ?> (<?= $prescription_count ?> sales)', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💊 Prescription Sales: TSh <?= number_format($prescription_revenue) ?> (<?= $prescription_count ?> prescriptions)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🏪 OTC Sales: TSh <?= number_format($otc_total) ?> (<?= $otc_count ?> transactions)', 'font-size:13px; color:#D97706;');
     console.log('%c📦 Stock Issues: <?= $out_of_stock + $low_stock ?> (Out: <?= $out_of_stock ?>, Low: <?= $low_stock ?>)', 'font-size:13px; color:#0891B2;');
     console.log('%c📅 Expiry Issues: <?= $expired + $expiring_soon ?> (Expired: <?= $expired ?>, Soon: <?= $expiring_soon ?>)', 'font-size:13px; color:#DC2626;');
     console.log('%c👤 Total Patients: <?= number_format($total_patients) ?> (Today: <?= $today_patients ?>)', 'font-size:13px; color:#4F46E5;');
     console.log('%c🎯 8 CARDS - SOLID COLORS', 'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ FIXED: Login session protection active', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Only bills from existing patients', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Column "branch_id" ambiguous - added table prefixes', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Prescription sales from prescription_sales table', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Using correct tables: bills, otc_sales, prescriptions, prescription_items', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Column "branch_id" ambiguous - added table prefixes (b., p., pi.)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: All queries now use proper table prefixes', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

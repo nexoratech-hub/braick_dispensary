@@ -2,10 +2,15 @@
 // ================================================================
 // FILE: frontend/pages/admin/branches.php
 // SUPER ADMIN - BRANCHES MANAGEMENT
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
-session_start();
+// ================================================================
+// START SESSION
+// ================================================================
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
 // ================================================================
 // CHECK LOGIN SESSION
@@ -20,9 +25,11 @@ if ($_SESSION['role'] !== 'admin') {
     exit();
 }
 
-// Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
@@ -87,7 +94,7 @@ $total_patients = 0;
 $active_branches = 0;
 
 foreach ($branches_raw as $branch) {
-    // Get staff counts
+    // Get staff counts - using users table
     $staff_stmt = $db->prepare("
         SELECT role, COUNT(*) as count 
         FROM users 
@@ -115,15 +122,16 @@ foreach ($branches_raw as $branch) {
         }
     }
     
-    $total_staff += ($admin_count + $doctor_count + $reception_count + $pharmacy_count + $cashier_count + $lab_count);
+    $branch_total_staff = $admin_count + $doctor_count + $reception_count + $pharmacy_count + $cashier_count + $lab_count;
+    $total_staff += $branch_total_staff;
     
-    // Get patient count
+    // Get patient count from patients table
     $patient_stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
     $patient_stmt->execute([$branch['id']]);
     $patient_count = $patient_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     $total_patients += $patient_count;
     
-    // Get visits
+    // Get visits count from visits table
     $visits_stmt = $db->prepare("
         SELECT 
             COUNT(CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN 1 END) as active_visits,
@@ -147,7 +155,7 @@ foreach ($branches_raw as $branch) {
     $branch['patient_count'] = $patient_count;
     $branch['active_visits'] = $visits_data['active_visits'] ?? 0;
     $branch['completed_visits'] = $visits_data['completed_visits'] ?? 0;
-    $branch['total_staff'] = $admin_count + $doctor_count + $reception_count + $pharmacy_count + $cashier_count + $lab_count;
+    $branch['total_staff'] = $branch_total_staff;
     
     $branches[] = $branch;
 }
@@ -155,11 +163,19 @@ foreach ($branches_raw as $branch) {
 $total_branches = count($branches);
 
 // ================================================================
+// GET USER DATA FOR SIDEBAR
+// ================================================================
+$user_name = $_SESSION['full_name'] ?? 'Admin';
+$user_role = $_SESSION['role'] ?? 'admin';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$user_name = $_SESSION['full_name'] ?? 'Admin';
-$user_role = $_SESSION['role'] ?? 'admin';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
@@ -1017,7 +1033,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
         }
         
         /* ================================================================
-           SIDEBAR FIX - Add these important styles
+           SIDEBAR
            ================================================================ */
         .sidebar {
             position: fixed !important;
@@ -1081,7 +1097,6 @@ $user_role = $_SESSION['role'] ?? 'admin';
             opacity: 0;
         }
         
-        /* Sidebar Overlay */
         #sidebarOverlay {
             position: fixed;
             top: 0;
@@ -1144,12 +1159,10 @@ $user_role = $_SESSION['role'] ?? 'admin';
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php
             try {
-                if ($db !== null) {
-                    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-                    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                        $sel = ($selected_branch_id == $row['id']) ? 'selected' : '';
-                        echo '<option value="' . $row['id'] . '" ' . $sel . ' style="background:#0B4EA8;color:white;padding:8px;">🏥 ' . htmlspecialchars($row['name']) . '</option>';
-                    }
+                $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+                    $sel = ($selected_branch_id == $row['id']) ? 'selected' : '';
+                    echo '<option value="' . $row['id'] . '" ' . $sel . ' style="background:#0B4EA8;color:white;padding:8px;">🏥 ' . htmlspecialchars($row['name']) . '</option>';
                 }
             } catch (Exception $e) {}
             ?>
@@ -1191,31 +1204,26 @@ $user_role = $_SESSION['role'] ?? 'admin';
         <a href="/dispensary_system/frontend/pages/admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-md"></i> Doctors
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeDoctors">0</span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-prescription"></i> Pharmacy
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgePharmacy">0</span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/view_reception.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-headset"></i> Reception
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeReception">0</span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-flask"></i> Laboratory
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeLaboratory">0</span>
         </a>
         
         <a href="/dispensary_system/frontend/pages/admin/view_cashier.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-cash-register"></i> Cashier
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeCashier">0</span>
         </a>
         
         <!-- ============================================================ -->
@@ -1226,7 +1234,6 @@ $user_role = $_SESSION['role'] ?? 'admin';
         <a href="/dispensary_system/frontend/pages/admin/services.php?branch=<?= $selected_branch_id ?>" 
            style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-concierge-bell"></i> Services
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeServices">0</span>
         </a>
         
         <!-- ============================================================ -->
@@ -1235,7 +1242,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
         <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Management</div>
         
         <a href="/dispensary_system/frontend/pages/admin/branches.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;background:#0AA84F;color:white;box-shadow:0 4px 12px rgba(10,168,79,0.35);">
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:#0AA84F;color:white;box-shadow:0 4px 12px rgba(10,168,79,0.35);">
             <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-store-alt"></i> Branches
             <span style="margin-left:auto;background:rgba(255,255,255,0.25);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeBranches"><?= $total_branches ?></span>
         </a>
@@ -1313,7 +1320,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= substr($user_name, 0, 1) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
@@ -1512,6 +1519,11 @@ $user_role = $_SESSION['role'] ?? 'admin';
                             <?php if ($pharmacy_count > 0): ?>
                                 <span class="staff-tag">
                                     <i class="fas fa-prescription-bottle"></i> <?= $pharmacy_count ?> Pharmacy
+                                </span>
+                            <?php endif; ?>
+                            <?php if ($lab_count > 0): ?>
+                                <span class="staff-tag">
+                                    <i class="fas fa-flask"></i> <?= $lab_count ?> Lab
                                 </span>
                             <?php endif; ?>
                             <?php if ($total_staff_branch == 0): ?>
@@ -1751,6 +1763,7 @@ $user_role = $_SESSION['role'] ?? 'admin';
     console.log('%c✅ Active: <?= $active_branches ?>, ❌ Inactive: <?= $total_branches - $active_branches ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👥 Total Staff: <?= number_format($total_staff) ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c🩺 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Using tables: branches, users, patients, visits', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

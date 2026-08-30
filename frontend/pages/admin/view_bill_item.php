@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/view_bill_item.php
 // ADMIN - VIEW BILL ITEM DETAILS WITH ALL ITEMS TABLE
 // BRAICK DISPENSARY - GREEN THEME
+// USING EXISTING DATABASE TABLES (bills, bill_items)
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
@@ -51,7 +52,11 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -65,32 +70,34 @@ if ($item_id <= 0) {
 }
 
 // ================================================================
-// FETCH BILL ITEM DETAILS
+// FETCH BILL ITEM DETAILS - FIXED: Using bills table
 // ================================================================
 try {
     $stmt = $db->prepare("
         SELECT 
             bi.*,
-            pb.bill_number,
-            pb.patient_id,
-            pb.total_amount as bill_total,
-            pb.status as bill_status,
-            pb.created_at as bill_created_at,
-            pb.paid_amount,
-            pb.balance,
-            pb.subtotal,
-            pb.discount_amount,
-            pb.discount_percent,
+            b.bill_number,
+            b.patient_id,
+            b.total_amount as bill_total,
+            b.status as bill_status,
+            b.created_at as bill_created_at,
+            b.paid_amount,
+            b.balance,
+            b.subtotal,
+            b.discount_amount as bill_discount_amount,
+            b.total_discount,
+            b.cashier_discount,
+            b.pharmacy_discount,
             p.full_name as patient_name,
             p.patient_id as patient_code,
             p.phone as patient_phone,
             u.full_name as created_by_name,
-            b.name as branch_name
+            br.name as branch_name
         FROM bill_items bi
-        LEFT JOIN patient_bills pb ON bi.bill_id = pb.id
-        LEFT JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        LEFT JOIN branches b ON bi.branch_id = b.id
+        LEFT JOIN bills b ON bi.bill_id = b.id
+        LEFT JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        LEFT JOIN branches br ON bi.branch_id = br.id
         WHERE bi.id = ?
     ");
     $stmt->execute([$item_id]);
@@ -114,9 +121,9 @@ try {
     $stmt = $db->prepare("
         SELECT 
             bi.*,
-            pb.bill_number
+            b.bill_number
         FROM bill_items bi
-        LEFT JOIN patient_bills pb ON bi.bill_id = pb.id
+        LEFT JOIN bills b ON bi.bill_id = b.id
         WHERE bi.bill_id = ?
         ORDER BY bi.created_at DESC
     ");
@@ -135,7 +142,7 @@ $total_items = count($all_items);
 foreach ($all_items as $it) {
     $subtotal += ($it['total_price'] ?? 0);
 }
-$discount_amount = $item['discount_amount'] ?? 0;
+$discount_amount = $item['total_discount'] ?? $item['bill_discount_amount'] ?? 0;
 $grand_total = $subtotal - $discount_amount;
 
 // ================================================================
@@ -172,6 +179,7 @@ function getItemTypeLabel($type) {
         'lab_test' => 'Lab Test',
         'medication' => 'Medication',
         'procedure' => 'Procedure',
+        'equipment' => 'Equipment',
         'tool' => 'Tool/Supply',
         'other' => 'Other'
     ];
@@ -185,6 +193,7 @@ function getItemTypeIcon($type) {
         'lab_test' => 'fa-flask',
         'medication' => 'fa-pills',
         'procedure' => 'fa-syringe',
+        'equipment' => 'fa-tools',
         'tool' => 'fa-tools',
         'other' => 'fa-cube'
     ];
@@ -198,6 +207,7 @@ function getItemTypeColor($type) {
         'lab_test' => 'orange',
         'medication' => 'green',
         'procedure' => 'red',
+        'equipment' => 'teal',
         'tool' => 'teal',
         'other' => 'gray'
     ];
@@ -1074,10 +1084,10 @@ include_once '../../components/admin_sidebar.php';
                     #<?= $item_id ?>
                 </span>
                 <span class="header-badge">
-                    <?php if ($item['payment_status'] === 'paid'): ?>
+                    <?php if ($item['status'] === 'paid'): ?>
                         <i class="fas fa-check-circle"></i> Paid
                     <?php else: ?>
-                        <i class="fas fa-clock"></i> <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
+                        <i class="fas fa-clock"></i> <?= ucfirst($item['status'] ?? 'Pending') ?>
                     <?php endif; ?>
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
@@ -1109,11 +1119,11 @@ include_once '../../components/admin_sidebar.php';
                 </span>
             </div>
             <div>
-                <span class="badge badge-<?= getStatusBadge($item['payment_status'] ?? 'pending') ?>">
-                    <?php if ($item['payment_status'] === 'paid'): ?>
+                <span class="badge badge-<?= getStatusBadge($item['status'] ?? 'pending') ?>">
+                    <?php if ($item['status'] === 'paid'): ?>
                         <i class="fas fa-check-circle"></i> Paid
                     <?php else: ?>
-                        <i class="fas fa-clock"></i> <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
+                        <i class="fas fa-clock"></i> <?= ucfirst($item['status'] ?? 'Pending') ?>
                     <?php endif; ?>
                 </span>
             </div>
@@ -1174,20 +1184,10 @@ include_once '../../components/admin_sidebar.php';
         </div>
         <?php endif; ?>
 
-        <?php if (!empty($item['department']) || !empty($item['service_type'])): ?>
-        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700 grid grid-cols-1 md:grid-cols-2 gap-4">
-            <?php if (!empty($item['department'])): ?>
-            <div>
-                <p class="detail-label"><i class="fas fa-building mr-1"></i> Department</p>
-                <p class="detail-value"><?= htmlspecialchars($item['department']) ?></p>
-            </div>
-            <?php endif; ?>
-            <?php if (!empty($item['service_type'])): ?>
-            <div>
-                <p class="detail-label"><i class="fas fa-tag mr-1"></i> Service Type</p>
-                <p class="detail-value"><?= htmlspecialchars($item['service_type']) ?></p>
-            </div>
-            <?php endif; ?>
+        <?php if (!empty($item['item_code'])): ?>
+        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <p class="detail-label"><i class="fas fa-barcode mr-1"></i> Item Code</p>
+            <p class="detail-value"><?= htmlspecialchars($item['item_code']) ?></p>
         </div>
         <?php endif; ?>
     </div>
@@ -1238,8 +1238,8 @@ include_once '../../components/admin_sidebar.php';
                                 <td>TSh <?= number_format($it['unit_price'] ?? 0, 0) ?></td>
                                 <td class="font-semibold text-green-600">TSh <?= number_format($it['total_price'] ?? 0, 0) ?></td>
                                 <td>
-                                    <span class="badge badge-<?= getStatusBadge($it['payment_status'] ?? 'pending') ?>" style="font-size:0.5rem;padding:1px 8px;">
-                                        <?= ucfirst($it['payment_status'] ?? 'Pending') ?>
+                                    <span class="badge badge-<?= getStatusBadge($it['status'] ?? 'pending') ?>" style="font-size:0.5rem;padding:1px 8px;">
+                                        <?= ucfirst($it['status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
                                 <td>
@@ -1258,7 +1258,7 @@ include_once '../../components/admin_sidebar.php';
                         </tr>
                         <?php if ($discount_amount > 0): ?>
                         <tr style="background:var(--warning-bg);">
-                            <td colspan="5" class="total-label">Discount (<?= $item['discount_percent'] ?? 0 ?>%):</td>
+                            <td colspan="5" class="total-label">Discount:</td>
                             <td class="total-amount red">- TSh <?= number_format($discount_amount, 0) ?></td>
                             <td colspan="2"></td>
                         </tr>
@@ -1271,8 +1271,8 @@ include_once '../../components/admin_sidebar.php';
                     </tfoot>
                 </table>
             <?php else: ?>
-                <div class="empty-state">
-                    <i class="fas fa-file-invoice"></i>
+                <div class="empty-state" style="text-align:center;padding:40px 20px;color:var(--text-secondary);">
+                    <i class="fas fa-file-invoice" style="font-size:2rem;color:var(--border-color);margin-bottom:12px;"></i>
                     <p>No items found for this bill</p>
                 </div>
             <?php endif; ?>
@@ -1319,7 +1319,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- QUICK ACTIONS - GREEN THEME -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4 animate-fade-in-up" style="animation-delay:0.15s;">
-        <?php if ($item['payment_status'] !== 'paid' && $item['payment_status'] !== 'cancelled'): ?>
+        <?php if ($item['status'] !== 'paid' && $item['status'] !== 'cancelled'): ?>
         <a href="add_payment.php?bill_item_id=<?= $item_id ?>&bill_id=<?= $item['bill_id'] ?>&branch=<?= $selected_branch_id ?>" 
            class="quick-action">
             <span class="quick-icon green"><i class="fas fa-money-bill-wave"></i></span>
@@ -1484,9 +1484,10 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Item: <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?> (ID: <?= $item_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c💰 Amount: TSh <?= number_format($item['total_price'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Status: <?= ucfirst($item['payment_status'] ?? 'Pending') ?>', 'font-size:13px; color:#F59E0B;');
+    console.log('%c📊 Status: <?= ucfirst($item['status'] ?? 'Pending') ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c📋 Total Items in Bill: <?= $total_items ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c🟢 Green Theme Applied', 'font-size:13px; color:#059669;');
+    console.log('%c📊 Using tables: bills, bill_items', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
 

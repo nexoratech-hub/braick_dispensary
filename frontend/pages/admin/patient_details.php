@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/patient_details.php
 // PATIENT DETAILS - VIEW ALL PATIENT INFORMATION
-// BRAICK DISPENSARY - WITH LOGIN SESSION
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -48,49 +48,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
 // INCLUDE DATABASE AND HELPERS
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -143,39 +105,46 @@ if (!$patient) {
 // ================================================================
 
 // Total Visits
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ?");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE patient_id = ? AND status != 'cancelled'");
 $stmt->execute([$patient_id]);
 $total_visits = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Total Bills
-$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(total_amount), 0) as total_amount FROM patient_bills WHERE patient_id = ? AND status != 'cancelled'");
+// Total Bills (from bills table)
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total, COALESCE(SUM(total_amount), 0) as total_amount 
+    FROM bills 
+    WHERE patient_id = ? AND status != 'cancelled'
+");
 $stmt->execute([$patient_id]);
 $bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
 $total_bills = $bills_data['total'] ?? 0;
 $total_bill_amount = $bills_data['total_amount'] ?? 0;
 
 // Total Prescriptions
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE patient_id = ?");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE patient_id = ? AND status != 'cancelled'");
 $stmt->execute([$patient_id]);
 $total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Total Lab Tests - FIXED: Use visit_id to get patient
+// Total Lab Tests
 $stmt = $db->prepare("
     SELECT COUNT(*) as total 
     FROM lab_tests lt
-    INNER JOIN visits v ON lt.visit_id = v.id
-    WHERE v.patient_id = ?
+    WHERE lt.patient_id = ?
 ");
 $stmt->execute([$patient_id]);
 $total_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // Total Appointments
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE patient_id = ?");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM appointments WHERE patient_id = ? AND status != 'cancelled'");
 $stmt->execute([$patient_id]);
 $total_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // Total Payments
-$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(amount), 0) as total_amount FROM payments WHERE patient_id = ?");
+$stmt = $db->prepare("
+    SELECT COUNT(*) as total, COALESCE(SUM(amount), 0) as total_amount 
+    FROM payments 
+    WHERE patient_id = ?
+");
 $stmt->execute([$patient_id]);
 $payments_data = $stmt->fetch(PDO::FETCH_ASSOC);
 $total_payments = $payments_data['total'] ?? 0;
@@ -199,10 +168,7 @@ $stmt = $db->prepare("
 $stmt->execute([$patient_id]);
 $vital_signs_history = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Total Vital Signs Records
 $total_vital_signs = count($vital_signs_history);
-
-// Get latest vital signs
 $latest_vital_signs = !empty($vital_signs_history) ? $vital_signs_history[0] : null;
 
 // ================================================================
@@ -226,20 +192,20 @@ $stmt->execute([$patient_id]);
 $recent_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET RECENT BILLS
+// GET RECENT BILLS (from bills table)
 // ================================================================
 $stmt = $db->prepare("
-    SELECT pb.*, 
+    SELECT b.*, 
            CASE 
-               WHEN pb.status = 'pending' THEN 'warning'
-               WHEN pb.status = 'paid' THEN 'success'
-               WHEN pb.status = 'partial' THEN 'info'
-               WHEN pb.status = 'cancelled' THEN 'danger'
+               WHEN b.status = 'pending' THEN 'warning'
+               WHEN b.status = 'paid' THEN 'success'
+               WHEN b.status = 'partial' THEN 'info'
+               WHEN b.status = 'cancelled' THEN 'danger'
                ELSE 'secondary'
            END as status_color
-    FROM patient_bills pb
-    WHERE pb.patient_id = ?
-    ORDER BY pb.created_at DESC
+    FROM bills b
+    WHERE b.patient_id = ?
+    ORDER BY b.created_at DESC
     LIMIT 10
 ");
 $stmt->execute([$patient_id]);
@@ -260,7 +226,7 @@ $stmt->execute([$patient_id]);
 $recent_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET RECENT LAB TESTS - FIXED: Use visit_id to get patient
+// GET RECENT LAB TESTS
 // ================================================================
 $stmt = $db->prepare("
     SELECT lt.*, 
@@ -273,9 +239,8 @@ $stmt = $db->prepare("
            END as status_color,
            u.full_name as doctor_name
     FROM lab_tests lt
-    INNER JOIN visits v ON lt.visit_id = v.id
     LEFT JOIN users u ON lt.doctor_id = u.id
-    WHERE v.patient_id = ?
+    WHERE lt.patient_id = ?
     ORDER BY lt.created_at DESC
     LIMIT 10
 ");
@@ -408,25 +373,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: #0B5ED7;
     }
     
-    .stat-card-mini .stat-number.green {
-        color: #059669;
-    }
-    
-    .stat-card-mini .stat-number.orange {
-        color: #F59E0B;
-    }
-    
-    .stat-card-mini .stat-number.red {
-        color: #EF4444;
-    }
-    
-    .stat-card-mini .stat-number.purple {
-        color: #7B2FBE;
-    }
-    
-    .stat-card-mini .stat-number.pink {
-        color: #EC4899;
-    }
+    .stat-card-mini .stat-number.green { color: #059669; }
+    .stat-card-mini .stat-number.orange { color: #F59E0B; }
+    .stat-card-mini .stat-number.red { color: #EF4444; }
+    .stat-card-mini .stat-number.purple { color: #7B2FBE; }
+    .stat-card-mini .stat-number.pink { color: #EC4899; }
     
     .stat-card-mini .stat-label {
         font-size: 0.7rem;
@@ -457,14 +408,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         border-color: #0B5ED7;
     }
     
-    [data-theme="dark"] .stat-card-mini .stat-number {
-        color: #6EA8FE;
-    }
-    
-    [data-theme="dark"] .stat-card-mini .stat-number.green {
-        color: #34D399;
-    }
-    
     /* Table Header - Blue Theme */
     .table-blue thead th {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8) !important;
@@ -481,13 +424,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         z-index: 5;
     }
     
-    .table-blue thead th:first-child {
-        border-radius: 8px 0 0 0 !important;
-    }
-    
-    .table-blue thead th:last-child {
-        border-radius: 0 8px 0 0 !important;
-    }
+    .table-blue thead th:first-child { border-radius: 8px 0 0 0 !important; }
+    .table-blue thead th:last-child { border-radius: 0 8px 0 0 !important; }
     
     .table-blue tbody td {
         padding: 8px 14px !important;
@@ -522,55 +460,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         border: none !important;
     }
     
-    .badge-success {
-        background: #D1FAE5 !important;
-        color: #059669 !important;
-    }
+    .badge-success { background: #D1FAE5 !important; color: #059669 !important; }
+    .badge-warning { background: #FEF3C7 !important; color: #D97706 !important; }
+    .badge-danger { background: #FEE2E2 !important; color: #EF4444 !important; }
+    .badge-info { background: #E8F0FE !important; color: #0B5ED7 !important; }
+    .badge-secondary { background: #E2E8F0 !important; color: #64748B !important; }
     
-    .badge-warning {
-        background: #FEF3C7 !important;
-        color: #D97706 !important;
-    }
-    
-    .badge-danger {
-        background: #FEE2E2 !important;
-        color: #EF4444 !important;
-    }
-    
-    .badge-info {
-        background: #E8F0FE !important;
-        color: #0B5ED7 !important;
-    }
-    
-    .badge-secondary {
-        background: #E2E8F0 !important;
-        color: #64748B !important;
-    }
-    
-    [data-theme="dark"] .badge-success {
-        background: #1A3A2A !important;
-        color: #34D399 !important;
-    }
-    
-    [data-theme="dark"] .badge-warning {
-        background: #3A2A1A !important;
-        color: #FBBF24 !important;
-    }
-    
-    [data-theme="dark"] .badge-danger {
-        background: #3A1A1A !important;
-        color: #F87171 !important;
-    }
-    
-    [data-theme="dark"] .badge-info {
-        background: #1E3A5F !important;
-        color: #6EA8FE !important;
-    }
-    
-    [data-theme="dark"] .badge-secondary {
-        background: #2D3748 !important;
-        color: #94A3B8 !important;
-    }
+    [data-theme="dark"] .badge-success { background: #1A3A2A !important; color: #34D399 !important; }
+    [data-theme="dark"] .badge-warning { background: #3A2A1A !important; color: #FBBF24 !important; }
+    [data-theme="dark"] .badge-danger { background: #3A1A1A !important; color: #F87171 !important; }
+    [data-theme="dark"] .badge-info { background: #1E3A5F !important; color: #6EA8FE !important; }
+    [data-theme="dark"] .badge-secondary { background: #2D3748 !important; color: #94A3B8 !important; }
     
     /* Info rows */
     .info-row {
@@ -604,15 +504,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         margin-bottom: 12px;
     }
     
-    [data-theme="dark"] .section-title {
-        color: #6EA8FE;
-    }
-    
-    .section-title .badge-count {
-        font-size: 0.7rem;
-        font-weight: 400;
-        color: var(--text-secondary);
-    }
+    [data-theme="dark"] .section-title { color: #6EA8FE; }
+    .section-title .badge-count { font-size: 0.7rem; font-weight: 400; color: var(--text-secondary); }
     
     .card {
         background: var(--bg-card);
@@ -676,33 +569,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         box-shadow: 0 8px 30px rgba(0,0,0,0.1);
     }
     
-    .vital-card .vital-icon {
-        font-size: 1.8rem;
-        margin-bottom: 6px;
-    }
-    
-    .vital-card .vital-value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-        line-height: 1.2;
-    }
-    
-    .vital-card .vital-label {
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        text-transform: uppercase;
-        font-weight: 600;
-        letter-spacing: 0.04em;
-        margin-top: 2px;
-    }
-    
-    .vital-card .vital-unit {
-        font-size: 0.6rem;
-        color: var(--text-secondary);
-        font-weight: 400;
-        margin-left: 2px;
-    }
+    .vital-card .vital-icon { font-size: 1.8rem; margin-bottom: 6px; }
+    .vital-card .vital-value { font-size: 1.5rem; font-weight: 700; color: var(--text-primary); line-height: 1.2; }
+    .vital-card .vital-label { font-size: 0.65rem; color: var(--text-secondary); text-transform: uppercase; font-weight: 600; letter-spacing: 0.04em; margin-top: 2px; }
+    .vital-card .vital-unit { font-size: 0.6rem; color: var(--text-secondary); font-weight: 400; margin-left: 2px; }
     
     /* Card Colors - 6 Colors */
     .vital-card.blue::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
@@ -729,27 +599,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .vital-card.indigo .vital-icon { color: #4F46E5; }
     .vital-card.indigo .vital-value { color: #4F46E5; }
     
-    /* Dark mode vital cards */
     [data-theme="dark"] .vital-card {
         background: #1E293B;
         border-color: #334155;
     }
-    
     [data-theme="dark"] .vital-card:hover {
         border-color: #0B5ED7;
         box-shadow: 0 8px 30px rgba(0,0,0,0.3);
     }
-    
-    [data-theme="dark"] .vital-card .vital-value {
-        color: #F1F5F9;
-    }
-    
-    [data-theme="dark"] .vital-card.blue .vital-value { color: #6EA8FE; }
-    [data-theme="dark"] .vital-card.red .vital-value { color: #F87171; }
-    [data-theme="dark"] .vital-card.pink .vital-value { color: #F472B6; }
-    [data-theme="dark"] .vital-card.purple .vital-value { color: #A78BFA; }
-    [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
-    [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
+    [data-theme="dark"] .vital-card .vital-value { color: #F1F5F9; }
     
     /* Toast */
     .toast-custom {
@@ -769,10 +627,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         color: white;
         box-shadow: 0 8px 30px rgba(0,0,0,0.15);
     }
-    .toast-custom.show {
-        transform: translateY(0);
-        opacity: 1;
-    }
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
     .toast-custom.success { background: #059669; }
     .toast-custom.error { background: #DC2626; }
     .toast-custom.info { background: #0B5ED7; }
@@ -780,46 +635,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     
     /* Responsive */
     @media (max-width: 640px) {
-        .profile-header {
-            padding: 16px 18px;
-        }
-        .profile-header .profile-avatar {
-            width: 60px;
-            height: 60px;
-            font-size: 1.8rem;
-        }
-        .profile-header .profile-name {
-            font-size: 1.2rem;
-        }
-        .info-row {
-            flex-direction: column;
-            gap: 2px;
-        }
-        .info-row .info-label {
-            width: 100%;
-            font-size: 0.75rem;
-        }
-        .stat-card-mini .stat-number {
-            font-size: 1.4rem;
-        }
-        .table-blue tbody td {
-            font-size: 0.7rem;
-            padding: 6px 10px !important;
-        }
-        .btn {
-            font-size: 0.7rem;
-            padding: 4px 10px;
-        }
-        .vital-card {
-            min-height: 80px;
-            padding: 12px 8px;
-        }
-        .vital-card .vital-value {
-            font-size: 1.2rem;
-        }
-        .vital-card .vital-icon {
-            font-size: 1.4rem;
-        }
+        .profile-header { padding: 16px 18px; }
+        .profile-header .profile-avatar { width: 60px; height: 60px; font-size: 1.8rem; }
+        .profile-header .profile-name { font-size: 1.2rem; }
+        .info-row { flex-direction: column; gap: 2px; }
+        .info-row .info-label { width: 100%; font-size: 0.75rem; }
+        .stat-card-mini .stat-number { font-size: 1.4rem; }
+        .vital-card { min-height: 80px; padding: 12px 8px; }
+        .vital-card .vital-value { font-size: 1.2rem; }
+        .vital-card .vital-icon { font-size: 1.4rem; }
     }
 </style>
 
@@ -970,7 +794,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- LATEST VITAL SIGNS - 6 CARDS ONLY (FIXED BP DISPLAY) -->
+    <!-- LATEST VITAL SIGNS - 6 CARDS ONLY -->
     <!-- ================================================================ -->
     <?php if ($latest_vital_signs): ?>
     <div class="card mb-5">
@@ -996,7 +820,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <div class="vital-label">Temperature</div>
             </div>
             
-            <!-- 2. Blood Pressure - FIXED: Shows only systolic if diastolic is NULL -->
+            <!-- 2. Blood Pressure -->
             <div class="vital-card red">
                 <div class="vital-icon"><i class="fas fa-heart"></i></div>
                 <div class="vital-value">
@@ -1278,7 +1102,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT BILLS -->
+    <!-- RECENT BILLS (from bills table) -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
@@ -1384,7 +1208,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT LAB TESTS - FIXED -->
+    <!-- RECENT LAB TESTS -->
     <!-- ================================================================ -->
     <div class="card mb-5">
         <div class="card-header">
@@ -1617,13 +1441,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Patient Details (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Patient Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c❤️ Vital Signs Records: <?= $total_vital_signs ?>', 'font-size:13px; color:#EC4899;');
-    console.log('%c📊 6 Vital Signs: Temp, BP, Pulse, Weight, Height, BMI', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🩸 BP Display: Shows only systolic if diastolic is NULL', 'font-size:13px; color:#EF4444;');
+    console.log('%c💰 Bills: <?= $total_bills ?> | Total: TSh <?= number_format($total_bill_amount) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Tables: bills, payments, prescriptions, lab_tests, appointments', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 

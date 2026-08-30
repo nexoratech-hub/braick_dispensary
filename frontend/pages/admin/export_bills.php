@@ -3,12 +3,11 @@
 // FILE: frontend/pages/admin/export_bills.php
 // SUPER ADMIN - EXPORT BILLS (VIEW & EXCEL)
 // PDF: Display in new window first with Braick Logo
-// BRAICK DISPENSARY
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
-// SESSION START
+// START SESSION
 // ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -47,11 +46,17 @@ $user_role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 
-// Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -93,28 +98,28 @@ $period_labels = [
 $period_label = $period_labels[$time_period] ?? 'All Time';
 
 // ================================================================
-// BUILD TIME PERIOD FILTER
+// BUILD TIME PERIOD FILTER - FIXED: Using bills table
 // ================================================================
 $date_condition = '';
 
 switch ($time_period) {
     case 'today':
-        $date_condition = "DATE(pb.created_at) = CURDATE()";
+        $date_condition = "DATE(b.created_at) = CURDATE()";
         break;
     case 'week':
-        $date_condition = "pb.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_condition = "b.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         break;
     case 'month':
-        $date_condition = "pb.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_condition = "b.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         break;
     case '3months':
-        $date_condition = "pb.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_condition = "b.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         break;
     case '6months':
-        $date_condition = "pb.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_condition = "b.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         break;
     case 'year':
-        $date_condition = "pb.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_condition = "b.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         break;
     case 'all':
     default:
@@ -123,26 +128,26 @@ switch ($time_period) {
 }
 
 // ================================================================
-// BUILD QUERY CONDITIONS
+// BUILD QUERY CONDITIONS - FIXED: Using bills table
 // ================================================================
 $conditions = [$date_condition];
 $params = [];
 
 // Branch filter
 if ($selected_branch_id !== 'all') {
-    $conditions[] = "pb.branch_id = ?";
+    $conditions[] = "b.branch_id = ?";
     $params[] = (int)$selected_branch_id;
 }
 
 // Status filter
 if (!empty($status_filter)) {
-    $conditions[] = "pb.status = ?";
+    $conditions[] = "b.status = ?";
     $params[] = $status_filter;
 }
 
 // Search filter
 if (!empty($search_filter)) {
-    $conditions[] = "(pb.bill_number LIKE ? OR p.full_name LIKE ? OR p.patient_id LIKE ?)";
+    $conditions[] = "(b.bill_number LIKE ? OR p.full_name LIKE ? OR p.patient_id LIKE ?)";
     $params[] = "%$search_filter%";
     $params[] = "%$search_filter%";
     $params[] = "%$search_filter%";
@@ -154,32 +159,32 @@ $where_clause = !empty($conditions) ? "WHERE " . implode(" AND ", $conditions) :
 // SORT
 // ================================================================
 $sort_map = [
-    'created_at_desc' => 'pb.created_at DESC',
-    'created_at_asc' => 'pb.created_at ASC',
-    'amount_desc' => 'pb.total_amount DESC',
-    'amount_asc' => 'pb.total_amount ASC',
-    'bill_number_asc' => 'pb.bill_number ASC',
-    'bill_number_desc' => 'pb.bill_number DESC'
+    'created_at_desc' => 'b.created_at DESC',
+    'created_at_asc' => 'b.created_at ASC',
+    'amount_desc' => 'b.total_amount DESC',
+    'amount_asc' => 'b.total_amount ASC',
+    'bill_number_asc' => 'b.bill_number ASC',
+    'bill_number_desc' => 'b.bill_number DESC'
 ];
-$order_by = $sort_map[$sort_by] ?? 'pb.created_at DESC';
+$order_by = $sort_map[$sort_by] ?? 'b.created_at DESC';
 
 // ================================================================
-// FETCH BILLS
+// FETCH BILLS - FIXED: Using bills table
 // ================================================================
 $sql = "
     SELECT 
-        pb.*,
+        b.*,
         p.full_name as patient_name,
         p.patient_id as patient_id_number,
         p.phone as patient_phone,
         u.full_name as created_by_name,
-        b.name as branch_name,
-        (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id) as item_count,
-        (SELECT COUNT(*) FROM payments WHERE bill_id = pb.id) as payment_count
-    FROM patient_bills pb
-    LEFT JOIN patients p ON pb.patient_id = p.id
-    LEFT JOIN users u ON pb.created_by = u.id
-    LEFT JOIN branches b ON pb.branch_id = b.id
+        br.name as branch_name,
+        (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id) as item_count,
+        (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as payment_count
+    FROM bills b
+    LEFT JOIN patients p ON b.patient_id = p.id
+    LEFT JOIN users u ON b.created_by = u.id
+    LEFT JOIN branches br ON b.branch_id = br.id
     $where_clause
     ORDER BY $order_by
 ";
@@ -198,9 +203,9 @@ $total_balance = 0;
 $status_counts = ['pending' => 0, 'partial' => 0, 'paid' => 0, 'cancelled' => 0];
 
 foreach ($bills as $bill) {
-    $total_amount += $bill['total_amount'];
-    $total_paid += $bill['paid_amount'];
-    $total_balance += $bill['balance'];
+    $total_amount += (float)$bill['total_amount'];
+    $total_paid += (float)$bill['paid_amount'];
+    $total_balance += (float)$bill['balance'];
     if (isset($status_counts[$bill['status']])) {
         $status_counts[$bill['status']]++;
     }
@@ -258,9 +263,6 @@ if ($format === 'pdf' || $format === 'view') {
         <title>Bills Report - Braick Dispensary</title>
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
         <style>
-            /* ================================================================
-               MAIN STYLES
-               ================================================================ */
             * {
                 margin: 0;
                 padding: 0;
@@ -274,7 +276,6 @@ if ($format === 'pdf' || $format === 'view') {
                 min-height: 100vh;
             }
             
-            /* Control Bar - Hidden when printing */
             .control-bar {
                 max-width: 1200px;
                 margin: 0 auto 20px auto;
@@ -374,9 +375,6 @@ if ($format === 'pdf' || $format === 'view') {
                 border: 1px solid #E2E8F0;
             }
             
-            /* ================================================================
-               REPORT HEADER WITH LOGO
-               ================================================================ */
             .report-header {
                 text-align: center;
                 border-bottom: 4px solid #059669;
@@ -447,9 +445,6 @@ if ($format === 'pdf' || $format === 'view') {
                 color: #059669;
             }
             
-            /* ================================================================
-               SUMMARY GRID
-               ================================================================ */
             .summary-grid {
                 display: grid;
                 grid-template-columns: repeat(4, 1fr);
@@ -492,9 +487,6 @@ if ($format === 'pdf' || $format === 'view') {
                 margin-top: 4px;
             }
             
-            /* ================================================================
-               FINANCIAL SUMMARY
-               ================================================================ */
             .financial-summary {
                 display: grid;
                 grid-template-columns: repeat(3, 1fr);
@@ -532,9 +524,6 @@ if ($format === 'pdf' || $format === 'view') {
                 margin-top: 2px;
             }
             
-            /* ================================================================
-               TABLE
-               ================================================================ */
             .table-wrapper {
                 overflow-x: auto;
                 margin-top: 5px;
@@ -674,9 +663,6 @@ if ($format === 'pdf' || $format === 'view') {
                 font-weight: 700;
             }
             
-            /* ================================================================
-               PRINT STYLES
-               ================================================================ */
             @media print {
                 body {
                     background: white !important;
@@ -725,9 +711,6 @@ if ($format === 'pdf' || $format === 'view') {
                 }
             }
             
-            /* ================================================================
-               RESPONSIVE
-               ================================================================ */
             @media (max-width: 768px) {
                 .summary-grid {
                     grid-template-columns: repeat(2, 1fr);
@@ -775,9 +758,7 @@ if ($format === 'pdf' || $format === 'view') {
     </head>
     <body>
         
-        <!-- ================================================================ -->
-        <!-- CONTROL BAR (Hidden when printing) -->
-        <!-- ================================================================ -->
+        <!-- Control Bar -->
         <div class="control-bar">
             <div class="title-section">
                 <h2><i class="fas fa-file-invoice" style="color:#059669;margin-right:8px;"></i>Bills Report</h2>
@@ -796,12 +777,10 @@ if ($format === 'pdf' || $format === 'view') {
             </div>
         </div>
         
-        <!-- ================================================================ -->
-        <!-- REPORT -->
-        <!-- ================================================================ -->
+        <!-- Report -->
         <div class="report-container" id="reportContainer">
             
-            <!-- Report Header with Logo -->
+            <!-- Report Header -->
             <div class="report-header">
                 <div class="logo-container">
                     <?php if ($logo_available): ?>
@@ -927,21 +906,13 @@ if ($format === 'pdf' || $format === 'view') {
             
         </div>
         
-        <!-- ================================================================ -->
-        <!-- PDF HINT -->
-        <!-- ================================================================ -->
+        <!-- PDF Hint -->
         <div class="pdf-hint">
             <i class="fas fa-info-circle"></i>
             <strong>To save as PDF:</strong> Click "Save as PDF" button, then choose <strong>"Save as PDF"</strong> in the print dialog
         </div>
         
-        <!-- ================================================================ -->
-        <!-- JAVASCRIPT -->
-        <!-- ================================================================ -->
         <script>
-            // ================================================================
-            // AUTO OPEN PRINT DIALOG FOR PDF VIEW
-            // ================================================================
             <?php if ($is_pdf_view): ?>
             window.onload = function() {
                 setTimeout(function() {
@@ -950,16 +921,11 @@ if ($format === 'pdf' || $format === 'view') {
             };
             <?php endif; ?>
             
-            // ================================================================
-            // KEYBOARD SHORTCUTS
-            // ================================================================
             document.addEventListener('keydown', function(e) {
-                // Ctrl+P or Cmd+P to print
                 if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
                     e.preventDefault();
                     window.print();
                 }
-                // Escape to close
                 if (e.key === 'Escape') {
                     window.close();
                 }
@@ -971,7 +937,7 @@ if ($format === 'pdf' || $format === 'view') {
             console.log('%c📊 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
             console.log('%c💰 Total Amount: TSh <?= number_format($total_amount, 0) ?>', 'font-size:13px; color:#7B2FBE;');
             console.log('%c🖼️ Logo: <?= $logo_available ? '✅ Loaded' : '❌ Not found' ?>', 'font-size:13px; color:#059669;');
-            console.log('%c💡 Click "Save as PDF" to download', 'font-size:13px; color:#059669;');
+            console.log('%c✅ Using bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
         </script>
         
     </body>

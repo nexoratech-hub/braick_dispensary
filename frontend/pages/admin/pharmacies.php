@@ -4,6 +4,7 @@
 // SUPER ADMIN - VIEW ALL PHARMACIES WITH BRANCH FILTERING
 // 8 CARDS WITH CUSTOM COLORS: BLUE, GREEN, ORANGE, RED
 // DATA FILTERED BY SELECTED BRANCH
+// FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -75,7 +76,11 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET FILTERS
@@ -124,59 +129,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
-// GET PRESCRIPTION SALES DATA (FILTERED BY BRANCH)
-// ================================================================
-$prescription_sales_data = [];
-$total_prescription_sales_db = 0;
-$total_prescription_revenue_db = 0;
-
-try {
-    $sql = "
-        SELECT 
-            ps.*,
-            b.name as branch_name,
-            pat.full_name as patient_name,
-            u.full_name as dispensed_by_name
-        FROM prescription_sales ps
-        LEFT JOIN branches b ON ps.branch_id = b.id
-        LEFT JOIN patients pat ON ps.patient_id = pat.id
-        LEFT JOIN users u ON ps.dispensed_by = u.id
-        WHERE 1=1
-    ";
-    
-    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $sql .= " AND ps.branch_id = " . (int)$selected_branch_id;
-    }
-    
-    $sql .= " ORDER BY ps.id DESC LIMIT 20";
-    
-    $stmt = $db->query($sql);
-    $prescription_sales_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Get totals with branch filter
-    $sql_totals = "
-        SELECT 
-            COUNT(*) as total_sales,
-            COALESCE(SUM(total_amount), 0) as total_revenue
-        FROM prescription_sales 
-        WHERE status = 'dispensed'
-    ";
-    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $sql_totals .= " AND branch_id = " . (int)$selected_branch_id;
-    }
-    
-    $stmt = $db->query($sql_totals);
-    $totals = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_prescription_sales_db = $totals['total_sales'] ?? 0;
-    $total_prescription_revenue_db = $totals['total_revenue'] ?? 0;
-} catch (Exception $e) {
-    $prescription_sales_data = [];
-    $total_prescription_sales_db = 0;
-    $total_prescription_revenue_db = 0;
-}
-
-// ================================================================
-// GET OTC SALES DATA (FILTERED BY BRANCH)
+// GET OTC SALES DATA (FILTERED BY BRANCH) - FIXED: net_amount removed
 // ================================================================
 $total_otc_sales_db = 0;
 $total_otc_revenue_db = 0;
@@ -185,7 +138,7 @@ try {
     $sql_otc = "
         SELECT 
             COUNT(*) as total_sales,
-            COALESCE(SUM(net_amount), 0) as total_revenue
+            COALESCE(SUM(total_amount), 0) as total_revenue
         FROM otc_sales 
         WHERE payment_status = 'paid'
     ";
@@ -208,6 +161,7 @@ try {
 $total_prescriptions_count = 0;
 $total_dispensed_count = 0;
 $total_pending_count = 0;
+$total_prescription_revenue = 0;
 
 try {
     $sql = "SELECT COUNT(*) as total FROM prescriptions WHERE 1=1";
@@ -230,10 +184,25 @@ try {
     }
     $stmt = $db->query($sql);
     $total_pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    
+    // Get prescription revenue from prescription_items (via prescriptions)
+    $sql = "
+        SELECT COALESCE(SUM(pi.total_price), 0) as total_revenue
+        FROM prescription_items pi
+        INNER JOIN prescriptions p ON pi.prescription_id = p.id
+        WHERE p.status = 'dispensed'
+    ";
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $sql .= " AND p.branch_id = " . (int)$selected_branch_id;
+    }
+    $stmt = $db->query($sql);
+    $total_prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total_revenue'] ?? 0;
+    
 } catch (Exception $e) {
     $total_prescriptions_count = 0;
     $total_dispensed_count = 0;
     $total_pending_count = 0;
+    $total_prescription_revenue = 0;
 }
 
 // ================================================================
@@ -250,15 +219,18 @@ $sql = "
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'pending') as pending_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'dispensed') as dispensed_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
-        (SELECT COALESCE(SUM(total_amount), 0) FROM prescription_sales WHERE branch_id = b.id AND status = 'dispensed') as prescription_revenue,
-        (SELECT COUNT(*) FROM prescription_sales WHERE branch_id = b.id AND status = 'dispensed') as prescription_sales_count,
         (SELECT COUNT(*) FROM otc_sales WHERE branch_id = b.id) as total_otc_sales,
-        (SELECT COALESCE(SUM(net_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid') as otc_revenue,
+        (SELECT COALESCE(SUM(total_amount), 0) FROM otc_sales WHERE branch_id = b.id AND payment_status = 'paid') as otc_revenue,
         (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND expiry_date < CURDATE()) as expired_medicines,
         (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active' AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)) as expiring_soon_medicines,
-        (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active') as total_active_medicines
+        (SELECT COUNT(*) FROM medications_inventory WHERE branch_id = b.id AND status = 'active') as total_active_medicines,
+        (SELECT COALESCE(SUM(pi.total_price), 0) 
+         FROM prescription_items pi
+         INNER JOIN prescriptions p ON pi.prescription_id = p.id
+         WHERE p.branch_id = b.id AND p.status = 'dispensed') as prescription_revenue,
+        (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'dispensed') as prescription_sales_count
     FROM branches b
-    WHERE b.status = 'active'
+    WHERE 1=1
 ";
 
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
@@ -294,7 +266,7 @@ $total_dispensed = 0;
 $total_pending = 0;
 $total_otc_sales = 0;
 $total_otc_revenue = 0;
-$total_prescription_revenue = 0;
+$total_prescription_revenue_sum = 0;
 $total_revenue = 0;
 $total_out_of_stock = 0;
 $total_low_stock = 0;
@@ -308,7 +280,7 @@ foreach ($pharmacies as $p) {
     $total_pending += $p['pending_prescriptions'] ?? 0;
     $total_otc_sales += $p['total_otc_sales'] ?? 0;
     $total_otc_revenue += $p['otc_revenue'] ?? 0;
-    $total_prescription_revenue += $p['prescription_revenue'] ?? 0;
+    $total_prescription_revenue_sum += $p['prescription_revenue'] ?? 0;
     $total_revenue += ($p['prescription_revenue'] ?? 0) + ($p['otc_revenue'] ?? 0);
     $total_out_of_stock += $p['out_of_stock_items'] ?? 0;
     $total_low_stock += $p['low_stock_items'] ?? 0;
@@ -352,11 +324,8 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         }
     }
 }
-
-// ================================================================
-// SASA NDIO HEADER INAINGIZWA
-// ================================================================
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -371,9 +340,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
         :root {
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
@@ -383,19 +349,8 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             --border-color: #E2E8F0;
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
-            
-            --card-blue: #0B5ED7;
-            --card-blue-dark: #0A4CA8;
-            --card-red: #DC2626;
-            --card-red-dark: #B91C1C;
-            --card-green: #059669;
-            --card-green-dark: #047857;
-            --card-orange: #D97706;
-            --card-orange-dark: #B45309;
         }
         [data-theme="dark"] {
             --bg-body: #0F172A;
@@ -406,8 +361,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             --border-color: #334155;
             --primary: #3B82F6;
             --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -663,9 +616,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* ================================================================
-           8 CARDS - CUSTOM COLORS WITH REDUCED HEIGHT
-           ================================================================ */
         .stats-grid-8 {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -1132,72 +1082,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             font-weight: 600;
         }
         
-        .prescription-table-wrap {
-            background: var(--bg-card);
-            border-radius: 18px;
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-            margin-top: 24px;
-        }
-        .prescription-table-wrap .table-header {
-            padding: 14px 20px;
-            background: var(--primary-gradient-strong);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        .prescription-table-wrap .table-header .title {
-            color: white;
-            font-size: 0.9rem;
-            font-weight: 600;
-        }
-        .prescription-table-wrap .table-header .title i { margin-right: 8px; }
-        .prescription-table-wrap .table-header .count {
-            color: rgba(255,255,255,0.8);
-            font-size: 0.75rem;
-        }
-        .prescription-table-wrap table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.78rem;
-        }
-        .prescription-table-wrap table thead {
-            background: var(--bg-body);
-        }
-        .prescription-table-wrap table th {
-            padding: 10px 14px;
-            text-align: left;
-            font-weight: 600;
-            color: var(--text-secondary);
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: 2px solid var(--border-color);
-            white-space: nowrap;
-        }
-        .prescription-table-wrap table td {
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-        }
-        .prescription-table-wrap table tr:hover td {
-            background: #F8FAFC;
-        }
-        [data-theme="dark"] .prescription-table-wrap table tr:hover td {
-            background: #1E293B;
-        }
-        .prescription-table-wrap .table-footer {
-            text-align: center;
-            padding: 10px 0;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            border-top: 1px solid var(--border-color);
-        }
-        
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -1317,7 +1201,19 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             color: #FDBA74;
         }
         
+        #sidebarOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 45;
+            display: none;
+            backdrop-filter: blur(2px);
+        }
         @media (max-width: 1024px) {
+            #sidebarOverlay.show { display: block; }
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
@@ -1352,21 +1248,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         .animate-fade-in-up {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
-        }
-        
-        #sidebarOverlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 45;
-            display: none;
-            backdrop-filter: blur(2px);
-        }
-        @media (max-width: 1024px) {
-            #sidebarOverlay.show { display: block; }
         }
     </style>
 </head>
@@ -1467,9 +1348,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER - BLUE BOX -->
-    <!-- ================================================================ -->
+    <!-- Page Header -->
     <div class="page-header-box animate-fade-in-up">
         <div>
             <h1 class="page-title">
@@ -1489,7 +1368,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
                     <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($total_revenue, 0) ?> Revenue
                 </span>
                 <span class="header-badge rx">
-                    <i class="fas fa-prescription"></i> <?= number_format($total_prescription_sales_db) ?> Rx Sales
+                    <i class="fas fa-prescription"></i> <?= number_format($total_prescriptions_count) ?> Rx
                 </span>
                 <span class="header-badge otc">
                     <i class="fas fa-shopping-cart"></i> <?= number_format($total_otc_sales_db) ?> OTC Sales
@@ -1498,10 +1377,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- 8 CARDS WITH CUSTOM COLORS - DATA FILTERED BY BRANCH -->
-    <!-- Pattern: BLUE, BLUE, GREEN, GREEN, BLUE, ORANGE, RED, ORANGE -->
-    <!-- ================================================================ -->
+    <!-- 8 CARDS -->
     <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.05s;">
         
         <!-- 1. Total Pharmacies - BLUE -->
@@ -1533,7 +1409,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
                 <p class="stat-label">Total Revenue</p>
                 <p class="stat-amount-large"><span class="stat-currency">TSh</span> <?= number_format($total_revenue, 0) ?></p>
                 <p class="stat-sub">
-                    <span class="highlight">Rx: TSh <?= number_format($total_prescription_revenue, 0) ?></span>
+                    <span class="highlight">Rx: TSh <?= number_format($total_prescription_revenue_sum, 0) ?></span>
                     <span class="highlight">OTC: TSh <?= number_format($total_otc_revenue, 0) ?></span>
                 </p>
             </div>
@@ -1547,7 +1423,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
                 <p class="stat-label">Prescriptions</p>
                 <div class="flex-row">
                     <span class="stat-number-small"><?= number_format($total_prescriptions_count) ?></span>
-                    <span class="stat-amount-large" style="font-size:1.4rem;">TSh <?= number_format($total_prescription_revenue_db, 0) ?></span>
+                    <span class="stat-amount-large" style="font-size:1.4rem;">TSh <?= number_format($total_prescription_revenue, 0) ?></span>
                 </div>
                 <p class="stat-sub">
                     <span class="badge-mini success">✅ <?= number_format($total_dispensed_count) ?> dispensed</span>
@@ -1750,65 +1626,14 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         
         <div class="text-center text-sm text-gray-500 dark:text-gray-400 py-2">
             Showing <strong><?= count($pharmacies) ?></strong> pharmacy branch<?= count($pharmacies) > 1 ? 'es' : '' ?>
-            <?php if ($total_prescription_sales_db > 0): ?>
-                · <span class="text-green-500">✅ <?= number_format($total_prescription_sales_db) ?> Rx sales</span>
-                · <span class="text-blue-500">💰 TSh <?= number_format($total_prescription_revenue_db, 0) ?></span>
+            <?php if ($total_prescriptions_count > 0): ?>
+                · <span class="text-green-500">✅ <?= number_format($total_dispensed_count) ?> dispensed</span>
+                · <span class="text-blue-500">💰 TSh <?= number_format($total_prescription_revenue, 0) ?></span>
             <?php endif; ?>
             <?php if ($total_otc_sales_db > 0): ?>
                 · <span class="text-orange-500">🛒 <?= number_format($total_otc_sales_db) ?> OTC · TSh <?= number_format($total_otc_revenue_db, 0) ?></span>
             <?php endif; ?>
         </div>
-        
-        <!-- PRESCRIPTION SALES TABLE -->
-        <?php if (count($prescription_sales_data) > 0): ?>
-        <div class="prescription-table-wrap">
-            <div class="table-header">
-                <span class="title"><i class="fas fa-prescription"></i> Prescription Sales (Latest <?= count($prescription_sales_data) ?>)</span>
-                <span class="count">Total: <?= number_format($total_prescription_sales_db) ?> sales · <?= format_currency($total_prescription_revenue_db) ?></span>
-            </div>
-            <div style="overflow-x:auto;padding:0;">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Sale #</th>
-                            <th>Patient</th>
-                            <th>Branch</th>
-                            <th class="text-right">Total Amount</th>
-                            <th class="text-right">Net Amount</th>
-                            <th>Status</th>
-                            <th>Date</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($prescription_sales_data as $ps): 
-                            $branch_name = 'Unknown';
-                            foreach ($branches as $b) {
-                                if ($b['id'] == ($ps['branch_id'] ?? 0)) {
-                                    $branch_name = $b['name'];
-                                    break;
-                                }
-                            }
-                        ?>
-                            <tr>
-                                <td class="font-mono text-xs font-semibold text-primary"><?= htmlspecialchars($ps['sale_number'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($ps['patient_name'] ?? 'Patient #' . ($ps['patient_id'] ?? 'N/A')) ?></td>
-                                <td><span class="badge badge-info" style="font-size:0.55rem;padding:2px 10px;"><?= htmlspecialchars($branch_name) ?></span></td>
-                                <td class="text-right font-semibold text-blue-600">TSh <?= number_format($ps['total_amount'] ?? 0, 0) ?></td>
-                                <td class="text-right font-semibold text-success">TSh <?= number_format($ps['net_amount'] ?? 0, 0) ?></td>
-                                <td><span class="badge badge-success" style="font-size:0.55rem;padding:2px 10px;"><?= ucfirst($ps['status'] ?? 'N/A') ?></span></td>
-                                <td class="text-xs"><?= date('M d, Y H:i', strtotime($ps['created_at'] ?? 'now')) ?></td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-                <div class="table-footer">
-                    <a href="prescriptions.php" style="color:var(--primary);text-decoration:none;font-weight:600;">
-                        <i class="fas fa-arrow-right"></i> View All Prescriptions
-                    </a>
-                </div>
-            </div>
-        </div>
-        <?php endif; ?>
         
     <?php else: ?>
         <div class="empty-state animate-fade-in-up">
@@ -1840,9 +1665,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1872,9 +1694,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     var overlay = document.getElementById('sidebarOverlay');
@@ -1912,9 +1731,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         }
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
@@ -1922,9 +1738,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
@@ -1941,9 +1754,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1960,18 +1770,17 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Pharmacies (FILTERED BY BRANCH)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Pharmacies', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏪 Branch: <?= htmlspecialchars($display_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Total Pharmacies: <?= $total_pharmacies ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💊 Total Medicines: <?= number_format($total_medicines) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📋 Prescriptions: <?= number_format($total_prescriptions_count) ?> (TSh <?= number_format($total_prescription_revenue_db, 0) ?>)', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📋 Prescriptions: <?= number_format($total_prescriptions_count) ?> (TSh <?= number_format($total_prescription_revenue, 0) ?>)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🛒 OTC Sales: <?= number_format($total_otc_sales_db) ?> (TSh <?= number_format($total_otc_revenue_db, 0) ?>)', 'font-size:13px; color:#D97706;');
-    console.log('%c🔵🔵🟢🟢🔵🟠🔴🟠 CUSTOM COLORS', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Data FILTERED by selected branch', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ "All Branches" shows all data', 'font-size:13px; color:#34D399;');
-    console.log('%c📉 REDUCED HEIGHT: min-height 100px', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Using tables: branches, users, medications_inventory, prescriptions, otc_sales', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ prescription_sales table removed - using prescriptions + prescription_items', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ net_amount removed - using total_amount from otc_sales', 'font-size:13px; color:#34D399;');
     console.log('%c❌ Add Pharmacy Button: REMOVED', 'font-size:13px; color:#DC2626;');
 </script>
 

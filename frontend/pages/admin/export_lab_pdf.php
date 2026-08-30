@@ -4,7 +4,9 @@
 // EXPORT LAB REPORT TO PDF - HTML FALLBACK VERSION
 // BRAICK DISPENSARY - PURPLE THEME
 // FIXED: GROUP BY lt.id to avoid duplicate tests
+// FIXED: Uses bills table (NOT patient_bills)
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// WITH OFFICIAL STAMP & ADMIN CONTACTS
 // ================================================================
 
 // ================================================================
@@ -46,25 +48,56 @@ $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? '';
+$profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // Include database
 require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// GET ADMIN CONTACT NUMBERS
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone FROM users 
+        WHERE role = 'admin' AND branch_id = ? AND status = 'active'
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$user_branch_id]);
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+}
+
+// ================================================================
+// GET BRANCH PHONE
+// ================================================================
+$branch_phone = '';
+try {
+    $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
+    $stmt->execute([$user_branch_id]);
+    $branch_phone = $stmt->fetchColumn();
+} catch (Exception $e) {
+    $branch_phone = '';
+}
+
+$admin_phones_display = !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001');
 
 // ================================================================
 // GET PARAMETERS
 // ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
-$date_from = $_GET['date_from'] ?? '';
-$date_to = $_GET['date_to'] ?? '';
+$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
+$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#0B5ED7"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
+$logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#7C3AED"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
 
 // ================================================================
 // GET BRANCH NAME
@@ -101,6 +134,7 @@ if ($branch_id > 0) {
 
 // ================================================================
 // FETCH LAB DATA - WITH GROUP BY TO AVOID DUPLICATES
+// FIXED: Uses bills table (NOT patient_bills)
 // ================================================================
 
 // All lab tests with patient info - GROUP BY lt.id to avoid duplicates
@@ -136,14 +170,16 @@ $stmt = $db->query("
         v.visit_number,
         u.full_name as doctor_name,
         u2.full_name as technician_name,
-        pb.total_amount as bill_amount,
-        pb.status as bill_status
+        b.total_amount as bill_amount,
+        b.status as bill_status,
+        br.name as branch_name
     FROM lab_tests lt
     LEFT JOIN visits v ON lt.visit_id = v.id
     LEFT JOIN patients p ON v.patient_id = p.id
     LEFT JOIN users u ON lt.doctor_id = u.id
     LEFT JOIN users u2 ON lt.lab_technician_id = u2.id
-    LEFT JOIN patient_bills pb ON pb.visit_id = v.id AND pb.status = 'paid'
+    LEFT JOIN bills b ON b.visit_id = v.id AND b.status = 'paid'
+    LEFT JOIN branches br ON lt.branch_id = br.id
     WHERE 1=1 $branch_filter $date_filter
     GROUP BY lt.id
     ORDER BY lt.created_at DESC
@@ -252,25 +288,41 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         /* ================================================================
-           HEADER WITH LOGO - PURPLE THEME
+           HEADER WITH LOGO - PURPLE THEME LIKE EXPENSES
            ================================================================ */
         .report-header {
             background: linear-gradient(135deg, #7C3AED, #5B21B6);
             color: white;
-            padding: 20px 24px;
-            border-radius: 10px;
+            padding: 24px 28px;
+            border-radius: 12px;
             margin-bottom: 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
             gap: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .report-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .report-header .brand {
             display: flex;
             align-items: center;
             gap: 16px;
+            position: relative;
+            z-index: 1;
         }
         
         .report-header .brand .logo-container {
@@ -294,22 +346,26 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .report-header .brand .logo-text h1 {
-            font-size: 22px;
+            font-size: 24px;
             font-weight: 700;
             letter-spacing: 0.5px;
             margin: 0;
+            color: white;
         }
         
         .report-header .brand .logo-text p {
             font-size: 12px;
             opacity: 0.85;
             margin: 2px 0 0 0;
+            color: rgba(255,255,255,0.85);
         }
         
         .report-header .meta-info {
             text-align: right;
             font-size: 12px;
             opacity: 0.9;
+            position: relative;
+            z-index: 1;
         }
         
         .report-header .meta-info .badge-print {
@@ -319,6 +375,32 @@ header('Content-Type: text/html; charset=utf-8');
             font-size: 10px;
             font-weight: 600;
             display: inline-block;
+            color: white;
+        }
+        
+        /* Admin Contact Line */
+        .admin-contact-line {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            font-size: 10px;
+            color: rgba(255,255,255,0.7);
+            margin-top: 4px;
+            padding-top: 4px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .admin-contact-line span {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .admin-contact-line i {
+            color: rgba(255,255,255,0.6);
         }
         
         /* ================================================================
@@ -501,6 +583,64 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         /* ================================================================
+           OFFICIAL STAMP - LIKE EXPENSES PDF
+           ================================================================ */
+        .official-stamp {
+            margin-top: 20px;
+            padding-top: 14px;
+            border-top: 2px solid #E2E8F0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .official-stamp .stamp-left {
+            font-size: 12px;
+            color: #64748B;
+        }
+        
+        .official-stamp .stamp-left strong {
+            color: #1E293B;
+        }
+        
+        .official-stamp .stamp-box {
+            text-align: center;
+            padding: 8px 20px;
+            border: 3px solid #7C3AED;
+            border-radius: 10px;
+            background: #EDE9FE;
+            min-width: 160px;
+        }
+        
+        .official-stamp .stamp-box .stamp-title {
+            font-size: 9px;
+            color: #64748B;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .official-stamp .stamp-box .stamp-name {
+            font-size: 14px;
+            font-weight: 800;
+            color: #7C3AED;
+        }
+        
+        .official-stamp .stamp-box .stamp-line {
+            font-size: 11px;
+            color: #64748B;
+            margin-top: 2px;
+        }
+        
+        .official-stamp .stamp-box .stamp-date {
+            font-size: 9px;
+            color: #94A3B8;
+            margin-top: 2px;
+        }
+        
+        /* ================================================================
            NO DATA
            ================================================================ */
         .no-data {
@@ -581,6 +721,7 @@ header('Content-Type: text/html; charset=utf-8');
             .data-table { font-size: 7px; }
             .data-table th, .data-table td { padding: 3px 4px; }
             .top-tests-grid { grid-template-columns: 1fr; }
+            .official-stamp { flex-direction: column; text-align: center; }
         }
         
         @media (max-width: 480px) {
@@ -628,6 +769,16 @@ header('Content-Type: text/html; charset=utf-8');
             .top-test-item {
                 background: #f5f5f5 !important;
             }
+            .official-stamp .stamp-box {
+                background: #EDE9FE !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                border-color: #7C3AED !important;
+            }
+            .admin-contact-line {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
         }
     </style>
 </head>
@@ -653,7 +804,7 @@ header('Content-Type: text/html; charset=utf-8');
     </div>
 
     <!-- ================================================================ -->
-    <!-- HEADER WITH LOGO - PURPLE THEME -->
+    <!-- HEADER WITH LOGO - PURPLE THEME LIKE EXPENSES -->
     <!-- ================================================================ -->
     <div class="report-header">
         <div class="brand">
@@ -664,7 +815,7 @@ header('Content-Type: text/html; charset=utf-8');
             </div>
             <div class="logo-text">
                 <h1>BRAICK DISPENSARY</h1>
-                <p>Quality Healthcare Services</p>
+                <p>Tunajali Afya Yako</p>
             </div>
         </div>
         <div class="meta-info">
@@ -672,6 +823,13 @@ header('Content-Type: text/html; charset=utf-8');
             <div>Generated: <?= date('M d, Y h:i A') ?></div>
             <span class="badge-print">🧪 Laboratory Report</span>
         </div>
+    </div>
+    
+    <!-- Admin Contact Line -->
+    <div class="admin-contact-line">
+        <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
+        <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($user_branch_name) ?> Branch</span>
+        <span><i class="fas fa-user"></i> Generated by: <?= htmlspecialchars($user_full_name) ?></span>
     </div>
 
     <!-- ================================================================ -->
@@ -761,6 +919,7 @@ header('Content-Type: text/html; charset=utf-8');
                     <th>Technician</th>
                     <th>Status</th>
                     <th>Bill</th>
+                    <th>Branch</th>
                     <th>Date</th>
                 </tr>
             </thead>
@@ -822,6 +981,7 @@ header('Content-Type: text/html; charset=utf-8');
                                 <span style="color:#94A3B8;">-</span>
                             <?php endif; ?>
                         </td>
+                        <td><?= htmlspecialchars($test['branch_name'] ?? 'N/A') ?></td>
                         <td style="font-size:8px;"><?= date('M d, Y', strtotime($test['created_at'] ?? 'now')) ?></td>
                     </tr>
                 <?php endforeach; ?>
@@ -845,6 +1005,25 @@ header('Content-Type: text/html; charset=utf-8');
     <?php endif; ?>
 
     <!-- ================================================================ -->
+    <!-- OFFICIAL STAMP - LIKE EXPENSES PDF -->
+    <!-- ================================================================ -->
+    <div class="official-stamp">
+        <div class="stamp-left">
+            <span>Generated by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
+            <span style="margin-left:14px;">Date: <strong><?= date('F d, Y') ?></strong></span>
+            <span style="margin-left:14px;display:block;font-size:10px;color:#94A3B8;margin-top:4px;">
+                <i class="fas fa-print"></i> Printed: <?= date('h:i A') ?>
+            </span>
+        </div>
+        <div class="stamp-box">
+            <div class="stamp-title">Official Stamp</div>
+            <div class="stamp-name">BRAICK DISPENSARY</div>
+            <div class="stamp-line">Approved By: _________________</div>
+            <div class="stamp-date">Date: <?= date('F d, Y') ?></div>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
     <div class="report-footer">
@@ -866,6 +1045,17 @@ header('Content-Type: text/html; charset=utf-8');
             window.print();
         }, 500);
     }
+    
+    console.log('%c🧪 Braick Dispensary - Lab Report (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🧪 Total Tests: <?= number_format($total_tests) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_lab_revenue, 0) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Using: lab_tests table with GROUP BY lt.id', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Using: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Design like expenses with logo & official stamp', 'font-size:13px; color:#34D399;');
+    console.log('%c📞 Admin Contacts: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

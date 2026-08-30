@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/pharmacy_inventory.php
 // SUPER ADMIN - VIEW PHARMACY INVENTORY
 // BRAICK DISPENSARY - BLUE THEME - WITH BLUE STAT CARDS (3+3)
+// FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -50,17 +51,21 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PARAMETERS
 // ================================================================
 $pharmacy_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? 'all';
-$filter = $_GET['filter'] ?? 'all'; // all, outofstock, lowstock, expired, expiring
+$filter = $_GET['filter'] ?? 'all';
 $search = $_GET['search'] ?? '';
 
 if ($pharmacy_id <= 0) {
@@ -115,9 +120,9 @@ $sql = "
     WHERE branch_id = ?
 ";
 
-// Apply filters
 $params = [$pharmacy_id];
 
+// Apply filters
 if ($filter === 'outofstock') {
     $sql .= " AND quantity <= 0";
 } elseif ($filter === 'lowstock') {
@@ -126,6 +131,8 @@ if ($filter === 'outofstock') {
     $sql .= " AND expiry_date < CURDATE()";
 } elseif ($filter === 'expiring') {
     $sql .= " AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)";
+} elseif ($filter === 'instock') {
+    $sql .= " AND quantity > reorder_level AND quantity > 0";
 }
 
 if (!empty($search)) {
@@ -217,13 +224,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE HEADERS
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -241,9 +244,6 @@ include_once '../../components/admin_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - BLUE THEME
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -251,41 +251,12 @@ include_once '../../components/admin_sidebar.php';
             --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --primary-gradient-hover: linear-gradient(135deg, #0A4CA8, #083C8A);
-            
             --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
             --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
-            --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.12);
-            
             --bg-body: #F0F4F8;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -294,6 +265,9 @@ include_once '../../components/admin_sidebar.php';
             --border-color: #E2E8F0;
             --radius: 12px;
             --radius-lg: 18px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
             --table-hover: #F8FAFC;
         }
         
@@ -305,13 +279,9 @@ include_once '../../components/admin_sidebar.php';
             --text-secondary: #94A3B8;
             --border-color: #334155;
             --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
             --primary-bg: #1E3A5F;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.5);
             --table-hover: #1E293B;
         }
         
@@ -324,13 +294,6 @@ include_once '../../components/admin_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -344,7 +307,6 @@ include_once '../../components/admin_sidebar.php';
             justify-content: space-between;
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
             backdrop-filter: blur(10px);
             box-shadow: var(--shadow-sm);
         }
@@ -355,14 +317,8 @@ include_once '../../components/admin_sidebar.php';
             background: var(--bg-body);
             border-radius: var(--radius);
             border: 2px solid var(--border-color);
-            transition: all 0.3s;
             flex: 1;
             max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
         }
         
         .top-nav .search-wrapper input {
@@ -375,10 +331,6 @@ include_once '../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
         .top-nav .search-wrapper .search-btn {
             background: var(--primary-gradient);
             color: white;
@@ -387,25 +339,6 @@ include_once '../../components/admin_sidebar.php';
             border-radius: 0 var(--radius) var(--radius) 0;
             cursor: pointer;
             font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
         }
         
         .top-nav .avatar {
@@ -415,12 +348,6 @@ include_once '../../components/admin_sidebar.php';
             object-fit: cover;
             border: 2px solid var(--border-color);
             cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
         }
         
         .top-nav .icon-btn {
@@ -431,16 +358,10 @@ include_once '../../components/admin_sidebar.php';
             align-items: center;
             justify-content: center;
             color: var(--text-secondary);
-            transition: all 0.3s;
             background: transparent;
             border: none;
             cursor: pointer;
             position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
         }
         
         .notif-dot {
@@ -470,18 +391,10 @@ include_once '../../components/admin_sidebar.php';
             cursor: pointer;
             font-size: 0.82rem;
             color: var(--text-primary);
-            transition: all 0.3s;
             display: flex;
             align-items: center;
             gap: 6px;
         }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
         
         .branch-selector {
             background: var(--bg-body);
@@ -492,16 +405,8 @@ include_once '../../components/admin_sidebar.php';
             color: var(--text-primary);
             outline: none;
             cursor: pointer;
-            transition: all 0.3s;
         }
         
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -509,9 +414,6 @@ include_once '../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - BLUE THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: var(--radius-lg);
@@ -527,30 +429,6 @@ include_once '../../components/admin_sidebar.php';
             overflow: hidden;
         }
         
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -563,10 +441,7 @@ include_once '../../components/admin_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -577,11 +452,6 @@ include_once '../../components/admin_sidebar.php';
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
         }
         
         .page-header .role-badge-display {
@@ -608,12 +478,6 @@ include_once '../../components/admin_sidebar.php';
             align-items: center;
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
         }
         
         .page-header .btn-outline-light {
@@ -624,7 +488,6 @@ include_once '../../components/admin_sidebar.php';
             border-radius: var(--radius);
             font-weight: 500;
             font-size: 0.82rem;
-            transition: all 0.3s;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -640,168 +503,6 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           BUTTONS - FULL CSS STYLED
-           ================================================================ */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            padding: 10px 20px;
-            border-radius: var(--radius);
-            font-weight: 600;
-            font-size: 0.85rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .btn:hover {
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .btn:active {
-            transform: translateY(0px);
-        }
-        
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none !important;
-            box-shadow: none !important;
-        }
-        
-        /* Primary Button */
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-gradient-hover);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
-        }
-        
-        /* Success Button */
-        .btn-success {
-            background: linear-gradient(135deg, #059669, #047857);
-            color: white;
-        }
-        
-        .btn-success:hover {
-            background: linear-gradient(135deg, #047857, #065F46);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.35);
-        }
-        
-        /* Danger Button */
-        .btn-danger {
-            background: linear-gradient(135deg, #DC2626, #B91C1C);
-            color: white;
-        }
-        
-        .btn-danger:hover {
-            background: linear-gradient(135deg, #B91C1C, #991B1B);
-            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
-        }
-        
-        /* Warning Button */
-        .btn-warning {
-            background: linear-gradient(135deg, #D97706, #B45309);
-            color: white;
-        }
-        
-        .btn-warning:hover {
-            background: linear-gradient(135deg, #B45309, #92400E);
-            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.35);
-        }
-        
-        /* Outline Button */
-        .btn-outline {
-            background: transparent;
-            color: var(--text-primary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
-        }
-        
-        /* Outline with primary color */
-        .btn-outline-primary {
-            background: transparent;
-            color: var(--primary);
-            border: 2px solid var(--primary);
-        }
-        
-        .btn-outline-primary:hover {
-            background: var(--primary);
-            color: white;
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
-        }
-        
-        /* Outline Light (for header) */
-        .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: var(--radius);
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-        }
-        
-        .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        /* Button Sizes */
-        .btn-sm {
-            padding: 5px 12px;
-            font-size: 0.7rem;
-            border-radius: 6px;
-        }
-        
-        .btn-lg {
-            padding: 14px 32px;
-            font-size: 1rem;
-        }
-        
-        .btn-block {
-            width: 100%;
-            justify-content: center;
-        }
-        
-        /* Button with icon */
-        .btn i {
-            font-size: 0.9rem;
-        }
-        
-        .btn-sm i {
-            font-size: 0.7rem;
-        }
-        
-        .btn-lg i {
-            font-size: 1.1rem;
-        }
-        
-        /* ================================================================
-           STATS CARDS - BLUE BACKGROUND (3+3 GRID)
-           ================================================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -810,7 +511,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .stat-card {
-            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            background: var(--primary-gradient);
             border-radius: var(--radius);
             padding: 20px 24px;
             border: 2px solid rgba(255,255,255,0.1);
@@ -824,30 +525,6 @@ include_once '../../components/admin_sidebar.php';
             position: relative;
             overflow: hidden;
             min-height: 90px;
-        }
-        
-        .stat-card::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -20%;
-            width: 150px;
-            height: 150px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .stat-card::after {
-            content: '';
-            position: absolute;
-            bottom: -30%;
-            left: -10%;
-            width: 100px;
-            height: 100px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
         }
         
         .stat-card:hover {
@@ -901,9 +578,6 @@ include_once '../../components/admin_sidebar.php';
             z-index: 1;
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -921,17 +595,9 @@ include_once '../../components/admin_sidebar.php';
         .badge-warning { background: #D97706; color: #1E293B; }
         .badge-info { background: #0B5ED7; }
         .badge-secondary { background: #64748B; }
-        .badge-outline {
-            background: transparent;
-            border: 2px solid var(--border-color);
-            color: var(--text-secondary);
-        }
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
-        /* ================================================================
-           FILTERS
-           ================================================================ */
         .filter-bar {
             display: flex;
             flex-wrap: wrap;
@@ -962,76 +628,56 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
         }
         
-        /* ================================================================
-           DATA TABLE - BEAUTIFUL DESIGN
-           ================================================================ */
-        .data-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            font-size: 0.8rem;
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 20px;
+            border-radius: var(--radius);
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            box-shadow: var(--shadow-sm);
         }
         
-        .data-table thead th {
+        .btn:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .btn-primary {
             background: var(--primary-gradient);
             color: white;
-            font-weight: 600;
-            padding: 12px 14px;
-            font-size: 0.65rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            border-bottom: none;
-            white-space: nowrap;
-            position: sticky;
-            top: 0;
-            z-index: 5;
         }
         
-        .data-table thead th:first-child {
-            border-radius: 8px 0 0 0;
+        .btn-primary:hover {
+            background: var(--primary-gradient-hover);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
         }
         
-        .data-table thead th:last-child {
-            border-radius: 0 8px 0 0;
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
         }
         
-        .data-table td {
-            padding: 10px 14px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-            vertical-align: middle;
-            transition: background 0.2s ease;
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.15);
         }
         
-        .data-table tbody tr {
-            transition: all 0.2s ease;
+        .btn-sm {
+            padding: 5px 12px;
+            font-size: 0.7rem;
+            border-radius: 6px;
         }
         
-        .data-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
-        
-        .data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        /* Status indicator dot */
-        .status-dot {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 6px;
-        }
-        
-        .status-dot.green { background: #059669; }
-        .status-dot.amber { background: #D97706; }
-        .status-dot.red { background: #DC2626; }
-        .status-dot.blue { background: #0B5ED7; }
-        
-        /* ================================================================
-           CARD
-           ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1071,42 +717,62 @@ include_once '../../components/admin_sidebar.php';
             align-items: center;
         }
         
-        .card-title i {
-            margin-right: 8px;
+        .card-title i { margin-right: 8px; }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            font-size: 0.8rem;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 14px 20px;
-            border-radius: 12px;
-            z-index: 999;
-            max-width: 400px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 12px;
+        .data-table thead th {
+            background: var(--primary-gradient);
             color: white;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            font-weight: 600;
+            padding: 12px 14px;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: none;
+            white-space: nowrap;
+            position: sticky;
+            top: 0;
+            z-index: 5;
         }
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        .toast-custom.success { background: #059669; }
-        .toast-custom.error { background: #DC2626; }
-        .toast-custom.info { background: #0B5ED7; }
-        .toast-custom.warning { background: #D97706; }
         
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
+        .data-table thead th:first-child { border-radius: 8px 0 0 0; }
+        .data-table thead th:last-child { border-radius: 0 8px 0 0; }
+        
+        .data-table td {
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+            transition: background 0.2s ease;
+        }
+        
+        .data-table tbody tr:hover td {
+            background: var(--table-hover);
+        }
+        
+        .data-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 6px;
+        }
+        
+        .status-dot.green { background: #059669; }
+        .status-dot.amber { background: #D97706; }
+        .status-dot.red { background: #DC2626; }
+        .status-dot.blue { background: #0B5ED7; }
+        
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -1125,9 +791,6 @@ include_once '../../components/admin_sidebar.php';
             margin-bottom: 8px;
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -1136,15 +799,53 @@ include_once '../../components/admin_sidebar.php';
             font-size: 0.7rem;
             color: var(--text-secondary);
         }
+        .footer .footer-brand { color: var(--primary); font-weight: 500; }
         
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 500;
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
         }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
+        .toast-custom.success { background: #059669; }
+        .toast-custom.error { background: #DC2626; }
+        .toast-custom.info { background: #0B5ED7; }
+        .toast-custom.warning { background: #D97706; }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        .flex { display: flex; }
+        .flex-wrap { flex-wrap: wrap; }
+        .items-center { align-items: center; }
+        .gap-2 { gap: 8px; }
+        .gap-3 { gap: 12px; }
+        .w-full { width: 100%; }
+        .min-w-\[150px\] { min-width: 150px; }
+        .min-w-\[200px\] { min-width: 200px; }
+        .flex-1 { flex: 1; }
+        .overflow-x-auto { overflow-x: auto; }
+        .text-red-600 { color: #DC2626; }
+        .text-amber-600 { color: #D97706; }
+        .text-green-600 { color: #059669; }
+        .text-blue-600 { color: #0B5ED7; }
+        .text-gray-500 { color: var(--text-secondary); }
+        .font-bold { font-weight: 700; }
+        .font-medium { font-weight: 500; }
+        .font-semibold { font-weight: 600; }
+        .text-[10px] { font-size: 0.6rem; }
+        .block { display: block; }
+        .mt-2 { margin-top: 8px; }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1172,9 +873,6 @@ include_once '../../components/admin_sidebar.php';
             .page-header { flex-direction: column; align-items: flex-start !important; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1185,9 +883,6 @@ include_once '../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
@@ -1215,7 +910,7 @@ include_once '../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1305,12 +1000,9 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
-        <!-- Row 1: Cards 1-3 -->
         <!-- Card 1: Total Items -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=all" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-boxes"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-boxes"></i></div>
             <div>
                 <p class="stat-label">Total Items</p>
                 <p class="stat-value"><?= number_format($total_items) ?></p>
@@ -1320,9 +1012,7 @@ include_once '../../components/admin_sidebar.php';
         
         <!-- Card 2: In Stock -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=instock" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-check-circle"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
             <div>
                 <p class="stat-label">In Stock</p>
                 <p class="stat-value"><?= number_format($in_stock) ?></p>
@@ -1332,9 +1022,7 @@ include_once '../../components/admin_sidebar.php';
         
         <!-- Card 3: Low Stock -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=lowstock" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-exclamation-triangle"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-exclamation-triangle"></i></div>
             <div>
                 <p class="stat-label">Low Stock</p>
                 <p class="stat-value"><?= number_format($low_stock) ?></p>
@@ -1342,12 +1030,9 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </a>
         
-        <!-- Row 2: Cards 4-6 -->
         <!-- Card 4: Out of Stock -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=outofstock" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-times-circle"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
             <div>
                 <p class="stat-label">Out of Stock</p>
                 <p class="stat-value"><?= number_format($out_of_stock) ?></p>
@@ -1357,9 +1042,7 @@ include_once '../../components/admin_sidebar.php';
         
         <!-- Card 5: Expired -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expired" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-skull"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-skull"></i></div>
             <div>
                 <p class="stat-label">Expired</p>
                 <p class="stat-value"><?= number_format($expired) ?></p>
@@ -1369,9 +1052,7 @@ include_once '../../components/admin_sidebar.php';
         
         <!-- Card 6: Expiring Soon -->
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>&filter=expiring" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-hourglass-half"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-hourglass-half"></i></div>
             <div>
                 <p class="stat-label">Expiring Soon</p>
                 <p class="stat-value"><?= number_format($expiring_soon) ?></p>
@@ -1505,7 +1186,7 @@ include_once '../../components/admin_sidebar.php';
                                 <td>
                                     <div class="flex gap-1 items-center">
                                         <a href="edit_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" 
-                                           class="btn btn-sm btn-outline-primary" style="padding:3px 8px;font-size:0.6rem;border-width:1.5px;">
+                                           class="btn btn-sm btn-outline" style="padding:3px 8px;font-size:0.6rem;">
                                             <i class="fas fa-edit"></i>
                                         </a>
                                         <a href="view_inventory.php?id=<?= $item['id'] ?>&branch=<?= $pharmacy['id'] ?>" 
@@ -1571,9 +1252,6 @@ include_once '../../components/admin_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1603,17 +1281,11 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1626,9 +1298,6 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
         var url = new URL(window.location.href);
@@ -1645,18 +1314,12 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1674,9 +1337,6 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1691,13 +1351,11 @@ include_once '../../components/admin_sidebar.php';
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
 
-    console.log('%c📦 Braick Dispensary - Pharmacy Inventory (3+3 GRID)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📦 Braick Dispensary - Pharmacy Inventory', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?> (ID: <?= $pharmacy['id'] ?>)', 'font-size:13px; color:#059669;');
     console.log('%c📦 Total Items: <?= number_format($total_items) ?>', 'font-size:13px; color:#7C3AED;');
@@ -1705,7 +1363,8 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c✅ 3+3 GRID: Cards in 2 rows of 3', 'font-size:13px; color:#34D399;');
     console.log('%c✅ All 6 stat cards have BLUE BACKGROUND with white text', 'font-size:13px; color:#34D399;');
     console.log('%c📊 Inventory table with beautiful design', 'font-size:13px; color:#34D399;');
-    console.log('%c🎨 All buttons have beautiful CSS styling', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Using table: medications_inventory', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Filter: instock, lowstock, outofstock, expired, expiring', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

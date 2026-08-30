@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/branch_staff.php
 // SUPER ADMIN - BRANCH STAFF MANAGEMENT
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 session_start();
@@ -24,7 +24,11 @@ if ($_SESSION['role'] !== 'admin') {
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET BRANCH ID
@@ -51,7 +55,7 @@ if (!$branch) {
 // ================================================================
 // SEARCH FUNCTIONALITY
 // ================================================================
-$search_term = $_GET['search'] ?? '';
+$search_term = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ================================================================
 // GET STAFF FOR THIS BRANCH
@@ -59,7 +63,8 @@ $search_term = $_GET['search'] ?? '';
 $staff_query = "
     SELECT 
         u.*,
-        b.name as branch_name
+        b.name as branch_name,
+        b.location as branch_location
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.id
     WHERE u.branch_id = ?
@@ -170,8 +175,52 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $check_stmt->execute([$staff_id]);
                 $visit_count = $check_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
                 
-                if ($visit_count > 0) {
-                    $message = "❌ Cannot delete this staff member. They have $visit_count associated visits.";
+                // Check for lab tests
+                $check_stmt = $db->prepare("
+                    SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? OR lab_technician_id = ?
+                ");
+                $check_stmt->execute([$staff_id, $staff_id]);
+                $lab_count = $check_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+                
+                // Check for prescriptions
+                $check_stmt = $db->prepare("
+                    SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? OR pharmacy_id = ?
+                ");
+                $check_stmt->execute([$staff_id, $staff_id]);
+                $prescription_count = $check_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+                
+                // Check for bills created by this user
+                $check_stmt = $db->prepare("
+                    SELECT COUNT(*) as count FROM bills WHERE created_by = ?
+                ");
+                $check_stmt->execute([$staff_id]);
+                $bill_count = $check_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+                
+                // Check for payments received by this user
+                $check_stmt = $db->prepare("
+                    SELECT COUNT(*) as count FROM payments WHERE received_by = ?
+                ");
+                $check_stmt->execute([$staff_id]);
+                $payment_count = $check_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+                
+                // Check for activity logs
+                $check_stmt = $db->prepare("
+                    SELECT COUNT(*) as count FROM activity_logs WHERE user_id = ?
+                ");
+                $check_stmt->execute([$staff_id]);
+                $log_count = $check_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+                
+                $total_dependencies = $visit_count + $lab_count + $prescription_count + $bill_count + $payment_count + $log_count;
+                
+                if ($total_dependencies > 0) {
+                    $message = "❌ Cannot delete this staff member. They have dependencies:<br>";
+                    if ($visit_count > 0) $message .= "• $visit_count associated visits<br>";
+                    if ($lab_count > 0) $message .= "• $lab_count associated lab tests<br>";
+                    if ($prescription_count > 0) $message .= "• $prescription_count associated prescriptions<br>";
+                    if ($bill_count > 0) $message .= "• $bill_count associated bills<br>";
+                    if ($payment_count > 0) $message .= "• $payment_count associated payments<br>";
+                    if ($log_count > 0) $message .= "• $log_count activity logs<br>";
+                    $message .= "Please deactivate instead of deleting.";
                     $message_type = 'error';
                 } else {
                     $stmt = $db->prepare("DELETE FROM users WHERE id = ?");
@@ -214,6 +263,10 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 $user_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $selected_branch_id = $branch_id;
+$profile_pic = $_SESSION['profile_pic'] ?? '';
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
@@ -1257,7 +1310,7 @@ $selected_branch_id = $branch_id;
         </button>
         
         <a href="profile.php">
-            <img src="<?= $logo_url ?>" alt="Profile" class="avatar"
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= substr($user_name, 0, 1) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
@@ -1296,7 +1349,7 @@ $selected_branch_id = $branch_id;
             <a href="branches.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Branches
             </a>
-            <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-outline-light">
+            <a href="add_employee.php?branch=<?= $branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-user-plus"></i> Add Staff
             </a>
         </div>
@@ -1369,7 +1422,7 @@ $selected_branch_id = $branch_id;
                     </span>
                 <?php endif; ?>
             </h3>
-            <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-add">
+            <a href="add_employee.php?branch=<?= $branch_id ?>" class="btn-add">
                 <i class="fas fa-user-plus"></i> Add Staff
             </a>
         </div>
@@ -1494,7 +1547,7 @@ $selected_branch_id = $branch_id;
                         <i class="fas fa-times"></i> Clear Search
                     </a>
                 <?php else: ?>
-                    <a href="add_staff.php?branch_id=<?= $branch_id ?>" class="btn-add" style="display:inline-flex;">
+                    <a href="add_employee.php?branch=<?= $branch_id ?>" class="btn-add" style="display:inline-flex;">
                         <i class="fas fa-user-plus"></i> Add First Staff
                     </a>
                 <?php endif; ?>

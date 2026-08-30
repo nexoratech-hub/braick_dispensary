@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/view_lab_result.php
 // ADMIN - VIEW LAB RESULT DETAILS
 // BRAICK DISPENSARY - BLUE THEME
+// USING YOUR DATABASE
 // ================================================================
 
 // ================================================================
@@ -15,10 +16,14 @@ if (session_status() === PHP_SESSION_NONE) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
@@ -84,7 +89,7 @@ try {
 // GET PARAMETERS
 // ================================================================
 $lab_test_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? $_GET['branch_id'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 
 if ($lab_test_id <= 0) {
     header('Location: lab_tests.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
@@ -92,27 +97,13 @@ if ($lab_test_id <= 0) {
 }
 
 // ================================================================
-// FETCH LAB TEST DETAILS
+// FETCH LAB TEST DETAILS - USING YOUR DATABASE
 // ================================================================
 try {
     $stmt = $db->prepare("
         SELECT 
-            lt.id,
-            lt.test_name,
-            lt.status,
-            lt.results,
-            lt.reference_range,
-            lt.interpretation,
-            lt.notes as lab_notes,
-            lt.created_at,
-            lt.completed_at,
-            lt.updated_at,
-            lt.test_price,
-            lt.lab_technician_id,
-            lt.formatted_result,
-            lt.visit_id,
-            lt.doctor_id,
-            lt.branch_id as lab_branch_id,
+            lt.*,
+            lt.id as lab_test_id,
             p.id as patient_id,
             p.full_name as patient_name,
             p.patient_id as patient_code,
@@ -132,13 +123,16 @@ try {
             v.complaint,
             v.diagnosis,
             v.treatment,
-            b.name as branch_name
+            b.name as branch_name,
+            ltc.test_code,
+            ltc.category as test_category
         FROM lab_tests lt
         LEFT JOIN visits v ON lt.visit_id = v.id
         LEFT JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON lt.doctor_id = u.id
-        LEFT JOIN users u2 ON lt.lab_technician_id = u2.id
+        LEFT JOIN users u2 ON lt.technician_id = u2.id
         LEFT JOIN branches b ON lt.branch_id = b.id
+        LEFT JOIN lab_tests_catalog ltc ON lt.test_id = ltc.id
         WHERE lt.id = ?
     ");
     $stmt->execute([$lab_test_id]);
@@ -199,7 +193,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
                 VALUES (?, ?, 'lab_test_deleted', ?, NOW())
             ");
-            $stmt->execute([$user_id, $lab_test['lab_branch_id'] ?? 1, $details]);
+            $stmt->execute([$user_id, $lab_test['branch_id'] ?? 1, $details]);
             
             $_SESSION['toast'] = [
                 'message' => '✅ Lab test deleted successfully!',
@@ -247,14 +241,10 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
-include_once '../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!DOCTYPE html>
@@ -361,180 +351,6 @@ include_once '../../components/admin_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
-        }
-        
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
-        }
-        
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-        
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .branch-selector {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            padding: 6px 12px;
-            font-size: 0.78rem;
-            color: var(--text-primary);
-            outline: none;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -938,28 +754,115 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           MODAL
+           ================================================================ */
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .modal.show {
+            display: flex;
+        }
+        
+        .modal-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            backdrop-filter: blur(4px);
+            cursor: pointer;
+        }
+        
+        .modal-content {
+            background: var(--bg-card);
+            border-radius: 16px;
+            max-width: 480px;
+            width: 90%;
+            position: relative;
+            z-index: 1001;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            border: 1px solid var(--border-color);
+            animation: modalSlideIn 0.3s ease;
+        }
+        
+        @keyframes modalSlideIn {
+            from { transform: scale(0.9) translateY(20px); opacity: 0; }
+            to { transform: scale(1) translateY(0); opacity: 1; }
+        }
+        
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .modal-header h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 0;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 0 4px;
+            transition: color 0.3s;
+        }
+        
+        .modal-close:hover {
+            color: var(--text-primary);
+        }
+        
+        .modal-body {
+            padding: 20px;
+            color: var(--text-primary);
+        }
+        
+        .modal-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
             .info-box .info-item { flex-direction: column; }
             .result-card { padding: 16px; }
             .btn-actions { flex-direction: column; }
             .btn-actions .btn { width: 100%; justify-content: center; }
         }
         
+        @media (max-width: 768px) {
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .result-card { padding: 14px; }
+        }
+        
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .modal-content { width: 95%; }
         }
         
         /* ================================================================
@@ -1000,54 +903,7 @@ include_once '../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
+<!-- MAIN CONTENT - Sidebar is loaded from admin_sidebar.php -->
 <!-- ================================================================ -->
 <main class="main-content">
 
@@ -1100,6 +956,19 @@ include_once '../../components/admin_sidebar.php';
             <span class="value">#<?= $lab_test_id ?></span>
         </div>
         <div class="info-item">
+            <span class="label">Test Name</span>
+            <span class="value">
+                <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
+                <?php if (!empty($lab_test['test_code'])): ?>
+                    <span class="text-gray-400 text-sm">(<?= htmlspecialchars($lab_test['test_code']) ?>)</span>
+                <?php endif; ?>
+            </span>
+        </div>
+        <div class="info-item">
+            <span class="label">Category</span>
+            <span class="value"><?= htmlspecialchars($lab_test['test_category'] ?? 'N/A') ?></span>
+        </div>
+        <div class="info-item">
             <span class="label">Patient</span>
             <span class="value">
                 <?php if (!empty($lab_test['patient_id']) && !empty($lab_test['patient_name'])): ?>
@@ -1108,6 +977,9 @@ include_once '../../components/admin_sidebar.php';
                     </a>
                     <?php if (!empty($lab_test['patient_code'])): ?>
                         (<?= htmlspecialchars($lab_test['patient_code']) ?>)
+                    <?php endif; ?>
+                    <?php if ($age !== null): ?>
+                        <span class="text-gray-400 text-sm">| <?= $age ?> yrs</span>
                     <?php endif; ?>
                 <?php else: ?>
                     <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>
@@ -1131,6 +1003,9 @@ include_once '../../components/admin_sidebar.php';
             <span class="value">
                 <?php if (!empty($lab_test['doctor_name'])): ?>
                     Dr. <?= htmlspecialchars($lab_test['doctor_name']) ?>
+                    <?php if (!empty($lab_test['doctor_specialty'])): ?>
+                        <span class="text-gray-400 text-sm">(<?= htmlspecialchars($lab_test['doctor_specialty']) ?>)</span>
+                    <?php endif; ?>
                 <?php else: ?>
                     <span class="text-gray-400">Not assigned</span>
                 <?php endif; ?>
@@ -1145,6 +1020,10 @@ include_once '../../components/admin_sidebar.php';
                     <span class="text-gray-400">Not assigned</span>
                 <?php endif; ?>
             </span>
+        </div>
+        <div class="info-item">
+            <span class="label">Branch</span>
+            <span class="value"><?= htmlspecialchars($lab_test['branch_name'] ?? 'N/A') ?></span>
         </div>
         <div class="info-item">
             <span class="label">Status</span>
@@ -1210,10 +1089,10 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- NOTES -->
     <!-- ================================================================ -->
-    <?php if (!empty($lab_test['lab_notes'])): ?>
+    <?php if (!empty($lab_test['notes'])): ?>
     <div class="result-card animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="result-label"><i class="fas fa-sticky-note"></i> Notes</div>
-        <div class="result-value" style="font-style:italic;color:var(--text-secondary);"><?= nl2br(htmlspecialchars($lab_test['lab_notes'])) ?></div>
+        <div class="result-value" style="font-style:italic;color:var(--text-secondary);"><?= nl2br(htmlspecialchars($lab_test['notes'])) ?></div>
     </div>
     <?php endif; ?>
 
@@ -1262,11 +1141,6 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-bolt"></i> Actions
         </h3>
         <div class="flex flex-wrap gap-3">
-            <!-- View Button -->
-            <a href="view_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary">
-                <i class="fas fa-eye"></i> View
-            </a>
-            
             <!-- Edit Button -->
             <a href="edit_lab_test.php?id=<?= $lab_test_id ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-warning">
                 <i class="fas fa-edit"></i> Edit
@@ -1311,7 +1185,7 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <!-- DELETE CONFIRMATION MODAL -->
 <!-- ================================================================ -->
-<div id="deleteModal" class="modal" style="display:none;">
+<div id="deleteModal" class="modal">
     <div class="modal-overlay" onclick="closeDeleteModal()"></div>
     <div class="modal-content">
         <div class="modal-header">
@@ -1392,9 +1266,10 @@ include_once '../../components/admin_sidebar.php';
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1407,26 +1282,9 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('branch_id');
-        window.location.href = url.toString();
-    }
-
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1471,21 +1329,14 @@ include_once '../../components/admin_sidebar.php';
     // DELETE MODAL
     // ================================================================
     function confirmDelete() {
-        document.getElementById('deleteModal').style.display = 'flex';
+        document.getElementById('deleteModal').classList.add('show');
         document.body.style.overflow = 'hidden';
     }
 
     function closeDeleteModal() {
-        document.getElementById('deleteModal').style.display = 'none';
+        document.getElementById('deleteModal').classList.remove('show');
         document.body.style.overflow = '';
     }
-
-    // Close modal on overlay click
-    document.getElementById('deleteModal')?.addEventListener('click', function(e) {
-        if (e.target === this || e.target.classList.contains('modal-overlay')) {
-            closeDeleteModal();
-        }
-    });
 
     // Close modal on ESC key
     document.addEventListener('keydown', function(e) {
@@ -1494,14 +1345,48 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
+    // Close modal on overlay click
+    document.getElementById('deleteModal')?.addEventListener('click', function(e) {
+        if (e.target === this || e.target.classList.contains('modal-overlay')) {
+            closeDeleteModal();
+        }
+    });
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
+
+    function switchBranch(branchId) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('branch', branchId);
+        url.searchParams.delete('branch_id');
+        window.location.href = url.toString();
+    }
+
     console.log('%c🧪 Braick Dispensary - View Lab Result', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> (ID: <?= $lab_test_id ?>)', 'font-size:13px; color:#7C3AED;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Status: <?= ucfirst($lab_test['status'] ?? 'Pending') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Admin has FULL ACCESS: View, Edit, Delete', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Using database tables: lab_tests, visits, patients, users, branches, lab_tests_catalog', 'font-size:13px; color:#34D399;');
     console.log('%c🔵 Blue Theme Applied with beautiful CSS', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Admin has FULL ACCESS: View, Edit, Delete', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

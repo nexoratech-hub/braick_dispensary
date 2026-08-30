@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_bill.php
 // ADMIN - EDIT BILL
-// BRAICK DISPENSARY - GREEN THEME
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -13,7 +13,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -21,7 +21,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER IS ADMIN
+// CHECK ADMIN ACCESS
 // ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
@@ -37,7 +37,7 @@ if ($_SESSION['role'] !== 'admin') {
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET ADMIN DATA
 // ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -50,16 +50,20 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PARAMETERS
 // ================================================================
 $bill_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? $_GET['branch_id'] ?? 'all';
+$selected_branch_id = $_GET['branch'] ?? 'all';
 
 if ($bill_id <= 0) {
     header('Location: bills.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
@@ -67,23 +71,22 @@ if ($bill_id <= 0) {
 }
 
 // ================================================================
-// FETCH BILL DETAILS
+// FETCH BILL DETAILS - USING bills TABLE
 // ================================================================
 try {
     $stmt = $db->prepare("
         SELECT 
-            pb.*,
+            b.*,
             p.full_name as patient_name,
             p.patient_id as patient_code,
             p.phone as patient_phone,
             u.full_name as created_by_name,
-            b.name as branch_name,
-            (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id AND status != 'cancelled') as items_count
-        FROM patient_bills pb
-        LEFT JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        LEFT JOIN branches b ON pb.branch_id = b.id
-        WHERE pb.id = ?
+            br.name as branch_name
+        FROM bills b
+        LEFT JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        LEFT JOIN branches br ON b.branch_id = br.id
+        WHERE b.id = ?
     ");
     $stmt->execute([$bill_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -105,11 +108,18 @@ $bill_items = [];
 try {
     $stmt = $db->prepare("
         SELECT 
-            bi.*,
-            (SELECT full_name FROM users WHERE id = bi.reference_id) as referenced_by_name
-        FROM bill_items bi
-        WHERE bi.bill_id = ?
-        ORDER BY bi.created_at ASC
+            id,
+            item_type,
+            item_name,
+            description,
+            quantity,
+            unit_price,
+            total_price,
+            status,
+            created_at
+        FROM bill_items
+        WHERE bill_id = ?
+        ORDER BY created_at ASC
     ");
     $stmt->execute([$bill_id]);
     $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -126,12 +136,13 @@ $item_types = [
     'lab_test' => 'Lab Test',
     'medication' => 'Medication',
     'procedure' => 'Procedure',
+    'equipment' => 'Equipment',
     'tool' => 'Tool/Supply',
     'other' => 'Other'
 ];
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// GET BRANCHES
 // ================================================================
 $branches = [];
 try {
@@ -175,9 +186,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $balance = $grand_total - $paid_amount;
             if ($balance < 0) $balance = 0;
             
-            // Update bill
+            // Update bill - using bills table
             $stmt = $db->prepare("
-                UPDATE patient_bills 
+                UPDATE bills 
                 SET 
                     discount_amount = ?,
                     discount_percent = ?,
@@ -209,17 +220,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Refresh bill data
             $stmt = $db->prepare("
                 SELECT 
-                    pb.*,
+                    b.*,
                     p.full_name as patient_name,
                     p.patient_id as patient_code,
                     p.phone as patient_phone,
                     u.full_name as created_by_name,
-                    b.name as branch_name
-                FROM patient_bills pb
-                LEFT JOIN patients p ON pb.patient_id = p.id
-                LEFT JOIN users u ON pb.created_by = u.id
-                LEFT JOIN branches b ON pb.branch_id = b.id
-                WHERE pb.id = ?
+                    br.name as branch_name
+                FROM bills b
+                LEFT JOIN patients p ON b.patient_id = p.id
+                LEFT JOIN users u ON b.created_by = u.id
+                LEFT JOIN branches br ON b.branch_id = br.id
+                WHERE b.id = ?
             ");
             $stmt->execute([$bill_id]);
             $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -239,8 +250,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $quantity = isset($_POST['quantity']) ? (int)$_POST['quantity'] : 1;
         $unit_price = isset($_POST['unit_price']) ? floatval(str_replace(',', '', $_POST['unit_price'])) : 0;
         $description = trim($_POST['description'] ?? '');
-        $service_type = trim($_POST['service_type'] ?? '');
-        $department = trim($_POST['department'] ?? '');
         
         if (empty($item_name)) {
             $message = "❌ Item name is required";
@@ -256,32 +265,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->beginTransaction();
                 
                 $total_price = $quantity * $unit_price;
+                $branch_id = $bill['branch_id'] ?? 1;
                 
                 $stmt = $db->prepare("
                     INSERT INTO bill_items (
-                        bill_id, branch_id, item_type, item_name,
-                        quantity, unit_price, total_price,
-                        payment_status, is_paid, status,
-                        description, department, service_type,
-                        created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, 'pending', ?, ?, ?, NOW())
+                        bill_id, patient_id, branch_id, item_type, item_name,
+                        description, quantity, unit_price, total_price,
+                        status, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
                 ");
                 $stmt->execute([
                     $bill_id,
-                    $selected_branch_id,
+                    $bill['patient_id'],
+                    $branch_id,
                     $item_type,
                     $item_name,
+                    $description,
                     $quantity,
                     $unit_price,
-                    $total_price,
-                    $description,
-                    $department,
-                    $service_type
+                    $total_price
                 ]);
                 
                 // Update bill totals
                 $stmt = $db->prepare("
-                    UPDATE patient_bills 
+                    UPDATE bills 
                     SET subtotal = subtotal + ?,
                         total_amount = total_amount + ?,
                         balance = balance + ?,
@@ -298,24 +305,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Refresh data
                 $stmt = $db->prepare("
                     SELECT 
-                        pb.*,
+                        b.*,
                         p.full_name as patient_name,
                         p.patient_id as patient_code,
                         p.phone as patient_phone,
                         u.full_name as created_by_name,
-                        b.name as branch_name
-                    FROM patient_bills pb
-                    LEFT JOIN patients p ON pb.patient_id = p.id
-                    LEFT JOIN users u ON pb.created_by = u.id
-                    LEFT JOIN branches b ON pb.branch_id = b.id
-                    WHERE pb.id = ?
+                        br.name as branch_name
+                    FROM bills b
+                    LEFT JOIN patients p ON b.patient_id = p.id
+                    LEFT JOIN users u ON b.created_by = u.id
+                    LEFT JOIN branches br ON b.branch_id = br.id
+                    WHERE b.id = ?
                 ");
                 $stmt->execute([$bill_id]);
                 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 // Refresh items
                 $stmt = $db->prepare("
-                    SELECT * FROM bill_items WHERE bill_id = ? ORDER BY created_at ASC
+                    SELECT 
+                        id,
+                        item_type,
+                        item_name,
+                        description,
+                        quantity,
+                        unit_price,
+                        total_price,
+                        status,
+                        created_at
+                    FROM bill_items
+                    WHERE bill_id = ?
+                    ORDER BY created_at ASC
                 ");
                 $stmt->execute([$bill_id]);
                 $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -352,7 +371,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     
                     // Update bill totals
                     $stmt = $db->prepare("
-                        UPDATE patient_bills 
+                        UPDATE bills 
                         SET subtotal = subtotal - ?,
                             total_amount = total_amount - ?,
                             balance = balance - ?,
@@ -370,24 +389,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // Refresh data
                 $stmt = $db->prepare("
                     SELECT 
-                        pb.*,
+                        b.*,
                         p.full_name as patient_name,
                         p.patient_id as patient_code,
                         p.phone as patient_phone,
                         u.full_name as created_by_name,
-                        b.name as branch_name
-                    FROM patient_bills pb
-                    LEFT JOIN patients p ON pb.patient_id = p.id
-                    LEFT JOIN users u ON pb.created_by = u.id
-                    LEFT JOIN branches b ON pb.branch_id = b.id
-                    WHERE pb.id = ?
+                        br.name as branch_name
+                    FROM bills b
+                    LEFT JOIN patients p ON b.patient_id = p.id
+                    LEFT JOIN users u ON b.created_by = u.id
+                    LEFT JOIN branches br ON b.branch_id = br.id
+                    WHERE b.id = ?
                 ");
                 $stmt->execute([$bill_id]);
                 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 // Refresh items
                 $stmt = $db->prepare("
-                    SELECT * FROM bill_items WHERE bill_id = ? ORDER BY created_at ASC
+                    SELECT 
+                        id,
+                        item_type,
+                        item_name,
+                        description,
+                        quantity,
+                        unit_price,
+                        total_price,
+                        status,
+                        created_at
+                    FROM bill_items
+                    WHERE bill_id = ?
+                    ORDER BY created_at ASC
                 ");
                 $stmt->execute([$bill_id]);
                 $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -403,7 +434,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
-// STATUS BADGE CLASS
+// STATUS FUNCTIONS
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
@@ -418,19 +449,6 @@ function getStatusBadge($status) {
     return $classes[$status] ?? 'secondary';
 }
 
-function getStatusIcon($status) {
-    $icons = [
-        'active' => 'fa-check-circle',
-        'inactive' => 'fa-times-circle',
-        'pending' => 'fa-clock',
-        'paid' => 'fa-check-circle',
-        'partial' => 'fa-clock',
-        'cancelled' => 'fa-times-circle',
-        'completed' => 'fa-check-circle'
-    ];
-    return $icons[$status] ?? 'fa-circle';
-}
-
 function getItemTypeColor($type) {
     $colors = [
         'registration' => 'blue',
@@ -438,7 +456,8 @@ function getItemTypeColor($type) {
         'lab_test' => 'orange',
         'medication' => 'green',
         'procedure' => 'red',
-        'tool' => 'teal',
+        'equipment' => 'teal',
+        'tool' => 'gray',
         'other' => 'gray'
     ];
     return $colors[$type] ?? 'gray';
@@ -451,6 +470,7 @@ function getItemTypeLabel($type) {
         'lab_test' => 'Lab Test',
         'medication' => 'Medication',
         'procedure' => 'Procedure',
+        'equipment' => 'Equipment',
         'tool' => 'Tool/Supply',
         'other' => 'Other'
     ];
@@ -467,13 +487,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE HEADERS
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -491,9 +507,6 @@ include_once '../../components/admin_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - GREEN THEME
-           ================================================================ */
         :root {
             --primary: #059669;
             --primary-dark: #047857;
@@ -501,46 +514,16 @@ include_once '../../components/admin_sidebar.php';
             --primary-bg: #D1FAE5;
             --primary-gradient: linear-gradient(135deg, #059669, #047857);
             --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            
             --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
             --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
-            
             --teal: #0D9488;
             --teal-bg: #ECFDF5;
-            
-            --orange: #F59E0B;
-            --orange-bg: #FFFBEB;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
             --bg-body: #F0FDF4;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -549,6 +532,9 @@ include_once '../../components/admin_sidebar.php';
             --border-color: #D1FAE5;
             --radius: 12px;
             --radius-lg: 18px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
             --table-hover: #ECFDF5;
         }
         
@@ -560,12 +546,7 @@ include_once '../../components/admin_sidebar.php';
             --text-secondary: #94A3B8;
             --border-color: #334155;
             --primary: #34D399;
-            --primary-dark: #059669;
-            --primary-light: #6EE7B7;
             --primary-bg: #1A3A2A;
-            --primary-gradient: linear-gradient(135deg, #059669, #047857);
-            --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --table-hover: #1A3A2A;
@@ -580,13 +561,6 @@ include_once '../../components/admin_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -600,7 +574,6 @@ include_once '../../components/admin_sidebar.php';
             justify-content: space-between;
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
             backdrop-filter: blur(10px);
             box-shadow: var(--shadow-sm);
         }
@@ -611,14 +584,8 @@ include_once '../../components/admin_sidebar.php';
             background: var(--bg-body);
             border-radius: var(--radius);
             border: 2px solid var(--border-color);
-            transition: all 0.3s;
             flex: 1;
             max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
         }
         
         .top-nav .search-wrapper input {
@@ -631,10 +598,6 @@ include_once '../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
         .top-nav .search-wrapper .search-btn {
             background: var(--primary-gradient);
             color: white;
@@ -643,25 +606,6 @@ include_once '../../components/admin_sidebar.php';
             border-radius: 0 var(--radius) var(--radius) 0;
             cursor: pointer;
             font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
         }
         
         .top-nav .avatar {
@@ -671,12 +615,6 @@ include_once '../../components/admin_sidebar.php';
             object-fit: cover;
             border: 2px solid var(--border-color);
             cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
         }
         
         .top-nav .icon-btn {
@@ -687,16 +625,10 @@ include_once '../../components/admin_sidebar.php';
             align-items: center;
             justify-content: center;
             color: var(--text-secondary);
-            transition: all 0.3s;
             background: transparent;
             border: none;
             cursor: pointer;
             position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
         }
         
         .notif-dot {
@@ -726,18 +658,10 @@ include_once '../../components/admin_sidebar.php';
             cursor: pointer;
             font-size: 0.82rem;
             color: var(--text-primary);
-            transition: all 0.3s;
             display: flex;
             align-items: center;
             gap: 6px;
         }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
         
         .branch-selector {
             background: var(--bg-body);
@@ -748,16 +672,8 @@ include_once '../../components/admin_sidebar.php';
             color: var(--text-primary);
             outline: none;
             cursor: pointer;
-            transition: all 0.3s;
         }
         
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -765,9 +681,6 @@ include_once '../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - GREEN THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
@@ -783,30 +696,6 @@ include_once '../../components/admin_sidebar.php';
             overflow: hidden;
         }
         
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -819,10 +708,7 @@ include_once '../../components/admin_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -833,11 +719,6 @@ include_once '../../components/admin_sidebar.php';
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
         }
         
         .page-header .role-badge-display {
@@ -864,12 +745,6 @@ include_once '../../components/admin_sidebar.php';
             align-items: center;
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
         }
         
         .page-header .btn-outline-light {
@@ -880,7 +755,6 @@ include_once '../../components/admin_sidebar.php';
             border-radius: var(--radius);
             font-weight: 500;
             font-size: 0.82rem;
-            transition: all 0.3s;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -896,9 +770,6 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           FORM CARD - GREEN THEME
-           ================================================================ */
         .form-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -950,9 +821,6 @@ include_once '../../components/admin_sidebar.php';
             margin-top: 2px;
         }
         
-        /* ================================================================
-           FORM ELEMENTS
-           ================================================================ */
         .form-label {
             font-size: 0.78rem;
             font-weight: 600;
@@ -1000,28 +868,13 @@ include_once '../../components/admin_sidebar.php';
             cursor: not-allowed;
         }
         
-        select.form-control {
-            appearance: auto;
-            cursor: pointer;
-        }
+        select.form-control { appearance: auto; cursor: pointer; }
+        textarea.form-control { resize: vertical; min-height: 80px; }
         
-        textarea.form-control {
-            resize: vertical;
-            min-height: 80px;
-        }
-        
-        .grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-        
+        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .form-row { margin-bottom: 20px; }
         .form-row:last-child { margin-bottom: 0; }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -1040,7 +893,6 @@ include_once '../../components/admin_sidebar.php';
         .badge-info { background: #0B5ED7; }
         .badge-secondary { background: #64748B; }
         .badge-purple { background: #7C3AED; }
-        .badge-teal { background: #0D9488; }
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
@@ -1070,9 +922,6 @@ include_once '../../components/admin_sidebar.php';
         [data-theme="dark"] .item-type-badge.teal { background: #0F3D3D; color: #5EEAD4; }
         [data-theme="dark"] .item-type-badge.gray { background: #334155; color: #94A3B8; }
         
-        /* ================================================================
-           BUTTONS - GREEN THEME
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1087,50 +936,35 @@ include_once '../../components/admin_sidebar.php';
             text-decoration: none;
         }
         
-        .btn:hover {
-            transform: translateY(-2px);
-        }
+        .btn:hover { transform: translateY(-2px); }
         
         .btn-primary {
             background: var(--primary-gradient);
             color: white;
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
         }
-        
-        .btn-primary:hover {
-            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
-        }
+        .btn-primary:hover { box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35); }
         
         .btn-success {
             background: var(--success);
             color: white;
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
         }
-        
-        .btn-success:hover {
-            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
-        }
+        .btn-success:hover { box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35); }
         
         .btn-outline {
             background: transparent;
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
         }
-        
-        .btn-outline:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
+        .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
         
         .btn-danger {
             background: var(--danger);
             color: white;
             box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
         }
-        
-        .btn-danger:hover {
-            box-shadow: 0 6px 24px rgba(220, 38, 38, 0.35);
-        }
+        .btn-danger:hover { box-shadow: 0 6px 24px rgba(220, 38, 38, 0.35); }
         
         .btn-sm {
             padding: 5px 14px;
@@ -1147,9 +981,6 @@ include_once '../../components/admin_sidebar.php';
             flex-wrap: wrap;
         }
         
-        /* ================================================================
-           DATA TABLE - GREEN THEME
-           ================================================================ */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1180,10 +1011,6 @@ include_once '../../components/admin_sidebar.php';
             gap: 8px;
         }
         
-        .table-container .card-header .card-title i {
-            color: rgba(255,255,255,0.8);
-        }
-        
         .table-container .card-header .card-badge {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -1211,9 +1038,7 @@ include_once '../../components/admin_sidebar.php';
             text-align: left;
         }
         
-        [data-theme="dark"] .data-table thead th {
-            background: #0F172A;
-        }
+        [data-theme="dark"] .data-table thead th { background: #0F172A; }
         
         .data-table td {
             padding: 8px 14px;
@@ -1222,25 +1047,12 @@ include_once '../../components/admin_sidebar.php';
             vertical-align: middle;
         }
         
-        .data-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
+        .data-table tbody tr:hover td { background: var(--table-hover); }
+        .data-table tbody tr:last-child td { border-bottom: none; }
+        .data-table tbody tr:nth-child(even) { background: var(--gray-50); }
         
-        .data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
+        [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: #1A3A2A; }
         
-        .data-table tbody tr:nth-child(even) {
-            background: var(--gray-50);
-        }
-        
-        [data-theme="dark"] .data-table tbody tr:nth-child(even) {
-            background: #1A3A2A;
-        }
-        
-        /* ================================================================
-           ALERT
-           ================================================================ */
         .alert {
             padding: 12px 16px;
             border-radius: 8px;
@@ -1257,15 +1069,10 @@ include_once '../../components/admin_sidebar.php';
             color: #065F46;
             border-color: #34D399;
         }
-        
         .alert-danger {
             background: #FEE2E2;
             color: #991B1B;
             border-color: #F87171;
-        }
-        
-        .alert i {
-            font-size: 1.1rem;
         }
         
         [data-theme="dark"] .alert-success {
@@ -1273,16 +1080,12 @@ include_once '../../components/admin_sidebar.php';
             color: #34D399;
             border-color: #059669;
         }
-        
         [data-theme="dark"] .alert-danger {
             background: #3A1A1A;
             color: #F87171;
             border-color: #DC2626;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1300,18 +1103,12 @@ include_once '../../components/admin_sidebar.php';
             color: white;
             box-shadow: 0 10px 40px rgba(0,0,0,0.15);
         }
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -1320,15 +1117,15 @@ include_once '../../components/admin_sidebar.php';
             font-size: 0.7rem;
             color: var(--text-secondary);
         }
+        .footer .footer-brand { color: var(--primary); font-weight: 700; }
         
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 700;
-        }
+        .text-xl { font-size: 1.25rem; }
+        .font-bold { font-weight: 700; }
+        .text-green-600 { color: var(--success); }
+        .text-blue-600 { color: #0B5ED7; }
+        .text-purple-600 { color: var(--purple); }
+        .text-red-600 { color: var(--danger); }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1351,13 +1148,8 @@ include_once '../../components/admin_sidebar.php';
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
-            .data-table { font-size: 0.55rem; }
-            .data-table thead th, .data-table td { padding: 4px 6px; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1368,9 +1160,6 @@ include_once '../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
@@ -1393,7 +1182,7 @@ include_once '../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1444,9 +1233,7 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER - GREEN THEME -->
-    <!-- ================================================================ -->
+    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1472,7 +1259,7 @@ include_once '../../components/admin_sidebar.php';
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+            <a href="bill_details.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-eye"></i> View
             </a>
             <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
@@ -1597,7 +1384,7 @@ include_once '../../components/admin_sidebar.php';
                 <button type="submit" class="btn btn-primary">
                     <i class="fas fa-save"></i> Update Bill
                 </button>
-                <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                <a href="bill_details.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
@@ -1651,8 +1438,8 @@ include_once '../../components/admin_sidebar.php';
                                     TSh <?= number_format($item['total_price'] ?? 0, 0) ?>
                                 </td>
                                 <td>
-                                    <span class="badge badge-<?= ($item['payment_status'] ?? 'pending') === 'paid' ? 'success' : 'warning' ?>">
-                                        <?= ucfirst($item['payment_status'] ?? 'Pending') ?>
+                                    <span class="badge badge-<?= ($item['status'] ?? 'pending') === 'paid' ? 'success' : 'warning' ?>">
+                                        <?= ucfirst($item['status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
                                 <td style="text-align:center;">
@@ -1752,24 +1539,6 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
             
-            <div class="grid-2">
-                <div class="form-row">
-                    <label class="form-label">
-                        <i class="fas fa-building label-icon"></i> Department
-                        <span class="label-badge">Optional</span>
-                    </label>
-                    <input type="text" name="department" class="form-control" placeholder="e.g. Medical, Laboratory">
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">
-                        <i class="fas fa-tag label-icon"></i> Service Type
-                        <span class="label-badge">Optional</span>
-                    </label>
-                    <input type="text" name="service_type" class="form-control" placeholder="e.g. Consultation, Test">
-                </div>
-            </div>
-            
             <div class="form-row">
                 <label class="form-label">
                     <i class="fas fa-align-left label-icon"></i> Description
@@ -1805,6 +1574,17 @@ include_once '../../components/admin_sidebar.php';
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
+    <div>
+        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
+        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
@@ -1936,13 +1716,13 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c📄 Braick Dispensary - Edit Bill (GREEN THEME)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c📄 Braick Dispensary - Edit Bill', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?> (ID: <?= $bill_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c💰 Total: TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🟢 Green Theme Applied', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Using tables: bills, bill_items, patients, users, branches', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

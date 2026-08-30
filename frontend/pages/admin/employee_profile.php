@@ -2,12 +2,12 @@
 // ================================================================
 // FILE: frontend/pages/admin/employee_profile.php
 // SUPER ADMIN - EMPLOYEE PROFILE
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
 // ================================================================
-// SESSION START
+// START SESSION
 // ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -48,10 +48,17 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET EMPLOYEE ID
@@ -82,83 +89,16 @@ if (!$employee) {
 }
 
 // ================================================================
-// GET EMPLOYEE ROLES
+// AVAILABLE ROLES (from users table ENUM)
 // ================================================================
-$employee_roles = [];
-try {
-    $stmt = $db->prepare("
-        SELECT r.id, r.name, r.description 
-        FROM employee_roles er
-        JOIN roles r ON er.role_id = r.id
-        WHERE er.user_id = ?
-        ORDER BY r.name
-    ");
-    $stmt->execute([$employee_id]);
-    $employee_roles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $employee_roles = [];
-}
-
-// If no roles in employee_roles, check if user has role from users table
-if (empty($employee_roles) && !empty($employee['role'])) {
-    try {
-        $stmt = $db->prepare("SELECT id, name, description FROM roles WHERE name = ?");
-        $stmt->execute([$employee['role']]);
-        $primary_role = $stmt->fetch(PDO::FETCH_ASSOC);
-        if ($primary_role) {
-            $employee_roles[] = $primary_role;
-        } else {
-            $employee_roles[] = [
-                'id' => 0,
-                'name' => ucfirst($employee['role']),
-                'description' => 'Primary role'
-            ];
-        }
-    } catch (Exception $e) {
-        $employee_roles[] = [
-            'id' => 0,
-            'name' => ucfirst($employee['role']),
-            'description' => 'Primary role'
-        ];
-    }
-}
-
-// ================================================================
-// GET EMPLOYEE DEPARTMENTS
-// ================================================================
-$employee_departments = [];
-try {
-    $stmt = $db->prepare("
-        SELECT d.id, d.name, d.description 
-        FROM employee_departments ed
-        JOIN departments d ON ed.department_id = d.id
-        WHERE ed.user_id = ?
-        ORDER BY d.name
-    ");
-    $stmt->execute([$employee_id]);
-    $employee_departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $employee_departments = [];
-}
-
-// ================================================================
-// GET ALL ROLES AND DEPARTMENTS (for info)
-// ================================================================
-$all_roles = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM roles ORDER BY name");
-    $all_roles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $all_roles = [];
-}
-
-$all_departments = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM departments ORDER BY name");
-    $all_departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $all_departments = [];
-}
+$available_roles = [
+    'doctor' => ['name' => 'Medical Doctor', 'icon' => 'fa-user-md', 'color' => '#059669'],
+    'pharmacy' => ['name' => 'Pharmacy Staff', 'icon' => 'fa-prescription-bottle', 'color' => '#7C3AED'],
+    'reception' => ['name' => 'Receptionist', 'icon' => 'fa-headset', 'color' => '#0B5ED7'],
+    'laboratory' => ['name' => 'Lab Technician', 'icon' => 'fa-flask', 'color' => '#0D9488'],
+    'cashier' => ['name' => 'Cashier', 'icon' => 'fa-cash-register', 'color' => '#D97706'],
+    'admin' => ['name' => 'Administrator', 'icon' => 'fa-user-tie', 'color' => '#DC2626']
+];
 
 // ================================================================
 // GET BRANCHES FOR SELECTOR
@@ -213,6 +153,20 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
+// GET BRANCH STAFF COUNT
+// ================================================================
+$branch_staff_count = 0;
+if (!empty($employee['branch_id'])) {
+    try {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE branch_id = ? AND role != 'admin'");
+        $stmt->execute([$employee['branch_id']]);
+        $branch_staff_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    } catch (Exception $e) {
+        $branch_staff_count = 0;
+    }
+}
+
+// ================================================================
 // PROFILE PICTURE URL
 // ================================================================
 $profile_pic_url = !empty($profile_pic) 
@@ -222,321 +176,530 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE HEADERS
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
-$selected_branch_id = $selected_branch_id ?? 'all';
-$total_employees = $total_employees ?? 0;
-$total_doctors = $total_doctors ?? 0;
-$total_branches = $total_branches ?? 0;
-$pending_lab_tests = $pending_lab_tests ?? 0;
-$pending_prescriptions = $pending_prescriptions ?? 0;
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<style>
-    /* ================================================================
-       PROFILE STYLES
-       ================================================================ */
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Employee Profile - Braick Dispensary</title>
     
-    .profile-avatar {
-        width: 100px;
-        height: 100px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 3rem;
-        font-weight: 700;
-        background: #E8F0FE;
-        color: #0B5ED7;
-        border: 4px solid #0B5ED7;
-        flex-shrink: 0;
-    }
+    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
     
-    [data-theme="dark"] .profile-avatar {
-        background: #1E3A5F;
-        color: #6EA8FE;
-        border-color: #6EA8FE;
-    }
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
-    .info-label {
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-    }
-    
-    .info-value {
-        font-size: 0.95rem;
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-    
-    .badge {
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: white;
-        border: none;
-    }
-    
-    .badge-success { background: #059669; color: white; }
-    .badge-danger { background: #EF4444; color: white; }
-    .badge-info { background: #0B5ED7; color: white; }
-    .badge-warning { background: #F59E0B; color: white; }
-    .badge-purple { background: #7B2FBE; color: white; }
-    
-    .role-badge {
-        padding: 6px 16px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        background: #E8F0FE;
-        color: #0B5ED7;
-        border: 1px solid #D2E3FC;
-        transition: all 0.3s ease;
-    }
-    
-    .role-badge:hover {
-        transform: scale(1.02);
-        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.15);
-    }
-    
-    [data-theme="dark"] .role-badge {
-        background: #1E3A5F;
-        color: #6EA8FE;
-        border-color: #1E3A5F;
-    }
-    
-    .dept-badge {
-        padding: 6px 16px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        background: #ECFDF5;
-        color: #059669;
-        border: 1px solid #D1FAE5;
-        transition: all 0.3s ease;
-    }
-    
-    .dept-badge:hover {
-        transform: scale(1.02);
-        box-shadow: 0 2px 8px rgba(5, 150, 105, 0.15);
-    }
-    
-    [data-theme="dark"] .dept-badge {
-        background: #1A3A2A;
-        color: #34D399;
-        border-color: #1A3A2A;
-    }
-    
-    /* Card */
-    .card {
-        background: var(--bg-card);
-        border-radius: 20px;
-        padding: 24px;
-        border: 2px solid var(--border-color);
-        transition: all 0.3s ease;
-    }
-    
-    .card:hover {
-        border-color: #0B5ED7;
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
-    }
-    
-    .card-title {
-        font-size: 1.05rem;
-        font-weight: 700;
-        color: #0B5ED7;
-        border-bottom: 2px solid var(--border-color);
-        padding-bottom: 12px;
-        margin-bottom: 16px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    [data-theme="dark"] .card-title {
-        color: #6EA8FE;
-    }
-    
-    .empty-state {
-        background: #FEF3C7;
-        border: 1px solid #F59E0B;
-        border-radius: 10px;
-        padding: 14px 18px;
-        color: #92400E;
-        font-size: 0.85rem;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    [data-theme="dark"] .empty-state {
-        background: #3A2A1A;
-        border-color: #F59E0B;
-        color: #FBBF24;
-    }
-    
-    /* Stat Box */
-    .stat-box {
-        text-align: center;
-        padding: 16px;
-        border-radius: 12px;
-        background: var(--bg-body);
-        border: 1px solid var(--border-color);
-        transition: all 0.3s ease;
-    }
-    
-    .stat-box:hover {
-        border-color: #0B5ED7;
-        background: #E8F0FE;
-        transform: translateY(-2px);
-    }
-    
-    [data-theme="dark"] .stat-box:hover {
-        background: #1E3A5F;
-    }
-    
-    .stat-box .stat-number {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #0B5ED7;
-    }
-    
-    [data-theme="dark"] .stat-box .stat-number {
-        color: #6EA8FE;
-    }
-    
-    .stat-box .stat-label {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    
-    .page-header {
-        border-bottom: 3px solid #0B5ED7;
-        padding-bottom: 12px;
-    }
-    
-    .page-header .page-title {
-        color: #0B3D8A;
-        font-size: 1.8rem;
-        font-weight: 700;
-    }
-    
-    [data-theme="dark"] .page-header .page-title {
-        color: #6EA8FE;
-    }
-    
-    .page-header .page-subtitle {
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-    }
-    
-    .page-header .branch-tag {
-        background: #059669;
-        color: white;
-        padding: 3px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }
-    
-    .footer {
-        padding: 14px 0;
-        border-top: 2px solid var(--border-color);
-        margin-top: 20px;
-        text-align: center;
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    
-    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
-    
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
-        padding: 8px 20px;
-        border-radius: 10px;
-        font-weight: 600;
-        font-size: 0.85rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-        min-height: 38px;
-    }
-    
-    .btn-green {
-        background: linear-gradient(135deg, #059669, #047857);
-        color: white;
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
-    
-    .btn-green:hover {
-        background: linear-gradient(135deg, #047857, #065F46);
-        transform: translateY(-2px);
-        box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-primary);
-        border: 2px solid var(--border-color);
-    }
-    
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-        transform: translateY(-2px);
-    }
-    
-    .btn-sm {
-        padding: 6px 14px;
-        font-size: 0.75rem;
-        min-height: 32px;
-    }
-    
-    @media (max-width: 640px) {
-        .profile-avatar {
-            width: 70px;
-            height: 70px;
-            font-size: 2rem;
+    <style>
+        :root {
+            --primary: #0B5ED7;
+            --primary-bg: #E8F0FE;
+            --success: #059669;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --bg-body: #F0F4F8;
+            --bg-card: #FFFFFF;
+            --bg-nav: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --border-color: #E2E8F0;
+            --radius: 12px;
+            --radius-lg: 18px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
         }
-        .card {
-            padding: 16px;
+        
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --bg-nav: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --border-color: #334155;
+            --primary: #3B82F6;
+            --primary-bg: #1E3A5F;
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
         }
-        .stat-box {
-            padding: 12px;
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
         }
-        .stat-box .stat-number {
-            font-size: 1.2rem;
+        
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            backdrop-filter: blur(10px);
+            box-shadow: var(--shadow-sm);
         }
+        
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: var(--radius);
+            border: 2px solid var(--border-color);
+            flex: 1;
+            max-width: 500px;
+        }
+        
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .top-nav .search-wrapper .search-btn {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .branch-selector {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 6px 12px;
+            font-size: 0.78rem;
+            color: var(--text-primary);
+            outline: none;
+            cursor: pointer;
+        }
+        
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+        
+        .page-header {
+            border-bottom: 3px solid var(--primary);
+            padding-bottom: 16px;
+            margin-bottom: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+        }
+        
         .page-header .page-title {
-            font-size: 1.2rem;
+            color: var(--primary);
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
         }
-    }
-</style>
+        
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
+        
+        .page-header .page-subtitle {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .page-header .branch-tag {
+            background: var(--primary);
+            color: white;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 24px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .card-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: var(--primary);
+            border-bottom: 2px solid var(--border-color);
+            padding-bottom: 12px;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        [data-theme="dark"] .card-title {
+            color: #6EA8FE;
+        }
+        
+        .info-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .info-value {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .badge {
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: white;
+            border: none;
+        }
+        
+        .badge-success { background: var(--success); }
+        .badge-danger { background: var(--danger); }
+        .badge-info { background: var(--primary); }
+        .badge-warning { background: var(--warning); color: #1E293B; }
+        .badge-purple { background: #7C3AED; }
+        
+        [data-theme="dark"] .badge-warning { color: #1E293B; }
+        
+        .role-badge {
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--primary-bg);
+            color: var(--primary);
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        
+        .role-badge:hover {
+            transform: scale(1.02);
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.15);
+        }
+        
+        .stat-box {
+            text-align: center;
+            padding: 16px;
+            border-radius: var(--radius);
+            background: var(--bg-body);
+            border: 1px solid var(--border-color);
+            transition: all 0.3s ease;
+        }
+        
+        .stat-box:hover {
+            border-color: var(--primary);
+            background: var(--primary-bg);
+            transform: translateY(-2px);
+        }
+        
+        .stat-box .stat-number {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        .stat-box .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 8px 20px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            min-height: 38px;
+        }
+        
+        .btn:hover { transform: translateY(-2px); }
+        
+        .btn-green {
+            background: var(--success);
+            color: white;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-green:hover { box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4); }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-primary);
+            border: 2px solid var(--border-color);
+        }
+        
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 0.75rem;
+            min-height: 32px;
+        }
+        
+        .empty-state {
+            background: var(--warning-bg);
+            border: 1px solid var(--warning);
+            border-radius: 10px;
+            padding: 14px 18px;
+            color: #92400E;
+            font-size: 0.85rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        [data-theme="dark"] .empty-state {
+            background: #3A2A1A;
+            border-color: #F59E0B;
+            color: #FBBF24;
+        }
+        
+        .profile-avatar {
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 3rem;
+            font-weight: 700;
+            background: var(--primary-bg);
+            color: var(--primary);
+            border: 4px solid var(--primary);
+            flex-shrink: 0;
+        }
+        
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
+        .grid { display: grid; }
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .lg\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .gap-4 { gap: 16px; }
+        .gap-5 { gap: 20px; }
+        .mb-5 { margin-bottom: 20px; }
+        .mt-2 { margin-top: 8px; }
+        .mt-3 { margin-top: 12px; }
+        .space-y-3 > * + * { margin-top: 12px; }
+        .space-y-5 > * + * { margin-top: 20px; }
+        .flex { display: flex; }
+        .flex-wrap { flex-wrap: wrap; }
+        .flex-col { flex-direction: column; }
+        .items-center { align-items: center; }
+        .justify-center { justify-content: center; }
+        .justify-between { justify-content: space-between; }
+        .gap-2 { gap: 8px; }
+        .gap-3 { gap: 12px; }
+        .gap-6 { gap: 24px; }
+        .text-center { text-align: center; }
+        .text-xs { font-size: 0.65rem; }
+        .text-sm { font-size: 0.75rem; }
+        .text-2xl { font-size: 1.5rem; }
+        .font-bold { font-weight: 700; }
+        .font-normal { font-weight: 400; }
+        .capitalize { text-transform: capitalize; }
+        .text-gray-400 { color: var(--text-secondary); }
+        .text-gray-500 { color: var(--text-secondary); }
+        .text-gray-800 { color: var(--text-primary); }
+        .ml-1 { margin-left: 4px; }
+        .ml-2 { margin-left: 8px; }
+        .mr-1 { margin-right: 4px; }
+        .mr-2 { margin-right: 8px; }
+        .md\:flex-row { flex-direction: row; }
+        .md\:text-left { text-align: left; }
+        .md\:justify-start { justify-content: flex-start; }
+        
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav .search-wrapper { max-width: 300px; }
+        }
+        
+        @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
+            .page-header { flex-direction: column; align-items: flex-start !important; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .card { padding: 16px; }
+            .lg\:grid-cols-2 { grid-template-columns: 1fr; }
+            .grid-cols-2 { grid-template-columns: 1fr; }
+            .profile-avatar { width: 70px; height: 70px; font-size: 2rem; }
+            .stat-box .stat-number { font-size: 1.2rem; }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+        }
+        
+        @media print {
+            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
+            .search-wrapper, .footer, #sidebarToggle { display: none !important; }
+            .main-content { margin: 0; padding: 20px; }
+            .card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
+            .page-header { border-color: #0B5ED7 !important; }
+            .badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        }
+    </style>
+</head>
+<body>
 
 <!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
@@ -568,7 +731,6 @@ include_once '../../components/admin_sidebar.php';
         
         <span class="datetime" id="currentDateTime"></span>
         
-        <!-- Dark Mode Toggle -->
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
@@ -592,17 +754,17 @@ include_once '../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-user-circle mr-2" style="color: var(--blue-600);"></i> Employee Profile
+                <i class="fas fa-user-circle"></i> Employee Profile
             </h1>
             <p class="page-subtitle">
-                View employee details, roles and departments
-                <span class="branch-tag ml-2">
+                View employee details, role and branch information
+                <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
                 </span>
-                <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
+                <span class="ml-2 inline-flex bg-primary-bg text-primary px-3 py-1 rounded-full text-xs border border-primary/20">
                     <i class="fas fa-user mr-1"></i> <?= htmlspecialchars($employee['full_name']) ?>
                 </span>
             </p>
@@ -627,10 +789,10 @@ include_once '../../components/admin_sidebar.php';
             </div>
             
             <div class="flex-1 text-center md:text-left">
-                <h2 class="text-2xl font-bold text-gray-800"><?= htmlspecialchars($employee['full_name']) ?></h2>
-                <p class="text-gray-500">
+                <h2 class="text-2xl font-bold text-gray-800 dark:text-gray-200"><?= htmlspecialchars($employee['full_name']) ?></h2>
+                <p class="text-gray-500 dark:text-gray-400">
                     <i class="fas fa-briefcase mr-1"></i> 
-                    <?= ucfirst(htmlspecialchars($employee['role'])) ?>
+                    <?= htmlspecialchars($available_roles[$employee['role']]['name'] ?? ucfirst($employee['role'])) ?>
                 </p>
                 <div class="flex flex-wrap gap-2 mt-2 justify-center md:justify-start">
                     <span class="badge badge-info">
@@ -640,8 +802,13 @@ include_once '../../components/admin_sidebar.php';
                         <i class="fas fa-circle text-[6px]"></i> <?= ucfirst($employee['status'] ?? 'Active') ?>
                     </span>
                     <span class="badge badge-warning">
-                        <i class="fas fa-id-card mr-1"></i> ID: <?= htmlspecialchars($employee['username']) ?>
+                        <i class="fas fa-id-card mr-1"></i> <?= htmlspecialchars($employee['username']) ?>
                     </span>
+                    <?php if (!empty($employee['specialty'])): ?>
+                        <span class="badge badge-purple">
+                            <i class="fas fa-stethoscope mr-1"></i> <?= htmlspecialchars($employee['specialty']) ?>
+                        </span>
+                    <?php endif; ?>
                 </div>
             </div>
         </div>
@@ -652,12 +819,12 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5 animate-fade-in-up">
         <div class="stat-box">
-            <p class="stat-number"><?= count($employee_roles) ?></p>
-            <p class="stat-label"><i class="fas fa-user-tag mr-1"></i> Roles</p>
+            <p class="stat-number">1</p>
+            <p class="stat-label"><i class="fas fa-user-tag mr-1"></i> Role</p>
         </div>
         <div class="stat-box">
-            <p class="stat-number"><?= count($employee_departments) ?></p>
-            <p class="stat-label"><i class="fas fa-building mr-1"></i> Departments</p>
+            <p class="stat-number"><?= $branch_staff_count ?></p>
+            <p class="stat-label"><i class="fas fa-users mr-1"></i> Branch Staff</p>
         </div>
         <div class="stat-box">
             <p class="stat-number"><?= date('d/m/Y', strtotime($employee['created_at'])) ?></p>
@@ -665,18 +832,12 @@ include_once '../../components/admin_sidebar.php';
         </div>
         <div class="stat-box">
             <p class="stat-number">
-                <?php
-                    try {
-                        $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE branch_id = ? AND role != 'admin'");
-                        $stmt->execute([$employee['branch_id']]);
-                        $branch_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-                        echo $branch_count;
-                    } catch (Exception $e) {
-                        echo '0';
-                    }
+                <?php 
+                    $online_status = ($employee['is_online'] ?? 0) == 1 ? '🟢' : '⚪';
+                    echo $online_status;
                 ?>
             </p>
-            <p class="stat-label"><i class="fas fa-users mr-1"></i> Branch Staff</p>
+            <p class="stat-label"><i class="fas fa-circle mr-1"></i> Status</p>
         </div>
     </div>
 
@@ -685,9 +846,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-5">
         
-        <!-- ================================================================ -->
         <!-- PERSONAL INFORMATION -->
-        <!-- ================================================================ -->
         <div class="card animate-fade-in-up">
             <h3 class="card-title">
                 <i class="fas fa-user-circle"></i> Personal Information
@@ -711,8 +870,14 @@ include_once '../../components/admin_sidebar.php';
                 </div>
                 <div>
                     <p class="info-label">Primary Role</p>
-                    <p class="info-value capitalize"><?= htmlspecialchars($employee['role']) ?></p>
+                    <p class="info-value capitalize"><?= htmlspecialchars($available_roles[$employee['role']]['name'] ?? ucfirst($employee['role'])) ?></p>
                 </div>
+                <?php if (!empty($employee['specialty'])): ?>
+                    <div>
+                        <p class="info-label">Specialty</p>
+                        <p class="info-value"><?= htmlspecialchars($employee['specialty']) ?></p>
+                    </div>
+                <?php endif; ?>
                 <div>
                     <p class="info-label">Branch</p>
                     <p class="info-value"><?= htmlspecialchars($employee['branch_name'] ?? 'Not Assigned') ?></p>
@@ -726,89 +891,89 @@ include_once '../../components/admin_sidebar.php';
                     </p>
                 </div>
                 <div>
+                    <p class="info-label">Online Status</p>
+                    <p class="info-value">
+                        <?php if (($employee['is_online'] ?? 0) == 1): ?>
+                            <span class="badge badge-success"><i class="fas fa-circle mr-1"></i> Online</span>
+                        <?php else: ?>
+                            <span class="badge badge-danger"><i class="fas fa-circle mr-1"></i> Offline</span>
+                        <?php endif; ?>
+                    </p>
+                </div>
+                <div>
                     <p class="info-label">Joined</p>
                     <p class="info-value"><?= date('F d, Y h:i A', strtotime($employee['created_at'])) ?></p>
                 </div>
             </div>
         </div>
 
-        <!-- ================================================================ -->
-        <!-- ROLES & DEPARTMENTS -->
-        <!-- ================================================================ -->
-        <div class="space-y-5">
+        <!-- ROLE INFORMATION -->
+        <div class="card animate-fade-in-up">
+            <h3 class="card-title">
+                <i class="fas fa-user-tag"></i> Role Information
+            </h3>
             
-            <!-- ROLES -->
-            <div class="card animate-fade-in-up">
-                <h3 class="card-title">
-                    <i class="fas fa-user-tag"></i> Assigned Roles
-                    <span class="text-sm font-normal text-gray-400">(<?= count($employee_roles) ?>)</span>
-                </h3>
+            <div class="space-y-3">
+                <div>
+                    <p class="info-label">Primary Role</p>
+                    <p class="info-value">
+                        <span class="role-badge">
+                            <i class="fas <?= $available_roles[$employee['role']]['icon'] ?? 'fa-user' ?>" 
+                               style="color: <?= $available_roles[$employee['role']]['color'] ?? '#0B5ED7' ?>"></i>
+                            <?= htmlspecialchars($available_roles[$employee['role']]['name'] ?? ucfirst($employee['role'])) ?>
+                        </span>
+                    </p>
+                </div>
                 
-                <?php if (count($employee_roles) > 0): ?>
-                    <div class="flex flex-wrap gap-2">
-                        <?php foreach ($employee_roles as $role): ?>
-                            <span class="role-badge">
-                                <i class="fas fa-circle text-[8px] text-blue-600"></i>
-                                <?= htmlspecialchars($role['name'] ?? 'Unknown') ?>
-                                <?php if (!empty($role['description'])): ?>
-                                    <span class="text-xs text-gray-400 font-normal ml-1">- <?= htmlspecialchars($role['description']) ?></span>
-                                <?php endif; ?>
+                <?php if (!empty($employee['specialty'])): ?>
+                    <div>
+                        <p class="info-label">Specialty / Department</p>
+                        <p class="info-value">
+                            <span class="role-badge" style="background:var(--success-bg);color:var(--success);">
+                                <i class="fas fa-stethoscope"></i>
+                                <?= htmlspecialchars($employee['specialty']) ?>
+                            </span>
+                        </p>
+                    </div>
+                <?php endif; ?>
+                
+                <div>
+                    <p class="info-label">Role Description</p>
+                    <p class="info-value text-sm text-gray-500 dark:text-gray-400">
+                        <?php 
+                            $role_desc = [
+                                'doctor' => 'Provides medical consultations, diagnoses, and treatments to patients.',
+                                'pharmacy' => 'Dispenses medications and manages pharmacy inventory.',
+                                'reception' => 'Handles patient registration, appointments, and front desk operations.',
+                                'laboratory' => 'Conducts laboratory tests and analyzes samples.',
+                                'cashier' => 'Handles patient billing, payments, and financial transactions.',
+                                'admin' => 'Manages system settings, user accounts, and overall system operations.'
+                            ];
+                            echo htmlspecialchars($role_desc[$employee['role']] ?? 'No description available.');
+                        ?>
+                    </p>
+                </div>
+                
+                <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-color);">
+                    <p class="info-label">Role Key</p>
+                    <p class="info-value">
+                        <code style="background:var(--bg-body);padding:4px 12px;border-radius:6px;font-size:0.8rem;">
+                            <?= htmlspecialchars($employee['role']) ?>
+                        </code>
+                    </p>
+                </div>
+                
+                <div>
+                    <p class="info-label">Available Roles</p>
+                    <div class="flex flex-wrap gap-2 mt-1">
+                        <?php foreach ($available_roles as $key => $role): ?>
+                            <span class="text-xs px-2 py-1 rounded-full" 
+                                  style="background:var(--bg-body);color:var(--text-secondary);border:1px solid var(--border-color);">
+                                <?= htmlspecialchars($role['name']) ?>
                             </span>
                         <?php endforeach; ?>
                     </div>
-                <?php else: ?>
-                    <div class="empty-state">
-                        <i class="fas fa-exclamation-triangle text-yellow-600"></i>
-                        <div>
-                            <strong>No roles assigned</strong>
-                            <span class="text-xs block">Edit this employee to assign roles.</span>
-                        </div>
-                    </div>
-                <?php endif; ?>
-                
-                <?php if (!empty($all_roles) && count($all_roles) > 0): ?>
-                    <div class="mt-3 text-xs text-gray-400">
-                        <i class="fas fa-info-circle mr-1"></i>
-                        <strong><?= count($all_roles) ?></strong> role(s) available in the system
-                    </div>
-                <?php endif; ?>
-            </div>
-
-            <!-- DEPARTMENTS -->
-            <div class="card animate-fade-in-up">
-                <h3 class="card-title">
-                    <i class="fas fa-building"></i> Assigned Departments
-                    <span class="text-sm font-normal text-gray-400">(<?= count($employee_departments) ?>)</span>
-                </h3>
-                
-                <?php if (count($employee_departments) > 0): ?>
-                    <div class="flex flex-wrap gap-2">
-                        <?php foreach ($employee_departments as $dept): ?>
-                            <span class="dept-badge">
-                                <i class="fas fa-circle text-[8px] text-green-600"></i>
-                                <?= htmlspecialchars($dept['name'] ?? 'Unknown') ?>
-                                <?php if (!empty($dept['description'])): ?>
-                                    <span class="text-xs text-gray-400 font-normal ml-1">- <?= htmlspecialchars($dept['description']) ?></span>
-                                <?php endif; ?>
-                            </span>
-                        <?php endforeach; ?>
-                    </div>
-                <?php else: ?>
-                    <div class="empty-state">
-                        <i class="fas fa-exclamation-triangle text-yellow-600"></i>
-                        <div>
-                            <strong>No departments assigned</strong>
-                            <span class="text-xs block">Edit this employee to assign departments.</span>
-                        </div>
-                    </div>
-                <?php endif; ?>
-                
-                <?php if (!empty($all_departments) && count($all_departments) > 0): ?>
-                    <div class="mt-3 text-xs text-gray-400">
-                        <i class="fas fa-info-circle mr-1"></i>
-                        <strong><?= count($all_departments) ?></strong> department(s) available in the system
-                    </div>
-                <?php endif; ?>
+                </div>
             </div>
         </div>
     </div>
@@ -880,12 +1045,9 @@ include_once '../../components/admin_sidebar.php';
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var branchSelector = document.getElementById('branchSelector');
-    var toast = document.getElementById('toast');
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -898,14 +1060,38 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
+
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
+
+    function updateDateTime() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var dtEl = document.getElementById('currentDateTime');
+        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+    }
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // TOAST
@@ -930,55 +1116,13 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
-    }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        document.getElementById('currentDateTime').textContent = 
-            now.toLocaleDateString('en-US', { 
-                weekday: 'short', 
-                month: 'short', 
-                day: 'numeric', 
-                year: 'numeric' 
-            }) + 
-            ' • ' + 
-            now.toLocaleTimeString('en-US', { 
-                hour: '2-digit', 
-                minute: '2-digit', 
-                second: '2-digit', 
-                hour12: true 
-            });
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
     console.log('%c👤 Braick - Employee Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Employee: <?= htmlspecialchars($employee['full_name']) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Roles: <?= count($employee_roles) ?> assigned', 'font-size:13px; color:#64748B;');
-    console.log('%c📋 Departments: <?= count($employee_departments) ?> assigned', 'font-size:13px; color:#64748B;');
-    console.log('%c🔗 Shared Header & Sidebar: ACTIVE', 'font-size:13px; color:#64748B;');
-    console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($employee['branch_name'] ?? 'Not Assigned') ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔑 Role: <?= htmlspecialchars($employee['role']) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Using users table only (no roles or departments tables)', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

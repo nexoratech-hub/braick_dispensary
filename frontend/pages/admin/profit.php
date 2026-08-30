@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/profit.php
 // ADMIN - PROFIT/REVENUE DASHBOARD
 // PROFIT = REVENUE - EXPENSES
+// FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -13,7 +14,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -37,7 +38,7 @@ if ($_SESSION['role'] !== 'admin') {
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET ADMIN DATA
 // ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -101,38 +102,8 @@ function formatMoney($amount) {
 }
 
 // ================================================================
-// CALCULATE PROFIT
-// PROFIT = REVENUE - EXPENSES
+// BUILD WHERE CLAUSE FOR BRANCH FILTER
 // ================================================================
-
-$revenue_data = [
-    'total_revenue' => 0,
-    'consultation_revenue' => 0,
-    'medication_revenue' => 0,
-    'lab_revenue' => 0,
-    'procedure_revenue' => 0,
-    'registration_revenue' => 0,
-    'other_revenue' => 0,
-    'total_invoices' => 0,
-    'total_patients' => 0
-];
-
-$expense_data = [
-    'total_expenses' => 0,
-    'expense_categories' => []
-];
-
-$profit_data = [
-    'gross_profit' => 0,
-    'net_profit' => 0,
-    'profit_margin' => 0
-];
-
-// ================================================================
-// 1. GET REVENUE (Income)
-// ================================================================
-
-// Build WHERE clause for branch filter
 $branch_condition = "";
 $params = [];
 
@@ -155,20 +126,24 @@ if (!empty($date_from) && !empty($date_to)) {
     $params[] = $date_to;
 }
 
-// 1a. Total Revenue from bill_items (paid items)
+// ================================================================
+// 1. GET REVENUE - FROM bill_items WITH bills status = 'paid'
+// ================================================================
+
 $sql = "
     SELECT 
-        SUM(total_price) as total_revenue,
-        COUNT(DISTINCT bill_id) as total_invoices,
-        COUNT(DISTINCT patient_id) as total_patients,
-        SUM(CASE WHEN item_type = 'consultation' THEN total_price ELSE 0 END) as consultation_revenue,
-        SUM(CASE WHEN item_type = 'medication' THEN total_price ELSE 0 END) as medication_revenue,
-        SUM(CASE WHEN item_type = 'lab_test' THEN total_price ELSE 0 END) as lab_revenue,
-        SUM(CASE WHEN item_type = 'procedure' THEN total_price ELSE 0 END) as procedure_revenue,
-        SUM(CASE WHEN item_type = 'registration' THEN total_price ELSE 0 END) as registration_revenue,
-        SUM(CASE WHEN item_type NOT IN ('consultation','medication','lab_test','procedure','registration') THEN total_price ELSE 0 END) as other_revenue
-    FROM bill_items 
-    WHERE is_paid = 1 
+        SUM(bi.total_price) as total_revenue,
+        COUNT(DISTINCT bi.bill_id) as total_invoices,
+        COUNT(DISTINCT bi.patient_id) as total_patients,
+        SUM(CASE WHEN bi.item_type = 'consultation' THEN bi.total_price ELSE 0 END) as consultation_revenue,
+        SUM(CASE WHEN bi.item_type = 'medication' THEN bi.total_price ELSE 0 END) as medication_revenue,
+        SUM(CASE WHEN bi.item_type = 'lab_test' THEN bi.total_price ELSE 0 END) as lab_revenue,
+        SUM(CASE WHEN bi.item_type = 'procedure' THEN bi.total_price ELSE 0 END) as procedure_revenue,
+        SUM(CASE WHEN bi.item_type = 'registration' THEN bi.total_price ELSE 0 END) as registration_revenue,
+        SUM(CASE WHEN bi.item_type NOT IN ('consultation','medication','lab_test','procedure','registration') THEN bi.total_price ELSE 0 END) as other_revenue
+    FROM bill_items bi
+    INNER JOIN bills b ON bi.bill_id = b.id
+    WHERE b.status = 'paid'
     $branch_condition 
     $date_condition
 ";
@@ -176,6 +151,18 @@ $sql = "
 $stmt = $db->prepare($sql);
 $stmt->execute($params);
 $revenue_result = $stmt->fetch(PDO::FETCH_ASSOC);
+
+$revenue_data = [
+    'total_revenue' => 0,
+    'consultation_revenue' => 0,
+    'medication_revenue' => 0,
+    'lab_revenue' => 0,
+    'procedure_revenue' => 0,
+    'registration_revenue' => 0,
+    'other_revenue' => 0,
+    'total_invoices' => 0,
+    'total_patients' => 0
+];
 
 if ($revenue_result) {
     $revenue_data['total_revenue'] = (float)($revenue_result['total_revenue'] ?? 0);
@@ -189,37 +176,10 @@ if ($revenue_result) {
     $revenue_data['other_revenue'] = (float)($revenue_result['other_revenue'] ?? 0);
 }
 
-// Also get revenue from patient_bills where status = 'paid'
-$sql2 = "
-    SELECT SUM(total_amount) as total_revenue
-    FROM patient_bills 
-    WHERE status = 'paid'
-    $branch_condition 
-    $date_condition
-";
-
-$stmt2 = $db->prepare($sql2);
-// Need to re-bind params for second query
-$params2 = [];
-if ($selected_branch_id > 0) { $params2[] = $selected_branch_id; }
-if (!empty($date_from) && !empty($date_to)) { $params2[] = $date_from; $params2[] = $date_to; }
-elseif (!empty($date_from)) { $params2[] = $date_from; }
-elseif (!empty($date_to)) { $params2[] = $date_to; }
-
-$stmt2->execute($params2);
-$bill_revenue = $stmt2->fetch(PDO::FETCH_ASSOC);
-
-// Use the larger of the two revenue values
-$bill_total = (float)($bill_revenue['total_revenue'] ?? 0);
-if ($bill_total > $revenue_data['total_revenue']) {
-    $revenue_data['total_revenue'] = $bill_total;
-}
-
 // ================================================================
 // 2. GET EXPENSES
 // ================================================================
 
-// Build params for expenses query
 $exp_params = [];
 $exp_branch_condition = "";
 $exp_date_condition = "";
@@ -241,7 +201,6 @@ if (!empty($date_from) && !empty($date_to)) {
     $exp_params[] = $date_to;
 }
 
-// 2a. Total Expenses (only paid expenses)
 $sql_exp = "
     SELECT 
         SUM(amount) as total_expenses,
@@ -259,8 +218,10 @@ $stmt_exp = $db->prepare($sql_exp);
 $stmt_exp->execute($exp_params);
 $expense_results = $stmt_exp->fetchAll(PDO::FETCH_ASSOC);
 
-$expense_data['total_expenses'] = 0;
-$expense_data['expense_categories'] = [];
+$expense_data = [
+    'total_expenses' => 0,
+    'expense_categories' => []
+];
 
 foreach ($expense_results as $row) {
     $expense_data['total_expenses'] += (float)($row['category_amount'] ?? 0);
@@ -284,14 +245,14 @@ $revenue = $revenue_data['total_revenue'];
 $expenses = $expense_data['total_expenses'];
 $profit = $revenue - $expenses;
 
-$profit_data['gross_profit'] = $revenue;
-$profit_data['net_profit'] = $profit;
+$profit_data = [
+    'gross_profit' => $revenue,
+    'net_profit' => $profit,
+    'profit_margin' => 0
+];
 
-// Profit Margin = (Profit / Revenue) * 100
 if ($revenue > 0) {
     $profit_data['profit_margin'] = round(($profit / $revenue) * 100, 2);
-} else {
-    $profit_data['profit_margin'] = 0;
 }
 
 // ================================================================
@@ -300,25 +261,25 @@ if ($revenue > 0) {
 
 $monthly_data = [];
 
-// Get monthly revenue
-$sql_monthly_rev = "
-    SELECT 
-        DATE_FORMAT(created_at, '%Y-%m') as month,
-        SUM(total_price) as revenue
-    FROM bill_items 
-    WHERE is_paid = 1
-    $branch_condition 
-    $date_condition
-    GROUP BY DATE_FORMAT(created_at, '%Y-%m')
-    ORDER BY month ASC
-";
-
-// Rebuild params for monthly query
+// Get monthly revenue from bills
 $monthly_params = [];
 if ($selected_branch_id > 0) { $monthly_params[] = $selected_branch_id; }
 if (!empty($date_from) && !empty($date_to)) { $monthly_params[] = $date_from; $monthly_params[] = $date_to; }
 elseif (!empty($date_from)) { $monthly_params[] = $date_from; }
 elseif (!empty($date_to)) { $monthly_params[] = $date_to; }
+
+$sql_monthly_rev = "
+    SELECT 
+        DATE_FORMAT(b.created_at, '%Y-%m') as month,
+        SUM(bi.total_price) as revenue
+    FROM bill_items bi
+    INNER JOIN bills b ON bi.bill_id = b.id
+    WHERE b.status = 'paid'
+    $branch_condition 
+    $date_condition
+    GROUP BY DATE_FORMAT(b.created_at, '%Y-%m')
+    ORDER BY month ASC
+";
 
 $stmt_monthly = $db->prepare($sql_monthly_rev);
 $stmt_monthly->execute($monthly_params);
@@ -368,13 +329,11 @@ foreach ($monthly_expenses as $row) {
     }
 }
 
-// Calculate profit for each month
 foreach ($monthly_map as $month => &$data) {
     $data['profit'] = $data['revenue'] - $data['expenses'];
 }
 unset($data);
 
-// Sort by month
 ksort($monthly_map);
 $monthly_data = array_values($monthly_map);
 
@@ -388,7 +347,7 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE HEADERS
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
@@ -416,41 +375,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --primary-bg: #D1FAE5;
             --primary-gradient: linear-gradient(135deg, #059669, #047857);
             --primary-gradient-strong: linear-gradient(135deg, #047857, #065F46);
-            
             --success: #059669;
-            --success-dark: #047857;
             --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
-            --danger-dark: #B91C1C;
             --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
             --bg-body: #F0FDF4;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -459,7 +391,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --border-color: #D1FAE5;
             --radius: 12px;
             --radius-lg: 18px;
-            --table-hover: #ECFDF5;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
             --transition: all 0.3s ease;
         }
         
@@ -471,13 +405,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --text-secondary: #94A3B8;
             --border-color: #334155;
             --primary: #34D399;
-            --primary-dark: #059669;
-            --primary-light: #6EE7B7;
             --primary-bg: #1A3A2A;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1A3A2A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -502,7 +432,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             justify-content: space-between;
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
             box-shadow: var(--shadow-sm);
         }
         
@@ -512,14 +442,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             background: var(--bg-body);
             border-radius: var(--radius);
             border: 2px solid var(--border-color);
-            transition: all 0.3s;
             flex: 1;
             max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.12);
         }
         
         .top-nav .search-wrapper input {
@@ -532,10 +456,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
         .top-nav .search-wrapper .search-btn {
             background: var(--primary-gradient);
             color: white;
@@ -544,22 +464,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-radius: 0 var(--radius) var(--radius) 0;
             cursor: pointer;
             font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            white-space: nowrap;
         }
         
         .top-nav .avatar {
@@ -569,12 +473,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             object-fit: cover;
             border: 2px solid var(--border-color);
             cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
         }
         
         .top-nav .icon-btn {
@@ -585,16 +483,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             align-items: center;
             justify-content: center;
             color: var(--text-secondary);
-            transition: all 0.3s;
             background: transparent;
             border: none;
             cursor: pointer;
             position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
         }
         
         .notif-dot {
@@ -624,18 +516,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             cursor: pointer;
             font-size: 0.82rem;
             color: var(--text-primary);
-            transition: all 0.3s;
             display: flex;
             align-items: center;
             gap: 6px;
         }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
         
         .branch-selector {
             background: var(--bg-body);
@@ -646,11 +530,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
             outline: none;
             cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .branch-selector:focus {
-            border-color: var(--primary);
         }
         
         .main-content {
@@ -664,12 +543,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .main-content { padding: 12px; }
         }
         
         .page-header {
@@ -699,10 +572,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i {
-            font-size: 1.6rem;
-            opacity: 0.9;
-        }
+        .page-header .page-title i { font-size: 1.6rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -763,7 +633,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transform: translateY(-2px);
         }
         
-        /* Stats Cards */
         .stats-row {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -777,6 +646,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transition: var(--transition);
             box-shadow: var(--shadow-sm);
             border: none;
+            color: white;
         }
         
         .stat-card:hover {
@@ -792,6 +662,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .stat-card .stat-number {
             font-size: 1.6rem;
             font-weight: 700;
+            color: white;
         }
         
         .stat-card .stat-label {
@@ -801,6 +672,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 600;
             margin-top: 4px;
             opacity: 0.85;
+            color: rgba(255,255,255,0.85);
         }
         
         .filter-section {
@@ -875,11 +747,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border: 1px solid var(--border-color);
             overflow: hidden;
             box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            margin-bottom: 20px;
         }
         
-        .table-scroll {
-            overflow-x: auto;
-        }
+        .table-scroll { overflow-x: auto; }
         
         .data-table {
             width: 100%;
@@ -910,21 +781,24 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             vertical-align: middle;
         }
         
-        .data-table tbody tr:hover td {
-            background: var(--primary-bg);
+        .data-table tbody tr:hover td { background: var(--primary-bg); }
+        .data-table tbody tr:last-child td { border-bottom: none; }
+        .data-table tbody tr:nth-child(even) td { background: var(--gray-50); }
+        
+        [data-theme="dark"] .data-table tbody tr:nth-child(even) td { background: #1A1A2E; }
+        
+        .badge-status {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 16px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            text-transform: capitalize;
         }
         
-        .data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        .data-table tbody tr:nth-child(even) td {
-            background: var(--gray-50);
-        }
-        
-        [data-theme="dark"] .data-table tbody tr:nth-child(even) td {
-            background: #1A1A2E;
-        }
+        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
         
         .table-footer {
             padding: 10px 16px;
@@ -952,56 +826,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-size: 0.65rem;
             color: var(--text-secondary);
         }
-        
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        .badge-status {
-            display: inline-block;
-            padding: 2px 10px;
-            border-radius: 16px;
-            font-size: 0.55rem;
-            font-weight: 600;
-            text-transform: capitalize;
-        }
-        
-        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
-        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
-        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(12px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
-        
-        .toast-custom {
-            position: fixed;
-            bottom: 24px;
-            right: 24px;
-            padding: 12px 18px;
-            border-radius: 10px;
-            z-index: 999;
-            max-width: 380px;
-            transform: translateY(100px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            color: white;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-            font-size: 0.8rem;
-        }
-        
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
-        .toast-custom.success { background: var(--success); }
-        .toast-custom.error { background: var(--danger); }
-        .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
         
         .chart-container {
             background: var(--bg-card);
@@ -1042,6 +867,37 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 700;
             color: var(--text-primary);
         }
+        
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 18px;
+            border-radius: 10px;
+            z-index: 999;
+            max-width: 380px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            color: white;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.15);
+            font-size: 0.8rem;
+        }
+        
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up { animation: fadeInUp 0.4s ease forwards; opacity: 0; }
         
         @media (max-width: 768px) {
             .filter-row { flex-direction: column; align-items: stretch; }
@@ -1090,7 +946,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <?php endforeach; ?>
         </select>
         
-        <!-- DATE & TIME -->
         <span class="datetime" id="currentDateTime">
             <i class="far fa-calendar-alt mr-1"></i>
             <span id="dateDisplay"><?= date('M d, Y') ?></span>
@@ -1099,10 +954,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span id="timeDisplay"><?= date('h:i:s A') ?></span>
         </span>
         
-        <!-- DARK MODE TOGGLE -->
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas <?= (isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true') ? 'fa-sun' : 'fa-moon' ?>"></i>
-            <span id="darkText"><?= (isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true') ? 'Light' : 'Dark' ?></span>
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
         </button>
         
         <button class="icon-btn">
@@ -1110,7 +964,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="notif-dot"></span>
         </button>
         
-        <a href="../admin/profile.php">
+        <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
@@ -1122,9 +976,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
+    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1158,9 +1010,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FILTERS -->
-    <!-- ================================================================ -->
+    <!-- Filters -->
     <div class="filter-section animate-fade-in-up" style="animation-delay:0.05s;">
         <form method="GET" action="" id="filterForm" class="w-full">
             <div class="filter-row">
@@ -1183,44 +1033,40 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- MAIN STATS CARDS - FIXED COLORS: BLUE, RED, GREEN, PURPLE -->
-    <!-- ================================================================ -->
+    <!-- Main Stats Cards -->
     <div class="stats-row animate-fade-in-up" style="animation-delay:0.1s;">
         
-        <!-- REVENUE - BLUE BACKGROUND -->
-        <div class="stat-card" style="background: linear-gradient(135deg, #2563EB, #1D4ED8); color: white; border: none;">
-            <div class="stat-icon" style="color: rgba(255,255,255,0.8);"><i class="fas fa-arrow-up"></i></div>
-            <div class="stat-number" style="color: white;">TSh <?= formatMoney($revenue_data['total_revenue']) ?></div>
-            <div class="stat-label" style="color: rgba(255,255,255,0.85);">💰 Total Revenue</div>
+        <!-- Revenue - BLUE -->
+        <div class="stat-card" style="background: linear-gradient(135deg, #2563EB, #1D4ED8);">
+            <div class="stat-icon"><i class="fas fa-arrow-up" style="color:rgba(255,255,255,0.8);"></i></div>
+            <div class="stat-number">TSh <?= formatMoney($revenue_data['total_revenue']) ?></div>
+            <div class="stat-label">💰 Total Revenue</div>
         </div>
         
-        <!-- EXPENSES - RED BACKGROUND -->
-        <div class="stat-card" style="background: linear-gradient(135deg, #DC2626, #B91C1C); color: white; border: none;">
-            <div class="stat-icon" style="color: rgba(255,255,255,0.8);"><i class="fas fa-arrow-down"></i></div>
-            <div class="stat-number" style="color: white;">TSh <?= formatMoney($expense_data['total_expenses']) ?></div>
-            <div class="stat-label" style="color: rgba(255,255,255,0.85);">📉 Total Expenses</div>
+        <!-- Expenses - RED -->
+        <div class="stat-card" style="background: linear-gradient(135deg, #DC2626, #B91C1C);">
+            <div class="stat-icon"><i class="fas fa-arrow-down" style="color:rgba(255,255,255,0.8);"></i></div>
+            <div class="stat-number">TSh <?= formatMoney($expense_data['total_expenses']) ?></div>
+            <div class="stat-label">📉 Total Expenses</div>
         </div>
         
-        <!-- NET PROFIT - GREEN BACKGROUND -->
-        <div class="stat-card" style="background: linear-gradient(135deg, #059669, #047857); color: white; border: none;">
-            <div class="stat-icon" style="color: rgba(255,255,255,0.8);"><i class="fas fa-<?= $profit_data['net_profit'] >= 0 ? 'check-circle' : 'exclamation-triangle' ?>"></i></div>
-            <div class="stat-number" style="color: white;">TSh <?= formatMoney($profit_data['net_profit']) ?></div>
-            <div class="stat-label" style="color: rgba(255,255,255,0.85);"><?= $profit_data['net_profit'] >= 0 ? '📈 Net Profit' : '📉 Net Loss' ?></div>
+        <!-- Net Profit - GREEN -->
+        <div class="stat-card" style="background: linear-gradient(135deg, #059669, #047857);">
+            <div class="stat-icon"><i class="fas fa-<?= $profit_data['net_profit'] >= 0 ? 'check-circle' : 'exclamation-triangle' ?>" style="color:rgba(255,255,255,0.8);"></i></div>
+            <div class="stat-number">TSh <?= formatMoney($profit_data['net_profit']) ?></div>
+            <div class="stat-label"><?= $profit_data['net_profit'] >= 0 ? '📈 Net Profit' : '📉 Net Loss' ?></div>
         </div>
         
-        <!-- PROFIT MARGIN - PURPLE BACKGROUND -->
-        <div class="stat-card" style="background: linear-gradient(135deg, #7C3AED, #6D28D9); color: white; border: none;">
-            <div class="stat-icon" style="color: rgba(255,255,255,0.8);"><i class="fas fa-percentage"></i></div>
-            <div class="stat-number" style="color: white;"><?= $profit_data['profit_margin'] ?>%</div>
-            <div class="stat-label" style="color: rgba(255,255,255,0.85);">📊 Profit Margin</div>
+        <!-- Profit Margin - PURPLE -->
+        <div class="stat-card" style="background: linear-gradient(135deg, #7C3AED, #6D28D9);">
+            <div class="stat-icon"><i class="fas fa-percentage" style="color:rgba(255,255,255,0.8);"></i></div>
+            <div class="stat-number"><?= $profit_data['profit_margin'] ?>%</div>
+            <div class="stat-label">📊 Profit Margin</div>
         </div>
         
     </div>
 
-    <!-- ================================================================ -->
-    <!-- REVENUE BREAKDOWN -->
-    <!-- ================================================================ -->
+    <!-- Revenue Breakdown -->
     <div class="chart-container animate-fade-in-up" style="animation-delay:0.15s;">
         <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:12px;color:var(--text-primary);">
             <i class="fas fa-pie-chart" style="color:var(--primary);"></i> Revenue Breakdown
@@ -1253,19 +1099,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- MONTHLY PROFIT CHART -->
-    <!-- ================================================================ -->
+    <!-- Monthly Profit Chart -->
+    <?php if (count($monthly_data) > 0): ?>
     <div class="chart-container animate-fade-in-up" style="animation-delay:0.2s;">
         <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:12px;color:var(--text-primary);">
             <i class="fas fa-chart-bar" style="color:var(--primary);"></i> Monthly Profit Trend
         </h3>
         <canvas id="profitChart"></canvas>
     </div>
+    <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- EXPENSES BREAKDOWN TABLE -->
-    <!-- ================================================================ -->
+    <!-- Expense Breakdown Table -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.25s;">
         <div style="padding:12px 16px;border-bottom:1px solid var(--border-color);">
             <h3 style="font-size:0.85rem;font-weight:700;color:var(--text-primary);">
@@ -1299,9 +1143,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <td style="text-align:right;font-weight:600;color:var(--danger);">
                                     TSh <?= formatMoney($cat['amount']) ?>
                                 </td>
-                                <td style="text-align:right;">
-                                    <?= $percentage ?>%
-                                </td>
+                                <td style="text-align:right;"><?= $percentage ?>%</td>
                             </tr>
                         <?php endforeach; ?>
                         <tr style="font-weight:700;border-top:2px solid var(--border-color);">
@@ -1313,7 +1155,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <?php else: ?>
                         <tr>
                             <td colspan="4">
-                                <div class="empty-state" style="padding:20px;text-align:center;color:var(--text-secondary);">
+                                <div style="padding:20px;text-align:center;color:var(--text-secondary);">
                                     <i class="fas fa-coins" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:8px;"></i>
                                     <p style="font-size:0.8rem;">No expense data available for this period</p>
                                 </div>
@@ -1334,9 +1176,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- SUMMARY -->
-    <!-- ================================================================ -->
+    <!-- Summary -->
     <div class="chart-container animate-fade-in-up" style="animation-delay:0.3s;">
         <h3 style="font-size:0.9rem;font-weight:700;margin-bottom:12px;color:var(--text-primary);">
             <i class="fas fa-file-alt" style="color:var(--primary);"></i> Summary
@@ -1351,7 +1191,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <div style="font-size:1.2rem;font-weight:700;color:var(--text-primary);"><?= $revenue_data['total_patients'] ?></div>
             </div>
             <div style="padding:10px 14px;background:var(--bg-body);border-radius:var(--radius);border:1px solid var(--border-color);">
-                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Average Revenue/Patient</div>
+                <div style="font-size:0.6rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;">Avg Revenue/Patient</div>
                 <div style="font-size:1.2rem;font-weight:700;color:var(--primary);">
                     TSh <?= $revenue_data['total_patients'] > 0 ? formatMoney($revenue_data['total_revenue'] / $revenue_data['total_patients']) : '0' ?>
                 </div>
@@ -1365,9 +1205,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1433,18 +1271,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             darkToggle.addEventListener('click', function() {
                 var isDark = htmlElement.getAttribute('data-theme') === 'dark';
                 applyDarkMode(!isDark);
-                window.dispatchEvent(new StorageEvent('storage', {
-                    key: 'darkMode',
-                    newValue: isDark ? 'false' : 'true'
-                }));
             });
         }
-        
-        window.addEventListener('storage', function(e) {
-            if (e.key === 'darkMode') {
-                applyDarkMode(e.newValue === 'true');
-            }
-        });
     })();
 
     // ================================================================
@@ -1466,7 +1294,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (timeDisplay) timeDisplay.textContent = timeStr;
         if (updateTimeDisplay) updateTimeDisplay.textContent = 'Last update: ' + timeStr;
     }
-    
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
@@ -1480,13 +1307,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             sidebar.classList.toggle('open');
         });
     }
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
-        }
-    });
 
     // ================================================================
     // BRANCH SWITCH
@@ -1509,7 +1329,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var expenses = <?= json_encode(array_column($monthly_data, 'expenses')) ?>;
         var profits = <?= json_encode(array_column($monthly_data, 'profit')) ?>;
         
-        // Format month labels
         var monthLabels = months.map(function(m) {
             var parts = m.split('-');
             var monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -1598,6 +1417,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c🔴 Expenses: TSh <?= formatMoney($expense_data['total_expenses']) ?>', 'font-size:12px; color:#DC2626;');
     console.log('%c🟢 Profit: TSh <?= formatMoney($profit_data['net_profit']) ?>', 'font-size:12px; color:#059669;');
     console.log('%c🟣 Profit Margin: <?= $profit_data['profit_margin'] ?>%', 'font-size:12px; color:#7C3AED;');
+    console.log('%c✅ Using tables: bills, bill_items, expenses', 'font-size:12px; color:#34D399;');
+    console.log('%c❌ patient_bills table removed - using bills table', 'font-size:12px; color:#34D399;');
+    console.log('%c❌ is_paid column removed - using bills.status = paid', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

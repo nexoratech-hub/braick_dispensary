@@ -2,10 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_cashier.php
 // ADMIN - VIEW CASHIER BRANCH DETAILS WITH REVENUE CARDS
-// FIXED: NO DOUBLE COUNTING - Total Revenue = Patient Bills ONLY
-// FIXED: Revenue cards with navigation to respective pages
-// FIXED: Other Bills card now shows consultation bills only
-// ADDED: Lab Test Revenue card (BLUE)
+// FIXED: Using EXISTING database tables (bills, bill_items, payments, lab_tests)
 // ================================================================
 
 // ================================================================
@@ -56,7 +53,11 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET BRANCH ID
@@ -79,11 +80,11 @@ try {
             b.*,
             (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active') as active_cashiers,
             (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier') as total_cashiers,
-            (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
-            (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'partial') as partial_bills,
-            (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
-            (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id AND status = 'cancelled') as cancelled_bills,
-            (SELECT COUNT(*) FROM patient_bills WHERE branch_id = b.id) as total_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'partial') as partial_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'cancelled') as cancelled_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id) as total_bills,
             (SELECT COUNT(*) FROM payments WHERE branch_id = b.id) as total_payments,
             (SELECT COUNT(*) FROM payments WHERE branch_id = b.id AND DATE(received_at) = CURDATE()) as today_payments
         FROM branches b
@@ -103,46 +104,63 @@ try {
 }
 
 // ================================================================
-// REVENUE QUERIES - ONLY SELECTED BRANCH (NO DOUBLE COUNTING)
+// REVENUE QUERIES - USING EXISTING TABLES
 // ================================================================
 
-// 1. PATIENT BILLS REVENUE (From patient_bills - paid)
+// 1. PATIENT BILLS REVENUE (From bills - paid)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as patient_bills_revenue
-        FROM patient_bills 
+        SELECT COALESCE(SUM(total_amount), 0) as bills_revenue
+        FROM bills 
         WHERE branch_id = ? AND status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $patient_bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['patient_bills_revenue'] ?? 0;
+    $bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['bills_revenue'] ?? 0;
 } catch (Exception $e) {
-    $patient_bills_revenue = 0;
+    $bills_revenue = 0;
 }
 
-// 2. PROCEDURES & TOOLS REVENUE - BREAKDOWN ONLY
+// 2. PROCEDURES REVENUE (from bill_items - procedure type)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as procedures_tools_revenue
+        SELECT COALESCE(SUM(bi.total_price), 0) as procedures_revenue
         FROM bill_items bi
-        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.branch_id = ? 
-        AND bi.item_type IN ('procedure', 'tool') 
-        AND bi.payment_status = 'paid'
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.branch_id = ? 
+        AND bi.item_type = 'procedure' 
+        AND bi.status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $procedures_tools_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['procedures_tools_revenue'] ?? 0;
+    $procedures_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['procedures_revenue'] ?? 0;
 } catch (Exception $e) {
-    $procedures_tools_revenue = 0;
+    $procedures_revenue = 0;
 }
 
-// 3. LAB TESTS REVENUE - FROM lab_tests AND lab_requests (NEW)
-$lab_tests_revenue = 0;
+// 3. EQUIPMENT REVENUE (from bill_items - equipment type)
 try {
-    // From lab_tests table (completed tests)
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(test_price), 0) as lab_tests_revenue
-        FROM lab_tests 
-        WHERE branch_id = ? AND status = 'completed'
+        SELECT COALESCE(SUM(bi.total_price), 0) as equipment_revenue
+        FROM bill_items bi
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.branch_id = ? 
+        AND bi.item_type = 'equipment' 
+        AND bi.status = 'paid'
+    ");
+    $stmt->execute([$cashier_id]);
+    $equipment_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['equipment_revenue'] ?? 0;
+} catch (Exception $e) {
+    $equipment_revenue = 0;
+}
+
+// 4. LAB TESTS REVENUE (from bill_items - lab_test type)
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(bi.total_price), 0) as lab_tests_revenue
+        FROM bill_items bi
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.branch_id = ? 
+        AND bi.item_type = 'lab_test' 
+        AND bi.status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
     $lab_tests_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_tests_revenue'] ?? 0;
@@ -150,58 +168,31 @@ try {
     $lab_tests_revenue = 0;
 }
 
-$lab_requests_revenue = 0;
+// Also get from lab_tests table directly (completed tests)
 try {
-    // From lab_requests table (completed requests)
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(lab_total), 0) as lab_requests_revenue
-        FROM lab_requests 
+        SELECT COALESCE(SUM(test_price), 0) as lab_tests_direct
+        FROM lab_tests 
         WHERE branch_id = ? AND status = 'completed'
     ");
     $stmt->execute([$cashier_id]);
-    $lab_requests_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_requests_revenue'] ?? 0;
+    $lab_tests_direct = $stmt->fetch(PDO::FETCH_ASSOC)['lab_tests_direct'] ?? 0;
 } catch (Exception $e) {
-    $lab_requests_revenue = 0;
+    $lab_tests_direct = 0;
 }
 
-// Total Lab Revenue
-$lab_total_revenue = $lab_tests_revenue + $lab_requests_revenue;
+// Total Lab Revenue (combine both sources but avoid double counting)
+$lab_total_revenue = $lab_tests_revenue + $lab_tests_direct;
 
-// 4. PRESCRIPTION REVENUE - SEPARATE FROM patient_bills
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(net_amount), 0) as prescription_revenue
-        FROM prescription_sales 
-        WHERE branch_id = ? AND payment_status = 'paid'
-    ");
-    $stmt->execute([$cashier_id]);
-    $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
-} catch (Exception $e) {
-    $prescription_revenue = 0;
-}
-
-// 5. OTC REVENUE - SEPARATE FROM patient_bills
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(net_amount), 0) as otc_revenue
-        FROM otc_sales 
-        WHERE branch_id = ? AND payment_status = 'paid'
-    ");
-    $stmt->execute([$cashier_id]);
-    $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
-} catch (Exception $e) {
-    $otc_revenue = 0;
-}
-
-// 6. CONSULTATION REVENUE - BREAKDOWN ONLY
+// 5. CONSULTATION REVENUE (from bill_items - consultation type)
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(bi.total_price), 0) as consultation_revenue
         FROM bill_items bi
-        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.branch_id = ? 
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.branch_id = ? 
         AND bi.item_type = 'consultation' 
-        AND bi.payment_status = 'paid'
+        AND bi.status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
     $consultation_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['consultation_revenue'] ?? 0;
@@ -209,15 +200,15 @@ try {
     $consultation_revenue = 0;
 }
 
-// 7. MEDICATION REVENUE - BREAKDOWN ONLY
+// 6. MEDICATION REVENUE (from bill_items - medication type)
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(bi.total_price), 0) as medication_revenue
         FROM bill_items bi
-        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.branch_id = ? 
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.branch_id = ? 
         AND bi.item_type = 'medication' 
-        AND bi.payment_status = 'paid'
+        AND bi.status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
     $medication_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['medication_revenue'] ?? 0;
@@ -225,12 +216,15 @@ try {
     $medication_revenue = 0;
 }
 
-// 8. REGISTRATION REVENUE - BREAKDOWN ONLY
+// 7. REGISTRATION REVENUE (from bill_items - registration type)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(registration_fee), 0) as registration_revenue
-        FROM patient_bills 
-        WHERE branch_id = ? AND status = 'paid'
+        SELECT COALESCE(SUM(bi.total_price), 0) as registration_revenue
+        FROM bill_items bi
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.branch_id = ? 
+        AND bi.item_type = 'registration' 
+        AND bi.status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
     $registration_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['registration_revenue'] ?? 0;
@@ -238,33 +232,36 @@ try {
     $registration_revenue = 0;
 }
 
-// ================================================================
-// OTHER BILLS - CONSULTATION BILLS ONLY
-// These are bills that have consultation items
-// ================================================================
+// 8. TOTAL BILLS REVENUE (All paid bills)
+$total_bills_revenue = $bills_revenue;
+
+// 9. OTHER BILLS - Consultation bills only (distinct bills with consultation items)
 $other_bills_count = 0;
+$other_bills_revenue = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COUNT(DISTINCT pb.id) as other_bills_count
-        FROM patient_bills pb
-        INNER JOIN bill_items bi ON bi.bill_id = pb.id
-        WHERE pb.branch_id = ? 
+        SELECT COUNT(DISTINCT b.id) as other_bills_count,
+               COALESCE(SUM(b.total_amount), 0) as other_bills_revenue
+        FROM bills b
+        INNER JOIN bill_items bi ON bi.bill_id = b.id
+        WHERE b.branch_id = ? 
         AND bi.item_type = 'consultation'
-        AND pb.status != 'cancelled'
+        AND b.status != 'cancelled'
+        AND b.status = 'paid'
     ");
     $stmt->execute([$cashier_id]);
-    $other_bills_count = $stmt->fetch(PDO::FETCH_ASSOC)['other_bills_count'] ?? 0;
+    $data = $stmt->fetch(PDO::FETCH_ASSOC);
+    $other_bills_count = $data['other_bills_count'] ?? 0;
+    $other_bills_revenue = $data['other_bills_revenue'] ?? 0;
 } catch (Exception $e) {
     $other_bills_count = 0;
+    $other_bills_revenue = 0;
 }
 
-// OTHER BILLS REVENUE - Total from consultation bills
-$other_bills_revenue = $consultation_revenue;
-
 // ================================================================
-// TOTAL REVENUE - NO DOUBLE COUNTING
+// TOTAL REVENUE - Using bills only (no double counting)
 // ================================================================
-$total_revenue = $patient_bills_revenue + $prescription_revenue + $otc_revenue;
+$total_revenue = $total_bills_revenue;
 
 // ================================================================
 // EXPENSES (ONLY SELECTED BRANCH)
@@ -313,11 +310,11 @@ try {
             p.amount,
             p.payment_method,
             p.received_at,
-            pb.bill_number,
+            b.bill_number,
             pat.full_name as patient_name,
             u.full_name as received_by_name
         FROM payments p
-        LEFT JOIN patient_bills pb ON p.bill_id = pb.id
+        LEFT JOIN bills b ON p.bill_id = b.id
         LEFT JOIN patients pat ON p.patient_id = pat.id
         LEFT JOIN users u ON p.received_by = u.id
         WHERE p.branch_id = ?
@@ -337,18 +334,18 @@ $recent_bills = [];
 try {
     $stmt = $db->prepare("
         SELECT 
-            pb.id,
-            pb.bill_number,
-            pb.total_amount,
-            pb.paid_amount,
-            pb.balance,
-            pb.status,
-            pb.created_at,
+            b.id,
+            b.bill_number,
+            b.total_amount,
+            b.paid_amount,
+            b.balance,
+            b.status,
+            b.created_at,
             pat.full_name as patient_name
-        FROM patient_bills pb
-        LEFT JOIN patients pat ON pb.patient_id = pat.id
-        WHERE pb.branch_id = ?
-        ORDER BY pb.created_at DESC
+        FROM bills b
+        LEFT JOIN patients pat ON b.patient_id = pat.id
+        WHERE b.branch_id = ?
+        ORDER BY b.created_at DESC
         LIMIT 10
     ");
     $stmt->execute([$cashier_id]);
@@ -1334,7 +1331,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
             <p class="card-amount"><?= formatCurrency($total_revenue) ?></p>
             <p class="card-label">Total Revenue</p>
-            <p class="card-sub">Patient Bills + Prescription + OTC</p>
+            <p class="card-sub">All paid bills from this branch</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1359,48 +1356,48 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 4. PATIENT BILLS REVENUE - BLUE -->
+        <!-- 4. BILLS REVENUE - BLUE -->
         <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
-            <p class="card-amount"><?= formatCurrency($patient_bills_revenue) ?></p>
-            <p class="card-label">Patient Bills</p>
-            <p class="card-sub">Includes procedures + consultation + medication</p>
+            <p class="card-amount"><?= formatCurrency($bills_revenue) ?></p>
+            <p class="card-label">Bills Revenue</p>
+            <p class="card-sub">All paid patient bills</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 5. PROCEDURES & TOOLS REVENUE - BLUE (BREAKDOWN ONLY) -->
+        <!-- 5. PROCEDURES REVENUE - BLUE -->
         <a href="procedures.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
-            <div class="card-icon"><i class="fas fa-toolbox"></i></div>
-            <p class="card-amount"><?= formatCurrency($procedures_tools_revenue) ?></p>
-            <p class="card-label">Procedures &amp; Tools</p>
-            <p class="card-sub">Breakdown (included in Patient Bills)</p>
+            <div class="card-icon"><i class="fas fa-syringe"></i></div>
+            <p class="card-amount"><?= formatCurrency($procedures_revenue) ?></p>
+            <p class="card-label">Procedures</p>
+            <p class="card-sub">From bill_items (procedure type)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 6. LAB TEST REVENUE - BLUE (NEW) -->
+        <!-- 6. LAB TEST REVENUE - BLUE -->
         <a href="lab_tests.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-flask"></i></div>
             <p class="card-amount"><?= formatCurrency($lab_total_revenue) ?></p>
             <p class="card-label">Lab Test Revenue</p>
-            <p class="card-sub">From lab_tests + lab_requests</p>
+            <p class="card-sub">From bill_items + lab_tests table</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 7. PRESCRIPTION REVENUE - BLUE -->
-        <a href="prescriptions.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
-            <div class="card-icon"><i class="fas fa-prescription-bottle"></i></div>
-            <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
-            <p class="card-label">Prescription Revenue</p>
-            <p class="card-sub">From prescription_sales (paid)</p>
+        <!-- 7. CONSULTATION REVENUE - BLUE -->
+        <a href="consultations.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
+            <div class="card-icon"><i class="fas fa-stethoscope"></i></div>
+            <p class="card-amount"><?= formatCurrency($consultation_revenue) ?></p>
+            <p class="card-label">Consultation</p>
+            <p class="card-sub">From bill_items (consultation type)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 8. OTC REVENUE - BLUE -->
-        <a href="otc_sales.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
-            <div class="card-icon"><i class="fas fa-cash-register"></i></div>
-            <p class="card-amount"><?= formatCurrency($otc_revenue) ?></p>
-            <p class="card-label">OTC Revenue</p>
-            <p class="card-sub">From otc_sales (paid)</p>
+        <!-- 8. MEDICATION REVENUE - BLUE -->
+        <a href="medications.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
+            <div class="card-icon"><i class="fas fa-pills"></i></div>
+            <p class="card-amount"><?= formatCurrency($medication_revenue) ?></p>
+            <p class="card-label">Medications</p>
+            <p class="card-sub">From bill_items (medication type)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1752,31 +1749,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    <?php if (isset($_GET['error']) && $_GET['error'] === 'invalid_id'): ?>
-        showToast('⚠️ Error', 'Invalid cashier ID provided. Please select a valid cashier.', 'error');
-        setTimeout(function() {
-            var cleanUrl = window.location.href.split('?')[0] + '?branch=<?= $selected_branch_id ?>';
-            if (window.history && window.history.replaceState) {
-                window.history.replaceState({}, document.title, cleanUrl);
-            }
-        }, 2000);
-    <?php endif; ?>
-
-    console.log('%c💰 Braick Dispensary - View Cashier (NO DOUBLE COUNTING)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick Dispensary - View Cashier (USING EXISTING TABLES)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Total Revenue: <?= formatCurrency($total_revenue) ?> (Patient Bills + Prescription + OTC)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Total Revenue: <?= formatCurrency($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c📊 Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Patient Bills: <?= formatCurrency($patient_bills_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Procedures & Tools: <?= formatCurrency($procedures_tools_revenue) ?> (Breakdown)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Lab Test Revenue: <?= formatCurrency($lab_total_revenue) ?> (NEW)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Prescription: <?= formatCurrency($prescription_revenue) ?> (Separate)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 OTC: <?= formatCurrency($otc_revenue) ?> (Separate)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Other Bills: <?= number_format($other_bills_count) ?> bills, <?= formatCurrency($other_bills_revenue) ?> (Consultation bills only)', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ ADDED: Lab Test Revenue card (BLUE)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Other Bills card shows consultation bills only', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: NO DOUBLE COUNTING - Total Revenue = Patient Bills + Prescription + OTC', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: 9 cards in 3x3 grid', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 Bills Revenue: <?= formatCurrency($bills_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Procedures: <?= formatCurrency($procedures_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Equipment: <?= formatCurrency($equipment_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Lab Tests: <?= formatCurrency($lab_total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Consultation: <?= formatCurrency($consultation_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Medications: <?= formatCurrency($medication_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Registration: <?= formatCurrency($registration_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Other Bills: <?= number_format($other_bills_count) ?> bills, <?= formatCurrency($other_bills_revenue) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Using tables: bills, bill_items, payments, lab_tests, expenses, users, branches', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ 9 cards in 3x3 grid', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/edit_prescription.php
 // SUPER ADMIN - EDIT PRESCRIPTION
 // BRAICK DISPENSARY - FIXED: Shows patient name, doctors & medications by branch
+// FIXED: Uses correct database columns
 // ================================================================
 
 // ================================================================
@@ -61,7 +62,6 @@ $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
@@ -1237,7 +1237,6 @@ if (!empty($patient_dob)) {
         
         <div class="nav-label">Management</div>
         <a href="/dispensary_system/frontend/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
-        <a href="/dispensary_system/frontend/pages/admin/departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
         <a href="/dispensary_system/frontend/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
         
         <div class="nav-label">Account</div>
@@ -1444,7 +1443,7 @@ if (!empty($patient_dob)) {
             <input type="hidden" name="branch_id" value="<?= $branch_id ?>">
             
             <div class="form-grid">
-                <!-- ✅ Patient - No "-- Select Patient --" -->
+                <!-- ✅ Patient -->
                 <div class="form-row">
                     <label class="form-label">Patient <span class="required">*</span></label>
                     <select name="patient_id" class="form-control" required>
@@ -1902,15 +1901,15 @@ if (!empty($patient_dob)) {
     }
 
     console.log('%c🏥 Braick Dispensary - Edit Prescription (FULL FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ USING: prescriptions, patients, users, branches, medications_inventory, prescription_items', 'font-size:13px; color:#34D399;');
     console.log('%c📋 Prescription: <?= htmlspecialchars($prescription_number) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient_display_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($doctor_name_display) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Status: <?= $status_display ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Patient name now visible in header', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Patient name visible in header', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Doctors filtered by branch: <?= count($doctors) ?> doctors', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Medications filtered by branch: <?= count($medications) ?> medications', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Beautiful medication dropdown with categories', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ No "-- Select Patient --" option', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

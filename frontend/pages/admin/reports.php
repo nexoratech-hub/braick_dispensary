@@ -1,11 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/reports.php
-// ADMIN - REPORTS DASHBOARD
-// PATIENT REPORT - WITH BILL TYPE COLUMN
-// BRAICK DISPENSARY - BLUE THEME
-// FIXED: Lab Report - No duplicate tests
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// ADMIN - REPORTS DASHBOARD - FINAL VERSION
+// PDF: Logo starts at top, proper page breaks
+// BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
@@ -24,7 +22,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// ROLE CHECK - ONLY ADMIN CAN ACCESS
+// ROLE CHECK - ONLY ADMIN
 // ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
@@ -40,7 +38,7 @@ if ($_SESSION['role'] !== 'admin') {
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET ADMIN DATA
 // ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -50,10 +48,26 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// GET ADMIN CONTACT NUMBERS
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone FROM users 
+        WHERE role = 'admin' AND status = 'active'
+        ORDER BY id ASC
+    ");
+    $stmt->execute();
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+}
 
 // ================================================================
 // GET PARAMETERS
@@ -70,19 +84,6 @@ $date_to = $_GET['date_to'] ?? '';
 $branches = [];
 $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// FUNCTION TO GET BRANCH FILTER
-// ================================================================
-function getBranchFilter($selected_branch_id, $table_alias = '') {
-    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        if (!empty($table_alias)) {
-            return " AND " . $table_alias . ".branch_id = " . (int)$selected_branch_id;
-        }
-        return " AND branch_id = " . (int)$selected_branch_id;
-    }
-    return '';
-}
 
 // ================================================================
 // BRANCH NAME
@@ -108,6 +109,32 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
+// FUNCTION FOR STATUS BADGE - PAID = GREEN
+// ================================================================
+function getStatusBadgeClass($status) {
+    $map = [
+        'pending' => 'warning',
+        'assigned' => 'primary',
+        'with_doctor' => 'purple',
+        'completed' => 'success',
+        'cancelled' => 'danger',
+        'paid' => 'paid',
+        'partial' => 'warning',
+        'dispensed' => 'success',
+        'confirmed' => 'primary',
+        'in_progress' => 'primary',
+        'scheduled' => 'primary',
+        'active' => 'success',
+        'inactive' => 'danger',
+        'lab_test' => 'purple',
+        'lab_completed' => 'success',
+        'prescribed' => 'primary',
+        'new' => 'primary'
+    ];
+    return $map[$status] ?? 'secondary';
+}
+
+// ================================================================
 // ================================================================
 // 1. PATIENT REPORT
 // ================================================================
@@ -121,10 +148,10 @@ $patient_bills_summary = [
     'total_lab' => 0,
     'total_procedures_tools' => 0,
     'total_consultation' => 0,
-    'total_bills' => 0
+    'total_bills' => 0,
+    'total_discount' => 0
 ];
 
-// Get patients for dropdown
 if ($report_type === 'patient') {
     $branch_filter_patients = "";
     if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
@@ -161,21 +188,20 @@ if ($report_type === 'patient') {
         $stmt->execute([$patient_id]);
         $patient_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // For each visit, get details
         foreach ($patient_visits as &$visit) {
             $visit_id = $visit['id'];
             
-            // Vital Signs
+            // 1. Vital Signs
             $stmt = $db->prepare("SELECT * FROM vital_signs WHERE visit_id = ? ORDER BY recorded_at DESC LIMIT 1");
             $stmt->execute([$visit_id]);
             $visit['vital_signs'] = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            // Lab Tests
+            // 2. Lab Tests
             $stmt = $db->prepare("SELECT * FROM lab_tests WHERE visit_id = ? ORDER BY created_at DESC");
             $stmt->execute([$visit_id]);
             $visit['lab_tests'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            // Prescriptions
+            // 3. Prescriptions
             $stmt = $db->prepare("
                 SELECT p.*, pi.* 
                 FROM prescriptions p
@@ -186,42 +212,38 @@ if ($report_type === 'patient') {
             $stmt->execute([$visit_id]);
             $visit['prescriptions'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            // Procedures & Tools from bill_items
+            // 4. Procedures & Tools
             $stmt = $db->prepare("
                 SELECT bi.* 
                 FROM bill_items bi
-                INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-                WHERE pb.visit_id = ?
+                INNER JOIN bills b ON bi.bill_id = b.id
+                WHERE b.visit_id = ?
                 AND bi.item_type IN ('procedure', 'tool')
                 ORDER BY bi.created_at DESC
             ");
             $stmt->execute([$visit_id]);
             $visit['procedures_tools'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            // ================================================================
-            // BILLS WITH TYPE DETERMINATION
-            // ================================================================
+            // 5. Bills
             $stmt = $db->prepare("
-                SELECT * FROM patient_bills 
+                SELECT * FROM bills 
                 WHERE visit_id = ? 
                 ORDER BY created_at DESC
             ");
             $stmt->execute([$visit_id]);
             $visit['bills'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            // Determine bill type for each bill
+            // Determine bill type
             foreach ($visit['bills'] as &$bill) {
                 $bill['bill_type'] = 'Other';
                 $bill['bill_type_icon'] = 'fa-file-invoice';
                 $bill['bill_type_color'] = '#64748B';
                 
-                // Check if it's a prescription bill
                 if (strpos($bill['bill_number'], 'BILL-PRES-') !== false) {
                     $bill['bill_type'] = 'Prescription';
                     $bill['bill_type_icon'] = 'fa-prescription-bottle';
                     $bill['bill_type_color'] = '#7C3AED';
                 } else {
-                    // Get items from this bill to determine type
                     $stmt_items = $db->prepare("
                         SELECT item_type, COUNT(*) as count, SUM(total_price) as total 
                         FROM bill_items 
@@ -233,9 +255,7 @@ if ($report_type === 'patient') {
                     $bill_items_types = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
                     
                     if (!empty($bill_items_types)) {
-                        // Get the dominant type (by total amount)
                         $dominant = $bill_items_types[0]['item_type'] ?? 'other';
-                        
                         $type_map = [
                             'consultation' => ['label' => 'Consultation', 'icon' => 'fa-user-md', 'color' => '#0D9488'],
                             'lab_test' => ['label' => 'Lab Test', 'icon' => 'fa-flask', 'color' => '#7C3AED'],
@@ -245,7 +265,6 @@ if ($report_type === 'patient') {
                             'registration' => ['label' => 'Registration', 'icon' => 'fa-file-medical', 'color' => '#0B5ED7'],
                             'other' => ['label' => 'Other', 'icon' => 'fa-file-invoice', 'color' => '#64748B']
                         ];
-                        
                         $bill['bill_type'] = $type_map[$dominant]['label'] ?? 'Other';
                         $bill['bill_type_icon'] = $type_map[$dominant]['icon'] ?? 'fa-file-invoice';
                         $bill['bill_type_color'] = $type_map[$dominant]['color'] ?? '#64748B';
@@ -254,9 +273,10 @@ if ($report_type === 'patient') {
             }
             unset($bill);
             
-            // Calculate summary
             foreach ($visit['bills'] as $bill) {
                 $patient_bills_summary['total_bills']++;
+                $patient_bills_summary['total_discount'] += $bill['total_discount'] ?? 0;
+                
                 if ($bill['status'] === 'paid') {
                     $patient_bills_summary['total_paid'] += $bill['total_amount'];
                     
@@ -286,7 +306,7 @@ if ($report_type === 'patient') {
 
 // ================================================================
 // ================================================================
-// 2. CASHIER REPORT
+// 2. CASHIER REPORT - WITH DISCOUNTS
 // ================================================================
 // ================================================================
 
@@ -295,36 +315,63 @@ $cashier_data = [];
 if ($report_type === 'cashier') {
     $branch_filter = "";
     if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $branch_filter = " AND pb.branch_id = " . (int)$selected_branch_id;
+        $branch_filter = " AND b.branch_id = " . (int)$selected_branch_id;
+    }
+    
+    $date_filter = "";
+    if (!empty($date_from) && !empty($date_to)) {
+        $date_filter = " AND b.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
+    } elseif (!empty($date_from)) {
+        $date_filter = " AND b.created_at >= '$date_from 00:00:00'";
+    } elseif (!empty($date_to)) {
+        $date_filter = " AND b.created_at <= '$date_to 23:59:59'";
     }
     
     // Total Revenue
     $stmt = $db->query("
-        SELECT COALESCE(SUM(pb.total_amount), 0) as total 
-        FROM patient_bills pb
-        WHERE pb.status = 'paid' $branch_filter
+        SELECT COALESCE(SUM(b.total_amount), 0) as total 
+        FROM bills b
+        WHERE b.status = 'paid' $branch_filter $date_filter
     ");
     $total_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // Total Expenses (discounts)
+    // Total Discounts
     $stmt = $db->query("
-        SELECT COALESCE(SUM(pb.discount_amount), 0) as total 
-        FROM patient_bills pb
-        WHERE pb.status = 'paid' $branch_filter
+        SELECT COALESCE(SUM(b.total_discount), 0) as total 
+        FROM bills b
+        WHERE b.status = 'paid' $branch_filter $date_filter
     ");
-    $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $total_discounts = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // Total Profit = Revenue - Expenses
-    $total_profit = $total_revenue - $total_expenses;
-    
-    // All bills with details
+    // Total Pharmacy Discount
     $stmt = $db->query("
-        SELECT pb.*, p.full_name as patient_name, u.full_name as cashier_name
-        FROM patient_bills pb
-        LEFT JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        WHERE 1=1 $branch_filter
-        ORDER BY pb.created_at DESC
+        SELECT COALESCE(SUM(b.pharmacy_discount), 0) as total 
+        FROM bills b
+        WHERE b.status = 'paid' $branch_filter $date_filter
+    ");
+    $total_pharmacy_discount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    
+    // Total Cashier Discount
+    $stmt = $db->query("
+        SELECT COALESCE(SUM(b.cashier_discount), 0) as total 
+        FROM bills b
+        WHERE b.status = 'paid' $branch_filter $date_filter
+    ");
+    $total_cashier_discount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    
+    $total_profit = $total_revenue - $total_discounts;
+    
+    // All bills
+    $stmt = $db->query("
+        SELECT 
+            b.*, 
+            p.full_name as patient_name, 
+            u.full_name as cashier_name
+        FROM bills b
+        LEFT JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        WHERE 1=1 $branch_filter $date_filter
+        ORDER BY b.created_at DESC
     ");
     $cashier_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
@@ -332,12 +379,12 @@ if ($report_type === 'cashier') {
     $stmt = $db->query("
         SELECT 
             p.id, p.full_name, p.patient_id,
-            COUNT(pb.id) as bill_count,
-            COALESCE(SUM(pb.total_amount), 0) as total_paid,
-            COALESCE(SUM(pb.discount_amount), 0) as total_discount
+            COUNT(b.id) as bill_count,
+            COALESCE(SUM(b.total_amount), 0) as total_paid,
+            COALESCE(SUM(b.total_discount), 0) as total_discount
         FROM patients p
-        LEFT JOIN patient_bills pb ON p.id = pb.patient_id AND pb.status = 'paid'
-        WHERE 1=1 $branch_filter
+        LEFT JOIN bills b ON p.id = b.patient_id AND b.status = 'paid'
+        WHERE 1=1 $branch_filter $date_filter
         GROUP BY p.id
         HAVING bill_count > 0
         ORDER BY total_paid DESC
@@ -347,7 +394,9 @@ if ($report_type === 'cashier') {
     
     $cashier_data = [
         'total_revenue' => $total_revenue,
-        'total_expenses' => $total_expenses,
+        'total_discounts' => $total_discounts,
+        'total_pharmacy_discount' => $total_pharmacy_discount,
+        'total_cashier_discount' => $total_cashier_discount,
         'total_profit' => $total_profit,
         'bills' => $cashier_bills,
         'patient_totals' => $patient_totals
@@ -363,11 +412,27 @@ if ($report_type === 'cashier') {
 $pharmacy_data = [];
 
 if ($report_type === 'pharmacy') {
-    $branch_filter = "";
-    $branch_filter_os = "";
+    $branch_filter_otc = "";
     if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $branch_filter = " AND os.branch_id = " . (int)$selected_branch_id;
-        $branch_filter_os = " AND ps.branch_id = " . (int)$selected_branch_id;
+        $branch_filter_otc = " AND os.branch_id = " . (int)$selected_branch_id;
+    }
+    
+    $branch_filter_pres = "";
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $branch_filter_pres = " AND p.branch_id = " . (int)$selected_branch_id;
+    }
+    
+    $date_filter_otc = "";
+    $date_filter_pres = "";
+    if (!empty($date_from) && !empty($date_to)) {
+        $date_filter_otc = " AND os.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
+        $date_filter_pres = " AND p.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
+    } elseif (!empty($date_from)) {
+        $date_filter_otc = " AND os.created_at >= '$date_from 00:00:00'";
+        $date_filter_pres = " AND p.created_at >= '$date_from 00:00:00'";
+    } elseif (!empty($date_to)) {
+        $date_filter_otc = " AND os.created_at <= '$date_to 23:59:59'";
+        $date_filter_pres = " AND p.created_at <= '$date_to 23:59:59'";
     }
     
     // OTC Sales
@@ -375,52 +440,47 @@ if ($report_type === 'pharmacy') {
         SELECT os.*, u.full_name as sold_by_name
         FROM otc_sales os
         LEFT JOIN users u ON os.sold_by = u.id
-        WHERE os.payment_status = 'paid' $branch_filter
+        WHERE os.payment_status = 'paid' $branch_filter_otc $date_filter_otc
         ORDER BY os.created_at DESC
     ");
     $otc_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // Prescription Sales
     $stmt = $db->query("
-        SELECT ps.*, p.full_name as patient_name, u.full_name as dispensed_by_name
-        FROM prescription_sales ps
-        LEFT JOIN patients p ON ps.patient_id = p.id
-        LEFT JOIN users u ON ps.dispensed_by = u.id
-        WHERE ps.payment_status = 'paid' $branch_filter_os
-        ORDER BY ps.created_at DESC
-    ");
-    $prescription_sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // Calculate totals for cards
-    $total_prescription_amount = 0;
-    $total_otc_amount = 0;
-    $total_prescription_count = count($prescription_sales);
-    $total_otc_count = count($otc_sales);
-    
-    foreach ($prescription_sales as $s) {
-        $total_prescription_amount += $s['total_amount'] ?? 0;
-    }
-    foreach ($otc_sales as $s) {
-        $total_otc_amount += $s['net_amount'] ?? 0;
-    }
-    
-    // Prescription Items
-    $stmt = $db->query("
-        SELECT pi.*, p.patient_id as patient_code, p.full_name as patient_name
+        SELECT 
+            pi.*,
+            p.id as prescription_id,
+            p.prescription_number,
+            p.status as prescription_status,
+            p.created_at as prescription_created_at,
+            pat.full_name as patient_name,
+            pat.patient_id as patient_code
         FROM prescription_items pi
-        LEFT JOIN prescriptions pr ON pi.prescription_id = pr.id
-        LEFT JOIN patients p ON pr.patient_id = p.id
+        INNER JOIN prescriptions p ON pi.prescription_id = p.id
+        LEFT JOIN patients pat ON p.patient_id = pat.id
+        WHERE p.status = 'dispensed' $branch_filter_pres $date_filter_pres
         ORDER BY pi.created_at DESC
-        LIMIT 100
     ");
     $prescription_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    $total_otc_amount = 0;
+    $total_otc_count = count($otc_sales);
+    $total_prescription_amount = 0;
+    $total_prescription_count = count($prescription_items);
+    
+    foreach ($otc_sales as $s) {
+        $total_otc_amount += $s['total_amount'] ?? 0;
+    }
+    foreach ($prescription_items as $s) {
+        $total_prescription_amount += $s['total_price'] ?? 0;
+    }
+    
     // OTC Items
     $stmt = $db->query("
-        SELECT oi.*, os.customer_name
+        SELECT oi.*, os.customer_name, os.sale_number
         FROM otc_sale_items oi
         LEFT JOIN otc_sales os ON oi.sale_id = os.id
-        WHERE os.payment_status = 'paid' $branch_filter
+        WHERE os.payment_status = 'paid' $branch_filter_otc $date_filter_otc
         ORDER BY oi.created_at DESC
         LIMIT 100
     ");
@@ -428,7 +488,6 @@ if ($report_type === 'pharmacy') {
     
     $pharmacy_data = [
         'otc_sales' => $otc_sales,
-        'prescription_sales' => $prescription_sales,
         'prescription_items' => $prescription_items,
         'otc_items' => $otc_items,
         'total_prescription_amount' => $total_prescription_amount,
@@ -440,7 +499,7 @@ if ($report_type === 'pharmacy') {
 
 // ================================================================
 // ================================================================
-// 4. LAB REPORT - FIXED: NO DUPLICATES
+// 4. LAB REPORT
 // ================================================================
 // ================================================================
 
@@ -452,7 +511,6 @@ if ($report_type === 'lab') {
         $branch_filter = " AND lt.branch_id = " . (int)$selected_branch_id;
     }
     
-    // Date filter
     $date_filter = "";
     if (!empty($date_from) && !empty($date_to)) {
         $date_filter = " AND lt.created_at BETWEEN '$date_from 00:00:00' AND '$date_to 23:59:59'";
@@ -462,54 +520,52 @@ if ($report_type === 'lab') {
         $date_filter = " AND lt.created_at <= '$date_to 23:59:59'";
     }
     
-    // All lab tests with patient info - GROUP BY lt.id to avoid duplicates
     $stmt = $db->query("
-        SELECT DISTINCT
+        SELECT 
             lt.id,
             lt.visit_id,
+            lt.patient_id,
             lt.doctor_id,
             lt.lab_technician_id,
+            lt.technician_id,
+            lt.test_id,
             lt.test_name,
             lt.test_price,
+            lt.equipment_used,
+            lt.batch_number,
             lt.test_type,
             lt.sample_type,
             lt.test_date,
             lt.results,
+            lt.formatted_result,
             lt.reference_range,
             lt.interpretation,
             lt.performed_by,
             lt.status,
+            lt.started_at,
             lt.bill_created,
-            lt.notes,
-            lt.technician_id,
             lt.branch_id,
+            lt.notes,
             lt.created_at,
             lt.completed_at,
-            lt.updated_at,
-            lt.result_template_id,
-            lt.formatted_result,
             lt.printed_at,
             lt.printed_by,
+            lt.updated_at,
             p.full_name as patient_name, 
             p.patient_id as patient_code,
             v.visit_number,
             u.full_name as doctor_name,
-            u2.full_name as technician_name,
-            pb.total_amount as bill_amount,
-            pb.status as bill_status
+            u2.full_name as technician_name
         FROM lab_tests lt
         LEFT JOIN visits v ON lt.visit_id = v.id
         LEFT JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON lt.doctor_id = u.id
         LEFT JOIN users u2 ON lt.lab_technician_id = u2.id
-        LEFT JOIN patient_bills pb ON pb.visit_id = v.id AND pb.status = 'paid'
         WHERE 1=1 $branch_filter $date_filter
-        GROUP BY lt.id
         ORDER BY lt.created_at DESC
     ");
     $lab_tests_all = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Summary
     $total_lab_revenue = 0;
     $total_tests = count($lab_tests_all);
     $completed_tests = 0;
@@ -518,8 +574,6 @@ if ($report_type === 'lab') {
     $cancelled_tests = 0;
     $tests_with_results = 0;
     $tests_without_results = 0;
-    
-    // Group by test name for top tests
     $test_counts = [];
     
     foreach ($lab_tests_all as $test) {
@@ -530,14 +584,12 @@ if ($report_type === 'lab') {
         elseif ($test['status'] === 'in_progress') $in_progress_tests++;
         elseif ($test['status'] === 'cancelled') $cancelled_tests++;
         
-        // Check if test has results
         if (!empty($test['results']) && $test['results'] !== 'NULL' && $test['results'] !== '') {
             $tests_with_results++;
         } else {
             $tests_without_results++;
         }
         
-        // Count by test name
         $test_name = $test['test_name'] ?? 'Unknown';
         if (!isset($test_counts[$test_name])) {
             $test_counts[$test_name] = 0;
@@ -545,7 +597,6 @@ if ($report_type === 'lab') {
         $test_counts[$test_name]++;
     }
     
-    // Sort test counts by frequency
     arsort($test_counts);
     $top_tests = array_slice($test_counts, 0, 10, true);
     
@@ -564,32 +615,7 @@ if ($report_type === 'lab') {
 }
 
 // ================================================================
-// STATUS BADGE CLASS
-// ================================================================
-function getStatusBadge($status) {
-    $classes = [
-        'active' => 'success',
-        'inactive' => 'danger',
-        'pending' => 'warning',
-        'paid' => 'success',
-        'partial' => 'warning',
-        'cancelled' => 'danger',
-        'completed' => 'success',
-        'confirmed' => 'info',
-        'dispensed' => 'success',
-        'in_progress' => 'info',
-        'scheduled' => 'info',
-        'assigned' => 'primary',
-        'with_doctor' => 'primary',
-        'lab_test' => 'info',
-        'lab_completed' => 'success',
-        'prescribed' => 'info'
-    ];
-    return $classes[$status] ?? 'secondary';
-}
-
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
@@ -607,6 +633,7 @@ include_once '../../components/admin_sidebar.php';
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
     <style>
         :root {
@@ -615,43 +642,10 @@ include_once '../../components/admin_sidebar.php';
             --primary-light: #6EA8FE;
             --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            
             --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
-            --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
-            --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
-            --warning-bg: #FEF3C7;
-            
             --purple: #7C3AED;
-            --purple-bg: #EDE9FE;
-            
-            --teal: #0D9488;
-            --teal-bg: #ECFDF5;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
             --bg-body: #F0F4F8;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -660,7 +654,6 @@ include_once '../../components/admin_sidebar.php';
             --border-color: #E2E8F0;
             --radius: 12px;
             --radius-lg: 18px;
-            --table-hover: #F8FAFC;
         }
         
         [data-theme="dark"] {
@@ -670,14 +663,6 @@ include_once '../../components/admin_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
-            --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --table-hover: #1E293B;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -707,7 +692,7 @@ include_once '../../components/admin_sidebar.php';
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
         }
         
         .top-nav .search-wrapper {
@@ -963,12 +948,6 @@ include_once '../../components/admin_sidebar.php';
             align-items: center;
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
-            transition: all 0.3s ease;
-        }
-        
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
         }
         
         .page-header .btn-outline-light {
@@ -1161,9 +1140,6 @@ include_once '../../components/admin_sidebar.php';
             padding: 16px 20px;
         }
         
-        /* ================================================================
-           SUMMARY CARDS
-           ================================================================ */
         .summary-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -1216,7 +1192,6 @@ include_once '../../components/admin_sidebar.php';
         .summary-card .number.orange { color: #D97706; }
         .summary-card .number.red { color: #DC2626; }
         .summary-card .number.teal { color: #0D9488; }
-        .summary-card .number.pink { color: #EC4899; }
         .summary-card .number.blue { color: #0B5ED7; }
         
         .summary-card .label {
@@ -1235,327 +1210,58 @@ include_once '../../components/admin_sidebar.php';
             opacity: 0.7;
         }
         
-        .summary-card .card-icon-mini {
-            position: absolute;
-            top: 12px;
-            right: 14px;
-            font-size: 1.2rem;
-            color: var(--border-color);
-            opacity: 0.3;
-        }
-        
-        .summary-card .card-icon-mini.blue { color: var(--primary); opacity: 0.2; }
-        .summary-card .card-icon-mini.green { color: #059669; opacity: 0.2; }
-        .summary-card .card-icon-mini.purple { color: #7C3AED; opacity: 0.2; }
-        .summary-card .card-icon-mini.orange { color: #D97706; opacity: 0.2; }
-        .summary-card .card-icon-mini.teal { color: #0D9488; opacity: 0.2; }
-        
         /* ================================================================
-           VISIT HISTORY
+           BADGE - PAID = GREEN
            ================================================================ */
-        .visit-timeline {
-            position: relative;
-            padding-left: 28px;
-        }
-        
-        .visit-timeline::before {
-            content: '';
-            position: absolute;
-            left: 8px;
-            top: 0;
-            bottom: 0;
-            width: 2px;
-            background: var(--primary-light);
-            border-radius: 2px;
-        }
-        
-        .visit-item-modern {
-            position: relative;
-            margin-bottom: 16px;
-            background: var(--bg-card);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            overflow: hidden;
-            transition: all 0.3s ease;
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .visit-item-modern:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .visit-item-modern .visit-dot {
-            position: absolute;
-            left: -22px;
-            top: 18px;
-            width: 14px;
-            height: 14px;
-            border-radius: 50%;
-            background: var(--primary);
-            border: 3px solid white;
-            box-shadow: 0 0 0 2px var(--primary-light);
-            z-index: 1;
-        }
-        
-        .visit-item-modern .visit-dot.completed {
-            background: #059669;
-            box-shadow: 0 0 0 2px #D1FAE5;
-        }
-        
-        .visit-item-modern .visit-dot.pending {
-            background: #D97706;
-            box-shadow: 0 0 0 2px #FEF3C7;
-        }
-        
-        .visit-item-modern .visit-dot.cancelled {
-            background: #DC2626;
-            box-shadow: 0 0 0 2px #FEE2E2;
-        }
-        
-        .visit-item-modern .visit-header-modern {
-            padding: 14px 18px;
-            background: var(--bg-body);
-            border-bottom: 2px solid var(--border-color);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 8px;
-        }
-        
-        [data-theme="dark"] .visit-item-modern .visit-header-modern {
-            background: #0F172A;
-        }
-        
-        .visit-item-modern .visit-header-modern .visit-number {
-            font-weight: 700;
-            color: var(--primary);
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
-        .visit-item-modern .visit-header-modern .visit-number i {
-            color: var(--primary);
-        }
-        
-        .visit-item-modern .visit-header-modern .visit-meta {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-        
-        .visit-item-modern .visit-header-modern .visit-date {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-        }
-        
-        .visit-item-modern .visit-body-modern {
-            padding: 14px 18px;
-        }
-        
-        .visit-item-modern .visit-body-modern .info-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px 24px;
-        }
-        
-        .visit-item-modern .visit-body-modern .info-item {
-            font-size: 0.8rem;
-            padding: 4px 0;
-        }
-        
-        .visit-item-modern .visit-body-modern .info-item .label {
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-        
-        .visit-item-modern .visit-body-modern .info-item .value {
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-        
-        /* ================================================================
-           DIAGNOSIS - HIGHLIGHTED STYLING
-           ================================================================ */
-        .diagnosis-box {
-            background: var(--primary-bg);
-            border-radius: 8px;
-            padding: 10px 14px;
-            border-left: 4px solid var(--primary);
-            grid-column: 1 / -1;
-            margin-top: 4px;
-        }
-        
-        [data-theme="dark"] .diagnosis-box {
-            background: #1E3A5F;
-            border-left-color: #3B82F6;
-        }
-        
-        .diagnosis-box .label {
-            color: var(--primary);
-            font-weight: 700;
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            display: block;
-            margin-bottom: 2px;
-        }
-        
-        .diagnosis-box .diagnosis-text {
-            font-weight: 700;
-            font-size: 0.95rem;
-            color: var(--text-primary);
-        }
-        
-        .diagnosis-box .diagnosis-text .highlight {
-            color: var(--primary);
-            background: rgba(11, 94, 215, 0.1);
-            padding: 2px 8px;
-            border-radius: 4px;
-        }
-        
-        [data-theme="dark"] .diagnosis-box .diagnosis-text .highlight {
-            background: rgba(59, 130, 246, 0.2);
-        }
-        
-        .complaint-box {
-            background: var(--bg-body);
-            border-radius: 6px;
-            padding: 8px 12px;
-            border: 1px dashed var(--border-color);
-            grid-column: 1 / -1;
-        }
-        
-        [data-theme="dark"] .complaint-box {
-            background: #0F172A;
-        }
-        
-        .complaint-box .label {
-            color: var(--text-secondary);
-            font-weight: 600;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            display: block;
-            margin-bottom: 2px;
-        }
-        
-        .complaint-box .complaint-text {
-            font-size: 0.85rem;
-            color: var(--text-primary);
-        }
-        
-        .no-diagnosis {
-            grid-column: 1 / -1;
-            color: var(--text-secondary);
-            font-size: 0.8rem;
-            font-style: italic;
-            padding: 6px 0;
-        }
-        
-        /* ================================================================
-           SUB SECTIONS
-           ================================================================ */
-        .visit-item-modern .sub-section {
-            margin-top: 10px;
-            padding-top: 10px;
-            border-top: 1px dashed var(--border-color);
-        }
-        
-        .visit-item-modern .sub-section .sub-title {
-            font-size: 0.7rem;
-            font-weight: 700;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-            margin-bottom: 6px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .visit-item-modern .sub-section .sub-title i {
-            color: var(--primary);
-        }
-        
-        .visit-item-modern .sub-table {
-            width: 100%;
-            font-size: 0.75rem;
-            border-collapse: collapse;
-        }
-        
-        .visit-item-modern .sub-table thead th {
-            background: var(--bg-body);
-            color: var(--text-secondary);
-            padding: 6px 10px;
-            text-align: left;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            font-weight: 700;
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        [data-theme="dark"] .visit-item-modern .sub-table thead th {
-            background: #0F172A;
-        }
-        
-        .visit-item-modern .sub-table tbody td {
-            padding: 5px 10px;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .visit-item-modern .sub-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-        
-        .visit-item-modern .sub-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
-        
-        /* ================================================================
-           BILL TYPE BADGE
-           ================================================================ */
-        .bill-type-badge {
+        .badge {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-size: 0.6rem;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
             font-weight: 600;
-            white-space: nowrap;
+            letter-spacing: 0.02em;
+            border: 1px solid transparent;
+            color: #ffffff !important;
         }
         
-        .bill-type-badge i {
-            font-size: 0.55rem;
+        .badge-success { background: #059669 !important; color: #ffffff !important; }
+        .badge-danger { background: #DC2626 !important; color: #ffffff !important; }
+        .badge-warning { background: #D97706 !important; color: #ffffff !important; }
+        .badge-info { background: #0B5ED7 !important; color: #ffffff !important; }
+        .badge-secondary { background: #64748B !important; color: #ffffff !important; }
+        .badge-purple { background: #7C3AED !important; color: #ffffff !important; }
+        .badge-teal { background: #0D9488 !important; color: #ffffff !important; }
+        .badge-primary { background: #0B5ED7 !important; color: #ffffff !important; }
+        
+        .badge-paid {
+            background: #D1FAE5 !important;
+            color: #059669 !important;
+            border: 1px solid #059669 !important;
+            font-weight: 700 !important;
         }
         
-        .bill-type-badge.consultation { background: #D1FAE5; color: #065F46; }
-        .bill-type-badge.prescription { background: #EDE9FE; color: #5B21B6; }
-        .bill-type-badge.lab_test { background: #EDE9FE; color: #5B21B6; }
-        .bill-type-badge.procedure { background: #FEF3C7; color: #92400E; }
-        .bill-type-badge.tool { background: #FEF3C7; color: #92400E; }
-        .bill-type-badge.medication { background: #D1FAE5; color: #065F46; }
-        .bill-type-badge.registration { background: #DBEAFE; color: #1E40AF; }
-        .bill-type-badge.other { background: #F1F5F9; color: #475569; }
+        [data-theme="dark"] .badge-paid {
+            background: #1A3A2A !important;
+            color: #34D399 !important;
+            border: 1px solid #34D399 !important;
+        }
         
-        [data-theme="dark"] .bill-type-badge.consultation { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .bill-type-badge.prescription { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .bill-type-badge.lab_test { background: #2D1B4E; color: #A78BFA; }
-        [data-theme="dark"] .bill-type-badge.procedure { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .bill-type-badge.tool { background: #3D2E0A; color: #FBBF24; }
-        [data-theme="dark"] .bill-type-badge.medication { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .bill-type-badge.registration { background: #1E3A5F; color: #60A5FA; }
-        [data-theme="dark"] .bill-type-badge.other { background: #1E293B; color: #94A3B8; }
+        .data-table .badge {
+            color: #ffffff !important;
+            text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+        }
         
-        /* ================================================================
-           DATA TABLE
-           ================================================================ */
+        .data-table .badge-paid {
+            color: #059669 !important;
+            text-shadow: none !important;
+        }
+        
+        [data-theme="dark"] .data-table .badge-paid {
+            color: #34D399 !important;
+        }
+        
         .data-table {
             width: 100%;
             border-collapse: separate;
@@ -1609,28 +1315,6 @@ include_once '../../components/admin_sidebar.php';
             border-bottom: 3px solid #047857;
         }
         
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: white;
-            letter-spacing: 0.02em;
-        }
-        
-        .badge-success { background: #059669; }
-        .badge-danger { background: #DC2626; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-info { background: #0B5ED7; }
-        .badge-secondary { background: #64748B; }
-        .badge-purple { background: #7C3AED; }
-        .badge-teal { background: #0D9488; }
-        
-        [data-theme="dark"] .badge-warning { color: #1E293B; }
-        
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1659,42 +1343,6 @@ include_once '../../components/admin_sidebar.php';
             border-radius: 6px;
         }
         
-        .btn-primary {
-            background: var(--primary-gradient);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            border-color: var(--primary-dark);
-            color: white;
-        }
-        
-        .btn-green {
-            background: #059669;
-            color: white;
-            border-color: #059669;
-        }
-        
-        .btn-green:hover {
-            background: #047857;
-            border-color: #047857;
-            color: white;
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
         .btn-pdf {
             background: #DC2626;
             color: white;
@@ -1705,8 +1353,6 @@ include_once '../../components/admin_sidebar.php';
             background: #B91C1C;
             border-color: #B91C1C;
             color: white;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
         }
         
         .empty-state {
@@ -1736,15 +1382,339 @@ include_once '../../components/admin_sidebar.php';
             font-weight: 700;
         }
         
+        /* ================================================================
+           PDF MODAL
+           ================================================================ */
+        .pdf-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.6);
+            z-index: 9999;
+            backdrop-filter: blur(4px);
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .pdf-modal-overlay.active { display: flex; }
+        
+        .pdf-modal {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            width: 95%;
+            max-width: 1100px;
+            max-height: 95vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: var(--shadow-lg);
+            animation: slideUp 0.3s ease;
+        }
+        
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(30px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        .pdf-modal-header {
+            padding: 14px 22px;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-shrink: 0;
+            background: var(--primary-gradient);
+            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        }
+        
+        .pdf-modal-header .modal-title {
+            font-size: 1rem;
+            font-weight: 700;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .pdf-modal-header .modal-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .pdf-modal-header .modal-actions .btn {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .pdf-modal-header .modal-actions .btn:hover {
+            background: rgba(255,255,255,0.3);
+            transform: translateY(-2px);
+        }
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal {
+            background: rgba(220,38,38,0.3);
+            border-color: rgba(220,38,38,0.2);
+        }
+        
+        .pdf-modal-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 28px;
+            background: var(--bg-body);
+        }
+        
+        .pdf-modal-body .pdf-content {
+            max-width: 100%;
+            font-size: 14px;
+            background: var(--bg-card);
+            padding: 24px 28px;
+            border-radius: var(--radius);
+            box-shadow: var(--shadow);
+            border: 1px solid var(--border-color);
+            line-height: 1.5;
+            margin-top: 0;
+            padding-top: 28px;
+        }
+        
+        /* ================================================================
+           PDF STYLES - Logo starts at top
+           ================================================================ */
+        .pdf-content {
+            font-family: 'Inter', 'Segoe UI', sans-serif;
+        }
+        
+        .pdf-content .pdf-header-section {
+            text-align: left;
+            padding: 0 0 12px 0;
+            border-bottom: 3px solid #0B5ED7;
+            margin-bottom: 16px;
+            page-break-after: avoid;
+            break-after: avoid;
+        }
+        
+        .pdf-content .pdf-header-top {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 6px;
+        }
+        
+        .pdf-content .pdf-header-top .pdf-logo {
+            flex-shrink: 0;
+        }
+        
+        .pdf-content .pdf-header-top .pdf-logo img {
+            height: 55px;
+            width: auto;
+            object-fit: contain;
+            display: block;
+        }
+        
+        .pdf-content .pdf-header-top .pdf-title-area {
+            flex: 1;
+        }
+        
+        .pdf-content .pdf-header-top .pdf-title-area .clinic-name {
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: #0B5ED7;
+            letter-spacing: -0.5px;
+            line-height: 1.2;
+        }
+        
+        .pdf-content .pdf-header-top .pdf-title-area .clinic-sub {
+            font-size: 0.75rem;
+            color: #64748B;
+            letter-spacing: 0.5px;
+        }
+        
+        .pdf-content .admin-contacts {
+            display: flex;
+            justify-content: flex-start;
+            gap: 20px;
+            flex-wrap: wrap;
+            margin-top: 4px;
+            padding-top: 4px;
+            border-top: 1px solid #E2E8F0;
+            font-size: 0.6rem;
+            color: #64748B;
+        }
+        
+        .pdf-content .admin-contacts .admin-phone {
+            color: #0B5ED7;
+            font-weight: 600;
+        }
+        
+        .pdf-content .section-title {
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: #0B5ED7;
+            border-bottom: 2px solid #6EA8FE;
+            padding-bottom: 4px;
+            margin: 10px 0 6px 0;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            page-break-after: avoid;
+            break-after: avoid;
+        }
+        
+        .pdf-content .pdf-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            margin: 4px 0;
+            word-wrap: break-word;
+        }
+        
+        .pdf-content .pdf-table th {
+            background: #059669;
+            color: white;
+            padding: 4px 8px;
+            text-align: left;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 700;
+            border: 1px solid #047857;
+        }
+        
+        .pdf-content .pdf-table td {
+            padding: 4px 8px;
+            border-bottom: 1px solid #E2E8F0;
+            font-size: 12px;
+            word-wrap: break-word;
+        }
+        
+        .pdf-content .pdf-table tr:nth-child(even) td {
+            background: #F8FAFC;
+        }
+        
+        .pdf-content .pdf-empty {
+            padding: 6px 0;
+            color: #64748B;
+            font-style: italic;
+            font-size: 14px;
+            text-align: center;
+            background: #F8FAFC;
+            border-radius: 4px;
+            margin: 2px 0;
+        }
+        
+        .pdf-content .pdf-footer {
+            margin-top: 12px;
+            padding-top: 10px;
+            border-top: 2px solid #E2E8F0;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        
+        .pdf-content .pdf-footer .footer-stamp {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box {
+            text-align: center;
+            padding: 6px 14px;
+            border: 3px solid #0B5ED7;
+            border-radius: 10px;
+            background: #EFF6FF;
+            min-width: 150px;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-title {
+            font-size: 10px;
+            color: #64748B;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-name {
+            font-size: 14px;
+            font-weight: 800;
+            color: #0B5ED7;
+        }
+        
+        .pdf-content .pdf-footer .stamp-box .stamp-line {
+            font-size: 12px;
+            color: #64748B;
+            margin-top: 2px;
+        }
+        
+        .pdf-content .pdf-footer .footer-bottom {
+            text-align: center;
+            margin-top: 6px;
+            font-size: 11px;
+            color: #94A3B8;
+        }
+        
+        .pdf-content .pdf-visit-block {
+            background: #F8FAFC;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin: 8px 0;
+            border: 1px solid #E2E8F0;
+            page-break-inside: avoid;
+            break-inside: avoid;
+        }
+        
+        .pdf-content .pdf-visit-block .visit-header {
+            font-weight: 700;
+            font-size: 0.9rem;
+            color: #0B5ED7;
+            border-bottom: 2px solid #6EA8FE;
+            padding-bottom: 4px;
+            margin-bottom: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
+        .toast-custom.success { background: #059669; }
+        .toast-custom.error { background: #DC2626; }
+        .toast-custom.info { background: #0B5ED7; }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .visit-item-modern .visit-body-modern .info-grid {
-                grid-template-columns: 1fr;
-            }
-            .diagnosis-box { grid-column: 1; }
-            .complaint-box { grid-column: 1; }
         }
         
         @media (max-width: 768px) {
@@ -1757,12 +1727,6 @@ include_once '../../components/admin_sidebar.php';
             .filter-bar { flex-direction: column; align-items: stretch; }
             .filter-bar select, .filter-bar input { width: 100%; }
             .data-table { font-size: 0.7rem; }
-            .data-table thead th, .data-table td { padding: 6px 8px; }
-            .summary-grid { grid-template-columns: 1fr 1fr; }
-            .visit-item-modern .visit-header-modern {
-                flex-direction: column;
-                align-items: flex-start;
-            }
         }
         
         @media (max-width: 480px) {
@@ -1772,7 +1736,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
+            from { opacity: 0; transform: translateY(15px); }
             to { opacity: 1; transform: translateY(0); }
         }
         
@@ -1780,55 +1744,14 @@ include_once '../../components/admin_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
-        
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle, .filter-bar, .report-tabs { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .data-table thead th {
-                background: #0B5ED7 !important;
-                color: white !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .cashier-table thead th {
-                background: #059669 !important;
-                color: white !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-header {
-                background: #0B5ED7 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-title, .page-subtitle, .header-badge, .role-badge-display {
-                color: white !important;
-            }
-            .summary-card { border: 1px solid #ddd !important; box-shadow: none !important; }
-            .visit-item-modern { border: 1px solid #ddd !important; box-shadow: none !important; }
-            .visit-item-modern .visit-dot { display: none !important; }
-            .visit-timeline::before { display: none !important; }
-            .visit-item-modern .visit-header-modern { background: #f5f5f5 !important; }
-            .diagnosis-box { background: #f0f7ff !important; border-left-color: #0B5ED7 !important; }
-            .complaint-box { background: #f5f5f5 !important; }
-            .bill-type-badge { 
-                background: #f0f0f0 !important;
-                color: #333 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-        }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
-<nav class="top-nav">
+<nav class="top-nav no-print">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
@@ -1843,7 +1766,7 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
     
-    <div class="flex items-center gap-3">
+    <div class="flex items-center gap-3 no-print">
         <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php foreach ($branches as $b): ?>
@@ -1908,7 +1831,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- REPORT TABS -->
     <!-- ================================================================ -->
-    <div class="report-tabs animate-fade-in-up">
+    <div class="report-tabs animate-fade-in-up no-print">
         <a href="?type=patient&branch=<?= urlencode($selected_branch_id) ?>" 
            class="report-tab <?= $report_type === 'patient' ? 'active' : '' ?>">
             <i class="fas fa-user-injured"></i> Patient Report
@@ -1930,7 +1853,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- FILTER BAR -->
     <!-- ================================================================ -->
-    <div class="filter-bar animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="filter-bar animate-fade-in-up no-print" style="animation-delay:0.05s;">
         <form method="GET" action="" class="flex flex-wrap gap-2 items-center w-full">
             <input type="hidden" name="type" value="<?= htmlspecialchars($report_type) ?>">
             <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
@@ -1960,321 +1883,99 @@ include_once '../../components/admin_sidebar.php';
             <a href="reports.php?type=<?= urlencode($report_type) ?>&branch=<?= urlencode($selected_branch_id) ?>" class="btn-reset">
                 <i class="fas fa-times"></i> Reset
             </a>
+            
+            <button type="button" onclick="generatePDF()" class="btn-filter" style="background:#DC2626;">
+                <i class="fas fa-file-pdf"></i> Export PDF
+            </button>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- ================================================================ -->
-    <!-- 1. PATIENT REPORT - WITH BILL TYPE COLUMN -->
-    <!-- ================================================================ -->
+    <!-- PATIENT REPORT -->
     <!-- ================================================================ -->
     <?php if ($report_type === 'patient'): ?>
     
         <?php if ($patient_data && !empty($patient_visits)): ?>
         
-        <!-- Summary Cards -->
         <div class="summary-grid animate-fade-in-up" style="animation-delay:0.1s;">
             <div class="summary-card">
                 <span class="card-icon-mini blue"><i class="fas fa-money-bill-wave"></i></span>
-                <p class="number">TSh <?= number_format($patient_bills_summary['total_paid'], 0) ?></p>
+                <p class="number blue">TSh <?= number_format($patient_bills_summary['total_paid'], 0) ?></p>
                 <p class="label">All Paid Bills</p>
-                <p class="sub-label">Total payments made</p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini green"><i class="fas fa-prescription"></i></span>
-                <p class="number green">TSh <?= number_format($patient_bills_summary['total_prescription'], 0) ?></p>
+                <span class="card-icon-mini purple"><i class="fas fa-prescription"></i></span>
+                <p class="number purple">TSh <?= number_format($patient_bills_summary['total_prescription'], 0) ?></p>
                 <p class="label">Prescription Bills</p>
-                <p class="sub-label">Medication costs</p>
             </div>
             <div class="summary-card">
                 <span class="card-icon-mini purple"><i class="fas fa-flask"></i></span>
                 <p class="number purple">TSh <?= number_format($patient_bills_summary['total_lab'], 0) ?></p>
                 <p class="label">Lab Test Bills</p>
-                <p class="sub-label">Laboratory services</p>
             </div>
             <div class="summary-card">
                 <span class="card-icon-mini orange"><i class="fas fa-syringe"></i></span>
                 <p class="number orange">TSh <?= number_format($patient_bills_summary['total_procedures_tools'], 0) ?></p>
                 <p class="label">Procedures & Tools</p>
-                <p class="sub-label">Medical procedures</p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini teal"><i class="fas fa-user-md"></i></span>
-                <p class="number teal">TSh <?= number_format($patient_bills_summary['total_consultation'], 0) ?></p>
-                <p class="label">Visit/Consultation</p>
-                <p class="sub-label">Doctor consultation fees</p>
+                <span class="card-icon-mini teal"><i class="fas fa-money-bill-wave"></i></span>
+                <p class="number teal">TSh <?= number_format($patient_bills_summary['total_discount'], 0) ?></p>
+                <p class="label">Total Discounts</p>
             </div>
         </div>
         
-        <!-- Patient Personal Info -->
         <div class="card animate-fade-in-up" style="animation-delay:0.12s;">
             <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-user"></i> Patient Personal Information
-                </h3>
+                <h3 class="card-title"><i class="fas fa-user"></i> Patient Information</h3>
                 <span class="badge badge-info">ID: <?= htmlspecialchars($patient_data['patient_id']) ?></span>
             </div>
             <div class="card-body">
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Full Name</span><br><strong><?= htmlspecialchars($patient_data['full_name']) ?></strong></div>
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Gender</span><br><strong><?= htmlspecialchars($patient_data['gender'] ?? 'N/A') ?></strong></div>
-                    <div><span style="color:var(--text-secondary);font-size:0.7rem;">Date of Birth</span><br><strong><?= !empty($patient_data['date_of_birth']) ? date('M d, Y', strtotime($patient_data['date_of_birth'])) : 'N/A' ?></strong></div>
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Phone</span><br><strong><?= htmlspecialchars($patient_data['phone'] ?? 'N/A') ?></strong></div>
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Email</span><br><strong><?= htmlspecialchars($patient_data['email'] ?? 'N/A') ?></strong></div>
-                    <div><span style="color:var(--text-secondary);font-size:0.7rem;">Address</span><br><strong><?= htmlspecialchars($patient_data['address'] ?? 'N/A') ?></strong></div>
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Blood Group</span><br><strong><?= htmlspecialchars($patient_data['blood_group'] ?? 'N/A') ?></strong></div>
-                    <div><span style="color:var(--text-secondary);font-size:0.7rem;">Allergies</span><br><strong><?= htmlspecialchars($patient_data['allergies'] ?? 'None') ?></strong></div>
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Branch</span><br><strong><?= htmlspecialchars($patient_data['branch_name'] ?? 'N/A') ?></strong></div>
-                    <div><span style="color:var(--text-secondary);font-size:0.7rem;">Registered By</span><br><strong><?= htmlspecialchars($patient_data['receptionist_name'] ?? 'N/A') ?></strong></div>
-                    <div><span style="color:var(--text-secondary);font-size:0.7rem;">Registration Date</span><br><strong><?= date('M d, Y h:i A', strtotime($patient_data['created_at'])) ?></strong></div>
                 </div>
             </div>
         </div>
         
-        <!-- Visits -->
         <div class="card animate-fade-in-up" style="animation-delay:0.14s;">
             <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-stethoscope"></i> Patient Visit History (<?= count($patient_visits) ?> visits)
-                </h3>
-                <button onclick="exportPatientPDF()" class="btn btn-pdf btn-sm">
-                    <i class="fas fa-file-pdf"></i> Export PDF
-                </button>
+                <h3 class="card-title"><i class="fas fa-stethoscope"></i> Visit History (<?= count($patient_visits) ?>)</h3>
             </div>
-            <div class="card-body">
+            <div class="card-body" style="padding:0;">
                 <?php if (count($patient_visits) > 0): ?>
-                    <div class="visit-timeline">
-                        <?php foreach ($patient_visits as $visit):
-                            $status_class = 'pending';
-                            if ($visit['status'] === 'completed') $status_class = 'completed';
-                            elseif ($visit['status'] === 'cancelled') $status_class = 'cancelled';
-                            
-                            $has_diagnosis = !empty($visit['diagnosis']) && $visit['diagnosis'] !== 'NULL' && $visit['diagnosis'] !== '0';
-                            $has_complaint = !empty($visit['complaint']) && $visit['complaint'] !== 'NULL';
-                            $has_symptoms = !empty($visit['symptoms']) && $visit['symptoms'] !== 'NULL';
-                        ?>
-                            <div class="visit-item-modern">
-                                <div class="visit-dot <?= $status_class ?>"></div>
-                                
-                                <div class="visit-header-modern">
-                                    <span class="visit-number">
-                                        <i class="fas fa-file-medical"></i> <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
-                                        <span class="badge badge-<?= getStatusBadge($visit['status'] ?? 'pending') ?>" style="font-size:0.6rem;padding:2px 10px;margin-left:8px;">
-                                            <?= ucfirst($visit['status'] ?? 'Pending') ?>
-                                        </span>
-                                        <?php if ($has_diagnosis): ?>
-                                            <span class="badge badge-purple" style="font-size:0.55rem;padding:1px 10px;">
-                                                <i class="fas fa-stethoscope"></i> Diagnosed
-                                            </span>
-                                        <?php endif; ?>
-                                    </span>
-                                    <span class="visit-meta">
-                                        <span class="visit-date">
-                                            <i class="fas fa-calendar"></i> <?= date('M d, Y h:i A', strtotime($visit['visit_date'] ?? $visit['created_at'])) ?>
-                                        </span>
-                                        <span class="badge badge-info" style="font-size:0.55rem;padding:1px 10px;background:var(--primary);">
-                                            <i class="fas fa-clock"></i> #<?= $visit['id'] ?>
-                                        </span>
-                                    </span>
-                                </div>
-                                
-                                <div class="visit-body-modern">
-                                    <div class="info-grid">
-                                        <div class="info-item"><span class="label">Doctor:</span> <span class="value">Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></span></div>
-                                        <div class="info-item"><span class="label">Visit Type:</span> <span class="value"><?= ucfirst($visit['visit_type'] ?? 'N/A') ?></span></div>
-                                        
-                                        <?php if ($has_symptoms): ?>
-                                            <div class="complaint-box">
-                                                <span class="label"><i class="fas fa-thermometer-half"></i> Symptoms / Presenting Complaints</span>
-                                                <p class="complaint-text"><?= htmlspecialchars($visit['symptoms']) ?></p>
-                                            </div>
-                                        <?php endif; ?>
-                                        
-                                        <?php if ($has_complaint): ?>
-                                            <div class="complaint-box">
-                                                <span class="label"><i class="fas fa-question-circle"></i> Reason for Visit / Complaint</span>
-                                                <p class="complaint-text"><?= htmlspecialchars($visit['complaint']) ?></p>
-                                            </div>
-                                        <?php endif; ?>
-                                        
-                                        <?php if ($has_diagnosis): ?>
-                                            <div class="diagnosis-box">
-                                                <span class="label"><i class="fas fa-stethoscope"></i> Diagnosis / Impression</span>
-                                                <p class="diagnosis-text">
-                                                    <span class="highlight"><?= htmlspecialchars($visit['diagnosis']) ?></span>
-                                                </p>
-                                            </div>
-                                        <?php else: ?>
-                                            <div class="no-diagnosis">
-                                                <i class="fas fa-info-circle" style="color:var(--text-secondary);"></i> No diagnosis recorded for this visit
-                                            </div>
-                                        <?php endif; ?>
-                                        
-                                        <?php if (!empty($visit['treatment']) && $visit['treatment'] !== 'NULL'): ?>
-                                            <div class="info-item" style="grid-column:1/-1;">
-                                                <span class="label">Treatment Given:</span>
-                                                <span class="value"><?= htmlspecialchars($visit['treatment']) ?></span>
-                                            </div>
-                                        <?php endif; ?>
-                                        
-                                        <?php if (!empty($visit['vital_signs'])): ?>
-                                            <div class="info-item" style="grid-column:1/-1;">
-                                                <span class="label">Vital Signs:</span>
-                                                <span class="value">
-                                                    <?php 
-                                                        $vs = $visit['vital_signs'];
-                                                        echo "🌡️ Temp: " . ($vs['temperature'] ?? 'N/A') . "°C | ";
-                                                        echo "❤️ BP: " . ($vs['blood_pressure_systolic'] ?? 'N/A') . "/" . ($vs['blood_pressure_diastolic'] ?? 'N/A') . " | ";
-                                                        echo "💓 Pulse: " . ($vs['pulse_rate'] ?? 'N/A') . " | ";
-                                                        echo "⚖️ Weight: " . ($vs['weight'] ?? 'N/A') . "kg";
-                                                        if (!empty($vs['bmi'])) echo " | BMI: " . $vs['bmi'];
-                                                    ?>
-                                                </span>
-                                            </div>
-                                        <?php endif; ?>
-                                    </div>
-                                    
-                                    <!-- Lab Tests -->
-                                    <?php if (!empty($visit['lab_tests'])): ?>
-                                        <div class="sub-section">
-                                            <div class="sub-title"><i class="fas fa-flask"></i> Lab Tests (<?= count($visit['lab_tests']) ?>)</div>
-                                            <table class="sub-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Test Name</th>
-                                                        <th>Result</th>
-                                                        <th>Reference</th>
-                                                        <th>Status</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php foreach ($visit['lab_tests'] as $test): ?>
-                                                        <tr>
-                                                            <td><?= htmlspecialchars($test['test_name']) ?></td>
-                                                            <td><strong><?= htmlspecialchars($test['results'] ?? '-') ?></strong></td>
-                                                            <td><?= htmlspecialchars($test['reference_range'] ?? '-') ?></td>
-                                                            <td>
-                                                                <span class="badge badge-<?= getStatusBadge($test['status'] ?? 'pending') ?>" style="font-size:0.55rem;padding:1px 8px;">
-                                                                    <?= ucfirst($test['status'] ?? 'Pending') ?>
-                                                                </span>
-                                                            </td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    <?php endif; ?>
-                                    
-                                    <!-- Prescriptions -->
-                                    <?php if (!empty($visit['prescriptions'])): ?>
-                                        <div class="sub-section">
-                                            <div class="sub-title"><i class="fas fa-prescription"></i> Prescriptions (<?= count($visit['prescriptions']) ?>)</div>
-                                            <table class="sub-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Medication</th>
-                                                        <th>Dosage</th>
-                                                        <th>Frequency</th>
-                                                        <th>Duration</th>
-                                                        <th>Status</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php foreach ($visit['prescriptions'] as $presc): ?>
-                                                        <tr>
-                                                            <td><?= htmlspecialchars($presc['medication'] ?? $presc['medication_name'] ?? 'N/A') ?></td>
-                                                            <td><?= htmlspecialchars($presc['dosage'] ?? '-') ?></td>
-                                                            <td><?= htmlspecialchars($presc['frequency'] ?? '-') ?></td>
-                                                            <td><?= htmlspecialchars($presc['duration'] ?? '-') ?></td>
-                                                            <td>
-                                                                <span class="badge badge-<?= getStatusBadge($presc['status'] ?? 'pending') ?>" style="font-size:0.55rem;padding:1px 8px;">
-                                                                    <?= ucfirst($presc['status'] ?? 'Pending') ?>
-                                                                </span>
-                                                            </td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    <?php endif; ?>
-                                    
-                                    <!-- Procedures & Tools -->
-                                    <?php if (!empty($visit['procedures_tools'])): ?>
-                                        <div class="sub-section">
-                                            <div class="sub-title"><i class="fas fa-syringe"></i> Procedures & Tools (<?= count($visit['procedures_tools']) ?>)</div>
-                                            <table class="sub-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Name</th>
-                                                        <th>Type</th>
-                                                        <th>Qty</th>
-                                                        <th style="text-align:right;">Total</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php foreach ($visit['procedures_tools'] as $item): ?>
-                                                        <tr>
-                                                            <td><?= htmlspecialchars($item['item_name']) ?></td>
-                                                            <td><?= ucfirst($item['item_type'] ?? 'N/A') ?></td>
-                                                            <td><?= $item['quantity'] ?? 1 ?></td>
-                                                            <td style="text-align:right;font-weight:600;">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    <?php endif; ?>
-                                    
-                                    <!-- ================================================================ -->
-                                    <!-- BILLS WITH TYPE COLUMN -->
-                                    <!-- ================================================================ -->
-                                    <?php if (!empty($visit['bills'])): ?>
-                                        <div class="sub-section">
-                                            <div class="sub-title"><i class="fas fa-file-invoice"></i> Bills (<?= count($visit['bills']) ?>)</div>
-                                            <table class="sub-table">
-                                                <thead>
-                                                    <tr>
-                                                        <th>Bill #</th>
-                                                        <th>Type</th>
-                                                        <th style="text-align:right;">Total</th>
-                                                        <th style="text-align:right;">Paid</th>
-                                                        <th style="text-align:right;">Balance</th>
-                                                        <th>Status</th>
-                                                    </tr>
-                                                </thead>
-                                                <tbody>
-                                                    <?php foreach ($visit['bills'] as $bill): 
-                                                        $bill_type_class = strtolower(str_replace(' ', '_', $bill['bill_type'] ?? 'other'));
-                                                    ?>
-                                                        <tr>
-                                                            <td style="font-family:monospace;font-size:0.7rem;"><?= htmlspecialchars($bill['bill_number']) ?></td>
-                                                            <td>
-                                                                <span class="bill-type-badge <?= $bill_type_class ?>">
-                                                                    <i class="fas <?= $bill['bill_type_icon'] ?? 'fa-file-invoice' ?>"></i>
-                                                                    <?= htmlspecialchars($bill['bill_type'] ?? 'Other') ?>
-                                                                </span>
-                                                            </td>
-                                                            <td style="text-align:right;font-weight:600;">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
-                                                            <td style="text-align:right;color:#059669;">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
-                                                            <td style="text-align:right;color:#DC2626;">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></td>
-                                                            <td>
-                                                                <span class="badge badge-<?= getStatusBadge($bill['status'] ?? 'pending') ?>" style="font-size:0.55rem;padding:1px 8px;">
-                                                                    <?= ucfirst($bill['status'] ?? 'Pending') ?>
-                                                                </span>
-                                                            </td>
-                                                        </tr>
-                                                    <?php endforeach; ?>
-                                                </tbody>
-                                            </table>
-                                        </div>
-                                    <?php endif; ?>
-                                    
-                                </div>
-                            </div>
-                        <?php endforeach; ?>
+                    <div class="overflow-x-auto">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Visit #</th>
+                                    <th>Date</th>
+                                    <th>Doctor</th>
+                                    <th>Status</th>
+                                    <th>Diagnosis</th>
+                                    <th>Bills</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($patient_visits as $visit): ?>
+                                    <tr>
+                                        <td><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></td>
+                                        <td><?= date('M d, Y', strtotime($visit['visit_date'] ?? $visit['created_at'])) ?></td>
+                                        <td>Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></td>
+                                        <td><span class="badge badge-<?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>"><?= ucfirst($visit['status'] ?? 'Pending') ?></span></td>
+                                        <td><?= htmlspecialchars(substr($visit['diagnosis'] ?? '', 0, 30)) ?></td>
+                                        <td><?= count($visit['bills'] ?? []) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
                     </div>
                 <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-stethoscope"></i><p>No visits found for this patient</p></div>
+                    <div class="empty-state"><i class="fas fa-stethoscope"></i><p>No visits found</p></div>
                 <?php endif; ?>
             </div>
         </div>
@@ -2285,7 +1986,7 @@ include_once '../../components/admin_sidebar.php';
                     <div class="empty-state">
                         <i class="fas fa-user-injured"></i>
                         <h3><?= $patient_id > 0 ? 'No Patient Data Found' : 'No Patient Selected' ?></h3>
-                        <p><?= $patient_id > 0 ? 'No data found for the selected patient.' : 'Please select a patient from the filter above to view their report.' ?></p>
+                        <p><?= $patient_id > 0 ? 'No data found for the selected patient.' : 'Please select a patient from the filter above.' ?></p>
                     </div>
                 </div>
             </div>
@@ -2294,9 +1995,7 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ================================================================ -->
-    <!-- 2. CASHIER REPORT -->
-    <!-- ================================================================ -->
+    <!-- CASHIER REPORT -->
     <!-- ================================================================ -->
     <?php if ($report_type === 'cashier'): ?>
     
@@ -2305,30 +2004,24 @@ include_once '../../components/admin_sidebar.php';
                 <span class="card-icon-mini green"><i class="fas fa-money-bill-wave"></i></span>
                 <p class="number green">TSh <?= number_format($cashier_data['total_revenue'] ?? 0, 0) ?></p>
                 <p class="label">Total Revenue</p>
-                <p class="sub-label">All paid bills</p>
             </div>
             <div class="summary-card">
                 <span class="card-icon-mini red"><i class="fas fa-receipt"></i></span>
-                <p class="number red">TSh <?= number_format($cashier_data['total_expenses'] ?? 0, 0) ?></p>
-                <p class="label">Total Expenses</p>
-                <p class="sub-label">Discounts given</p>
+                <p class="number red">TSh <?= number_format($cashier_data['total_discounts'] ?? 0, 0) ?></p>
+                <p class="label">Total Discounts</p>
+                <p class="sub-label">Pharmacy: TSh <?= number_format($cashier_data['total_pharmacy_discount'] ?? 0, 0) ?> | Cashier: TSh <?= number_format($cashier_data['total_cashier_discount'] ?? 0, 0) ?></p>
             </div>
             <div class="summary-card">
                 <span class="card-icon-mini teal"><i class="fas fa-chart-line"></i></span>
                 <p class="number teal">TSh <?= number_format($cashier_data['total_profit'] ?? 0, 0) ?></p>
-                <p class="label">Total Profit</p>
-                <p class="sub-label">Revenue - Expenses</p>
+                <p class="label">Net Profit</p>
+                <p class="sub-label">Revenue - Discounts</p>
             </div>
         </div>
         
         <div class="card animate-fade-in-up" style="animation-delay:0.12s;">
             <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-file-invoice"></i> All Bills (<?= count($cashier_data['bills'] ?? []) ?>)
-                </h3>
-                <button onclick="exportCashierPDF()" class="btn btn-pdf btn-sm">
-                    <i class="fas fa-file-pdf"></i> Export PDF
-                </button>
+                <h3 class="card-title"><i class="fas fa-file-invoice"></i> All Bills (<?= count($cashier_data['bills'] ?? []) ?>)</h3>
             </div>
             <div class="card-body" style="padding:0;">
                 <?php if (!empty($cashier_data['bills'])): ?>
@@ -2341,26 +2034,24 @@ include_once '../../components/admin_sidebar.php';
                                     <th>Total</th>
                                     <th>Paid</th>
                                     <th>Balance</th>
-                                    <th>Discount</th>
+                                    <th>Pharmacy Disc</th>
+                                    <th>Cashier Disc</th>
+                                    <th>Total Disc</th>
                                     <th>Status</th>
-                                    <th>Date</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php foreach ($cashier_data['bills'] as $bill): ?>
                                     <tr>
-                                        <td class="font-mono text-xs"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
+                                        <td><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
                                         <td><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></td>
-                                        <td class="font-semibold">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
+                                        <td>TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
                                         <td class="text-green-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
                                         <td class="text-red-600">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></td>
-                                        <td>TSh <?= number_format($bill['discount_amount'] ?? 0, 0) ?></td>
-                                        <td>
-                                            <span class="badge badge-<?= getStatusBadge($bill['status'] ?? 'pending') ?>">
-                                                <?= ucfirst($bill['status'] ?? 'Pending') ?>
-                                            </span>
-                                        </td>
-                                        <td class="text-xs"><?= date('M d, Y', strtotime($bill['created_at'] ?? 'now')) ?></td>
+                                        <td>TSh <?= number_format($bill['pharmacy_discount'] ?? 0, 0) ?></td>
+                                        <td>TSh <?= number_format($bill['cashier_discount'] ?? 0, 0) ?></td>
+                                        <td>TSh <?= number_format($bill['total_discount'] ?? 0, 0) ?></td>
+                                        <td><span class="badge badge-<?= getStatusBadgeClass($bill['status'] ?? 'pending') ?>"><?= ucfirst($bill['status'] ?? 'Pending') ?></span></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -2372,50 +2063,10 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <div class="card animate-fade-in-up" style="animation-delay:0.14s;">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-users"></i> Patient Totals
-                </h3>
-            </div>
-            <div class="card-body" style="padding:0;">
-                <?php if (!empty($cashier_data['patient_totals'])): ?>
-                    <div class="overflow-x-auto">
-                        <table class="data-table cashier-table">
-                            <thead>
-                                <tr>
-                                    <th>Patient</th>
-                                    <th>ID</th>
-                                    <th># Bills</th>
-                                    <th>Total Paid</th>
-                                    <th>Total Discount</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($cashier_data['patient_totals'] as $pt): ?>
-                                    <tr>
-                                        <td><strong><?= htmlspecialchars($pt['full_name']) ?></strong></td>
-                                        <td><?= htmlspecialchars($pt['patient_id']) ?></td>
-                                        <td><?= number_format($pt['bill_count']) ?></td>
-                                        <td class="text-green-600 font-bold">TSh <?= number_format($pt['total_paid'], 0) ?></td>
-                                        <td>TSh <?= number_format($pt['total_discount'], 0) ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-users"></i><p>No patient data found</p></div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ================================================================ -->
-    <!-- 3. PHARMACY REPORT -->
-    <!-- ================================================================ -->
+    <!-- PHARMACY REPORT -->
     <!-- ================================================================ -->
     <?php if ($report_type === 'pharmacy'): ?>
     
@@ -2424,7 +2075,7 @@ include_once '../../components/admin_sidebar.php';
                 <span class="card-icon-mini purple"><i class="fas fa-prescription"></i></span>
                 <p class="number purple">TSh <?= number_format($pharmacy_data['total_prescription_amount'] ?? 0, 0) ?></p>
                 <p class="label">Prescription Sales</p>
-                <p class="sub-label"><?= number_format($pharmacy_data['total_prescription_count'] ?? 0) ?> transactions</p>
+                <p class="sub-label"><?= number_format($pharmacy_data['total_prescription_count'] ?? 0) ?> items</p>
             </div>
             <div class="summary-card">
                 <span class="card-icon-mini orange"><i class="fas fa-cash-register"></i></span>
@@ -2436,96 +2087,12 @@ include_once '../../components/admin_sidebar.php';
                 <span class="card-icon-mini blue"><i class="fas fa-prescription-bottle"></i></span>
                 <p class="number blue">TSh <?= number_format(($pharmacy_data['total_prescription_amount'] ?? 0) + ($pharmacy_data['total_otc_amount'] ?? 0), 0) ?></p>
                 <p class="label">Total Pharmacy Revenue</p>
-                <p class="sub-label">Prescription + OTC</p>
             </div>
         </div>
     
         <div class="card animate-fade-in-up" style="animation-delay:0.12s;">
             <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-prescription-bottle"></i> Prescription Sales (<?= count($pharmacy_data['prescription_sales'] ?? []) ?>)
-                </h3>
-                <button onclick="exportPharmacyPDF()" class="btn btn-pdf btn-sm">
-                    <i class="fas fa-file-pdf"></i> Export PDF
-                </button>
-            </div>
-            <div class="card-body" style="padding:0;">
-                <?php if (!empty($pharmacy_data['prescription_sales'])): ?>
-                    <div class="overflow-x-auto">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Sale #</th>
-                                    <th>Patient</th>
-                                    <th>Total</th>
-                                    <th>Dispensed By</th>
-                                    <th>Date</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($pharmacy_data['prescription_sales'] as $sale): ?>
-                                    <tr>
-                                        <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
-                                        <td><?= htmlspecialchars($sale['patient_name'] ?? 'Walk-in') ?></td>
-                                        <td class="font-semibold">TSh <?= number_format($sale['total_amount'] ?? 0, 0) ?></td>
-                                        <td><?= htmlspecialchars($sale['dispensed_by_name'] ?? 'N/A') ?></td>
-                                        <td class="text-xs"><?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-prescription-bottle"></i><p>No prescription sales found</p></div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-        <div class="card animate-fade-in-up" style="animation-delay:0.14s;">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-shopping-cart"></i> OTC Sales (<?= count($pharmacy_data['otc_sales'] ?? []) ?>)
-                </h3>
-            </div>
-            <div class="card-body" style="padding:0;">
-                <?php if (!empty($pharmacy_data['otc_sales'])): ?>
-                    <div class="overflow-x-auto">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Sale #</th>
-                                    <th>Customer</th>
-                                    <th>Total</th>
-                                    <th>Net</th>
-                                    <th>Sold By</th>
-                                    <th>Date</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php foreach ($pharmacy_data['otc_sales'] as $sale): ?>
-                                    <tr>
-                                        <td class="font-mono text-xs"><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
-                                        <td><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></td>
-                                        <td>TSh <?= number_format($sale['total_amount'] ?? 0, 0) ?></td>
-                                        <td class="font-semibold">TSh <?= number_format($sale['net_amount'] ?? 0, 0) ?></td>
-                                        <td><?= htmlspecialchars($sale['sold_by_name'] ?? 'N/A') ?></td>
-                                        <td class="text-xs"><?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-shopping-cart"></i><p>No OTC sales found</p></div>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-        <div class="card animate-fade-in-up" style="animation-delay:0.16s;">
-            <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-pills"></i> Prescription Items
-                </h3>
+                <h3 class="card-title"><i class="fas fa-prescription-bottle"></i> Prescription Items (<?= count($pharmacy_data['prescription_items'] ?? []) ?>)</h3>
             </div>
             <div class="card-body" style="padding:0;">
                 <?php if (!empty($pharmacy_data['prescription_items'])): ?>
@@ -2537,7 +2104,6 @@ include_once '../../components/admin_sidebar.php';
                                     <th>Medication</th>
                                     <th>Dosage</th>
                                     <th>Qty</th>
-                                    <th>Unit Price</th>
                                     <th>Total</th>
                                 </tr>
                             </thead>
@@ -2545,10 +2111,9 @@ include_once '../../components/admin_sidebar.php';
                                 <?php foreach ($pharmacy_data['prescription_items'] as $item): ?>
                                     <tr>
                                         <td><?= htmlspecialchars($item['patient_name'] ?? 'N/A') ?></td>
-                                        <td><strong><?= htmlspecialchars($item['medication_name']) ?></strong></td>
+                                        <td><strong><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></strong></td>
                                         <td><?= htmlspecialchars($item['dosage'] ?? '-') ?></td>
-                                        <td><?= number_format($item['quantity']) ?></td>
-                                        <td>TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
+                                        <td><?= number_format($item['quantity'] ?? 0) ?></td>
                                         <td class="font-semibold">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -2561,12 +2126,46 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </div>
         
+        <div class="card animate-fade-in-up" style="animation-delay:0.14s;">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-shopping-cart"></i> OTC Sales (<?= count($pharmacy_data['otc_sales'] ?? []) ?>)</h3>
+            </div>
+            <div class="card-body" style="padding:0;">
+                <?php if (!empty($pharmacy_data['otc_sales'])): ?>
+                    <div class="overflow-x-auto">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Sale #</th>
+                                    <th>Customer</th>
+                                    <th>Total</th>
+                                    <th>Sold By</th>
+                                    <th>Date</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <?php foreach ($pharmacy_data['otc_sales'] as $sale): ?>
+                                    <tr>
+                                        <td><?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?></td>
+                                        <td><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></td>
+                                        <td>TSh <?= number_format($sale['total_amount'] ?? 0, 0) ?></td>
+                                        <td><?= htmlspecialchars($sale['sold_by_name'] ?? 'N/A') ?></td>
+                                        <td><?= date('M d, Y', strtotime($sale['created_at'] ?? 'now')) ?></td>
+                                    </tr>
+                                <?php endforeach; ?>
+                            </tbody>
+                        </table>
+                    </div>
+                <?php else: ?>
+                    <div class="empty-state"><i class="fas fa-shopping-cart"></i><p>No OTC sales found</p></div>
+                <?php endif; ?>
+            </div>
+        </div>
+        
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ================================================================ -->
-    <!-- 4. LAB REPORT - FIXED: NO DUPLICATES -->
-    <!-- ================================================================ -->
+    <!-- LAB REPORT -->
     <!-- ================================================================ -->
     <?php if ($report_type === 'lab'): ?>
     
@@ -2575,41 +2174,28 @@ include_once '../../components/admin_sidebar.php';
                 <span class="card-icon-mini purple"><i class="fas fa-money-bill-wave"></i></span>
                 <p class="number purple">TSh <?= number_format($lab_data['total_revenue'] ?? 0, 0) ?></p>
                 <p class="label">Total Revenue</p>
-                <p class="sub-label">Lab test fees</p>
             </div>
             <div class="summary-card">
                 <span class="card-icon-mini blue"><i class="fas fa-flask"></i></span>
                 <p class="number blue"><?= number_format($lab_data['total_tests'] ?? 0) ?></p>
                 <p class="label">Total Tests</p>
-                <p class="sub-label">All tests performed</p>
             </div>
             <div class="summary-card">
                 <span class="card-icon-mini green"><i class="fas fa-check-circle"></i></span>
                 <p class="number green"><?= number_format($lab_data['completed_tests'] ?? 0) ?></p>
                 <p class="label">Completed</p>
-                <p class="sub-label">Tests finalized</p>
             </div>
             <div class="summary-card">
                 <span class="card-icon-mini orange"><i class="fas fa-clock"></i></span>
                 <p class="number orange"><?= number_format(($lab_data['pending_tests'] ?? 0) + ($lab_data['in_progress_tests'] ?? 0)) ?></p>
                 <p class="label">In Progress</p>
-                <p class="sub-label"><?= number_format($lab_data['pending_tests'] ?? 0) ?> pending · <?= number_format($lab_data['in_progress_tests'] ?? 0) ?> in progress</p>
-            </div>
-            <div class="summary-card">
-                <span class="card-icon-mini teal"><i class="fas fa-file-medical"></i></span>
-                <p class="number teal"><?= number_format($lab_data['tests_with_results'] ?? 0) ?> / <?= number_format($lab_data['tests_without_results'] ?? 0) ?></p>
-                <p class="label">Results</p>
-                <p class="sub-label"><?= number_format($lab_data['tests_with_results'] ?? 0) ?> with results · <?= number_format($lab_data['tests_without_results'] ?? 0) ?> no results</p>
             </div>
         </div>
         
-        <!-- Top Tests -->
         <?php if (!empty($lab_data['top_tests'])): ?>
         <div class="card animate-fade-in-up" style="animation-delay:0.12s;">
             <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-chart-bar"></i> Most Frequent Tests
-                </h3>
+                <h3 class="card-title"><i class="fas fa-chart-bar"></i> Most Frequent Tests</h3>
             </div>
             <div class="card-body">
                 <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -2626,12 +2212,7 @@ include_once '../../components/admin_sidebar.php';
         
         <div class="card animate-fade-in-up" style="animation-delay:0.14s;">
             <div class="card-header">
-                <h3 class="card-title">
-                    <i class="fas fa-flask"></i> All Lab Tests (<?= count($lab_data['tests'] ?? []) ?>)
-                </h3>
-                <button onclick="exportLabPDF()" class="btn btn-pdf btn-sm">
-                    <i class="fas fa-file-pdf"></i> Export PDF
-                </button>
+                <h3 class="card-title"><i class="fas fa-flask"></i> All Lab Tests (<?= count($lab_data['tests'] ?? []) ?>)</h3>
             </div>
             <div class="card-body" style="padding:0;">
                 <?php if (!empty($lab_data['tests'])): ?>
@@ -2640,83 +2221,33 @@ include_once '../../components/admin_sidebar.php';
                             <thead>
                                 <tr>
                                     <th>Patient</th>
-                                    <th>Visit #</th>
-                                    <th>Test Name</th>
-                                    <th style="text-align:right;">Price</th>
+                                    <th>Test</th>
+                                    <th>Price</th>
                                     <th>Result</th>
                                     <th>Doctor</th>
                                     <th>Technician</th>
                                     <th>Status</th>
-                                    <th>Bill</th>
                                     <th>Date</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php 
-                                $lt_total = 0;
-                                $lt_with_bill = 0;
-                                $lt_without_bill = 0;
-                                
-                                foreach ($lab_data['tests'] as $test):
-                                    $lt_total += $test['test_price'] ?? 0;
-                                    if (!empty($test['bill_amount']) && $test['bill_amount'] > 0) {
-                                        $lt_with_bill++;
-                                    } else {
-                                        $lt_without_bill++;
-                                    }
-                                    
-                                    // Truncate long results
-                                    $result_display = '';
-                                    if (!empty($test['results']) && $test['results'] !== 'NULL' && $test['results'] !== '') {
-                                        $result_display = htmlspecialchars($test['results']);
-                                        if (strlen($result_display) > 50) {
-                                            $result_display = substr($result_display, 0, 50) . '...';
-                                        }
-                                    } else {
-                                        $result_display = '<span style="color:var(--text-secondary);">-</span>';
-                                    }
-                                ?>
+                                <?php foreach ($lab_data['tests'] as $test): ?>
                                     <tr>
-                                        <td>
-                                            <strong><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></strong>
-                                            <div class="text-xs text-gray-400"><?= htmlspecialchars($test['patient_code'] ?? '') ?></div>
-                                        </td>
-                                        <td style="font-size:0.7rem;"><?= htmlspecialchars($test['visit_number'] ?? 'N/A') ?></td>
-                                        <td><strong><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></strong></td>
-                                        <td style="text-align:right;font-weight:600;">TSh <?= number_format($test['test_price'] ?? 0, 0) ?></td>
-                                        <td style="font-size:0.75rem;max-width:120px;word-wrap:break-word;"><?= $result_display ?></td>
-                                        <td style="font-size:0.7rem;">Dr. <?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
-                                        <td style="font-size:0.7rem;"><?= htmlspecialchars($test['technician_name'] ?? 'N/A') ?></td>
-                                        <td>
-                                            <span class="badge badge-<?= getStatusBadge($test['status'] ?? 'pending') ?>">
-                                                <?= ucfirst($test['status'] ?? 'Pending') ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <?php if (!empty($test['bill_amount']) && $test['bill_amount'] > 0): ?>
-                                                <span class="text-green-600">TSh <?= number_format($test['bill_amount'], 0) ?></span>
-                                            <?php else: ?>
-                                                <span class="text-gray-400">-</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td style="font-size:0.7rem;"><?= date('M d, Y', strtotime($test['created_at'] ?? 'now')) ?></td>
+                                        <td><strong><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></strong></td>
+                                        <td><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
+                                        <td>TSh <?= number_format($test['test_price'] ?? 0, 0) ?></td>
+                                        <td><?= !empty($test['results']) ? '✅' : '⏳' ?></td>
+                                        <td>Dr. <?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
+                                        <td><?= htmlspecialchars($test['technician_name'] ?? 'N/A') ?></td>
+                                        <td><span class="badge badge-<?= getStatusBadgeClass($test['status'] ?? 'pending') ?>"><?= ucfirst($test['status'] ?? 'Pending') ?></span></td>
+                                        <td><?= date('M d, Y', strtotime($test['created_at'] ?? 'now')) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
-                            <tfoot>
-                                <tr style="background:var(--bg-body);font-weight:700;border-top:2px solid var(--primary);">
-                                    <td colspan="3" style="text-align:right;">GRAND TOTAL</td>
-                                    <td style="text-align:right;">TSh <?= number_format($lt_total, 0) ?></td>
-                                    <td colspan="2" style="text-align:center;font-size:0.7rem;">
-                                        <?= number_format($lt_with_bill) ?> with bill · <?= number_format($lt_without_bill) ?> no bill
-                                    </td>
-                                    <td colspan="4"></td>
-                                </tr>
-                            </tfoot>
                         </table>
                     </div>
                 <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-flask"></i><p>No lab tests found for the selected filters</p></div>
+                    <div class="empty-state"><i class="fas fa-flask"></i><p>No lab tests found</p></div>
                 <?php endif; ?>
             </div>
         </div>
@@ -2739,6 +2270,36 @@ include_once '../../components/admin_sidebar.php';
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- PDF MODAL -->
+<!-- ================================================================ -->
+<div class="pdf-modal-overlay" id="pdfModal">
+    <div class="pdf-modal">
+        <div class="pdf-modal-header">
+            <div class="modal-title">
+                <i class="fas fa-file-pdf" style="color:rgba(255,255,255,0.8);"></i>
+                <span id="pdfModalTitle">Report Preview</span>
+            </div>
+            <div class="modal-actions">
+                <button onclick="downloadPDF()" class="btn btn-sm">
+                    <i class="fas fa-download"></i> Download
+                </button>
+                <button onclick="window.print()" class="btn btn-sm">
+                    <i class="fas fa-print"></i> Print
+                </button>
+                <button onclick="closePDFModal()" class="btn btn-sm btn-danger-modal">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+            </div>
+        </div>
+        <div class="pdf-modal-body" id="pdfModalBody">
+            <div class="pdf-content" id="pdfContent">
+                <!-- Generated by JavaScript -->
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- TOAST -->
@@ -2845,44 +2406,6 @@ include_once '../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // PDF EXPORT FUNCTIONS
-    // ================================================================
-    function exportPatientPDF() {
-        showToast('PDF Export', 'Generating Patient Report PDF...', 'info');
-        var patientId = '<?= $patient_id ?>';
-        var branch = '<?= $selected_branch_id ?>';
-        if (patientId > 0) {
-            window.open('export_patient_pdf.php?patient_id=' + patientId + '&branch=' + branch, '_blank');
-        } else {
-            showToast('Error', 'Please select a patient first', 'error');
-        }
-    }
-    
-    function exportCashierPDF() {
-        showToast('PDF Export', 'Generating Cashier Report PDF...', 'info');
-        var branch = '<?= $selected_branch_id ?>';
-        var dateFrom = '<?= $date_from ?>';
-        var dateTo = '<?= $date_to ?>';
-        window.open('export_cashier_pdf.php?branch=' + branch + '&date_from=' + dateFrom + '&date_to=' + dateTo, '_blank');
-    }
-    
-    function exportPharmacyPDF() {
-        showToast('PDF Export', 'Generating Pharmacy Report PDF...', 'info');
-        var branch = '<?= $selected_branch_id ?>';
-        var dateFrom = '<?= $date_from ?>';
-        var dateTo = '<?= $date_to ?>';
-        window.open('export_pharmacy_pdf.php?branch=' + branch + '&date_from=' + dateFrom + '&date_to=' + dateTo, '_blank');
-    }
-    
-    function exportLabPDF() {
-        showToast('PDF Export', 'Generating Lab Report PDF...', 'info');
-        var branch = '<?= $selected_branch_id ?>';
-        var dateFrom = '<?= $date_from ?>';
-        var dateTo = '<?= $date_to ?>';
-        window.open('export_lab_pdf.php?branch=' + branch + '&date_from=' + dateFrom + '&date_to=' + dateTo, '_blank');
-    }
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
@@ -2905,18 +2428,778 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c📊 Braick Dispensary - Reports (IMPROVED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Report Type: <?= ucfirst($report_type) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Lab Report - NO DUPLICATES (GROUP BY lt.id)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Bills show TYPE column (Consultation, Prescription, Lab Test, etc.)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Each bill type has a color-coded badge with icon', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Patient Report shows diagnosis, complaint, symptoms', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Lab Report shows Most Frequent Tests', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Lab Report shows Results count', 'font-size:13px; color:#34D399;');
-    console.log('%c📄 PDF Export Available for all reports', 'font-size:13px; color:#DC2626;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
+    // ================================================================
+    // DATA FOR PDF
+    // ================================================================
+    var adminPhones = <?= json_encode($admin_phones) ?>;
+    var branchName = '<?= htmlspecialchars($branch_name) ?>';
+    var reportType = '<?= $report_type ?>';
+    
+    // Patient Data
+    var patientName = '<?= isset($patient_data['full_name']) ? htmlspecialchars($patient_data['full_name']) : '' ?>';
+    var patientId = '<?= isset($patient_data['patient_id']) ? htmlspecialchars($patient_data['patient_id']) : '' ?>';
+    var patientPhone = '<?= isset($patient_data['phone']) ? htmlspecialchars($patient_data['phone']) : 'N/A' ?>';
+    var patientEmail = '<?= isset($patient_data['email']) ? htmlspecialchars($patient_data['email']) : 'N/A' ?>';
+    var patientGender = '<?= isset($patient_data['gender']) ? htmlspecialchars($patient_data['gender']) : 'N/A' ?>';
+    var patientBlood = '<?= isset($patient_data['blood_group']) ? htmlspecialchars($patient_data['blood_group']) : 'N/A' ?>';
+    var patientAddress = '<?= isset($patient_data['address']) ? htmlspecialchars($patient_data['address']) : 'N/A' ?>';
+    var patientDob = '<?= isset($patient_data['date_of_birth']) ? date('F d, Y', strtotime($patient_data['date_of_birth'])) : 'N/A' ?>';
+    var patientAllergies = '<?= isset($patient_data['allergies']) ? htmlspecialchars($patient_data['allergies']) : 'None' ?>';
+    var visitsData = <?= json_encode($patient_visits) ?>;
+    
+    // Cashier Data
+    var cashierData = <?= json_encode($cashier_data) ?>;
+    
+    // Pharmacy Data
+    var pharmacyData = <?= json_encode($pharmacy_data) ?>;
+    
+    // Lab Data
+    var labData = <?= json_encode($lab_data) ?>;
+
+    // ================================================================
+    // PDF GENERATION - Logo starts at top, proper page breaks
+    // ================================================================
+    function generatePDF() {
+        var modal = document.getElementById('pdfModal');
+        var content = document.getElementById('pdfContent');
+        var titleEl = document.getElementById('pdfModalTitle');
+        var html = '';
+        var hasData = false;
+        var reportTitle = '';
+        
+        switch(reportType) {
+            case 'patient':
+                if (visitsData && visitsData.length > 0) {
+                    hasData = true;
+                    reportTitle = 'Patient Report - ' + patientName;
+                    html = buildPatientPDF();
+                }
+                break;
+                
+            case 'cashier':
+                if (cashierData && cashierData.bills && cashierData.bills.length > 0) {
+                    hasData = true;
+                    reportTitle = 'Cashier Report';
+                    html = buildCashierPDF();
+                }
+                break;
+                
+            case 'pharmacy':
+                if (pharmacyData && (pharmacyData.otc_sales.length > 0 || pharmacyData.prescription_items.length > 0)) {
+                    hasData = true;
+                    reportTitle = 'Pharmacy Report';
+                    html = buildPharmacyPDF();
+                }
+                break;
+                
+            case 'lab':
+                if (labData && labData.tests && labData.tests.length > 0) {
+                    hasData = true;
+                    reportTitle = 'Lab Report';
+                    html = buildLabPDF();
+                }
+                break;
+                
+            default:
+                hasData = false;
+        }
+        
+        if (!hasData) {
+            showToast('Error', 'No data available to export for this report', 'error');
+            return;
+        }
+        
+        if (titleEl) titleEl.textContent = reportTitle;
+        content.innerHTML = html;
+        modal.classList.add('active');
+        
+        var modalBody = document.getElementById('pdfModalBody');
+        if (modalBody) {
+            modalBody.scrollTop = 0;
+        }
+    }
+
+    // ================================================================
+    // BUILD PATIENT PDF - Logo at top, proper page breaks
+    // ================================================================
+    function buildPatientPDF() {
+        var adminPhonesText = adminPhones.length > 0 ? adminPhones.join(' | ') : '+255 700 000 001';
+        var currentDate = new Date().toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var currentTime = new Date().toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        
+        var visitsHTML = '';
+        var visitCount = 0;
+        
+        visitsData.forEach(function(visit) {
+            visitCount++;
+            var visitNumber = visit.visit_number || 'N/A';
+            var visitDate = visit.visit_date ? new Date(visit.visit_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A';
+            var visitTime = visit.visit_date ? new Date(visit.visit_date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'N/A';
+            var visitStatus = visit.status || 'pending';
+            var doctorName = visit.doctor_name || 'Not assigned';
+            var visitType = visit.visit_type || 'N/A';
+            var consultationFee = parseFloat(visit.consultation_fee) || 0;
+            var complaint = visit.complaint || '';
+            var symptoms = visit.symptoms || '';
+            var hpi = visit.hpi || '';
+            var physicalExam = visit.physical_exam || '';
+            var diagnosis = visit.diagnosis || '';
+            var treatment = visit.treatment || '';
+            var notes = visit.notes || '';
+            var followUpDate = visit.follow_up_date || '';
+            
+            var vs = visit.vital_signs || {};
+            var labTests = visit.lab_tests || [];
+            var prescriptions = visit.prescriptions || [];
+            var proceduresTools = visit.procedures_tools || [];
+            var bills = visit.bills || [];
+            
+            var totalAmount = 0;
+            var totalPaid = 0;
+            var totalBalance = 0;
+            var totalDiscount = 0;
+            var cancelledBills = 0;
+            bills.forEach(function(bill) {
+                totalAmount += parseFloat(bill.total_amount || 0);
+                totalPaid += parseFloat(bill.paid_amount || 0);
+                totalBalance += parseFloat(bill.balance || 0);
+                totalDiscount += parseFloat(bill.total_discount || 0);
+                if (bill.status === 'cancelled') cancelledBills++;
+            });
+            var isFullyPaid = totalBalance <= 0 && totalAmount > 0;
+            
+            visitsHTML += `
+                <div class="pdf-visit-block" style="margin-bottom:12px;page-break-inside:avoid;break-inside:avoid;">
+                    <div class="visit-header" style="margin-bottom:6px;">
+                        <span>📋 Visit #${visitCount}: ${visitNumber}</span>
+                        <span style="font-size:0.8rem;color:#64748B;">${visitDate} ${visitTime}</span>
+                    </div>
+                    
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">📋 1. Visit Information</div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;font-size:14px;">
+                            <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Status</span><span style="font-size:13px;">${visitStatus.charAt(0).toUpperCase() + visitStatus.slice(1)}</span></div>
+                            <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Doctor</span><span style="font-size:13px;">Dr. ${doctorName}</span></div>
+                            <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Visit Type</span><span style="font-size:13px;">${visitType}</span></div>
+                            <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Consultation Fee</span><span style="font-size:13px;">TSh ${consultationFee.toLocaleString()}</span></div>
+                            ${followUpDate ? `<div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Follow-up Date</span><span style="font-size:13px;">${new Date(followUpDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span></div>` : ''}
+                        </div>
+                    </div>
+                    
+                    ${complaint || symptoms || hpi || physicalExam || notes ? `
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🩺 2. Clinical Information</div>
+                        ${complaint ? `<div style="padding:2px 4px;background:#EFF6FF;border-radius:4px;border-left:3px solid #0B5ED7;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Complaint:</span> ${escapeHtml(complaint)}</div>` : ''}
+                        ${symptoms ? `<div style="padding:2px 4px;background:#FEF3C7;border-radius:4px;border-left:3px solid #D97706;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Symptoms:</span> ${escapeHtml(symptoms)}</div>` : ''}
+                        ${hpi ? `<div style="padding:2px 4px;background:#EDE9FE;border-radius:4px;border-left:3px solid #7C3AED;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">HPI:</span> ${escapeHtml(hpi)}</div>` : ''}
+                        ${physicalExam ? `<div style="padding:2px 4px;background:#D1FAE5;border-radius:4px;border-left:3px solid #059669;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Physical Exam:</span> ${escapeHtml(physicalExam)}</div>` : ''}
+                        ${notes ? `<div style="padding:2px 4px;background:#F1F5F9;border-radius:4px;border-left:3px solid #94A3B8;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Notes:</span> ${escapeHtml(notes)}</div>` : ''}
+                    </div>
+                    ` : ''}
+                    
+                    ${diagnosis || treatment ? `
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🏥 3. Diagnosis</div>
+                        ${diagnosis ? `<div style="padding:2px 4px;background:#EFF6FF;border-radius:4px;border-left:3px solid #0B5ED7;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Diagnosis:</span> ${escapeHtml(diagnosis)}</div>` : ''}
+                        ${treatment ? `<div style="padding:2px 4px;background:#D1FAE5;border-radius:4px;border-left:3px solid #059669;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Treatment:</span> ${escapeHtml(treatment)}</div>` : ''}
+                    </div>
+                    ` : ''}
+                    
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">❤️ 4. Vital Signs</div>
+                        ${vs.temperature || vs.blood_pressure_systolic || vs.pulse_rate || vs.weight || vs.height || vs.bmi ? `
+                        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+                            ${vs.temperature ? `<div style="background:#EFF6FF;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0B5ED7;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Temperature</div><div style="font-weight:700;color:#0B5ED7;font-size:14px;">${vs.temperature} °C</div></div>` : ''}
+                            ${vs.blood_pressure_systolic || vs.blood_pressure_diastolic ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #059669;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Blood Pressure</div><div style="font-weight:700;color:#059669;font-size:14px;">${vs.blood_pressure_systolic || '?'}/${vs.blood_pressure_diastolic || '?'} mmHg</div></div>` : ''}
+                            ${vs.pulse_rate ? `<div style="background:#EDE9FE;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #7C3AED;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Pulse Rate</div><div style="font-weight:700;color:#7C3AED;font-size:14px;">${vs.pulse_rate} bpm</div></div>` : ''}
+                            ${vs.weight ? `<div style="background:#FEF3C7;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #D97706;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Weight</div><div style="font-weight:700;color:#D97706;font-size:14px;">${vs.weight} kg</div></div>` : ''}
+                            ${vs.height ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0D9488;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Height</div><div style="font-weight:700;color:#0D9488;font-size:14px;">${vs.height} cm</div></div>` : ''}
+                            ${vs.bmi ? `<div style="background:#FEE2E2;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #DC2626;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">BMI</div><div style="font-weight:700;color:#DC2626;font-size:14px;">${vs.bmi} kg/m²</div></div>` : ''}
+                        </div>
+                        ` : `<div class="pdf-empty">No vital signs recorded</div>`}
+                    </div>
+                    
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🧪 5. Lab Tests (${labTests.length})</div>
+                        ${labTests.length > 0 ? `
+                        <table class="pdf-table" style="font-size:12px;">
+                            <thead><tr><th>Test Name</th><th>Status</th><th>Results</th><th>Technician</th></tr></thead>
+                            <tbody>
+                                ${labTests.map(function(test) {
+                                    return `<tr><td>${escapeHtml(test.test_name || 'N/A')}</td>
+                                        <td>${test.status || 'Pending'}</td>
+                                        <td>${test.results ? '✅ ' + escapeHtml(test.results.substring(0, 50)) : '⏳ Pending'}</td>
+                                        <td>${escapeHtml(test.technician_name || 'Not assigned')}</td>
+                                    </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                        ` : `<div class="pdf-empty">No lab tests found</div>`}
+                    </div>
+                    
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">💊 6. Medications (${prescriptions.length})</div>
+                        ${prescriptions.length > 0 ? `
+                        <table class="pdf-table" style="font-size:12px;">
+                            <thead><tr><th>Medication</th><th>Dosage</th><th>Frequency</th><th>Qty</th></tr></thead>
+                            <tbody>
+                                ${prescriptions.map(function(p) {
+                                    var medName = p.medication_name || p.inventory_medication_name || 'N/A';
+                                    return `<tr><td>${escapeHtml(medName)}</td>
+                                        <td>${escapeHtml(p.dosage || '-')}</td>
+                                        <td>${escapeHtml(p.frequency || '-')}</td>
+                                        <td>${p.quantity || 0}</td>
+                                    </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                        ` : `<div class="pdf-empty">No medications prescribed</div>`}
+                    </div>
+                    
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🔧 7. Procedures & Tools (${proceduresTools.length})</div>
+                        ${proceduresTools.length > 0 ? `
+                        <table class="pdf-table" style="font-size:12px;">
+                            <thead><tr><th>Item Name</th><th>Type</th><th>Qty</th><th>Total</th></tr></thead>
+                            <tbody>
+                                ${proceduresTools.map(function(item) {
+                                    return `<tr><td>${escapeHtml(item.item_name || 'N/A')}</td>
+                                        <td>${escapeHtml(item.item_type || 'N/A')}</td>
+                                        <td>${item.quantity || 1}</td>
+                                        <td>TSh ${(parseFloat(item.total_price) || 0).toLocaleString()}</td>
+                                    </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                        ` : `<div class="pdf-empty">No procedures or tools used</div>`}
+                    </div>
+                    
+                    <div style="margin-bottom:8px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">💰 8. Bills Summary</div>
+                        ${bills.length > 0 ? `
+                        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:2px 0;">
+                            <div style="background:#EFF6FF;padding:2px 4px;border-radius:4px;text-align:center;border:1px solid #6EA8FE;"><div style="font-size:16px;font-weight:700;color:#0B5ED7;">TSh ${totalAmount.toLocaleString()}</div><div style="font-size:10px;color:#64748B;text-transform:uppercase;">Total</div></div>
+                            <div style="background:#FEF3C7;padding:2px 4px;border-radius:4px;text-align:center;border:1px solid #D97706;"><div style="font-size:16px;font-weight:700;color:#D97706;">TSh ${(totalAmount - totalPaid).toLocaleString()}</div><div style="font-size:10px;color:#64748B;text-transform:uppercase;">Balance</div></div>
+                            <div style="background:#D1FAE5;padding:2px 4px;border-radius:4px;text-align:center;border:1px solid #059669;"><div style="font-size:16px;font-weight:700;color:#059669;">TSh ${totalPaid.toLocaleString()}</div><div style="font-size:10px;color:#64748B;text-transform:uppercase;">Paid</div></div>
+                            <div style="background:#FEE2E2;padding:2px 4px;border-radius:4px;text-align:center;border:1px solid #DC2626;"><div style="font-size:16px;font-weight:700;color:#DC2626;">${cancelledBills}</div><div style="font-size:10px;color:#64748B;text-transform:uppercase;">Cancelled</div></div>
+                        </div>
+                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:2px 0;font-size:13px;">
+                            <div><span style="font-weight:600;color:#64748B;">Total Discount:</span> <span style="color:#DC2626;font-weight:700;">TSh ${totalDiscount.toLocaleString()}</span></div>
+                            <div style="text-align:right;"><span style="font-weight:600;color:#64748B;">Status:</span> <span style="font-size:13px;padding:2px 10px;border-radius:12px;background:${isFullyPaid ? '#D1FAE5' : '#FEF3C7'};color:${isFullyPaid ? '#059669' : '#D97706'};">${isFullyPaid ? '✅ Fully Paid' : '⏳ Pending / Partial'}</span></div>
+                        </div>
+                        ` : `<div class="pdf-empty">No bills found</div>`}
+                    </div>
+                    
+                    <div style="margin-bottom:4px;">
+                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">📄 9. Bills List</div>
+                        ${bills.length > 0 ? `
+                        <table class="pdf-table" style="font-size:12px;">
+                            <thead><tr><th>Bill Number</th><th>Total</th><th>Paid</th><th>Balance</th><th>Discount</th><th>Status</th></tr></thead>
+                            <tbody>
+                                ${bills.map(function(bill) {
+                                    var statusClass = bill.status === 'paid' ? 'paid' : '';
+                                    return `<tr>
+                                        <td>${escapeHtml(bill.bill_number || 'N/A')}</td>
+                                        <td>TSh ${(parseFloat(bill.total_amount) || 0).toLocaleString()}</td>
+                                        <td>TSh ${(parseFloat(bill.paid_amount) || 0).toLocaleString()}</td>
+                                        <td>TSh ${(parseFloat(bill.balance) || 0).toLocaleString()}</td>
+                                        <td>TSh ${(parseFloat(bill.total_discount) || 0).toLocaleString()}</td>
+                                        <td style="color:${bill.status === 'paid' ? '#059669' : '#D97706'};font-weight:${bill.status === 'paid' ? '700' : '600'};">${escapeHtml(bill.status || 'Pending')}</td>
+                                    </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                        ` : `<div class="pdf-empty">No bills found</div>`}
+                    </div>
+                </div>
+            `;
+        });
+        
+        return `
+            <div class="pdf-header-section">
+                <div class="pdf-header-top">
+                    <div class="pdf-logo">
+                        <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                    </div>
+                    <div class="pdf-title-area">
+                        <div class="clinic-name">BRAICK DISPENSARY</div>
+                        <div class="clinic-sub">Tunajali Afya Yako</div>
+                    </div>
+                </div>
+                <div class="admin-contacts">
+                    <span><i class="fas fa-phone-alt"></i> Admin: <span class="admin-phone">${adminPhonesText}</span></span>
+                    <span><i class="fas fa-building"></i> Branch: ${branchName}</span>
+                    <span><i class="fas fa-calendar-alt"></i> ${currentDate}</span>
+                </div>
+                <div style="font-size:0.85rem;font-weight:700;color:#0B5ED7;margin-top:4px;background:#EFF6FF;padding:4px 16px;border-radius:20px;display:inline-block;">
+                    📋 Patient Report - ${escapeHtml(patientName)}
+                </div>
+            </div>
+            
+            <div style="margin-bottom:10px;">
+                <div class="section-title" style="margin-top:0;"><i class="fas fa-user"></i> Patient Information</div>
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:2px 14px;font-size:14px;">
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Full Name</span><span style="font-size:13px;"><strong>${escapeHtml(patientName)}</strong></span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Patient ID</span><span style="font-size:13px;">${escapeHtml(patientId)}</span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Gender</span><span style="font-size:13px;">${escapeHtml(patientGender)}</span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Phone</span><span style="font-size:13px;">${escapeHtml(patientPhone)}</span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Email</span><span style="font-size:13px;">${escapeHtml(patientEmail)}</span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Blood Group</span><span style="font-size:13px;">${escapeHtml(patientBlood)}</span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Date of Birth</span><span style="font-size:13px;">${escapeHtml(patientDob)}</span></div>
+                    <div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 3;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Address</span><span style="font-size:13px;">${escapeHtml(patientAddress)}</span></div>
+                    ${patientAllergies !== 'None' ? `<div style="display:flex;padding:2px 0;border-bottom:1px solid #E2E8F0;grid-column:span 3;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Allergies</span><span style="font-size:13px;color:#DC2626;">${escapeHtml(patientAllergies)}</span></div>` : ''}
+                </div>
+            </div>
+            
+            <div>
+                <div class="section-title"><i class="fas fa-stethoscope"></i> Visit History (${visitsData.length} visits)</div>
+                ${visitsHTML}
+            </div>
+            
+            <div class="pdf-footer">
+                <div class="footer-stamp">
+                    <div style="font-size:14px;color:#64748B;">
+                        <span>Technician: _________________</span>
+                        <span style="margin-left:14px;">Date: ${currentDate}</span>
+                    </div>
+                    <div class="stamp-box">
+                        <div class="stamp-title">Official Stamp</div>
+                        <div class="stamp-name">BRAICK DISPENSARY</div>
+                        <div class="stamp-line">Approved By: _________________</div>
+                        <div style="font-size:10px;color:#94A3B8;margin-top:2px;">Date: ${currentDate}</div>
+                    </div>
+                </div>
+                <div class="footer-bottom">
+                    Braick Dispensary • Generated on ${currentDate} at ${currentTime} • All rights reserved
+                </div>
+            </div>
+        `;
+    }
+
+    // ================================================================
+    // BUILD CASHIER PDF
+    // ================================================================
+    function buildCashierPDF() {
+        var adminPhonesText = adminPhones.length > 0 ? adminPhones.join(' | ') : '+255 700 000 001';
+        var currentDate = new Date().toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var currentTime = new Date().toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        
+        var totalAmount = 0;
+        var totalPaid = 0;
+        var totalBalance = 0;
+        var totalPharmacyDisc = 0;
+        var totalCashierDisc = 0;
+        var totalDiscount = 0;
+        
+        cashierData.bills.forEach(function(bill) {
+            totalAmount += parseFloat(bill.total_amount || 0);
+            totalPaid += parseFloat(bill.paid_amount || 0);
+            totalBalance += parseFloat(bill.balance || 0);
+            totalPharmacyDisc += parseFloat(bill.pharmacy_discount || 0);
+            totalCashierDisc += parseFloat(bill.cashier_discount || 0);
+            totalDiscount += parseFloat(bill.total_discount || 0);
+        });
+        
+        var billsHTML = '';
+        cashierData.bills.forEach(function(bill) {
+            var statusClass = bill.status === 'paid' ? 'paid' : '';
+            billsHTML += `
+                <tr>
+                    <td>${escapeHtml(bill.bill_number || 'N/A')}</td>
+                    <td>${escapeHtml(bill.patient_name || 'N/A')}</td>
+                    <td>TSh ${(parseFloat(bill.total_amount) || 0).toLocaleString()}</td>
+                    <td>TSh ${(parseFloat(bill.paid_amount) || 0).toLocaleString()}</td>
+                    <td>TSh ${(parseFloat(bill.balance) || 0).toLocaleString()}</td>
+                    <td>TSh ${(parseFloat(bill.pharmacy_discount) || 0).toLocaleString()}</td>
+                    <td>TSh ${(parseFloat(bill.cashier_discount) || 0).toLocaleString()}</td>
+                    <td>TSh ${(parseFloat(bill.total_discount) || 0).toLocaleString()}</td>
+                    <td style="color:${bill.status === 'paid' ? '#059669' : '#D97706'};font-weight:${bill.status === 'paid' ? '700' : '600'};">${escapeHtml(bill.status || 'Pending')}</td>
+                </tr>
+            `;
+        });
+        
+        return `
+            <div class="pdf-header-section">
+                <div class="pdf-header-top">
+                    <div class="pdf-logo">
+                        <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                    </div>
+                    <div class="pdf-title-area">
+                        <div class="clinic-name">BRAICK DISPENSARY</div>
+                        <div class="clinic-sub">Tunajali Afya Yako</div>
+                    </div>
+                </div>
+                <div class="admin-contacts">
+                    <span><i class="fas fa-phone-alt"></i> Admin: <span class="admin-phone">${adminPhonesText}</span></span>
+                    <span><i class="fas fa-building"></i> Branch: ${branchName}</span>
+                    <span><i class="fas fa-calendar-alt"></i> ${currentDate}</span>
+                </div>
+                <div style="font-size:0.85rem;font-weight:700;color:#0B5ED7;margin-top:4px;background:#EFF6FF;padding:4px 16px;border-radius:20px;display:inline-block;">
+                    📊 Cashier Report
+                </div>
+            </div>
+            
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
+                <div style="background:#EFF6FF;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #6EA8FE;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;">TSh ${totalAmount.toLocaleString()}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Revenue</div>
+                </div>
+                <div style="background:#FEE2E2;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #DC2626;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#DC2626;">TSh ${totalDiscount.toLocaleString()}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Discounts</div>
+                    <div style="font-size:0.5rem;color:#64748B;">Pharmacy: TSh ${totalPharmacyDisc.toLocaleString()} | Cashier: TSh ${totalCashierDisc.toLocaleString()}</div>
+                </div>
+                <div style="background:#D1FAE5;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #059669;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#059669;">TSh ${(totalAmount - totalDiscount).toLocaleString()}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Net Profit</div>
+                </div>
+            </div>
+            
+            <div class="section-title"><i class="fas fa-file-invoice"></i> All Bills (${cashierData.bills.length})</div>
+            <table class="pdf-table">
+                <thead>
+                    <tr><th>Bill #</th><th>Patient</th><th>Total</th><th>Paid</th><th>Balance</th><th>Pharm Disc</th><th>Cashier Disc</th><th>Total Disc</th><th>Status</th></tr>
+                </thead>
+                <tbody>${billsHTML}</tbody>
+            </table>
+            
+            <div class="pdf-footer">
+                <div class="footer-stamp">
+                    <div style="font-size:14px;color:#64748B;">
+                        <span>Technician: _________________</span>
+                        <span style="margin-left:14px;">Date: ${currentDate}</span>
+                    </div>
+                    <div class="stamp-box">
+                        <div class="stamp-title">Official Stamp</div>
+                        <div class="stamp-name">BRAICK DISPENSARY</div>
+                        <div class="stamp-line">Approved By: _________________</div>
+                        <div style="font-size:10px;color:#94A3B8;margin-top:2px;">Date: ${currentDate}</div>
+                    </div>
+                </div>
+                <div class="footer-bottom">
+                    Braick Dispensary • Generated on ${currentDate} at ${currentTime} • All rights reserved
+                </div>
+            </div>
+        `;
+    }
+
+    // ================================================================
+    // BUILD PHARMACY PDF
+    // ================================================================
+    function buildPharmacyPDF() {
+        var adminPhonesText = adminPhones.length > 0 ? adminPhones.join(' | ') : '+255 700 000 001';
+        var currentDate = new Date().toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var currentTime = new Date().toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        
+        var presItemsHTML = '';
+        pharmacyData.prescription_items.forEach(function(item) {
+            presItemsHTML += `
+                <tr>
+                    <td>${escapeHtml(item.patient_name || 'N/A')}</td>
+                    <td><strong>${escapeHtml(item.medication_name || 'N/A')}</strong></td>
+                    <td>${escapeHtml(item.dosage || '-')}</td>
+                    <td>${item.quantity || 0}</td>
+                    <td>TSh ${(parseFloat(item.total_price) || 0).toLocaleString()}</td>
+                </tr>
+            `;
+        });
+        
+        var otcHTML = '';
+        pharmacyData.otc_sales.forEach(function(sale) {
+            otcHTML += `
+                <tr>
+                    <td>${escapeHtml(sale.sale_number || 'N/A')}</td>
+                    <td>${escapeHtml(sale.customer_name || 'Walk-in')}</td>
+                    <td>TSh ${(parseFloat(sale.total_amount) || 0).toLocaleString()}</td>
+                    <td>${escapeHtml(sale.sold_by_name || 'N/A')}</td>
+                    <td>${new Date(sale.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</td>
+                </tr>
+            `;
+        });
+        
+        return `
+            <div class="pdf-header-section">
+                <div class="pdf-header-top">
+                    <div class="pdf-logo">
+                        <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                    </div>
+                    <div class="pdf-title-area">
+                        <div class="clinic-name">BRAICK DISPENSARY</div>
+                        <div class="clinic-sub">Tunajali Afya Yako</div>
+                    </div>
+                </div>
+                <div class="admin-contacts">
+                    <span><i class="fas fa-phone-alt"></i> Admin: <span class="admin-phone">${adminPhonesText}</span></span>
+                    <span><i class="fas fa-building"></i> Branch: ${branchName}</span>
+                    <span><i class="fas fa-calendar-alt"></i> ${currentDate}</span>
+                </div>
+                <div style="font-size:0.85rem;font-weight:700;color:#0B5ED7;margin-top:4px;background:#EFF6FF;padding:4px 16px;border-radius:20px;display:inline-block;">
+                    📊 Pharmacy Report
+                </div>
+            </div>
+            
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
+                <div style="background:#EDE9FE;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #7C3AED;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#7C3AED;">TSh ${(pharmacyData.total_prescription_amount || 0).toLocaleString()}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Prescription Sales</div>
+                    <div style="font-size:0.5rem;color:#64748B;">${pharmacyData.total_prescription_count || 0} items</div>
+                </div>
+                <div style="background:#FEF3C7;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #D97706;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#D97706;">TSh ${(pharmacyData.total_otc_amount || 0).toLocaleString()}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">OTC Sales</div>
+                    <div style="font-size:0.5rem;color:#64748B;">${pharmacyData.total_otc_count || 0} transactions</div>
+                </div>
+                <div style="background:#EFF6FF;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #0B5ED7;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;">TSh ${((pharmacyData.total_prescription_amount || 0) + (pharmacyData.total_otc_amount || 0)).toLocaleString()}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Pharmacy Revenue</div>
+                </div>
+            </div>
+            
+            <div class="section-title"><i class="fas fa-prescription-bottle"></i> Prescription Items (${pharmacyData.prescription_items.length})</div>
+            <table class="pdf-table">
+                <thead><tr><th>Patient</th><th>Medication</th><th>Dosage</th><th>Qty</th><th>Total</th></tr></thead>
+                <tbody>${presItemsHTML}</tbody>
+            </table>
+            
+            <div class="section-title"><i class="fas fa-shopping-cart"></i> OTC Sales (${pharmacyData.otc_sales.length})</div>
+            <table class="pdf-table">
+                <thead><tr><th>Sale #</th><th>Customer</th><th>Total</th><th>Sold By</th><th>Date</th></tr></thead>
+                <tbody>${otcHTML}</tbody>
+            </table>
+            
+            <div class="pdf-footer">
+                <div class="footer-stamp">
+                    <div style="font-size:14px;color:#64748B;">
+                        <span>Technician: _________________</span>
+                        <span style="margin-left:14px;">Date: ${currentDate}</span>
+                    </div>
+                    <div class="stamp-box">
+                        <div class="stamp-title">Official Stamp</div>
+                        <div class="stamp-name">BRAICK DISPENSARY</div>
+                        <div class="stamp-line">Approved By: _________________</div>
+                        <div style="font-size:10px;color:#94A3B8;margin-top:2px;">Date: ${currentDate}</div>
+                    </div>
+                </div>
+                <div class="footer-bottom">
+                    Braick Dispensary • Generated on ${currentDate} at ${currentTime} • All rights reserved
+                </div>
+            </div>
+        `;
+    }
+
+    // ================================================================
+    // BUILD LAB PDF
+    // ================================================================
+    function buildLabPDF() {
+        var adminPhonesText = adminPhones.length > 0 ? adminPhones.join(' | ') : '+255 700 000 001';
+        var currentDate = new Date().toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var currentTime = new Date().toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        
+        var testsHTML = '';
+        labData.tests.forEach(function(test) {
+            var statusClass = test.status === 'completed' ? 'paid' : '';
+            testsHTML += `
+                <tr>
+                    <td><strong>${escapeHtml(test.patient_name || 'N/A')}</strong></td>
+                    <td>${escapeHtml(test.test_name || 'N/A')}</td>
+                    <td>TSh ${(parseFloat(test.test_price) || 0).toLocaleString()}</td>
+                    <td>${test.results ? '✅' : '⏳'}</td>
+                    <td>Dr. ${escapeHtml(test.doctor_name || 'N/A')}</td>
+                    <td>${escapeHtml(test.technician_name || 'N/A')}</td>
+                    <td style="color:${test.status === 'completed' ? '#059669' : '#D97706'};font-weight:${test.status === 'completed' ? '700' : '600'};">${escapeHtml(test.status || 'Pending')}</td>
+                    <td>${test.created_at ? new Date(test.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A'}</td>
+                </tr>
+            `;
+        });
+        
+        var topTestsHTML = '';
+        var topTests = labData.top_tests || {};
+        var topEntries = Object.entries(topTests).slice(0, 10);
+        topEntries.forEach(function([name, count]) {
+            topTestsHTML += `
+                <div style="display:flex;justify-content:space-between;padding:4px 8px;background:#F8FAFC;border-radius:4px;border:1px solid #E2E8F0;font-size:13px;">
+                    <span style="font-weight:600;">${escapeHtml(name)}</span>
+                    <span style="color:#7C3AED;font-weight:700;">${count} tests</span>
+                </div>
+            `;
+        });
+        
+        return `
+            <div class="pdf-header-section">
+                <div class="pdf-header-top">
+                    <div class="pdf-logo">
+                        <img src="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" alt="Braick Logo" onerror="this.style.display='none'">
+                    </div>
+                    <div class="pdf-title-area">
+                        <div class="clinic-name">BRAICK DISPENSARY</div>
+                        <div class="clinic-sub">Tunajali Afya Yako</div>
+                    </div>
+                </div>
+                <div class="admin-contacts">
+                    <span><i class="fas fa-phone-alt"></i> Admin: <span class="admin-phone">${adminPhonesText}</span></span>
+                    <span><i class="fas fa-building"></i> Branch: ${branchName}</span>
+                    <span><i class="fas fa-calendar-alt"></i> ${currentDate}</span>
+                </div>
+                <div style="font-size:0.85rem;font-weight:700;color:#0B5ED7;margin-top:4px;background:#EFF6FF;padding:4px 16px;border-radius:20px;display:inline-block;">
+                    📊 Lab Report
+                </div>
+            </div>
+            
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
+                <div style="background:#EDE9FE;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #7C3AED;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#7C3AED;">TSh ${(labData.total_revenue || 0).toLocaleString()}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Revenue</div>
+                </div>
+                <div style="background:#EFF6FF;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #0B5ED7;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;">${(labData.total_tests || 0)}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Tests</div>
+                </div>
+                <div style="background:#D1FAE5;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #059669;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#059669;">${(labData.completed_tests || 0)}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Completed</div>
+                </div>
+                <div style="background:#FEF3C7;padding:8px 12px;border-radius:6px;text-align:center;border:1px solid #D97706;">
+                    <div style="font-size:1.2rem;font-weight:700;color:#D97706;">${((labData.pending_tests || 0) + (labData.in_progress_tests || 0))}</div>
+                    <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">In Progress</div>
+                </div>
+            </div>
+            
+            ${topTestsHTML ? `
+            <div class="section-title"><i class="fas fa-chart-bar"></i> Most Frequent Tests</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px;">${topTestsHTML}</div>
+            ` : ''}
+            
+            <div class="section-title"><i class="fas fa-flask"></i> All Lab Tests (${labData.tests.length})</div>
+            <table class="pdf-table">
+                <thead><tr><th>Patient</th><th>Test</th><th>Price</th><th>Result</th><th>Doctor</th><th>Technician</th><th>Status</th><th>Date</th></tr></thead>
+                <tbody>${testsHTML}</tbody>
+            </table>
+            
+            <div class="pdf-footer">
+                <div class="footer-stamp">
+                    <div style="font-size:14px;color:#64748B;">
+                        <span>Technician: _________________</span>
+                        <span style="margin-left:14px;">Date: ${currentDate}</span>
+                    </div>
+                    <div class="stamp-box">
+                        <div class="stamp-title">Official Stamp</div>
+                        <div class="stamp-name">BRAICK DISPENSARY</div>
+                        <div class="stamp-line">Approved By: _________________</div>
+                        <div style="font-size:10px;color:#94A3B8;margin-top:2px;">Date: ${currentDate}</div>
+                    </div>
+                </div>
+                <div class="footer-bottom">
+                    Braick Dispensary • Generated on ${currentDate} at ${currentTime} • All rights reserved
+                </div>
+            </div>
+        `;
+    }
+
+    // ================================================================
+    // HELPER FUNCTIONS
+    // ================================================================
+    function escapeHtml(text) {
+        if (!text) return '';
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    function closePDFModal() {
+        document.getElementById('pdfModal').classList.remove('active');
+    }
+    
+    function downloadPDF() {
+        var element = document.getElementById('pdfContent');
+        var reportTypeLabel = reportType.charAt(0).toUpperCase() + reportType.slice(1);
+        var filename = 'Report_' + reportTypeLabel + '_' + new Date().toISOString().slice(0,10) + '.pdf';
+        
+        var opt = {
+            margin: [8, 8, 8, 8],
+            filename: filename,
+            image: { type: 'jpeg', quality: 0.98 },
+            html2canvas: { 
+                scale: 2, 
+                useCORS: true,
+                backgroundColor: '#ffffff',
+                logging: false,
+                allowTaint: true
+            },
+            jsPDF: { 
+                unit: 'mm', 
+                format: 'a4', 
+                orientation: 'portrait' 
+            },
+            pagebreak: { 
+                mode: ['css', 'legacy']
+            }
+        };
+        
+        html2pdf().set(opt).from(element).save();
+    }
+
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closePDFModal();
+        }
+    });
+
+    // ================================================================
+    // CLICK OUTSIDE TO CLOSE
+    // ================================================================
+    document.getElementById('pdfModal').addEventListener('click', function(e) {
+        if (e.target === this) {
+            closePDFModal();
+        }
+    });
+
+    // ================================================================
+    // FIX: Make status badges visible on page load
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('.data-table .badge').forEach(function(badge) {
+            badge.style.color = '#ffffff';
+            badge.style.textShadow = '0 1px 2px rgba(0,0,0,0.2)';
+        });
+        
+        document.querySelectorAll('.badge-paid').forEach(function(badge) {
+            badge.style.color = '#059669';
+            badge.style.textShadow = 'none';
+        });
+        
+        console.log('✅ Reports loaded successfully');
+        console.log('✅ Paid status = GREEN color');
+        console.log('✅ Discounts calculated correctly');
+        console.log('✅ PDF Export for ALL reports');
+        console.log('✅ PDF Logo starts at top');
+        console.log('✅ PDF Page breaks working properly');
+    });
+
+    console.log('%c📊 Braick Dispensary - Reports FINAL', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Paid status = GREEN color', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Discounts: pharmacy_discount + cashier_discount = total_discount', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ PDF Export for ALL reports (Patient, Cashier, Pharmacy, Lab)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ PDF Logo starts at top left', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ PDF Page breaks with page-break-inside: avoid', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

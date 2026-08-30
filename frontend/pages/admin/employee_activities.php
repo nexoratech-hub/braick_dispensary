@@ -6,6 +6,7 @@
 // WITH RECENT ACTIVITIES SECTION
 // BRAICK DISPENSARY - WITH LOGIN SESSION
 // FIXED: Chart size reduced, activities display improved
+// FIXED: Uses correct database columns (activity_logs table)
 // ================================================================
 
 // ================================================================
@@ -89,7 +90,6 @@ if ($user_id <= 0) {
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 // ================================================================
 // GET DATABASE CONNECTION
@@ -104,7 +104,7 @@ try {
 // GET EMPLOYEE ID
 // ================================================================
 $employee_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 if ($employee_id <= 0) {
     header('Location: employees.php?branch=' . urlencode($selected_branch_id));
@@ -1831,12 +1831,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
 
     console.log('%c🕐 Braick Dispensary - Employee Activities', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ USING: activity_logs table', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c👤 Employee: <?= htmlspecialchars($employee['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Activities: <?= number_format($total_activities) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📄 Page: <?= $page ?> of <?= $total_pages ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
-    console.log('%c📊 Chart size reduced to 160px max-height', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>

@@ -3,7 +3,7 @@
 // FILE: frontend/pages/admin/bill_details.php
 // SUPER ADMIN - BILL DETAILS
 // VIEW COMPLETE BILL INFORMATION
-// BRAICK DISPENSARY - WITH LOGIN SESSION
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -49,49 +49,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -113,7 +75,7 @@ if ($bill_id <= 0) {
 // GET BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active'");
+$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
@@ -129,11 +91,11 @@ try {
 }
 
 // ================================================================
-// FETCH BILL DETAILS
+// FETCH BILL DETAILS - USING bills TABLE
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
-        pb.*,
+        b.*,
         p.full_name as patient_name,
         p.patient_id as patient_id_number,
         p.phone as patient_phone,
@@ -141,15 +103,15 @@ $stmt = $db->prepare("
         p.date_of_birth as patient_dob,
         u.full_name as created_by_name,
         u.username as created_by_username,
-        b.name as branch_name,
-        b.location as branch_location,
-        (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id) as total_items,
-        (SELECT COUNT(*) FROM payments WHERE bill_id = pb.id) as total_payments
-    FROM patient_bills pb
-    LEFT JOIN patients p ON pb.patient_id = p.id
-    LEFT JOIN users u ON pb.created_by = u.id
-    LEFT JOIN branches b ON pb.branch_id = b.id
-    WHERE pb.id = ?
+        br.name as branch_name,
+        br.location as branch_location,
+        (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as total_items,
+        (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as total_payments
+    FROM bills b
+    LEFT JOIN patients p ON b.patient_id = p.id
+    LEFT JOIN users u ON b.created_by = u.id
+    LEFT JOIN branches br ON b.branch_id = br.id
+    WHERE b.id = ?
 ");
 $stmt->execute([$bill_id]);
 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -167,15 +129,12 @@ $stmt = $db->prepare("
         id,
         item_type,
         item_name,
+        description,
         quantity,
         unit_price,
         total_price,
-        payment_status,
-        is_paid,
         status,
-        paid_at,
-        created_at,
-        description
+        created_at
     FROM bill_items
     WHERE bill_id = ?
     ORDER BY created_at ASC
@@ -205,25 +164,6 @@ $stmt->execute([$bill_id]);
 $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// FETCH PRESCRIPTION (if exists)
-// ================================================================
-$prescription = null;
-if (!empty($bill['prescription_id'])) {
-    $stmt = $db->prepare("
-        SELECT 
-            p.*,
-            d.full_name as doctor_name,
-            pat.full_name as patient_name
-        FROM prescriptions p
-        LEFT JOIN users d ON p.doctor_id = d.id
-        LEFT JOIN patients pat ON p.patient_id = pat.id
-        WHERE p.id = ?
-    ");
-    $stmt->execute([$bill['prescription_id']]);
-    $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
-}
-
-// ================================================================
 // FETCH VISIT (if exists)
 // ================================================================
 $visit = null;
@@ -243,6 +183,27 @@ if (!empty($bill['visit_id'])) {
 }
 
 // ================================================================
+// FETCH PRESCRIPTION (if exists via visit)
+// ================================================================
+$prescription = null;
+if (!empty($bill['visit_id'])) {
+    $stmt = $db->prepare("
+        SELECT 
+            p.*,
+            d.full_name as doctor_name,
+            pat.full_name as patient_name
+        FROM prescriptions p
+        LEFT JOIN users d ON p.doctor_id = d.id
+        LEFT JOIN patients pat ON p.patient_id = pat.id
+        WHERE p.visit_id = ?
+        ORDER BY p.created_at DESC
+        LIMIT 1
+    ");
+    $stmt->execute([$bill['visit_id']]);
+    $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// ================================================================
 // CALCULATE TOTALS
 // ================================================================
 $total_items_amount = 0;
@@ -253,6 +214,8 @@ foreach ($bill_items as $item) {
 $total_paid = $bill['paid_amount'] ?? 0;
 $balance = $bill['balance'] ?? 0;
 $total_amount = $bill['total_amount'] ?? 0;
+$discount_amount = $bill['discount_amount'] ?? 0;
+$discount_percent = $bill['discount_percent'] ?? 0;
 
 // ================================================================
 // GET STATUS BADGE CLASS
@@ -287,13 +250,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
@@ -502,12 +461,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                             <?= ucfirst(str_replace('_', ' ', $item['item_type'])) ?>
                                         </span>
                                     </td>
-                                    <td class="text-center"><?= $item['quantity'] ?></td>
+                                    <td class="text-center"><?= $item['quantity'] ?? 1 ?></td>
                                     <td class="text-right">TSh <?= number_format($item['unit_price'], 2) ?></td>
                                     <td class="text-right font-semibold">TSh <?= number_format($item['total_price'], 2) ?></td>
                                     <td class="text-center">
-                                        <span class="badge badge-<?= $item['is_paid'] ? 'success' : 'warning' ?>" style="font-size: 0.6rem; padding: 2px 10px;">
-                                            <?= $item['is_paid'] ? 'Paid' : 'Unpaid' ?>
+                                        <span class="badge badge-<?= $item['status'] === 'paid' ? 'success' : 'warning' ?>" style="font-size: 0.6rem; padding: 2px 10px;">
+                                            <?= ucfirst($item['status'] ?? 'pending') ?>
                                         </span>
                                     </td>
                                 </tr>
@@ -527,10 +486,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <td class="text-right font-bold">TSh <?= number_format($total_items_amount, 2) ?></td>
                             <td></td>
                         </tr>
-                        <?php if ($bill['discount_amount'] > 0): ?>
+                        <?php if ($discount_amount > 0): ?>
                             <tr>
-                                <td colspan="5" class="text-right text-red-500">Discount (<?= $bill['discount_percent'] ?>%)</td>
-                                <td class="text-right text-red-500">- TSh <?= number_format($bill['discount_amount'], 2) ?></td>
+                                <td colspan="5" class="text-right text-red-500">Discount (<?= $discount_percent ?>%)</td>
+                                <td class="text-right text-red-500">- TSh <?= number_format($discount_amount, 2) ?></td>
                                 <td></td>
                             </tr>
                         <?php endif; ?>
@@ -546,7 +505,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PAYMENTS & PRESCRIPTION CARDS -->
+    <!-- PAYMENTS & RELATED CARDS -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
         
@@ -608,42 +567,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </div>
             </div>
             <div class="card-modern-body">
-                <?php if ($prescription): ?>
-                    <div class="related-item">
-                        <h4><i class="fas fa-prescription-bottle mr-2"></i> Prescription</h4>
-                        <div class="related-details">
-                            <div class="detail-row">
-                                <span class="label">Prescription #</span>
-                                <span class="value"><?= htmlspecialchars($prescription['prescription_number']) ?></span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="label">Doctor</span>
-                                <span class="value"><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="label">Status</span>
-                                <span class="value">
-                                    <span class="badge badge-<?= $prescription['status'] === 'dispensed' ? 'success' : 'warning' ?>" style="font-size: 0.6rem;">
-                                        <?= ucfirst($prescription['status']) ?>
-                                    </span>
-                                </span>
-                            </div>
-                            <div class="detail-row">
-                                <span class="label">Created</span>
-                                <span class="value"><?= date('M d, Y', strtotime($prescription['created_at'])) ?></span>
-                            </div>
-                            <?php if (!empty($prescription['diagnosis'])): ?>
-                                <div class="detail-row full">
-                                    <span class="label">Diagnosis</span>
-                                    <span class="value"><?= htmlspecialchars($prescription['diagnosis']) ?></span>
-                                </div>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                <?php endif; ?>
-                
                 <?php if ($visit): ?>
-                    <div class="related-item <?= $prescription ? 'mt-3' : '' ?>">
+                    <div class="related-item">
                         <h4><i class="fas fa-stethoscope mr-2"></i> Visit</h4>
                         <div class="related-details">
                             <div class="detail-row">
@@ -676,10 +601,44 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     </div>
                 <?php endif; ?>
                 
-                <?php if (!$prescription && !$visit): ?>
+                <?php if ($prescription): ?>
+                    <div class="related-item <?= $visit ? 'mt-3' : '' ?>">
+                        <h4><i class="fas fa-prescription-bottle mr-2"></i> Prescription</h4>
+                        <div class="related-details">
+                            <div class="detail-row">
+                                <span class="label">Prescription #</span>
+                                <span class="value"><?= htmlspecialchars($prescription['prescription_number']) ?></span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="label">Doctor</span>
+                                <span class="value"><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="label">Status</span>
+                                <span class="value">
+                                    <span class="badge badge-<?= $prescription['status'] === 'dispensed' ? 'success' : 'warning' ?>" style="font-size: 0.6rem;">
+                                        <?= ucfirst($prescription['status']) ?>
+                                    </span>
+                                </span>
+                            </div>
+                            <div class="detail-row">
+                                <span class="label">Created</span>
+                                <span class="value"><?= date('M d, Y', strtotime($prescription['created_at'])) ?></span>
+                            </div>
+                            <?php if (!empty($prescription['diagnosis'])): ?>
+                                <div class="detail-row full">
+                                    <span class="label">Diagnosis</span>
+                                    <span class="value"><?= htmlspecialchars($prescription['diagnosis']) ?></span>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                <?php endif; ?>
+                
+                <?php if (!$visit && !$prescription): ?>
                     <div class="text-center text-gray-400 text-sm py-5">
                         <i class="fas fa-info-circle text-2xl block mb-2"></i>
-                        No related prescription or visit found
+                        No related visit or prescription found
                     </div>
                 <?php endif; ?>
             </div>
@@ -1067,7 +1026,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .item-lab_test { background: #EDE9FE; color: #7B2FBE; }
     .item-medication { background: #D1FAE5; color: #059669; }
     .item-procedure { background: #FEF3C7; color: #D97706; }
-    .item-tool { background: #FCE4EC; color: #DC2626; }
+    .item-equipment { background: #FCE4EC; color: #DC2626; }
+    .item-tool { background: #F1F5F9; color: #64748B; }
     .item-other { background: #F1F5F9; color: #64748B; }
     .item-registration { background: #CCFBF1; color: #0D9488; }
     
@@ -1075,7 +1035,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     [data-theme="dark"] .item-lab_test { background: #2D1B4E; color: #A78BFA; }
     [data-theme="dark"] .item-medication { background: #1A3A2A; color: #34D399; }
     [data-theme="dark"] .item-procedure { background: #3D2E0A; color: #FBBF24; }
-    [data-theme="dark"] .item-tool { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .item-equipment { background: #3A1A1A; color: #F87171; }
+    [data-theme="dark"] .item-tool { background: #334155; color: #94A3B8; }
     [data-theme="dark"] .item-other { background: #334155; color: #94A3B8; }
     [data-theme="dark"] .item-registration { background: #0D2E2A; color: #2DD4BF; }
     
@@ -1471,11 +1432,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c📄 Braick Dispensary - Bill Details (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📄 Braick Dispensary - Bill Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏷️ Bill: <?= htmlspecialchars($bill['bill_number']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total: TSh <?= number_format($total_amount, 2) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Status: <?= ucfirst($bill['status']) ?>', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c📊 Tables: bills, bill_items, payments, patients, users, branches', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 

@@ -3,7 +3,7 @@
 // FILE: frontend/pages/admin/print_bill.php
 // SUPER ADMIN - PRINT RECEIPT WITH BRAICK LOGO
 // USING CASHIER RECEIPT DESIGN
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
@@ -49,10 +49,10 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI
+// INCLUDE DATABASE
 // ================================================================
-require_once '../../../backend/config/config.php';
 require_once '../../../backend/config/database.php';
+require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
@@ -87,28 +87,28 @@ try {
     $site_email = $settings['email'] ?? 'info@braick.com';
     
     // ================================================================
-    // GET BILL DETAILS
+    // GET BILL DETAILS - USING bills TABLE
     // ================================================================
     if ($bill_id > 0) {
         $stmt = $db->prepare("
             SELECT 
-                pb.*,
+                b.*,
                 p.full_name as patient_name,
                 p.patient_id,
                 p.phone,
                 p.address,
                 u.full_name as cashier_name,
-                b.name as branch_name,
-                b.location as branch_location,
+                br.name as branch_name,
+                br.location as branch_location,
                 v.visit_number,
                 v.visit_type,
                 v.created_at as visit_date
-            FROM patient_bills pb
-            LEFT JOIN patients p ON pb.patient_id = p.id
-            LEFT JOIN users u ON pb.created_by = u.id
-            LEFT JOIN branches b ON pb.branch_id = b.id
-            LEFT JOIN visits v ON pb.visit_id = v.id
-            WHERE pb.id = ?
+            FROM bills b
+            LEFT JOIN patients p ON b.patient_id = p.id
+            LEFT JOIN users u ON b.created_by = u.id
+            LEFT JOIN branches br ON b.branch_id = br.id
+            LEFT JOIN visits v ON b.visit_id = v.id
+            WHERE b.id = ?
         ");
         $stmt->execute([$bill_id]);
         $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -119,8 +119,8 @@ try {
             // ================================================================
             $stmt = $db->prepare("
                 SELECT * FROM bill_items 
-                WHERE bill_id = ? 
-                ORDER BY id
+                WHERE bill_id = ? AND status != 'cancelled'
+                ORDER BY created_at ASC
             ");
             $stmt->execute([$bill_id]);
             $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -160,15 +160,16 @@ try {
                 
                 $stmt = $db->prepare("
                     INSERT INTO receipts (
-                        receipt_number, payment_id, bill_id, patient_id, receipt_data, 
-                        printed_by, printed_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, NOW())
+                        receipt_number, payment_id, bill_id, patient_id, branch_id,
+                        receipt_data, printed_by, printed_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([
                     $receipt_number,
                     $payment ? $payment['id'] : null,
                     $bill_id,
                     $bill['patient_id'],
+                    $bill['branch_id'],
                     $receipt_data,
                     $_SESSION['user_id']
                 ]);
@@ -476,8 +477,8 @@ $profile_pic_url = !empty($profile_pic)
         }
         
         .payment-status.partial {
-            background: #FEF3C7;
-            color: #D97706;
+            background: #DBEAFE;
+            color: #2563EB;
         }
         
         .payment-status.cancelled {
@@ -802,10 +803,17 @@ $profile_pic_url = !empty($profile_pic)
                 </div>
                 <?php endif; ?>
                 
-                <?php if (($bill['tax_amount'] ?? 0) > 0): ?>
+                <?php if (($bill['pharmacy_discount'] ?? 0) > 0): ?>
                 <div class="receipt-total-row">
-                    <span class="label">Tax</span>
-                    <span class="value"><?= $currency ?> <?= number_format($bill['tax_amount'] ?? 0, 0) ?></span>
+                    <span class="label">Pharmacy Discount</span>
+                    <span class="value" style="color:#DC2626;">-<?= $currency ?> <?= number_format($bill['pharmacy_discount'] ?? 0, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if (($bill['cashier_discount'] ?? 0) > 0): ?>
+                <div class="receipt-total-row">
+                    <span class="label">Cashier Discount</span>
+                    <span class="value" style="color:#DC2626;">-<?= $currency ?> <?= number_format($bill['cashier_discount'] ?? 0, 0) ?></span>
                 </div>
                 <?php endif; ?>
                 
@@ -921,6 +929,7 @@ $profile_pic_url = !empty($profile_pic)
     console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Tables: bills, bill_items, payments, receipts', 'font-size:13px; color:#34D399;');
     console.log('%c🖨️ Receipt saved to database', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>

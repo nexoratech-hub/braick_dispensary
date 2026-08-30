@@ -2,18 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/cancel_bill.php
 // ADMIN - CANCEL BILL
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// BRAICK DISPENSARY
-// ================================================================
-// FEATURES:
-// 1. View bill details before cancellation
-// 2. Cancel bill with reason
-// 3. Reverse payments if any
-// 4. Update stock movements if medications dispensed
-// 5. Modern design with blue theme
-// 6. Confirmation dialog before cancellation
-// 7. Audit trail for cancelled bills
-// 8. Responsive design
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -24,7 +13,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -32,10 +21,9 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER HAS ADMIN ACCESS
+// CHECK ADMIN ACCESS
 // ================================================================
 if ($_SESSION['role'] !== 'admin') {
-    // Redirect based on role
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
@@ -49,7 +37,7 @@ if ($_SESSION['role'] !== 'admin') {
 }
 
 // ================================================================
-// GET USER DATA FROM SESSION
+// GET USER DATA
 // ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -60,49 +48,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
+// INCLUDE DATABASE
 // ================================================================
-if ($user_id <= 0) {
-    if (isset($user_username) && !empty($user_username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = getDB();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$user_username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
-// PATH SAHIHI - FIXED
-// ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
 require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION - FIXED
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -110,171 +60,179 @@ try {
 }
 
 // ================================================================
-// BRANCH FILTER
+// GET PARAMETERS
 // ================================================================
-$selected_branch_id = isset($_GET['branch']) && $_GET['branch'] !== 'all' ? (int)$_GET['branch'] : $user_branch_id;
-$branch_filter = isset($_GET['branch']) ? $_GET['branch'] : 'all';
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$message = '';
-$message_type = '';
-
 $bill_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$cancellation_reason = isset($_POST['reason']) ? trim($_POST['reason']) : '';
-$confirm_cancel = isset($_POST['confirm_cancel']) ? (bool)$_POST['confirm_cancel'] : false;
+$selected_branch_id = $_GET['branch'] ?? 'all';
 
 if ($bill_id <= 0) {
-    header('Location: manage_bills.php?branch=' . $branch_filter);
+    header('Location: bills.php?branch=' . $selected_branch_id);
     exit;
 }
 
-try {
-    // ================================================================
-    // GET BILL DETAILS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT 
-            pb.*,
-            p.full_name as patient_name,
-            p.patient_id as patient_number,
-            p.phone as patient_phone,
-            v.visit_number,
-            v.visit_type,
-            v.status as visit_status,
-            u.full_name as created_by_name,
-            u2.full_name as cancelled_by_name,
-            b.name as branch_name
-        FROM patient_bills pb
-        LEFT JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN visits v ON pb.visit_id = v.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        LEFT JOIN users u2 ON pb.cancelled_by = u2.id
-        LEFT JOIN branches b ON pb.branch_id = b.id
-        WHERE pb.id = ?
-    ");
-    $stmt->execute([$bill_id]);
-    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (!$bill) {
-        header('Location: manage_bills.php?branch=' . $branch_filter);
-        exit;
-    }
-    
-    // ================================================================
-    // GET BILL ITEMS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT * FROM bill_items 
-        WHERE bill_id = ? AND status != 'cancelled'
-        ORDER BY created_at DESC
-    ");
-    $stmt->execute([$bill_id]);
-    $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ================================================================
-    // GET PAYMENTS FOR THIS BILL
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT p.*, u.full_name as received_by_name
-        FROM payments p
-        LEFT JOIN users u ON p.received_by = u.id
-        WHERE p.bill_id = ?
-        ORDER BY p.received_at DESC
-    ");
-    $stmt->execute([$bill_id]);
-    $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    $total_paid = 0;
-    foreach ($payments as $payment) {
-        $total_paid += $payment['amount'];
-    }
-    
-    // ================================================================
-    // GET PRESCRIPTIONS FOR THIS BILL
-    // ================================================================
+$message = '';
+$message_type = '';
+$cancellation_reason = isset($_POST['reason']) ? trim($_POST['reason']) : '';
+$confirm_cancel = isset($_POST['confirm_cancel']) ? (bool)$_POST['confirm_cancel'] : false;
+
+// ================================================================
+// FETCH BILL DETAILS
+// ================================================================
+$stmt = $db->prepare("
+    SELECT 
+        b.*,
+        p.full_name as patient_name,
+        p.patient_id as patient_number,
+        p.phone as patient_phone,
+        v.visit_number,
+        v.visit_type,
+        v.status as visit_status,
+        u.full_name as created_by_name,
+        br.name as branch_name
+    FROM bills b
+    LEFT JOIN patients p ON b.patient_id = p.id
+    LEFT JOIN visits v ON b.visit_id = v.id
+    LEFT JOIN users u ON b.created_by = u.id
+    LEFT JOIN branches br ON b.branch_id = br.id
+    WHERE b.id = ?
+");
+$stmt->execute([$bill_id]);
+$bill = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$bill) {
+    header('Location: bills.php?branch=' . $selected_branch_id);
+    exit;
+}
+
+// ================================================================
+// FETCH BILL ITEMS
+// ================================================================
+$stmt = $db->prepare("
+    SELECT * FROM bill_items 
+    WHERE bill_id = ? AND status != 'cancelled'
+    ORDER BY created_at DESC
+");
+$stmt->execute([$bill_id]);
+$bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// FETCH PAYMENTS
+// ================================================================
+$stmt = $db->prepare("
+    SELECT p.*, u.full_name as received_by_name
+    FROM payments p
+    LEFT JOIN users u ON p.received_by = u.id
+    WHERE p.bill_id = ?
+    ORDER BY p.received_at DESC
+");
+$stmt->execute([$bill_id]);
+$payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$total_paid = 0;
+foreach ($payments as $payment) {
+    $total_paid += $payment['amount'];
+}
+
+// ================================================================
+// FETCH PRESCRIPTIONS (via visit)
+// ================================================================
+$prescriptions = [];
+if (!empty($bill['visit_id'])) {
     $stmt = $db->prepare("
         SELECT pr.*, u.full_name as doctor_name
         FROM prescriptions pr
         LEFT JOIN users u ON pr.doctor_id = u.id
-        WHERE pr.bill_id = ? AND pr.status != 'cancelled'
+        WHERE pr.visit_id = ? AND pr.status != 'cancelled'
     ");
-    $stmt->execute([$bill_id]);
+    $stmt->execute([$bill['visit_id']]);
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    
-    // ================================================================
-    // CHECK IF BILL CAN BE CANCELLED
-    // ================================================================
+}
+
+// ================================================================
+// FETCH STOCK MOVEMENTS (via reference_id and reference_type)
+// ================================================================
+$stock_movements = [];
+$stmt = $db->prepare("
+    SELECT sm.*, mi.id as inventory_id
+    FROM stock_movements sm
+    LEFT JOIN medications_inventory mi ON sm.inventory_id = mi.id
+    WHERE sm.reference_id = ? AND sm.reference_type = 'prescription'
+");
+$stmt->execute([$bill_id]);
+$stock_movements = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// CHECK IF BILL CAN BE CANCELLED
+// ================================================================
+$can_cancel = false;
+$cancel_message = '';
+
+if ($bill['status'] === 'cancelled') {
     $can_cancel = false;
-    $cancel_message = '';
-    
-    if ($bill['status'] === 'cancelled') {
-        $can_cancel = false;
-        $cancel_message = 'This bill has already been cancelled.';
-    } elseif ($bill['status'] === 'paid') {
-        $can_cancel = true;
-        $cancel_message = '⚠️ This bill has been paid. Cancelling will reverse payments.';
-    } elseif ($bill['status'] === 'partial') {
-        $can_cancel = true;
-        $cancel_message = '⚠️ This bill has partial payments. Cancelling will reverse all payments.';
-    } elseif ($bill['status'] === 'pending') {
-        $can_cancel = true;
-        $cancel_message = 'This bill is pending and can be cancelled.';
-    } else {
-        $can_cancel = true;
-    }
-    
-    // ================================================================
-    // HANDLE CANCELLATION
-    // ================================================================
-    if ($_SERVER['REQUEST_METHOD'] === 'POST' && $confirm_cancel) {
-        try {
-            $db->beginTransaction();
-            
-            // Check if bill is already cancelled
-            if ($bill['status'] === 'cancelled') {
-                throw new Exception('Bill is already cancelled.');
-            }
-            
-            // Get branch_id
-            $branch_id = $bill['branch_id'] ?? $selected_branch_id;
-            
-            // 1. Reverse payments if any
-            if (!empty($payments)) {
+    $cancel_message = 'This bill has already been cancelled.';
+} elseif ($bill['status'] === 'paid') {
+    $can_cancel = true;
+    $cancel_message = '⚠️ This bill has been paid. Cancelling will reverse payments.';
+} elseif ($bill['status'] === 'partial') {
+    $can_cancel = true;
+    $cancel_message = '⚠️ This bill has partial payments. Cancelling will reverse all payments.';
+} elseif ($bill['status'] === 'pending') {
+    $can_cancel = true;
+    $cancel_message = 'This bill is pending and can be cancelled.';
+} else {
+    $can_cancel = true;
+}
+
+// ================================================================
+// HANDLE CANCELLATION
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $confirm_cancel) {
+    try {
+        $db->beginTransaction();
+        
+        if ($bill['status'] === 'cancelled') {
+            throw new Exception('Bill is already cancelled.');
+        }
+        
+        $branch_id = $bill['branch_id'] ?? $user_branch_id;
+        $cancellation_note = "Cancelled by {$user_full_name}. Reason: {$cancellation_reason}";
+        
+        // 1. Reverse payments if any
+        if (!empty($payments)) {
+            // Note: No status column in payments table, so we just log the reversal
+            foreach ($payments as $payment) {
                 $stmt = $db->prepare("
-                    UPDATE payments 
-                    SET status = 'reversed',
-                        reversed_at = NOW(),
-                        reversed_by = ?,
-                        reversal_reason = ?
-                    WHERE bill_id = ?
+                    INSERT INTO activity_logs (user_id, branch_id, patient_id, action, details, created_at)
+                    VALUES (?, ?, ?, 'payment_reversed', ?, NOW())
                 ");
-                $stmt->execute([$user_id, $cancellation_reason, $bill_id]);
-                
-                // Log payment reversals
-                foreach ($payments as $payment) {
-                    $stmt = $db->prepare("
-                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
-                        VALUES (?, ?, 'payment_reversed', ?, NOW())
-                    ");
-                    $stmt->execute([
-                        $user_id,
-                        $branch_id,
-                        "Payment #{$payment['receipt_number']} of TSh " . number_format($payment['amount'], 0) . " reversed due to bill cancellation"
-                    ]);
-                }
+                $stmt->execute([
+                    $user_id,
+                    $branch_id,
+                    $bill['patient_id'],
+                    "Payment #{$payment['receipt_number']} of TSh " . number_format($payment['amount'], 0) . " reversed due to bill cancellation. Reason: {$cancellation_reason}"
+                ]);
             }
-            
-            // 2. Reverse stock movements for medications
-            $stmt = $db->prepare("
-                SELECT sm.*, mi.id as inventory_id
-                FROM stock_movements sm
-                LEFT JOIN medications_inventory mi ON sm.inventory_id = mi.id
-                WHERE sm.bill_id = ? AND sm.movement_type = 'out'
-            ");
-            $stmt->execute([$bill_id]);
-            $stock_movements = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
-            foreach ($stock_movements as $movement) {
-                // Reverse stock: add back quantity
+        }
+        
+        // 2. Reverse stock movements for medications
+        $stmt = $db->prepare("
+            SELECT sm.*, mi.id as inventory_id
+            FROM stock_movements sm
+            LEFT JOIN medications_inventory mi ON sm.inventory_id = mi.id
+            WHERE sm.reference_id = ? AND sm.reference_type = 'prescription' AND sm.movement_type = 'out'
+        ");
+        $stmt->execute([$bill_id]);
+        $stock_movements_to_reverse = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($stock_movements_to_reverse as $movement) {
+            if ($movement['inventory_id']) {
+                // Get current stock
+                $stmt = $db->prepare("SELECT quantity FROM medications_inventory WHERE id = ?");
+                $stmt->execute([$movement['inventory_id']]);
+                $current = $stmt->fetch(PDO::FETCH_ASSOC);
+                $current_qty = $current['quantity'] ?? 0;
+                
+                // Restore stock
                 $stmt = $db->prepare("
                     UPDATE medications_inventory 
                     SET quantity = quantity + ?,
@@ -283,106 +241,121 @@ try {
                 ");
                 $stmt->execute([$movement['quantity'], $movement['inventory_id']]);
                 
-                // Log stock reversal
+                // Log reversal
                 $stmt = $db->prepare("
                     INSERT INTO stock_movements (
-                        inventory_id, bill_id, quantity, previous_stock, new_stock,
-                        movement_type, performed_by, notes, created_at
-                    ) VALUES (?, ?, ?, ?, ?, 'in', ?, ?, NOW())
+                        inventory_id, patient_id, movement_type, quantity, 
+                        previous_stock, new_stock, reference_type, reference_id,
+                        performed_by, branch_id, notes, created_at
+                    ) VALUES (?, ?, 'in', ?, ?, ?, 'adjustment', ?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([
                     $movement['inventory_id'],
-                    $bill_id,
+                    $bill['patient_id'],
                     $movement['quantity'],
-                    $movement['new_stock'] - $movement['quantity'],
-                    $movement['new_stock'],
+                    $current_qty,
+                    $current_qty + $movement['quantity'],
+                    $bill_id,
                     $user_id,
+                    $branch_id,
                     "Stock reversal due to bill cancellation - Original: {$movement['notes']}"
                 ]);
             }
-            
-            // 3. Cancel prescriptions
+        }
+        
+        // 3. Cancel prescriptions
+        if (!empty($bill['visit_id'])) {
             $stmt = $db->prepare("
                 UPDATE prescriptions 
                 SET status = 'cancelled',
-                    cancelled_at = NOW(),
-                    cancelled_by = ?,
-                    cancellation_reason = ?
-                WHERE bill_id = ? AND status != 'cancelled'
+                    notes = CONCAT(IFNULL(notes, ''), '\n', ?)
+                WHERE visit_id = ? AND status != 'cancelled'
             ");
-            $stmt->execute([$user_id, $cancellation_reason, $bill_id]);
+            $stmt->execute([$cancellation_note, $bill['visit_id']]);
             
-            // 4. Cancel bill items
+            // Log prescription cancellations
             $stmt = $db->prepare("
-                UPDATE bill_items 
-                SET status = 'cancelled',
-                    payment_status = 'cancelled'
-                WHERE bill_id = ? AND status != 'cancelled'
-            ");
-            $stmt->execute([$bill_id]);
-            
-            // 5. Update bill status
-            $stmt = $db->prepare("
-                UPDATE patient_bills 
-                SET status = 'cancelled',
-                    cancelled_at = NOW(),
-                    cancelled_by = ?,
-                    cancellation_reason = ?,
-                    updated_at = NOW()
-                WHERE id = ?
-            ");
-            $stmt->execute([$user_id, $cancellation_reason, $bill_id]);
-            
-            // 6. Update visit if linked
-            if ($bill['visit_id']) {
-                $stmt = $db->prepare("
-                    UPDATE visits 
-                    SET payment_status = 'cancelled',
-                        updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([$bill['visit_id']]);
-            }
-            
-            // 7. Log activity
-            $stmt = $db->prepare("
-                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
-                VALUES (?, ?, 'bill_cancelled', ?, NOW())
+                INSERT INTO activity_logs (user_id, branch_id, patient_id, action, details, created_at)
+                SELECT ?, ?, patient_id, 'prescription_cancelled', ?, NOW()
+                FROM prescriptions
+                WHERE visit_id = ? AND status = 'cancelled'
             ");
             $stmt->execute([
                 $user_id,
                 $branch_id,
-                "Bill #{$bill['bill_number']} (TSh " . number_format($bill['total_amount'], 0) . ") cancelled. Reason: $cancellation_reason"
+                "Prescriptions cancelled due to bill cancellation. Reason: {$cancellation_reason}",
+                $bill['visit_id']
             ]);
-            
-            $db->commit();
-            
-            $message = "✅ Bill #{$bill['bill_number']} has been cancelled successfully!";
-            $message .= "<br>📋 Reason: " . htmlspecialchars($cancellation_reason);
-            if (!empty($payments)) {
-                $message .= "<br>💰 Payments reversed: TSh " . number_format($total_paid, 0);
-            }
-            $message_type = 'success';
-            
-            // Refresh bill data
-            $stmt = $db->prepare("
-                SELECT * FROM patient_bills WHERE id = ?
-            ");
-            $stmt->execute([$bill_id]);
-            $bill = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-        } catch (Exception $e) {
-            $db->rollBack();
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
         }
+        
+        // 4. Cancel bill items
+        $stmt = $db->prepare("
+            UPDATE bill_items 
+            SET status = 'cancelled'
+            WHERE bill_id = ? AND status != 'cancelled'
+        ");
+        $stmt->execute([$bill_id]);
+        
+        // 5. Update bill status
+        $stmt = $db->prepare("
+            UPDATE bills 
+            SET status = 'cancelled',
+                notes = CONCAT(IFNULL(notes, ''), '\n', ?),
+                updated_at = NOW()
+            WHERE id = ?
+        ");
+        $stmt->execute([$cancellation_note, $bill_id]);
+        
+        // 6. Update visit if linked
+        if ($bill['visit_id']) {
+            $stmt = $db->prepare("
+                UPDATE visits 
+                SET payment_status = 'cancelled',
+                    notes = CONCAT(IFNULL(notes, ''), '\n', ?),
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$cancellation_note, $bill['visit_id']]);
+        }
+        
+        // 7. Log activity
+        $stmt = $db->prepare("
+            INSERT INTO activity_logs (user_id, branch_id, patient_id, action, details, created_at)
+            VALUES (?, ?, ?, 'bill_cancelled', ?, NOW())
+        ");
+        $stmt->execute([
+            $user_id,
+            $branch_id,
+            $bill['patient_id'],
+            "Bill #{$bill['bill_number']} (TSh " . number_format($bill['total_amount'], 0) . ") cancelled. Reason: {$cancellation_reason}"
+        ]);
+        
+        $db->commit();
+        
+        $message = "✅ Bill #{$bill['bill_number']} has been cancelled successfully!";
+        $message .= "<br>📋 Reason: " . htmlspecialchars($cancellation_reason);
+        if (!empty($payments)) {
+            $message .= "<br>💰 Payments reversed: TSh " . number_format($total_paid, 0);
+        }
+        $message_type = 'success';
+        
+        // Refresh bill data
+        $stmt = $db->prepare("SELECT * FROM bills WHERE id = ?");
+        $stmt->execute([$bill_id]);
+        $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // Redirect after success
+        echo '<script>
+            setTimeout(function(){ 
+                window.location.href = "bills.php?branch=' . $selected_branch_id . '&success=1"; 
+            }, 3000);
+        </script>';
+        
+    } catch (Exception $e) {
+        $db->rollBack();
+        $message = "❌ Error: " . $e->getMessage();
+        $message_type = 'error';
     }
-    
-} catch (Exception $e) {
-    $message = "Database error: " . $e->getMessage();
-    $message_type = 'error';
-    header('Location: manage_bills.php?branch=' . $branch_filter);
-    exit;
 }
 
 // ================================================================
@@ -392,9 +365,6 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -410,15 +380,10 @@ try {
 }
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR - FIXED PATHS
+// INCLUDE HEADERS
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
-
-// ================================================================
-// PAGE TITLE
-// ================================================================
-$page_title = 'Cancel Bill';
 ?>
 
 <!DOCTYPE html>
@@ -435,51 +400,20 @@ $page_title = 'Cancel Bill';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* All CSS styles remain the same as previous... */
-        /* ================================================================
-           MODERN ROOT VARIABLES
-           ================================================================ */
         :root {
             --primary: #2563EB;
             --primary-dark: #1D4ED8;
             --primary-light: #60A5FA;
             --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
-            
             --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
             --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 30px rgba(0,0,0,0.12);
-            
             --bg-body: #F0F4F8;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -488,6 +422,9 @@ $page_title = 'Cancel Bill';
             --border-color: #E2E8F0;
             --radius: 12px;
             --radius-lg: 18px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
         }
         
         [data-theme="dark"] {
@@ -498,11 +435,7 @@ $page_title = 'Cancel Bill';
             --text-secondary: #94A3B8;
             --border-color: #334155;
             --primary: #3B82F6;
-            --primary-dark: #2563EB;
             --primary-bg: #1E3A5F;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --purple-bg: #2D1B5F;
         }
         
@@ -515,13 +448,6 @@ $page_title = 'Cancel Bill';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -535,55 +461,8 @@ $page_title = 'Cancel Bill';
             justify-content: space-between;
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
             backdrop-filter: blur(10px);
             box-shadow: var(--shadow-sm);
-        }
-        
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: var(--radius);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
-        }
-        
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-        
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
-        .top-nav .search-wrapper .search-btn {
-            background: var(--primary-gradient);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
         }
         
         .top-nav .datetime {
@@ -595,10 +474,6 @@ $page_title = 'Cancel Bill';
             gap: 6px;
         }
         
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
         .top-nav .avatar {
             width: 40px;
             height: 40px;
@@ -607,11 +482,6 @@ $page_title = 'Cancel Bill';
             border: 2px solid var(--border-color);
             cursor: pointer;
             transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
         }
         
         .top-nav .icon-btn {
@@ -627,11 +497,6 @@ $page_title = 'Cancel Bill';
             border: none;
             cursor: pointer;
             position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
         }
         
         .notif-dot {
@@ -672,11 +537,19 @@ $page_title = 'Cancel Bill';
             background: var(--bg-card);
         }
         
-        .dark-toggle-btn i { font-size: 0.9rem; }
+        .branch-badge-display {
+            background: var(--primary-bg);
+            color: var(--primary);
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.78rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid var(--primary-light);
+        }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -684,9 +557,6 @@ $page_title = 'Cancel Bill';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: var(--radius-lg);
@@ -702,30 +572,6 @@ $page_title = 'Cancel Bill';
             overflow: hidden;
         }
         
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -738,10 +584,7 @@ $page_title = 'Cancel Bill';
             z-index: 1;
         }
         
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -752,11 +595,6 @@ $page_title = 'Cancel Bill';
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
         }
         
         .page-header .role-badge-display {
@@ -786,11 +624,6 @@ $page_title = 'Cancel Bill';
             transition: all 0.3s ease;
         }
         
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
-        }
-        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.12);
             color: white;
@@ -815,87 +648,21 @@ $page_title = 'Cancel Bill';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        .update-badge-light {
-            background: rgba(255,255,255,0.08);
-            color: rgba(255,255,255,0.8);
-            padding: 3px 12px;
-            border-radius: 20px;
+        .status-badge {
+            display: inline-block;
             font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(4px);
-        }
-        
-        /* ================================================================
-           MODERN CARD
-           ================================================================ */
-        .modern-card {
-            background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            padding: 24px 28px;
-            border: 1px solid var(--border-color);
-            box-shadow: var(--shadow-md);
-            transition: all 0.3s ease;
-            margin-bottom: 24px;
-        }
-        
-        .modern-card:hover {
-            border-color: var(--primary-light);
-            box-shadow: var(--shadow-lg);
-        }
-        
-        .modern-card .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-            margin-bottom: 16px;
-            padding-bottom: 14px;
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        .modern-card .card-title {
-            font-size: 1rem;
             font-weight: 600;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .modern-card .card-title i {
-            color: var(--primary);
-        }
-        
-        .modern-card .card-badge {
-            background: var(--primary-bg);
-            color: var(--primary);
             padding: 2px 12px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
+            border-radius: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
         }
         
-        .modern-card .card-badge.success {
-            background: var(--success-bg);
-            color: var(--success);
-        }
+        .status-badge.pending { background: var(--warning-bg); color: var(--warning); }
+        .status-badge.paid { background: var(--success-bg); color: var(--success); }
+        .status-badge.partial { background: var(--warning-bg); color: var(--warning); }
+        .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); }
         
-        .modern-card .card-badge.danger {
-            background: var(--danger-bg);
-            color: var(--danger);
-        }
-        
-        .modern-card .card-badge.warning {
-            background: var(--warning-bg);
-            color: var(--warning);
-        }
-        
-        /* ================================================================
-           DETAILS CARD
-           ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -924,42 +691,79 @@ $page_title = 'Cancel Bill';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           STATUS BADGES
-           ================================================================ */
-        .status-badge {
-            display: inline-block;
-            font-size: 0.6rem;
+        .modern-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 24px 28px;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-md);
+            transition: all 0.3s ease;
+            margin-bottom: 24px;
+        }
+        
+        .modern-card .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .modern-card .card-title {
+            font-size: 1rem;
             font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .modern-card .card-title i { color: var(--primary); }
+        .modern-card .card-badge {
+            background: var(--primary-bg);
+            color: var(--primary);
             padding: 2px 12px;
-            border-radius: 12px;
-            text-transform: uppercase;
-            letter-spacing: 0.03em;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
         }
-        
-        .status-badge.pending {
-            background: var(--warning-bg);
-            color: var(--warning);
-        }
-        
-        .status-badge.paid {
+        .modern-card .card-badge.success {
             background: var(--success-bg);
             color: var(--success);
         }
-        
-        .status-badge.partial {
-            background: var(--warning-bg);
-            color: var(--warning);
-        }
-        
-        .status-badge.cancelled {
+        .modern-card .card-badge.danger {
             background: var(--danger-bg);
             color: var(--danger);
         }
         
-        /* ================================================================
-           FORM ELEMENTS
-           ================================================================ */
+        .alert-modern {
+            padding: 14px 18px;
+            border-radius: var(--radius);
+            margin-bottom: 16px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+        }
+        .alert-modern-success {
+            background: var(--success-bg);
+            color: var(--success);
+            border: 1px solid var(--success);
+        }
+        .alert-modern-error {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border: 1px solid var(--danger);
+        }
+        .alert-modern-warning {
+            background: var(--warning-bg);
+            color: var(--warning);
+            border: 1px solid var(--warning);
+        }
+        .alert-modern i { font-size: 1.1rem; margin-top: 2px; }
+        
         .form-label {
             font-size: 0.78rem;
             font-weight: 600;
@@ -967,16 +771,8 @@ $page_title = 'Cancel Bill';
             margin-bottom: 5px;
             display: block;
         }
-        
-        .form-label .required {
-            color: var(--danger);
-            margin-left: 2px;
-        }
-        
-        .form-label .label-icon {
-            margin-right: 4px;
-            color: var(--primary);
-        }
+        .form-label .required { color: var(--danger); margin-left: 2px; }
+        .form-label .label-icon { margin-right: 4px; color: var(--primary); }
         
         .form-control-modern {
             width: 100%;
@@ -989,39 +785,12 @@ $page_title = 'Cancel Bill';
             background: var(--bg-card);
             color: var(--text-primary);
         }
-        
         .form-control-modern:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.08);
         }
+        textarea.form-control-modern { resize: vertical; min-height: 80px; }
         
-        .form-control-modern::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        
-        textarea.form-control-modern {
-            resize: vertical;
-            min-height: 80px;
-        }
-        
-        .grid-2-modern {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-        }
-        
-        .form-row-modern {
-            margin-bottom: 20px;
-        }
-        
-        .form-row-modern:last-child {
-            margin-bottom: 0;
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn-modern {
             display: inline-flex;
             align-items: center;
@@ -1035,62 +804,38 @@ $page_title = 'Cancel Bill';
             border: none;
             text-decoration: none;
         }
-        
         .btn-modern-primary {
             background: var(--primary-gradient);
             color: white;
             box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
         }
-        
         .btn-modern-primary:hover {
             transform: translateY(-2px);
             box-shadow: 0 6px 24px rgba(37, 99, 235, 0.35);
         }
-        
         .btn-modern-danger {
             background: var(--danger);
             color: white;
             box-shadow: 0 4px 12px rgba(220, 38, 38, 0.25);
         }
-        
         .btn-modern-danger:hover {
             transform: translateY(-2px);
             box-shadow: 0 6px 24px rgba(220, 38, 38, 0.35);
         }
-        
         .btn-modern-danger:disabled {
             opacity: 0.6;
             cursor: not-allowed;
             transform: none;
         }
-        
-        .btn-modern-success {
-            background: var(--success);
-            color: white;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
-        }
-        
-        .btn-modern-success:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 24px rgba(5, 150, 105, 0.35);
-        }
-        
         .btn-modern-outline {
             background: transparent;
             color: var(--text-secondary);
             border: 2px solid var(--border-color);
         }
-        
         .btn-modern-outline:hover {
             background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
-        }
-        
-        .btn-modern-sm {
-            padding: 5px 14px;
-            font-size: 0.75rem;
-            border-radius: 8px;
         }
         
         .form-actions-modern {
@@ -1102,50 +847,11 @@ $page_title = 'Cancel Bill';
             flex-wrap: wrap;
         }
         
-        /* ================================================================
-           ALERT
-           ================================================================ */
-        .alert-modern {
-            padding: 14px 18px;
-            border-radius: var(--radius);
-            margin-bottom: 16px;
-            display: flex;
-            align-items: flex-start;
-            gap: 12px;
-        }
-        
-        .alert-modern-success {
-            background: var(--success-bg);
-            color: var(--success-dark);
-            border: 1px solid var(--success);
-        }
-        
-        .alert-modern-error {
-            background: var(--danger-bg);
-            color: var(--danger-dark);
-            border: 1px solid var(--danger);
-        }
-        
-        .alert-modern-warning {
-            background: var(--warning-bg);
-            color: var(--warning);
-            border: 1px solid var(--warning);
-        }
-        
-        .alert-modern i {
-            font-size: 1.1rem;
-            margin-top: 2px;
-        }
-        
-        /* ================================================================
-           TABLE
-           ================================================================ */
         .table-modern {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.85rem;
         }
-        
         .table-modern thead th {
             padding: 10px 12px;
             text-align: left;
@@ -1155,19 +861,12 @@ $page_title = 'Cancel Bill';
             color: var(--text-secondary);
             border-bottom: 2px solid var(--border-color);
         }
-        
         .table-modern tbody td {
             padding: 10px 12px;
             border-bottom: 1px solid var(--border-color);
         }
+        .table-modern tbody tr:hover { background: var(--primary-bg); }
         
-        .table-modern tbody tr:hover {
-            background: var(--primary-bg);
-        }
-        
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-modern {
             position: fixed;
             bottom: 24px;
@@ -1185,20 +884,12 @@ $page_title = 'Cancel Bill';
             color: white;
             box-shadow: var(--shadow-lg);
         }
-        
-        .toast-modern.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
+        .toast-modern.show { transform: translateY(0); opacity: 1; }
         .toast-modern.success { background: var(--success); }
         .toast-modern.error { background: var(--danger); }
         .toast-modern.info { background: var(--primary); }
         .toast-modern.warning { background: var(--warning); }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer-modern {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1207,64 +898,7 @@ $page_title = 'Cancel Bill';
             font-size: 0.7rem;
             color: var(--text-secondary);
         }
-        
-        .footer-modern .footer-brand {
-            color: var(--primary);
-            font-weight: 500;
-        }
-        
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .grid-2-modern {
-                grid-template-columns: 1fr;
-                gap: 14px;
-            }
-            .form-actions-modern {
-                flex-direction: column;
-            }
-            .form-actions-modern .btn-modern {
-                width: 100%;
-                justify-content: center;
-            }
-            .detail-card {
-                padding: 16px;
-            }
-            .modern-card {
-                padding: 16px;
-            }
-        }
-        
-        @media (max-width: 640px) {
-            .main-content { padding: 10px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
-            .page-header .header-badge { font-size: 0.6rem; padding: 2px 10px; }
-            .page-header .page-subtitle { font-size: 0.8rem; }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
+        .footer-modern .footer-brand { color: var(--primary); font-weight: 500; }
         
         .spinner {
             display: inline-block;
@@ -1275,34 +909,64 @@ $page_title = 'Cancel Bill';
             border-radius: 50%;
             animation: spin 0.6s linear infinite;
         }
-        
         @keyframes spin { to { transform: rotate(360deg); } }
         
-        .live-indicator-modern {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            background: #34D399;
-            animation: pulse-dot 1.5s infinite;
-            margin-right: 4px;
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
         
+        .grid { display: grid; }
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .gap-4 { gap: 16px; }
+        .gap-5 { gap: 20px; }
+        .mt-5 { margin-top: 20px; }
+        .mb-5 { margin-bottom: 20px; }
+        .col-span-2 { grid-column: span 2; }
+        .text-center { text-align: center; }
         .text-danger { color: var(--danger); }
         .text-success { color: var(--success); }
         .text-warning { color: var(--warning); }
         .text-primary { color: var(--primary); }
         .text-muted { color: var(--text-secondary); }
-        .bg-danger-light { background: var(--danger-bg); }
-        .bg-success-light { background: var(--success-bg); }
-        .bg-warning-light { background: var(--warning-bg); }
-        .bg-primary-light { background: var(--primary-bg); }
+        .text-lg { font-size: 1.1rem; }
+        .text-xl { font-size: 1.25rem; }
+        .font-semibold { font-weight: 600; }
+        .space-y-4 > * + * { margin-top: 16px; }
+        .py-6 { padding-top: 24px; padding-bottom: 24px; }
+        .mb-2 { margin-bottom: 8px; }
+        .mb-3 { margin-bottom: 12px; }
+        .mb-4 { margin-bottom: 16px; }
+        
+        .lg\:col-span-2 { grid-column: span 2; }
+        .lg\:grid-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+        
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+        }
+        @media (max-width: 768px) {
+            .top-nav .datetime { display: none; }
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .grid-cols-2 { grid-template-columns: 1fr; }
+            .lg\:grid-cols-3 { grid-template-columns: 1fr; }
+            .form-actions-modern { flex-direction: column; }
+            .form-actions-modern .btn-modern { width: 100%; justify-content: center; }
+            .detail-card { padding: 16px; }
+            .modern-card { padding: 16px; }
+        }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - WITH CLOCK -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1310,10 +974,10 @@ $page_title = 'Cancel Bill';
             <i class="fas fa-bars text-lg"></i>
         </button>
         
-        <div class="search-wrapper">
+        <div class="search-wrapper" style="display:flex;align-items:center;background:var(--bg-body);border-radius:var(--radius);border:2px solid var(--border-color);flex:1;max-width:500px;">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
+            <input type="text" id="searchInput" placeholder="Search..." style="border:none;background:transparent;padding:8px 14px;width:100%;font-size:0.85rem;outline:none;color:var(--text-primary);">
+            <button id="searchBtn" class="search-btn" style="background:var(--primary-gradient);color:white;border:none;padding:8px 16px;border-radius:0 var(--radius) var(--radius) 0;cursor:pointer;font-size:0.85rem;transition:all 0.3s;">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
         </div>
@@ -1321,7 +985,7 @@ $page_title = 'Cancel Bill';
     
     <div class="flex items-center gap-3">
         <span class="branch-badge-display">
-            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($user_branch_name) ?>
         </span>
         
         <span class="datetime" id="currentDateTime">
@@ -1351,9 +1015,7 @@ $page_title = 'Cancel Bill';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
+    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1361,7 +1023,7 @@ $page_title = 'Cancel Bill';
                 Cancel Bill
                 <span class="role-badge-display">ADMIN</span>
                 <?php if ($bill['status'] === 'cancelled'): ?>
-                    <span class="update-badge-light" style="background:rgba(220,38,38,0.3);color:#F87171;">
+                    <span style="background:rgba(220,38,38,0.3);color:#F87171;padding:3px 12px;border-radius:20px;font-size:0.6rem;display:inline-flex;align-items:center;gap:4px;backdrop-filter:blur(4px);">
                         <i class="fas fa-check-circle"></i> Cancelled
                     </span>
                 <?php endif; ?>
@@ -1385,11 +1047,11 @@ $page_title = 'Cancel Bill';
                 </span>
             </p>
         </div>
-        <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
-            <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $branch_filter ?>" class="btn-outline-light">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="bill_details.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-eye"></i> View Bill
             </a>
-            <a href="manage_bills.php?branch=<?= $branch_filter ?>" class="btn-outline-light">
+            <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -1404,9 +1066,7 @@ $page_title = 'Cancel Bill';
     <?php endif; ?>
 
     <?php if ($bill['status'] !== 'cancelled'): ?>
-    <!-- ================================================================ -->
-    <!-- CANCELLATION WARNING -->
-    <!-- ================================================================ -->
+    <!-- Cancellation Warning -->
     <div class="alert-modern alert-modern-warning" style="max-width:1100px;margin:0 auto 16px;">
         <i class="fas fa-exclamation-triangle" style="font-size:1.2rem;"></i>
         <div>
@@ -1419,15 +1079,9 @@ $page_title = 'Cancel Bill';
                 <li>Update the visit payment status</li>
             </ul>
             <?php if (!empty($payments)): ?>
-                <div style="margin-top:8px;padding:8px 12px;background:var(--danger-bg);border-radius:var(--radius);color:var(--danger-dark);">
+                <div style="margin-top:8px;padding:8px 12px;background:var(--danger-bg);border-radius:var(--radius);color:var(--danger);">
                     <i class="fas fa-coins"></i> 
                     <strong><?= count($payments) ?> payment(s) totaling TSh <?= number_format($total_paid, 0) ?> will be reversed.</strong>
-                </div>
-            <?php endif; ?>
-            <?php if (!empty($stock_movements)): ?>
-                <div style="margin-top:6px;padding:8px 12px;background:var(--warning-bg);border-radius:var(--radius);color:var(--warning);">
-                    <i class="fas fa-boxes"></i> 
-                    <strong><?= count($stock_movements) ?> medication item(s) will be restored to inventory.</strong>
                 </div>
             <?php endif; ?>
         </div>
@@ -1439,9 +1093,8 @@ $page_title = 'Cancel Bill';
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
         
-        <!-- Bill Info -->
         <div class="detail-card lg:col-span-2 animate-fade-in-up">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4">
+            <h3 class="text-lg font-semibold mb-4">
                 <i class="fas fa-file-invoice text-primary mr-2"></i> Bill Information
             </h3>
             <div class="grid grid-cols-2 gap-4">
@@ -1497,24 +1150,11 @@ $page_title = 'Cancel Bill';
                     </p>
                 </div>
                 <?php endif; ?>
-                <?php if (!empty($bill['cancellation_reason'])): ?>
-                <div class="col-span-2">
-                    <p class="detail-label">Cancellation Reason</p>
-                    <p class="detail-value text-danger"><?= htmlspecialchars($bill['cancellation_reason']) ?></p>
-                </div>
-                <?php endif; ?>
-                <?php if (!empty($bill['cancelled_by_name'])): ?>
-                <div class="col-span-2">
-                    <p class="detail-label">Cancelled By</p>
-                    <p class="detail-value"><?= htmlspecialchars($bill['cancelled_by_name']) ?></p>
-                </div>
-                <?php endif; ?>
             </div>
         </div>
         
-        <!-- Summary -->
         <div class="detail-card animate-fade-in-up" style="animation-delay:0.05s;">
-            <h3 class="text-lg font-semibold text-gray-800 mb-4">
+            <h3 class="text-lg font-semibold mb-4">
                 <i class="fas fa-chart-pie text-primary mr-2"></i> Summary
             </h3>
             <div class="space-y-4">
@@ -1642,7 +1282,6 @@ $page_title = 'Cancel Bill';
                         <th>Method</th>
                         <th>Received By</th>
                         <th>Date</th>
-                        <th>Status</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1653,11 +1292,6 @@ $page_title = 'Cancel Bill';
                             <td><?= ucfirst($payment['payment_method'] ?? 'Cash') ?></td>
                             <td><?= htmlspecialchars($payment['received_by_name'] ?? 'N/A') ?></td>
                             <td><?= date('d/m/Y H:i', strtotime($payment['received_at'] ?? 'now')) ?></td>
-                            <td>
-                                <span class="status-badge <?= ($payment['status'] ?? 'completed') === 'reversed' ? 'cancelled' : 'paid' ?>">
-                                    <?= ucfirst($payment['status'] ?? 'Completed') ?>
-                                </span>
-                            </td>
                         </tr>
                     <?php endforeach; ?>
                 </tbody>
@@ -1670,7 +1304,7 @@ $page_title = 'Cancel Bill';
     <!-- CANCELLATION FORM -->
     <!-- ================================================================ -->
     <?php if ($bill['status'] !== 'cancelled'): ?>
-    <div class="detail-card animate-fade-in-up mt-5" style="animation-delay:0.2s;border-color:var(--danger);border-width:2px;">
+    <div class="detail-card animate-fade-in-up mt-5" style="border-color:var(--danger);border-width:2px;">
         <h3 class="text-lg font-semibold text-danger mb-4">
             <i class="fas fa-ban text-danger mr-2"></i> Cancel Bill
         </h3>
@@ -1678,7 +1312,7 @@ $page_title = 'Cancel Bill';
         <form method="POST" action="" id="cancelForm">
             <input type="hidden" name="confirm_cancel" value="1">
             
-            <div class="form-row-modern">
+            <div class="form-row-modern" style="margin-bottom:20px;">
                 <label class="form-label">
                     <i class="fas fa-comment label-icon"></i> Cancellation Reason <span class="required">*</span>
                 </label>
@@ -1696,29 +1330,24 @@ $page_title = 'Cancel Bill';
                 <button type="button" class="btn-modern btn-modern-danger" id="cancelBtn" onclick="confirmCancellation()" style="font-size:1rem;padding:12px 32px;">
                     <i class="fas fa-ban"></i> Cancel Bill
                 </button>
-                <a href="manage_bills.php?branch=<?= $branch_filter ?>" class="btn-modern btn-modern-outline">
+                <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-modern btn-modern-outline">
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
         </form>
     </div>
     <?php else: ?>
-    <!-- ================================================================ -->
-    <!-- BILL ALREADY CANCELLED -->
-    <!-- ================================================================ -->
+    <!-- Bill Already Cancelled -->
     <div class="detail-card animate-fade-in-up mt-5" style="border-color:var(--success);border-width:2px;background:var(--success-bg);">
         <div class="text-center py-6">
             <i class="fas fa-check-circle text-4xl text-success mb-3"></i>
             <h3 class="text-xl font-semibold text-success">Bill Already Cancelled</h3>
-            <p class="text-gray-500 mt-2">This bill was cancelled on <?= date('F d, Y h:i A', strtotime($bill['cancelled_at'] ?? 'now')) ?></p>
-            <?php if (!empty($bill['cancellation_reason'])): ?>
-                <p class="text-gray-600 mt-1">Reason: <?= htmlspecialchars($bill['cancellation_reason']) ?></p>
-            <?php endif; ?>
-            <?php if (!empty($bill['cancelled_by_name'])): ?>
-                <p class="text-gray-600 mt-1">Cancelled by: <?= htmlspecialchars($bill['cancelled_by_name']) ?></p>
+            <p class="text-gray-500 mt-2">This bill was cancelled on <?= date('F d, Y h:i A', strtotime($bill['updated_at'] ?? 'now')) ?></p>
+            <?php if (!empty($bill['notes']) && strpos($bill['notes'], 'Cancelled by') !== false): ?>
+                <p class="text-gray-600 mt-1"><?= nl2br(htmlspecialchars($bill['notes'])) ?></p>
             <?php endif; ?>
             <div class="mt-4">
-                <a href="manage_bills.php?branch=<?= $branch_filter ?>" class="btn-modern btn-modern-primary">
+                <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-modern btn-modern-primary">
                     <i class="fas fa-arrow-left"></i> Back to Bills
                 </a>
             </div>
@@ -1913,15 +1542,12 @@ $page_title = 'Cancel Bill';
     updateFooterTime();
     setInterval(updateFooterTime, 1000);
 
-    console.log('%c🚫 Braick - Cancel Bill (FIXED)', 'font-size:18px; font-weight:bold; color:#DC2626;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🚫 Braick - Cancel Bill', 'font-size:18px; font-weight:bold; color:#DC2626;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Bill #<?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total: TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#2563EB;');
     console.log('%c💳 Paid: TSh <?= number_format($total_paid, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📦 Items: <?= count($bill_items) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c⚠️ Cancellation will reverse all payments and restore stock', 'font-size:13px; color:#D97706;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Using tables: bills, bill_items, payments, patients, users, branches, visits', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

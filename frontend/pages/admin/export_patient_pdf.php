@@ -3,6 +3,8 @@
 // FILE: frontend/pages/admin/export_patient_pdf.php
 // EXPORT PATIENT REPORT TO PDF - WITH BILL TYPE COLUMN
 // BRAICK DISPENSARY - BLUE THEME - WITH LOGIN SESSION
+// FIXED: Uses bills table (NOT patient_bills)
+// WITH OFFICIAL STAMP & ADMIN CONTACTS
 // ================================================================
 
 // ================================================================
@@ -86,7 +88,6 @@ if ($user_id <= 0) {
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 // ================================================================
 // GET DATABASE CONNECTION
@@ -96,6 +97,36 @@ try {
 } catch (Exception $e) {
     die("Database connection error: " . $e->getMessage());
 }
+
+// ================================================================
+// GET ADMIN CONTACT NUMBERS
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone FROM users 
+        WHERE role = 'admin' AND branch_id = ? AND status = 'active'
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$user_branch_id]);
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+}
+
+// ================================================================
+// GET BRANCH PHONE
+// ================================================================
+$branch_phone = '';
+try {
+    $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
+    $stmt->execute([$user_branch_id]);
+    $branch_phone = $stmt->fetchColumn();
+} catch (Exception $e) {
+    $branch_phone = '';
+}
+
+$admin_phones_display = !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001');
 
 // ================================================================
 // GET PARAMETERS
@@ -143,7 +174,7 @@ $stmt = $db->prepare("
 $stmt->execute([$patient_id]);
 $patient_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// For each visit, get details
+// For each visit, get details - USING bills table (NOT patient_bills)
 $patient_bills_summary = [
     'total_paid' => 0,
     'total_prescription' => 0,
@@ -177,21 +208,21 @@ foreach ($patient_visits as &$visit) {
     $stmt->execute([$visit_id]);
     $visit['prescriptions'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Procedures & Tools
+    // Procedures & Tools - USING bills table
     $stmt = $db->prepare("
         SELECT bi.* 
         FROM bill_items bi
-        INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-        WHERE pb.visit_id = ?
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.visit_id = ?
         AND bi.item_type IN ('procedure', 'tool')
         ORDER BY bi.created_at DESC
     ");
     $stmt->execute([$visit_id]);
     $visit['procedures_tools'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // Bills with type determination
+    // Bills - USING bills table (NOT patient_bills)
     $stmt = $db->prepare("
-        SELECT * FROM patient_bills 
+        SELECT * FROM bills 
         WHERE visit_id = ? 
         ORDER BY created_at DESC
     ");
@@ -337,25 +368,41 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         /* ================================================================
-           HEADER WITH LOGO
+           HEADER WITH LOGO - BLUE THEME LIKE EXPENSES
            ================================================================ */
         .report-header {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
-            padding: 20px 24px;
-            border-radius: 10px;
+            padding: 24px 28px;
+            border-radius: 12px;
             margin-bottom: 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
             gap: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .report-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .report-header .brand {
             display: flex;
             align-items: center;
             gap: 16px;
+            position: relative;
+            z-index: 1;
         }
         
         .report-header .brand .logo-container {
@@ -379,22 +426,26 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .report-header .brand .logo-text h1 {
-            font-size: 22px;
+            font-size: 24px;
             font-weight: 700;
             letter-spacing: 0.5px;
             margin: 0;
+            color: white;
         }
         
         .report-header .brand .logo-text p {
             font-size: 12px;
             opacity: 0.85;
             margin: 2px 0 0 0;
+            color: rgba(255,255,255,0.85);
         }
         
         .report-header .meta-info {
             text-align: right;
             font-size: 12px;
             opacity: 0.9;
+            position: relative;
+            z-index: 1;
         }
         
         .report-header .meta-info .badge-print {
@@ -404,6 +455,32 @@ header('Content-Type: text/html; charset=utf-8');
             font-size: 10px;
             font-weight: 600;
             display: inline-block;
+            color: white;
+        }
+        
+        /* Admin Contact Line */
+        .admin-contact-line {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            font-size: 10px;
+            color: rgba(255,255,255,0.7);
+            margin-top: 4px;
+            padding-top: 4px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .admin-contact-line span {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .admin-contact-line i {
+            color: rgba(255,255,255,0.6);
         }
         
         /* ================================================================
@@ -639,6 +716,64 @@ header('Content-Type: text/html; charset=utf-8');
         .bill-type-badge.other { background: #F1F5F9; color: #475569; }
         
         /* ================================================================
+           OFFICIAL STAMP - LIKE EXPENSES PDF
+           ================================================================ */
+        .official-stamp {
+            margin-top: 20px;
+            padding-top: 14px;
+            border-top: 2px solid #E2E8F0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .official-stamp .stamp-left {
+            font-size: 12px;
+            color: #64748B;
+        }
+        
+        .official-stamp .stamp-left strong {
+            color: #1E293B;
+        }
+        
+        .official-stamp .stamp-box {
+            text-align: center;
+            padding: 8px 20px;
+            border: 3px solid #0B5ED7;
+            border-radius: 10px;
+            background: #DBEAFE;
+            min-width: 160px;
+        }
+        
+        .official-stamp .stamp-box .stamp-title {
+            font-size: 9px;
+            color: #64748B;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .official-stamp .stamp-box .stamp-name {
+            font-size: 14px;
+            font-weight: 800;
+            color: #0B5ED7;
+        }
+        
+        .official-stamp .stamp-box .stamp-line {
+            font-size: 11px;
+            color: #64748B;
+            margin-top: 2px;
+        }
+        
+        .official-stamp .stamp-box .stamp-date {
+            font-size: 9px;
+            color: #94A3B8;
+            margin-top: 2px;
+        }
+        
+        /* ================================================================
            SUB TABLES
            ================================================================ */
         .sub-table-wrap {
@@ -768,6 +903,7 @@ header('Content-Type: text/html; charset=utf-8');
             .report-header .brand { flex-direction: column; }
             .report-header .meta-info { text-align: center; }
             .visit-header { flex-direction: column; align-items: flex-start; }
+            .official-stamp { flex-direction: column; text-align: center; }
         }
         
         @media (max-width: 480px) {
@@ -832,6 +968,16 @@ header('Content-Type: text/html; charset=utf-8');
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
+            .official-stamp .stamp-box {
+                background: #DBEAFE !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                border-color: #0B5ED7 !important;
+            }
+            .admin-contact-line {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
         }
     </style>
 </head>
@@ -857,7 +1003,7 @@ header('Content-Type: text/html; charset=utf-8');
     </div>
 
     <!-- ================================================================ -->
-    <!-- HEADER WITH LOGO -->
+    <!-- HEADER WITH LOGO - BLUE THEME LIKE EXPENSES -->
     <!-- ================================================================ -->
     <div class="report-header">
         <div class="brand">
@@ -868,7 +1014,7 @@ header('Content-Type: text/html; charset=utf-8');
             </div>
             <div class="logo-text">
                 <h1>BRAICK DISPENSARY</h1>
-                <p>Quality Healthcare Services</p>
+                <p>Tunajali Afya Yako</p>
             </div>
         </div>
         <div class="meta-info">
@@ -876,6 +1022,13 @@ header('Content-Type: text/html; charset=utf-8');
             <div>Generated: <?= date('M d, Y h:i A') ?></div>
             <span class="badge-print">📋 Medical Record</span>
         </div>
+    </div>
+    
+    <!-- Admin Contact Line -->
+    <div class="admin-contact-line">
+        <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
+        <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($user_branch_name) ?> Branch</span>
+        <span><i class="fas fa-user"></i> Generated by: <?= htmlspecialchars($user_full_name) ?></span>
     </div>
 
     <!-- ================================================================ -->
@@ -1087,7 +1240,7 @@ header('Content-Type: text/html; charset=utf-8');
                 </div>
                 <?php endif; ?>
                 
-                <!-- Bills with Type Column -->
+                <!-- Bills with Type Column - USING bills table -->
                 <?php if (!empty($visit['bills'])): ?>
                 <div class="sub-table-wrap">
                     <span class="sub-title"><i class="fas fa-file-invoice"></i> Bills (<?= count($visit['bills']) ?>)</span>
@@ -1142,6 +1295,25 @@ header('Content-Type: text/html; charset=utf-8');
     <?php endif; ?>
 
     <!-- ================================================================ -->
+    <!-- OFFICIAL STAMP - LIKE EXPENSES PDF -->
+    <!-- ================================================================ -->
+    <div class="official-stamp">
+        <div class="stamp-left">
+            <span>Generated by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
+            <span style="margin-left:14px;">Date: <strong><?= date('F d, Y') ?></strong></span>
+            <span style="margin-left:14px;display:block;font-size:10px;color:#94A3B8;margin-top:4px;">
+                <i class="fas fa-print"></i> Printed: <?= date('h:i A') ?>
+            </span>
+        </div>
+        <div class="stamp-box">
+            <div class="stamp-title">Official Stamp</div>
+            <div class="stamp-name">BRAICK DISPENSARY</div>
+            <div class="stamp-line">Approved By: _________________</div>
+            <div class="stamp-date">Date: <?= date('F d, Y') ?></div>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
     <!-- FOOTER -->
     <!-- ================================================================ -->
     <div class="report-footer">
@@ -1166,10 +1338,13 @@ header('Content-Type: text/html; charset=utf-8');
     
     console.log('%c📋 Braick Dispensary - Export Patient Report (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Using: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Design like expenses with logo & official stamp', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient_data['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Patient ID: <?= htmlspecialchars($patient_data['patient_id']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💵 Total Paid: TSh <?= number_format($patient_bills_summary['total_paid'], 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Visits: <?= count($patient_visits) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📞 Admin Contacts: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 

@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/export_cashier_pdf.php
 // EXPORT CASHIER REPORT TO PDF - HTML FALLBACK VERSION
 // BRAICK DISPENSARY - GREEN THEME - WITH LOGIN SESSION
+// WITH OFFICIAL STAMP & ADMIN CONTACTS
 // ================================================================
 
 // ================================================================
@@ -86,7 +87,6 @@ if ($user_id <= 0) {
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 // ================================================================
 // GET DATABASE CONNECTION
@@ -98,17 +98,47 @@ try {
 }
 
 // ================================================================
+// GET ADMIN CONTACT NUMBERS
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone FROM users 
+        WHERE role = 'admin' AND branch_id = ? AND status = 'active'
+        ORDER BY id ASC
+    ");
+    $stmt->execute([$user_branch_id]);
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+}
+
+// ================================================================
+// GET BRANCH PHONE
+// ================================================================
+$branch_phone = '';
+try {
+    $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
+    $stmt->execute([$user_branch_id]);
+    $branch_phone = $stmt->fetchColumn();
+} catch (Exception $e) {
+    $branch_phone = '';
+}
+
+$admin_phones_display = !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001');
+
+// ================================================================
 // GET PARAMETERS
 // ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
-$date_from = $_GET['date_from'] ?? '';
-$date_to = $_GET['date_to'] ?? '';
+$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
+$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
 // LOGO PATH
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#0B5ED7"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
+$logo_fallback = 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60" viewBox="0 0 60 60"><rect width="60" height="60" rx="12" fill="#059669"/><text x="30" y="38" text-anchor="middle" fill="white" font-size="28" font-weight="bold" font-family="Arial">B</text></svg>');
 
 // ================================================================
 // GET BRANCH NAME
@@ -144,41 +174,41 @@ if ($branch_id > 0) {
 }
 
 // ================================================================
-// FETCH CASHIER DATA
+// FETCH CASHIER DATA - Using bills table
 // ================================================================
 
-// Total Revenue - with branch filter via visits
+// Total Revenue
 $stmt = $db->query("
-    SELECT COALESCE(SUM(pb.total_amount), 0) as total 
-    FROM patient_bills pb
-    LEFT JOIN visits v ON pb.visit_id = v.id
-    WHERE pb.status = 'paid' $branch_filter $date_filter
+    SELECT COALESCE(SUM(b.total_amount), 0) as total 
+    FROM bills b
+    LEFT JOIN visits v ON b.visit_id = v.id
+    WHERE b.status = 'paid' $branch_filter $date_filter
 ");
 $total_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // Total Expenses (discounts)
 $stmt = $db->query("
-    SELECT COALESCE(SUM(pb.discount_amount), 0) as total 
-    FROM patient_bills pb
-    LEFT JOIN visits v ON pb.visit_id = v.id
-    WHERE pb.status = 'paid' $branch_filter $date_filter
+    SELECT COALESCE(SUM(b.total_discount), 0) as total 
+    FROM bills b
+    LEFT JOIN visits v ON b.visit_id = v.id
+    WHERE b.status = 'paid' $branch_filter $date_filter
 ");
 $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // Total Profit = Revenue - Expenses
 $total_profit = $total_revenue - $total_expenses;
 
-// All bills with details
+// All bills with details - USING bills table
 $stmt = $db->query("
-    SELECT pb.*, p.full_name as patient_name, u.full_name as cashier_name,
-           v.branch_id, b.name as branch_name
-    FROM patient_bills pb
-    LEFT JOIN patients p ON pb.patient_id = p.id
-    LEFT JOIN users u ON pb.created_by = u.id
-    LEFT JOIN visits v ON pb.visit_id = v.id
-    LEFT JOIN branches b ON v.branch_id = b.id
+    SELECT b.*, p.full_name as patient_name, u.full_name as cashier_name,
+           v.branch_id, br.name as branch_name
+    FROM bills b
+    LEFT JOIN patients p ON b.patient_id = p.id
+    LEFT JOIN users u ON b.created_by = u.id
+    LEFT JOIN visits v ON b.visit_id = v.id
+    LEFT JOIN branches br ON v.branch_id = br.id
     WHERE 1=1 $branch_filter $date_filter
-    ORDER BY pb.created_at DESC
+    ORDER BY b.created_at DESC
 ");
 $cashier_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
@@ -186,12 +216,12 @@ $cashier_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $stmt = $db->query("
     SELECT 
         p.id, p.full_name, p.patient_id,
-        COUNT(pb.id) as bill_count,
-        COALESCE(SUM(pb.total_amount), 0) as total_paid,
-        COALESCE(SUM(pb.discount_amount), 0) as total_discount
+        COUNT(b.id) as bill_count,
+        COALESCE(SUM(b.total_amount), 0) as total_paid,
+        COALESCE(SUM(b.total_discount), 0) as total_discount
     FROM patients p
-    LEFT JOIN patient_bills pb ON p.id = pb.patient_id AND pb.status = 'paid'
-    LEFT JOIN visits v ON pb.visit_id = v.id
+    LEFT JOIN bills b ON p.id = b.patient_id AND b.status = 'paid'
+    LEFT JOIN visits v ON b.visit_id = v.id
     WHERE 1=1 $branch_filter $date_filter
     GROUP BY p.id
     HAVING bill_count > 0
@@ -203,13 +233,13 @@ $patient_totals = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // Count bills by status
 $stmt = $db->query("
     SELECT 
-        SUM(CASE WHEN pb.status = 'paid' THEN 1 ELSE 0 END) as paid_count,
-        SUM(CASE WHEN pb.status = 'pending' THEN 1 ELSE 0 END) as pending_count,
-        SUM(CASE WHEN pb.status = 'partial' THEN 1 ELSE 0 END) as partial_count,
-        SUM(CASE WHEN pb.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
+        SUM(CASE WHEN b.status = 'paid' THEN 1 ELSE 0 END) as paid_count,
+        SUM(CASE WHEN b.status = 'pending' THEN 1 ELSE 0 END) as pending_count,
+        SUM(CASE WHEN b.status = 'partial' THEN 1 ELSE 0 END) as partial_count,
+        SUM(CASE WHEN b.status = 'cancelled' THEN 1 ELSE 0 END) as cancelled_count,
         COUNT(*) as total_count
-    FROM patient_bills pb
-    LEFT JOIN visits v ON pb.visit_id = v.id
+    FROM bills b
+    LEFT JOIN visits v ON b.visit_id = v.id
     WHERE 1=1 $branch_filter $date_filter
 ");
 $bill_stats = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -231,6 +261,13 @@ function getStatusLabel($status) {
         'assigned' => 'Assigned'
     ];
     return $labels[$status] ?? ucfirst($status);
+}
+
+// ================================================================
+// FORMAT CURRENCY
+// ================================================================
+function formatCurrency($amount) {
+    return 'TSh ' . number_format($amount, 0);
 }
 
 // ================================================================
@@ -271,28 +308,45 @@ header('Content-Type: text/html; charset=utf-8');
             border-radius: 12px;
             box-shadow: 0 4px 20px rgba(0,0,0,0.08);
             padding: 30px 35px;
+            position: relative;
         }
         
         /* ================================================================
-           HEADER WITH LOGO - GREEN THEME
+           HEADER WITH LOGO - GREEN THEME LIKE EXPENSES
            ================================================================ */
         .report-header {
             background: linear-gradient(135deg, #059669, #047857);
             color: white;
-            padding: 20px 24px;
-            border-radius: 10px;
+            padding: 24px 28px;
+            border-radius: 12px;
             margin-bottom: 20px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
             gap: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .report-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
         }
         
         .report-header .brand {
             display: flex;
             align-items: center;
             gap: 16px;
+            position: relative;
+            z-index: 1;
         }
         
         .report-header .brand .logo-container {
@@ -316,22 +370,26 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         .report-header .brand .logo-text h1 {
-            font-size: 22px;
+            font-size: 24px;
             font-weight: 700;
             letter-spacing: 0.5px;
             margin: 0;
+            color: white;
         }
         
         .report-header .brand .logo-text p {
             font-size: 12px;
             opacity: 0.85;
             margin: 2px 0 0 0;
+            color: rgba(255,255,255,0.85);
         }
         
         .report-header .meta-info {
             text-align: right;
             font-size: 12px;
             opacity: 0.9;
+            position: relative;
+            z-index: 1;
         }
         
         .report-header .meta-info .badge-print {
@@ -341,6 +399,32 @@ header('Content-Type: text/html; charset=utf-8');
             font-size: 10px;
             font-weight: 600;
             display: inline-block;
+            color: white;
+        }
+        
+        /* Admin Contact Line */
+        .admin-contact-line {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            font-size: 10px;
+            color: rgba(255,255,255,0.7);
+            margin-top: 4px;
+            padding-top: 4px;
+            border-top: 1px solid rgba(255,255,255,0.1);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .admin-contact-line span {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .admin-contact-line i {
+            color: rgba(255,255,255,0.6);
         }
         
         /* ================================================================
@@ -452,33 +536,6 @@ header('Content-Type: text/html; charset=utf-8');
         .badge-secondary { background: #64748B; }
         
         /* ================================================================
-           BILL TYPE BADGE
-           ================================================================ */
-        .bill-type-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-size: 8px;
-            font-weight: 700;
-            white-space: nowrap;
-        }
-        
-        .bill-type-badge i {
-            font-size: 8px;
-        }
-        
-        .bill-type-badge.consultation { background: #D1FAE5; color: #065F46; }
-        .bill-type-badge.prescription { background: #EDE9FE; color: #5B21B6; }
-        .bill-type-badge.lab_test { background: #EDE9FE; color: #5B21B6; }
-        .bill-type-badge.procedure { background: #FEF3C7; color: #92400E; }
-        .bill-type-badge.tool { background: #FEF3C7; color: #92400E; }
-        .bill-type-badge.medication { background: #D1FAE5; color: #065F46; }
-        .bill-type-badge.registration { background: #DBEAFE; color: #1E40AF; }
-        .bill-type-badge.other { background: #F1F5F9; color: #475569; }
-        
-        /* ================================================================
            DATA TABLE
            ================================================================ */
         .data-table {
@@ -518,6 +575,64 @@ header('Content-Type: text/html; charset=utf-8');
         .text-red { color: #DC2626; }
         .font-mono { font-family: monospace; }
         .font-bold { font-weight: 700; }
+        
+        /* ================================================================
+           OFFICIAL STAMP - LIKE EXPENSES PDF
+           ================================================================ */
+        .official-stamp {
+            margin-top: 20px;
+            padding-top: 14px;
+            border-top: 2px solid #E2E8F0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        
+        .official-stamp .stamp-left {
+            font-size: 12px;
+            color: #64748B;
+        }
+        
+        .official-stamp .stamp-left strong {
+            color: #1E293B;
+        }
+        
+        .official-stamp .stamp-box {
+            text-align: center;
+            padding: 8px 20px;
+            border: 3px solid #059669;
+            border-radius: 10px;
+            background: #D1FAE5;
+            min-width: 160px;
+        }
+        
+        .official-stamp .stamp-box .stamp-title {
+            font-size: 9px;
+            color: #64748B;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+        
+        .official-stamp .stamp-box .stamp-name {
+            font-size: 14px;
+            font-weight: 800;
+            color: #059669;
+        }
+        
+        .official-stamp .stamp-box .stamp-line {
+            font-size: 11px;
+            color: #64748B;
+            margin-top: 2px;
+        }
+        
+        .official-stamp .stamp-box .stamp-date {
+            font-size: 9px;
+            color: #94A3B8;
+            margin-top: 2px;
+        }
         
         /* ================================================================
            NO DATA
@@ -599,6 +714,7 @@ header('Content-Type: text/html; charset=utf-8');
             .report-header .meta-info { text-align: center; }
             .data-table { font-size: 8px; }
             .data-table th, .data-table td { padding: 4px 6px; }
+            .official-stamp { flex-direction: column; text-align: center; }
         }
         
         @media (max-width: 480px) {
@@ -634,10 +750,6 @@ header('Content-Type: text/html; charset=utf-8');
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
-            .bill-type-badge {
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
             .data-table th {
                 background: #059669 !important;
                 color: white !important;
@@ -646,6 +758,16 @@ header('Content-Type: text/html; charset=utf-8');
             }
             .summary-card {
                 border-color: #ddd !important;
+            }
+            .official-stamp .stamp-box {
+                background: #D1FAE5 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+                border-color: #059669 !important;
+            }
+            .admin-contact-line {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
             }
         }
     </style>
@@ -672,7 +794,7 @@ header('Content-Type: text/html; charset=utf-8');
     </div>
 
     <!-- ================================================================ -->
-    <!-- HEADER WITH LOGO - GREEN THEME -->
+    <!-- HEADER WITH LOGO - GREEN THEME LIKE EXPENSES -->
     <!-- ================================================================ -->
     <div class="report-header">
         <div class="brand">
@@ -683,7 +805,7 @@ header('Content-Type: text/html; charset=utf-8');
             </div>
             <div class="logo-text">
                 <h1>BRAICK DISPENSARY</h1>
-                <p>Quality Healthcare Services</p>
+                <p>Tunajali Afya Yako</p>
             </div>
         </div>
         <div class="meta-info">
@@ -691,6 +813,13 @@ header('Content-Type: text/html; charset=utf-8');
             <div>Generated: <?= date('M d, Y h:i A') ?></div>
             <span class="badge-print">💰 Financial Report</span>
         </div>
+    </div>
+    
+    <!-- Admin Contact Line -->
+    <div class="admin-contact-line">
+        <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
+        <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($user_branch_name) ?> Branch</span>
+        <span><i class="fas fa-user"></i> Generated by: <?= htmlspecialchars($user_full_name) ?></span>
     </div>
 
     <!-- ================================================================ -->
@@ -717,17 +846,17 @@ header('Content-Type: text/html; charset=utf-8');
     <!-- ================================================================ -->
     <div class="summary-grid">
         <div class="summary-card">
-            <div class="number green">TSh <?= number_format($total_revenue, 0) ?></div>
+            <div class="number green"><?= formatCurrency($total_revenue) ?></div>
             <div class="label">Total Revenue</div>
             <div class="sub-label">All paid bills</div>
         </div>
         <div class="summary-card">
-            <div class="number red">TSh <?= number_format($total_expenses, 0) ?></div>
+            <div class="number red"><?= formatCurrency($total_expenses) ?></div>
             <div class="label">Total Expenses</div>
             <div class="sub-label">Discounts given</div>
         </div>
         <div class="summary-card">
-            <div class="number teal">TSh <?= number_format($total_profit, 0) ?></div>
+            <div class="number teal"><?= formatCurrency($total_profit) ?></div>
             <div class="label">Total Profit</div>
             <div class="sub-label">Revenue - Expenses</div>
         </div>
@@ -754,7 +883,6 @@ header('Content-Type: text/html; charset=utf-8');
                 <tr>
                     <th>Bill #</th>
                     <th>Patient</th>
-                    <th>Type</th>
                     <th style="text-align:right;">Total</th>
                     <th style="text-align:right;">Paid</th>
                     <th style="text-align:right;">Balance</th>
@@ -772,56 +900,18 @@ header('Content-Type: text/html; charset=utf-8');
                 $grand_discount = 0;
                 
                 foreach ($cashier_bills as $bill):
-                    // Determine bill type
-                    $bill_type = 'Other';
-                    $bill_type_icon = 'fa-file-invoice';
-                    $bill_type_class = 'other';
-                    
-                    if (strpos($bill['bill_number'], 'BILL-PRES-') !== false) {
-                        $bill_type = 'Prescription';
-                        $bill_type_icon = 'fa-prescription-bottle';
-                        $bill_type_class = 'prescription';
-                    } else {
-                        // Check items
-                        $stmt_check = $db->prepare("SELECT item_type FROM bill_items WHERE bill_id = ? GROUP BY item_type ORDER BY SUM(total_price) DESC LIMIT 1");
-                        $stmt_check->execute([$bill['id']]);
-                        $item_type = $stmt_check->fetch(PDO::FETCH_ASSOC);
-                        
-                        if ($item_type) {
-                            $type_map = [
-                                'consultation' => ['label' => 'Consultation', 'icon' => 'fa-user-md', 'class' => 'consultation'],
-                                'lab_test' => ['label' => 'Lab Test', 'icon' => 'fa-flask', 'class' => 'lab_test'],
-                                'procedure' => ['label' => 'Procedure', 'icon' => 'fa-syringe', 'class' => 'procedure'],
-                                'tool' => ['label' => 'Tool', 'icon' => 'fa-tools', 'class' => 'tool'],
-                                'medication' => ['label' => 'Medication', 'icon' => 'fa-pills', 'class' => 'medication'],
-                                'registration' => ['label' => 'Registration', 'icon' => 'fa-file-medical', 'class' => 'registration']
-                            ];
-                            if (isset($type_map[$item_type['item_type']])) {
-                                $bill_type = $type_map[$item_type['item_type']]['label'];
-                                $bill_type_icon = $type_map[$item_type['item_type']]['icon'];
-                                $bill_type_class = $type_map[$item_type['item_type']]['class'];
-                            }
-                        }
-                    }
-                    
                     $grand_total += $bill['total_amount'] ?? 0;
                     $grand_paid += $bill['paid_amount'] ?? 0;
                     $grand_balance += $bill['balance'] ?? 0;
-                    $grand_discount += $bill['discount_amount'] ?? 0;
+                    $grand_discount += $bill['total_discount'] ?? 0;
                 ?>
                     <tr>
                         <td class="font-mono" style="font-size:9px;"><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></td>
                         <td><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></td>
-                        <td>
-                            <span class="bill-type-badge <?= $bill_type_class ?>">
-                                <i class="fas <?= $bill_type_icon ?>"></i>
-                                <?= $bill_type ?>
-                            </span>
-                        </td>
-                        <td style="text-align:right;font-weight:bold;">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
-                        <td style="text-align:right;color:#059669;">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
-                        <td style="text-align:right;color:#DC2626;">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></td>
-                        <td style="text-align:right;">TSh <?= number_format($bill['discount_amount'] ?? 0, 0) ?></td>
+                        <td style="text-align:right;font-weight:bold;"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
+                        <td style="text-align:right;color:#059669;"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
+                        <td style="text-align:right;color:#DC2626;"><?= formatCurrency($bill['balance'] ?? 0) ?></td>
+                        <td style="text-align:right;"><?= formatCurrency($bill['total_discount'] ?? 0) ?></td>
                         <td>
                             <span class="badge badge-<?= $bill['status'] === 'paid' ? 'success' : ($bill['status'] === 'pending' ? 'warning' : ($bill['status'] === 'partial' ? 'warning' : 'danger')) ?>">
                                 <?= getStatusLabel($bill['status'] ?? 'pending') ?>
@@ -834,11 +924,11 @@ header('Content-Type: text/html; charset=utf-8');
             </tbody>
             <tfoot>
                 <tr style="background:#F8FAFC;font-weight:700;border-top:2px solid #059669;">
-                    <td colspan="3" style="text-align:right;">GRAND TOTAL</td>
-                    <td style="text-align:right;">TSh <?= number_format($grand_total, 0) ?></td>
-                    <td style="text-align:right;color:#059669;">TSh <?= number_format($grand_paid, 0) ?></td>
-                    <td style="text-align:right;color:#DC2626;">TSh <?= number_format($grand_balance, 0) ?></td>
-                    <td style="text-align:right;">TSh <?= number_format($grand_discount, 0) ?></td>
+                    <td colspan="2" style="text-align:right;">GRAND TOTAL</td>
+                    <td style="text-align:right;"><?= formatCurrency($grand_total) ?></td>
+                    <td style="text-align:right;color:#059669;"><?= formatCurrency($grand_paid) ?></td>
+                    <td style="text-align:right;color:#DC2626;"><?= formatCurrency($grand_balance) ?></td>
+                    <td style="text-align:right;"><?= formatCurrency($grand_discount) ?></td>
                     <td colspan="3"></td>
                 </tr>
             </tfoot>
@@ -874,8 +964,8 @@ header('Content-Type: text/html; charset=utf-8');
                         <td><strong><?= htmlspecialchars($pt['full_name']) ?></strong></td>
                         <td><?= htmlspecialchars($pt['patient_id']) ?></td>
                         <td style="text-align:right;"><?= number_format($pt['bill_count']) ?></td>
-                        <td style="text-align:right;color:#059669;font-weight:bold;">TSh <?= number_format($pt['total_paid'], 0) ?></td>
-                        <td style="text-align:right;">TSh <?= number_format($pt['total_discount'], 0) ?></td>
+                        <td style="text-align:right;color:#059669;font-weight:bold;"><?= formatCurrency($pt['total_paid']) ?></td>
+                        <td style="text-align:right;"><?= formatCurrency($pt['total_discount']) ?></td>
                     </tr>
                 <?php endforeach; ?>
             </tbody>
@@ -886,6 +976,25 @@ header('Content-Type: text/html; charset=utf-8');
             No patient data found
         </div>
     <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- OFFICIAL STAMP - LIKE EXPENSES PDF -->
+    <!-- ================================================================ -->
+    <div class="official-stamp">
+        <div class="stamp-left">
+            <span>Generated by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
+            <span style="margin-left:14px;">Date: <strong><?= date('F d, Y') ?></strong></span>
+            <span style="margin-left:14px;display:block;font-size:10px;color:#94A3B8;margin-top:4px;">
+                <i class="fas fa-print"></i> Printed: <?= date('h:i A') ?>
+            </span>
+        </div>
+        <div class="stamp-box">
+            <div class="stamp-title">Official Stamp</div>
+            <div class="stamp-name">BRAICK DISPENSARY</div>
+            <div class="stamp-line">Approved By: _________________</div>
+            <div class="stamp-date">Date: <?= date('F d, Y') ?></div>
+        </div>
+    </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -913,10 +1022,13 @@ header('Content-Type: text/html; charset=utf-8');
     console.log('%c💰 Braick Dispensary - Export Cashier Report (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💵 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Total Expenses: TSh <?= number_format($total_expenses, 0) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c📈 Total Profit: TSh <?= number_format($total_profit, 0) ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c💵 Total Revenue: <?= formatCurrency($total_revenue) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Total Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c📈 Total Profit: <?= formatCurrency($total_profit) ?>', 'font-size:13px; color:#0D9488;');
     console.log('%c📄 Total Bills: <?= number_format($bill_stats['total_count'] ?? 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Using: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Design like expenses with logo & official stamp', 'font-size:13px; color:#34D399;');
+    console.log('%c📞 Admin Contacts: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 

@@ -2,9 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/admin/laboratories.php
 // ADMIN - VIEW ALL LABORATORIES
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
+// BLUE THEME - BRANCH FILTER
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// ADD LABORATORY BUTTON REMOVED
 // ================================================================
 
 // ================================================================
@@ -55,11 +55,59 @@ require_once '../../../backend/helpers/functions.php';
 $db = Database::getInstance()->getConnection();
 
 // ================================================================
+// FIX: REMOVE error PARAMETER FROM URL
+// ================================================================
+if (isset($_GET['error'])) {
+    // Remove error parameter and redirect cleanly
+    $clean_url = $_SERVER['PHP_SELF'];
+    $params = [];
+    
+    if (isset($_GET['branch']) && $_GET['branch'] !== 'all') {
+        $params[] = 'branch=' . urlencode($_GET['branch']);
+    }
+    if (isset($_GET['search']) && !empty($_GET['search'])) {
+        $params[] = 'search=' . urlencode($_GET['search']);
+    }
+    if (isset($_GET['status']) && $_GET['status'] !== 'all') {
+        $params[] = 'status=' . urlencode($_GET['status']);
+    }
+    
+    if (!empty($params)) {
+        $clean_url .= '?' . implode('&', $params);
+    }
+    
+    header('Location: ' . $clean_url);
+    exit;
+}
+
+// ================================================================
 // GET FILTER PARAMETERS
 // ================================================================
-$selected_branch_id = $_GET['branch'] ?? $_GET['branch_id'] ?? 'all';
-$search = $_GET['search'] ?? '';
-$status_filter = $_GET['status'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$status_filter = isset($_GET['status']) ? trim($_GET['status']) : 'all';
+
+// ================================================================
+// FIX: VALIDATE BRANCH ID - IF INVALID, RESET TO 'all'
+// ================================================================
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $check_stmt = $db->prepare("SELECT id FROM branches WHERE id = ? AND status = 'active'");
+    $check_stmt->execute([(int)$selected_branch_id]);
+    if (!$check_stmt->fetch()) {
+        // Branch doesn't exist - silently reset to all (no error redirect)
+        $selected_branch_id = 'all';
+        // Remove branch from URL by redirecting cleanly
+        $clean_url = $_SERVER['PHP_SELF'];
+        $params = [];
+        if (!empty($search)) $params[] = 'search=' . urlencode($search);
+        if ($status_filter !== 'all') $params[] = 'status=' . urlencode($status_filter);
+        if (!empty($params)) {
+            $clean_url .= '?' . implode('&', $params);
+        }
+        header('Location: ' . $clean_url);
+        exit;
+    }
+}
 
 // ================================================================
 // BUILD QUERY WITH FILTERS
@@ -73,18 +121,14 @@ $query = "
         (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id AND status = 'in_progress') as in_progress_tests,
         (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id AND status = 'completed') as completed_tests,
         (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id) as total_tests,
-        (SELECT COUNT(*) FROM lab_tests_catalog WHERE branch_id = b.id AND is_active = 1) as total_test_types,
-        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'pending') as pending_requests,
-        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'completed') as completed_requests,
-        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id) as total_requests,
-        (SELECT COUNT(*) FROM lab_result_templates WHERE is_active = 1) as total_templates
+        (SELECT COUNT(*) FROM lab_tests_catalog WHERE branch_id = b.id AND is_active = 1) as total_test_types
     FROM branches b
     WHERE 1=1
 ";
 
 $params = [];
 
-// Branch filter
+// Branch filter - only apply if NOT 'all'
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     $query .= " AND b.id = ?";
     $params[] = (int)$selected_branch_id;
@@ -94,6 +138,8 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 if ($status_filter !== 'all') {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
+} else {
+    $query .= " AND b.status = 'active'";
 }
 
 // Search filter
@@ -129,14 +175,14 @@ $total_technicians = 0;
 $total_tests = 0;
 $pending_tests = 0;
 $completed_tests = 0;
-$total_requests = 0;
+$in_progress_tests = 0;
 
 foreach ($laboratories as $lab) {
     $total_technicians += ($lab['total_technicians'] ?? 0);
     $total_tests += ($lab['total_tests'] ?? 0);
     $pending_tests += ($lab['pending_tests'] ?? 0);
     $completed_tests += ($lab['completed_tests'] ?? 0);
-    $total_requests += ($lab['total_requests'] ?? 0);
+    $in_progress_tests += ($lab['in_progress_tests'] ?? 0);
 }
 
 // ================================================================
@@ -148,21 +194,6 @@ try {
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $branches = [];
-}
-
-// ================================================================
-// STATUS BADGE CLASS
-// ================================================================
-function getStatusBadge($status) {
-    $classes = [
-        'active' => 'success',
-        'inactive' => 'danger',
-        'pending' => 'warning',
-        'in_progress' => 'info',
-        'completed' => 'success',
-        'cancelled' => 'danger'
-    ];
-    return $classes[$status] ?? 'secondary';
 }
 
 // ================================================================
@@ -1158,7 +1189,7 @@ include_once '../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER - ADD LABORATORY BUTTON REMOVED -->
+    <!-- PAGE HEADER -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -1181,7 +1212,7 @@ include_once '../../components/admin_sidebar.php';
                 </span>
             </p>
         </div>
-        <!-- BUTTON YA ADD LABORATORY IMEONDOLWA -->
+        <!-- Add Laboratory button REMOVED -->
     </div>
 
     <!-- ================================================================ -->
@@ -1322,8 +1353,8 @@ include_once '../../components/admin_sidebar.php';
                             <div class="label">Test Types</div>
                         </div>
                         <div class="stat-item">
-                            <div class="num teal"><?= number_format($lab['total_requests'] ?? 0) ?></div>
-                            <div class="label">Requests</div>
+                            <div class="num teal"><?= number_format($lab['in_progress_tests'] ?? 0) ?></div>
+                            <div class="label">In Progress</div>
                         </div>
                     </div>
                     
@@ -1468,12 +1499,10 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🧪 Braick Dispensary - Laboratories', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔬 Total Labs: <?= $total_labs ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🧪 Total Tests: <?= number_format($total_tests) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c⏳ Pending Tests: <?= number_format($pending_tests) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ Completed Tests: <?= number_format($completed_tests) ?>', 'font-size:13px; color:#34D399;');
-    console.log('%c👨‍🔬 Total Technicians: <?= number_format($total_technicians) ?>', 'font-size:13px; color:#0D9488;');
-    console.log('%c🔵 Card headers have BLUE BACKGROUND with white text', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c❌ Add Laboratory button REMOVED', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ error=invalid_id FIXED - Automatically removed', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Invalid branch resets to "all" without showing error', 'font-size:13px; color:#34D399;');
+    console.log('%c🔵 Default branch filter: "all"', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

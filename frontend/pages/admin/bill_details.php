@@ -3,7 +3,7 @@
 // FILE: frontend/pages/admin/bill_details.php
 // SUPER ADMIN - BILL DETAILS
 // VIEW COMPLETE BILL INFORMATION
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -51,8 +51,8 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
@@ -75,11 +75,11 @@ $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'acti
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// FETCH BILL DETAILS
+// FETCH BILL DETAILS - FIXED: Using bills table not patient_bills
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
-        pb.*,
+        b.*,
         p.full_name as patient_name,
         p.patient_id as patient_id_number,
         p.phone as patient_phone,
@@ -87,15 +87,15 @@ $stmt = $db->prepare("
         p.date_of_birth as patient_dob,
         u.full_name as created_by_name,
         u.username as created_by_username,
-        b.name as branch_name,
-        b.location as branch_location,
-        (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id) as total_items,
-        (SELECT COUNT(*) FROM payments WHERE bill_id = pb.id) as total_payments
-    FROM patient_bills pb
-    LEFT JOIN patients p ON pb.patient_id = p.id
-    LEFT JOIN users u ON pb.created_by = u.id
-    LEFT JOIN branches b ON pb.branch_id = b.id
-    WHERE pb.id = ?
+        br.name as branch_name,
+        br.location as branch_location,
+        (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id) as total_items,
+        (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as total_payments
+    FROM bills b
+    LEFT JOIN patients p ON b.patient_id = p.id
+    LEFT JOIN users u ON b.created_by = u.id
+    LEFT JOIN branches br ON b.branch_id = br.id
+    WHERE b.id = ?
 ");
 $stmt->execute([$bill_id]);
 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -113,15 +113,15 @@ $stmt = $db->prepare("
         id,
         item_type,
         item_name,
+        description,
         quantity,
         unit_price,
         total_price,
-        payment_status,
-        is_paid,
+        discount_amount,
+        tax_amount,
+        final_price,
         status,
-        paid_at,
-        created_at,
-        description
+        created_at
     FROM bill_items
     WHERE bill_id = ?
     ORDER BY created_at ASC
@@ -134,40 +134,15 @@ $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
-        id,
-        receipt_number,
-        amount,
-        payment_method,
-        reference_number,
-        notes,
-        received_by,
-        received_at,
-        (SELECT full_name FROM users WHERE id = payments.received_by) as received_by_name
-    FROM payments
-    WHERE bill_id = ?
-    ORDER BY received_at DESC
+        p.*,
+        u.full_name as received_by_name
+    FROM payments p
+    LEFT JOIN users u ON p.received_by = u.id
+    WHERE p.bill_id = ?
+    ORDER BY p.received_at DESC
 ");
 $stmt->execute([$bill_id]);
 $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// FETCH PRESCRIPTION (if exists)
-// ================================================================
-$prescription = null;
-if (!empty($bill['prescription_id'])) {
-    $stmt = $db->prepare("
-        SELECT 
-            p.*,
-            d.full_name as doctor_name,
-            pat.full_name as patient_name
-        FROM prescriptions p
-        LEFT JOIN users d ON p.doctor_id = d.id
-        LEFT JOIN patients pat ON p.patient_id = pat.id
-        WHERE p.id = ?
-    ");
-    $stmt->execute([$bill['prescription_id']]);
-    $prescription = $stmt->fetch(PDO::FETCH_ASSOC);
-}
 
 // ================================================================
 // FETCH VISIT (if exists)
@@ -440,8 +415,8 @@ include_once '../../components/admin_sidebar.php';
                                 <td class="text-right">TSh <?= number_format($item['unit_price'], 2) ?></td>
                                 <td class="text-right font-semibold">TSh <?= number_format($item['total_price'], 2) ?></td>
                                 <td>
-                                    <span class="badge badge-<?= $item['is_paid'] ? 'success' : 'warning' ?>" style="font-size: 0.6rem; padding: 2px 10px;">
-                                        <?= $item['is_paid'] ? 'Paid' : 'Unpaid' ?>
+                                    <span class="badge badge-<?= $item['status'] === 'paid' ? 'success' : 'warning' ?>" style="font-size: 0.6rem; padding: 2px 10px;">
+                                        <?= ucfirst($item['status'] ?? 'pending') ?>
                                     </span>
                                 </td>
                             </tr>
@@ -479,7 +454,7 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PAYMENTS & PRESCRIPTION -->
+    <!-- PAYMENTS & VISIT -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-5">
         
@@ -492,7 +467,7 @@ include_once '../../components/admin_sidebar.php';
                 </h3>
             </div>
             <?php if (count($payments) > 0): ?>
-                <div class="space-y-3">
+                <div class="space-y-3 p-4">
                     <?php foreach ($payments as $payment): ?>
                         <div class="payment-item">
                             <div class="payment-info">
@@ -529,51 +504,17 @@ include_once '../../components/admin_sidebar.php';
             <?php endif; ?>
         </div>
         
-        <!-- Prescription & Visit Details -->
+        <!-- Visit Details -->
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-prescription title-purple mr-2"></i> Related Information
+                    <i class="fas fa-stethoscope title-purple mr-2"></i> Visit Information
                 </h3>
             </div>
             
-            <?php if ($prescription): ?>
-                <div class="related-item">
-                    <h4><i class="fas fa-prescription-bottle mr-2"></i> Prescription</h4>
-                    <div class="related-details">
-                        <div class="detail-row">
-                            <span class="label">Prescription #</span>
-                            <span class="value"><?= htmlspecialchars($prescription['prescription_number']) ?></span>
-                        </div>
-                        <div class="detail-row">
-                            <span class="label">Doctor</span>
-                            <span class="value"><?= htmlspecialchars($prescription['doctor_name'] ?? 'N/A') ?></span>
-                        </div>
-                        <div class="detail-row">
-                            <span class="label">Status</span>
-                            <span class="value">
-                                <span class="badge badge-<?= $prescription['status'] === 'dispensed' ? 'success' : 'warning' ?>" style="font-size: 0.6rem;">
-                                    <?= ucfirst($prescription['status']) ?>
-                                </span>
-                            </span>
-                        </div>
-                        <div class="detail-row">
-                            <span class="label">Created</span>
-                            <span class="value"><?= date('M d, Y', strtotime($prescription['created_at'])) ?></span>
-                        </div>
-                        <?php if (!empty($prescription['diagnosis'])): ?>
-                            <div class="detail-row full">
-                                <span class="label">Diagnosis</span>
-                                <span class="value"><?= htmlspecialchars($prescription['diagnosis']) ?></span>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            <?php endif; ?>
-            
             <?php if ($visit): ?>
-                <div class="related-item <?= $prescription ? 'mt-3' : '' ?>">
-                    <h4><i class="fas fa-stethoscope mr-2"></i> Visit</h4>
+                <div class="related-item m-4">
+                    <h4><i class="fas fa-stethoscope mr-2"></i> Visit Details</h4>
                     <div class="related-details">
                         <div class="detail-row">
                             <span class="label">Visit #</span>
@@ -584,6 +525,10 @@ include_once '../../components/admin_sidebar.php';
                             <span class="value"><?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></span>
                         </div>
                         <div class="detail-row">
+                            <span class="label">Receptionist</span>
+                            <span class="value"><?= htmlspecialchars($visit['receptionist_name'] ?? 'N/A') ?></span>
+                        </div>
+                        <div class="detail-row">
                             <span class="label">Status</span>
                             <span class="value">
                                 <span class="badge badge-<?= $visit['status'] === 'completed' ? 'success' : 'warning' ?>" style="font-size: 0.6rem;">
@@ -592,8 +537,12 @@ include_once '../../components/admin_sidebar.php';
                             </span>
                         </div>
                         <div class="detail-row">
+                            <span class="label">Visit Type</span>
+                            <span class="value"><?= htmlspecialchars($visit['visit_type'] ?? 'N/A') ?></span>
+                        </div>
+                        <div class="detail-row">
                             <span class="label">Date</span>
-                            <span class="value"><?= date('M d, Y', strtotime($visit['visit_date'])) ?></span>
+                            <span class="value"><?= date('M d, Y', strtotime($visit['visit_date'] ?? $visit['created_at'])) ?></span>
                         </div>
                         <?php if (!empty($visit['diagnosis'])): ?>
                             <div class="detail-row full">
@@ -601,14 +550,24 @@ include_once '../../components/admin_sidebar.php';
                                 <span class="value"><?= htmlspecialchars($visit['diagnosis']) ?></span>
                             </div>
                         <?php endif; ?>
+                        <?php if (!empty($visit['symptoms'])): ?>
+                            <div class="detail-row full">
+                                <span class="label">Symptoms</span>
+                                <span class="value"><?= htmlspecialchars($visit['symptoms']) ?></span>
+                            </div>
+                        <?php endif; ?>
+                        <?php if (!empty($visit['treatment'])): ?>
+                            <div class="detail-row full">
+                                <span class="label">Treatment</span>
+                                <span class="value"><?= htmlspecialchars($visit['treatment']) ?></span>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
-            <?php endif; ?>
-            
-            <?php if (!$prescription && !$visit): ?>
+            <?php else: ?>
                 <div class="text-center text-gray-400 text-sm py-5">
                     <i class="fas fa-info-circle text-2xl block mb-2"></i>
-                    No related prescription or visit found
+                    No visit found for this bill
                 </div>
             <?php endif; ?>
         </div>
@@ -906,6 +865,7 @@ include_once '../../components/admin_sidebar.php';
     .item-lab_test { background: #EDE9FE; color: #7B2FBE; }
     .item-medication { background: #D1FAE5; color: #059669; }
     .item-procedure { background: #FEF3C7; color: #D97706; }
+    .item-equipment { background: #FCE4EC; color: #DC2626; }
     .item-tool { background: #FCE4EC; color: #DC2626; }
     .item-other { background: #F1F5F9; color: #64748B; }
     .item-registration { background: #CCFBF1; color: #0D9488; }
@@ -914,6 +874,7 @@ include_once '../../components/admin_sidebar.php';
     [data-theme="dark"] .item-lab_test { background: #2D1B4E; color: #A78BFA; }
     [data-theme="dark"] .item-medication { background: #1A3A2A; color: #34D399; }
     [data-theme="dark"] .item-procedure { background: #3D2E0A; color: #FBBF24; }
+    [data-theme="dark"] .item-equipment { background: #3A1A1A; color: #F87171; }
     [data-theme="dark"] .item-tool { background: #3A1A1A; color: #F87171; }
     [data-theme="dark"] .item-other { background: #334155; color: #94A3B8; }
     [data-theme="dark"] .item-registration { background: #0D2E2A; color: #2DD4BF; }
@@ -1172,6 +1133,7 @@ include_once '../../components/admin_sidebar.php';
         padding: 2px 10px !important;
     }
 
+    .m-4 { margin: 16px; }
     .mt-3 { margin-top: 12px; }
 
     /* ================================================================
@@ -1268,11 +1230,13 @@ include_once '../../components/admin_sidebar.php';
         color: #0B5ED7;
     }
 
+    /* ================================================================
+       UTILITY
+       ================================================================ */
     .flex { display: flex; }
     .flex-wrap { flex-wrap: wrap; }
     .items-center { align-items: center; }
     .justify-between { justify-content: space-between; }
-    .justify-end { justify-content: flex-end; }
     .gap-2 { gap: 8px; }
     .gap-3 { gap: 12px; }
     .gap-4 { gap: 16px; }
@@ -1281,6 +1245,7 @@ include_once '../../components/admin_sidebar.php';
     .ml-2 { margin-left: 8px; }
     .mr-1 { margin-right: 4px; }
     .mr-2 { margin-right: 8px; }
+    .p-4 { padding: 16px; }
     .py-5 { padding-top: 20px; padding-bottom: 20px; }
     .text-center { text-align: center; }
     .text-sm { font-size: 0.8rem; }
@@ -1334,195 +1299,55 @@ include_once '../../components/admin_sidebar.php';
        RESPONSIVE
        ================================================================ */
     @media (max-width: 1024px) {
-        .main-content {
-            padding: 16px;
-        }
-        
-        .bill-summary-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        
-        .financial-summary-grid {
-            grid-template-columns: 1fr 1fr;
-        }
-        
-        .related-details {
-            grid-template-columns: 1fr;
-        }
-        
-        .detail-row {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 2px;
-        }
-        
-        .detail-row .value {
-            text-align: left;
-            max-width: 100%;
-        }
+        .main-content { padding: 16px; }
+        .bill-summary-grid { grid-template-columns: 1fr 1fr; }
+        .financial-summary-grid { grid-template-columns: 1fr 1fr; }
+        .related-details { grid-template-columns: 1fr; }
+        .detail-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+        .detail-row .value { text-align: left; max-width: 100%; }
     }
 
     @media (max-width: 768px) {
-        .main-content {
-            padding: 12px;
-        }
-        
-        .bill-summary-header {
-            flex-direction: column;
-            gap: 10px;
-            text-align: center;
-        }
-        
-        .bill-summary-grid {
-            grid-template-columns: 1fr 1fr;
-            padding: 16px;
-        }
-        
-        .financial-summary-grid {
-            grid-template-columns: 1fr;
-        }
-        
-        .data-table {
-            font-size: 0.7rem;
-        }
-        
-        .data-table td,
-        .data-table th {
-            padding: 8px 10px;
-        }
-        
-        .data-table thead th {
-            font-size: 0.55rem;
-            padding: 8px 10px;
-        }
-        
-        .page-title {
-            font-size: 1.2rem;
-        }
-        
-        .page-subtitle {
-            font-size: 0.75rem;
-        }
-        
-        .financial-card {
-            padding: 14px 16px;
-        }
-        
-        .financial-value {
-            font-size: 1rem;
-        }
+        .main-content { padding: 12px; }
+        .bill-summary-header { flex-direction: column; gap: 10px; text-align: center; }
+        .bill-summary-grid { grid-template-columns: 1fr 1fr; padding: 16px; }
+        .financial-summary-grid { grid-template-columns: 1fr; }
+        .data-table { font-size: 0.7rem; }
+        .data-table td, .data-table th { padding: 8px 10px; }
+        .data-table thead th { font-size: 0.55rem; padding: 8px 10px; }
+        .page-title { font-size: 1.2rem; }
+        .page-subtitle { font-size: 0.75rem; }
+        .financial-card { padding: 14px 16px; }
+        .financial-value { font-size: 1rem; }
     }
 
     @media (max-width: 480px) {
-        .main-content {
-            padding: 10px;
-        }
-        
-        .bill-summary-grid {
-            grid-template-columns: 1fr;
-            padding: 12px;
-        }
-        
-        .bill-summary-header {
-            padding: 12px 16px;
-        }
-        
-        .card-header {
-            padding: 12px 16px;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 8px;
-        }
-        
-        .data-table td,
-        .data-table th {
-            padding: 6px 8px;
-            font-size: 0.6rem;
-        }
-        
-        .data-table thead th {
-            font-size: 0.5rem;
-            padding: 6px 8px;
-        }
-        
-        .payment-item {
-            padding: 10px 14px;
-        }
-        
-        .payment-info .payment-details {
-            flex-direction: column;
-            gap: 4px;
-        }
-        
-        .payment-info .payment-amount {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 4px;
-        }
-        
-        .related-item {
-            padding: 10px 14px;
-        }
-        
-        .detail-row {
-            padding: 4px 0;
-        }
-        
-        .detail-row .label {
-            font-size: 0.6rem;
-        }
-        
-        .detail-row .value {
-            font-size: 0.7rem;
-        }
-        
-        .page-header {
-            flex-direction: column;
-            align-items: flex-start !important;
-        }
-        
-        .btn {
-            font-size: 0.7rem;
-            padding: 5px 10px;
-        }
-        
-        .btn-sm {
-            font-size: 0.6rem;
-            padding: 3px 8px;
-        }
+        .main-content { padding: 10px; }
+        .bill-summary-grid { grid-template-columns: 1fr; padding: 12px; }
+        .bill-summary-header { padding: 12px 16px; }
+        .card-header { padding: 12px 16px; flex-direction: column; align-items: flex-start; gap: 8px; }
+        .data-table td, .data-table th { padding: 6px 8px; font-size: 0.6rem; }
+        .data-table thead th { font-size: 0.5rem; padding: 6px 8px; }
+        .payment-item { padding: 10px 14px; }
+        .payment-info .payment-details { flex-direction: column; gap: 4px; }
+        .payment-info .payment-amount { flex-direction: column; align-items: flex-start; gap: 4px; }
+        .page-header { flex-direction: column; align-items: flex-start !important; }
+        .btn { font-size: 0.7rem; padding: 5px 10px; }
+        .btn-sm { font-size: 0.6rem; padding: 3px 8px; }
     }
 
     /* ================================================================
        PRINT STYLES
        ================================================================ */
     @media print {
-        .top-nav,
-        .sidebar,
-        #sidebarToggle,
-        .btn,
-        .dark-toggle-btn,
-        .icon-btn,
-        .search-wrapper,
-        .page-header .flex.gap-2,
-        .footer {
+        .top-nav, .sidebar, #sidebarToggle, .btn, .dark-toggle-btn,
+        .icon-btn, .search-wrapper, .page-header .flex.gap-2, .footer {
             display: none !important;
         }
         
-        .main-content {
-            padding: 0 !important;
-            background: white !important;
-        }
-        
-        .card {
-            box-shadow: none !important;
-            border: 1px solid #ddd !important;
-            break-inside: avoid;
-        }
-        
-        .bill-summary-card {
-            box-shadow: none !important;
-            border: 1px solid #ddd !important;
-        }
+        .main-content { padding: 0 !important; background: white !important; }
+        .card { box-shadow: none !important; border: 1px solid #ddd !important; break-inside: avoid; }
+        .bill-summary-card { box-shadow: none !important; border: 1px solid #ddd !important; }
         
         .data-table thead th {
             background: #0B5ED7 !important;
@@ -1531,42 +1356,22 @@ include_once '../../components/admin_sidebar.php';
             print-color-adjust: exact !important;
         }
         
-        .badge {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-        }
-        
+        .badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         .badge-success { background: #059669 !important; color: white !important; }
         .badge-warning { background: #F59E0B !important; color: #1E293B !important; }
         .badge-info { background: #0B5ED7 !important; color: white !important; }
         .badge-danger { background: #EF4444 !important; color: white !important; }
         .badge-secondary { background: #64748B !important; color: white !important; }
         
-        .item-type-badge {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-        }
-        
-        .financial-icon {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-        }
-        
+        .item-type-badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        .financial-icon { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         .financial-icon.blue { background: #EFF6FF !important; color: #0B5ED7 !important; }
         .financial-icon.green { background: #ECFDF5 !important; color: #059669 !important; }
         .financial-icon.orange { background: #FFFBEB !important; color: #F59E0B !important; }
         .financial-icon.purple { background: #F5F3FF !important; color: #7B2FBE !important; }
         
-        .branch-tag {
-            -webkit-print-color-adjust: exact !important;
-            print-color-adjust: exact !important;
-            background: #E8F0FE !important;
-            color: #0B5ED7 !important;
-        }
-        
-        .page-title {
-            color: #0F172A !important;
-        }
+        .branch-tag { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; background: #E8F0FE !important; color: #0B5ED7 !important; }
+        .page-title { color: #0F172A !important; }
     }
 </style>
 
@@ -1671,6 +1476,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🏷️ Bill: <?= htmlspecialchars($bill['bill_number']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total: TSh <?= number_format($total_amount, 2) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Status: <?= ucfirst($bill['status']) ?>', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c✅ Using tables: bills, bill_items, payments, patients, users, branches, visits', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

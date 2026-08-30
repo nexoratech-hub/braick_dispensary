@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_laboratory.php
-// SUPER ADMIN - VIEW LABORATORY BRANCH DETAILS
+// ADMIN - VIEW LABORATORY BRANCH DETAILS
 // BRAICK DISPENSARY - BLUE THEME
+// WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
 // ================================================================
@@ -18,7 +19,11 @@ if (session_status() === PHP_SESSION_NONE) {
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
@@ -56,39 +61,25 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// VERIFY USER EXISTS IN DATABASE
-// ================================================================
-$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$user || $user['status'] !== 'active') {
-    session_destroy();
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
-
-// ================================================================
-// GET BRANCH ID
+// GET PARAMETERS
 // ================================================================
 $lab_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 if ($lab_id <= 0) {
-    header('Location: laboratories.php?branch=' . $selected_branch_id . '&error=invalid_id');
+    header('Location: laboratories.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
     exit;
+}
+
+// ================================================================
+// GET BRANCHES FOR FILTER
+// ================================================================
+$branches = [];
+try {
+    $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
 }
 
 // ================================================================
@@ -105,12 +96,8 @@ $stmt = $db->prepare("
         (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id AND status = 'completed') as completed_tests,
         (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id AND status = 'cancelled') as cancelled_tests,
         (SELECT COUNT(*) FROM lab_tests WHERE branch_id = b.id) as total_tests_done,
-        (SELECT COALESCE(SUM(total_price), 0) FROM bill_items WHERE branch_id = b.id AND item_type = 'lab_test' AND payment_status = 'paid') as lab_revenue,
-        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'pending') as pending_requests,
-        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'accepted') as accepted_requests,
-        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'in_progress') as in_progress_requests,
-        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id AND status = 'completed') as completed_requests,
-        (SELECT COUNT(*) FROM lab_requests WHERE branch_id = b.id) as total_requests
+        (SELECT COALESCE(SUM(price), 0) FROM lab_tests_catalog WHERE branch_id = b.id AND is_active = 1) as total_catalog_value,
+        (SELECT COUNT(*) FROM activity_logs WHERE branch_id = b.id AND (action LIKE '%lab%' OR action LIKE '%test%' OR action LIKE '%laboratory%')) as total_activities
     FROM branches b
     WHERE b.id = ?
 ");
@@ -118,16 +105,9 @@ $stmt->execute([$lab_id]);
 $laboratory = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$laboratory) {
-    header('Location: laboratories.php?branch=' . $selected_branch_id . '&error=notfound');
+    header('Location: laboratories.php?branch=' . urlencode($selected_branch_id) . '&error=notfound');
     exit;
 }
-
-// ================================================================
-// GET BRANCHES FOR FILTER
-// ================================================================
-$branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // GET TECHNICIANS FOR THIS BRANCH
@@ -135,7 +115,7 @@ $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 $technicians = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, full_name, email, phone, status, created_at 
+        SELECT id, full_name, email, phone, status, created_at, is_online 
         FROM users 
         WHERE branch_id = ? AND role = 'laboratory'
         ORDER BY full_name
@@ -160,6 +140,7 @@ try {
             lt.completed_at,
             lt.test_price,
             p.full_name as patient_name,
+            p.patient_id as patient_code,
             u.full_name as doctor_name,
             v.visit_number
         FROM lab_tests lt
@@ -177,47 +158,34 @@ try {
 }
 
 // ================================================================
-// GET RECENT LAB REQUESTS
-// ================================================================
-$recent_requests = [];
-try {
-    $stmt = $db->prepare("
-        SELECT 
-            lr.id,
-            lr.request_number,
-            lr.status,
-            lr.requested_at,
-            p.full_name as patient_name,
-            u.full_name as doctor_name,
-            (SELECT COUNT(*) FROM lab_request_items WHERE request_id = lr.id) as total_items
-        FROM lab_requests lr
-        LEFT JOIN patients p ON lr.patient_id = p.id
-        LEFT JOIN users u ON lr.doctor_id = u.id
-        WHERE lr.branch_id = ?
-        ORDER BY lr.requested_at DESC
-        LIMIT 10
-    ");
-    $stmt->execute([$lab_id]);
-    $recent_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $recent_requests = [];
-}
-
-// ================================================================
 // GET RECENT ACTIVITIES
 // ================================================================
 $recent_activities = [];
 try {
     $stmt = $db->prepare("
-        SELECT * FROM activity_logs 
-        WHERE branch_id = ? AND (action LIKE '%lab%' OR action LIKE '%test%' OR action LIKE '%laboratory%')
-        ORDER BY created_at DESC 
+        SELECT al.*, u.full_name as user_name
+        FROM activity_logs al
+        LEFT JOIN users u ON al.user_id = u.id
+        WHERE al.branch_id = ? AND (al.action LIKE '%lab%' OR al.action LIKE '%test%' OR al.action LIKE '%laboratory%')
+        ORDER BY al.created_at DESC 
         LIMIT 10
     ");
     $stmt->execute([$lab_id]);
     $recent_activities = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $recent_activities = [];
+}
+
+// ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
 }
 
 // ================================================================
@@ -233,7 +201,9 @@ function getStatusBadge($status) {
         'cancelled' => 'danger',
         'accepted' => 'primary',
         'paid' => 'success',
-        'partial' => 'warning'
+        'partial' => 'warning',
+        'online' => 'success',
+        'offline' => 'secondary'
     ];
     return $classes[$status] ?? 'secondary';
 }
@@ -247,7 +217,9 @@ function getStatusIcon($status) {
         'completed' => 'fa-check-circle',
         'cancelled' => 'fa-times-circle',
         'accepted' => 'fa-check-double',
-        'paid' => 'fa-check-circle'
+        'paid' => 'fa-check-circle',
+        'online' => 'fa-circle',
+        'offline' => 'fa-circle'
     ];
     return $icons[$status] ?? 'fa-circle';
 }
@@ -584,18 +556,6 @@ include_once '../../components/admin_sidebar.php';
             pointer-events: none;
         }
         
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -629,7 +589,7 @@ include_once '../../components/admin_sidebar.php';
             font-weight: 600;
         }
         
-        .page-header .role-badge-display {
+        .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 4px 14px;
@@ -1014,6 +974,32 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           EMPTY STATE
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 30px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 2.5rem;
+            color: var(--border-color);
+            margin-bottom: 12px;
+        }
+        
+        .empty-state h4 {
+            font-size: 1rem;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .empty-state p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+        
+        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
@@ -1047,12 +1033,16 @@ include_once '../../components/admin_sidebar.php';
             .page-header .page-title { font-size: 1.3rem; }
             .stats-grid { grid-template-columns: 1fr 1fr; }
             .detail-card { padding: 16px; }
+            .data-table { font-size: 0.7rem; }
+            .data-table thead th, .data-table td { padding: 6px 8px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .card-header { flex-direction: column; align-items: flex-start; }
+            .btn { width: 100%; justify-content: center; }
         }
         
         /* ================================================================
@@ -1182,16 +1172,13 @@ include_once '../../components/admin_sidebar.php';
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
                     <i class="fas fa-flask"></i> <?= $laboratory['total_tests'] ?? 0 ?> Tests
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-money-bill-wave"></i> TSh <?= number_format($laboratory['lab_revenue'] ?? 0, 0) ?>
-                </span>
                 <span class="header-badge" style="background:rgba(255,255,255,0.15);">
                     <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="edit_laboratory.php?id=<?= $laboratory['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+            <a href="edit_branch.php?id=<?= $laboratory['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-edit"></i> Edit
             </a>
             <a href="laboratories.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
@@ -1276,41 +1263,41 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
-        <!-- Card 4: Revenue -->
-        <a href="reports.php?branch=<?= $laboratory['id'] ?>&type=lab" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-money-bill-wave"></i>
-            </div>
-            <div>
-                <p class="stat-label">Revenue</p>
-                <p class="stat-value">TSh <?= number_format($laboratory['lab_revenue'] ?? 0, 0) ?></p>
-                <p class="stat-sub">Lab fees collected</p>
-            </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
-        </a>
-        
-        <!-- Card 5: Lab Requests -->
-        <a href="lab_requests.php?branch=<?= $laboratory['id'] ?>" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-clipboard-list"></i>
-            </div>
-            <div>
-                <p class="stat-label">Requests</p>
-                <p class="stat-value"><?= number_format($laboratory['total_requests'] ?? 0) ?></p>
-                <p class="stat-sub"><?= $laboratory['pending_requests'] ?? 0 ?> pending</p>
-            </div>
-            <i class="fas fa-chevron-right stat-arrow"></i>
-        </a>
-        
-        <!-- Card 6: Test Catalog -->
+        <!-- Card 4: Catalog Value -->
         <a href="lab_test_catalog.php?branch=<?= $laboratory['id'] ?>" class="stat-card">
             <div class="stat-icon">
                 <i class="fas fa-book"></i>
             </div>
             <div>
-                <p class="stat-label">Test Catalog</p>
-                <p class="stat-value"><?= number_format($laboratory['total_tests'] ?? 0) ?></p>
-                <p class="stat-sub">Available tests</p>
+                <p class="stat-label">Catalog Value</p>
+                <p class="stat-value">TSh <?= number_format($laboratory['total_catalog_value'] ?? 0, 0) ?></p>
+                <p class="stat-sub"><?= $laboratory['total_tests'] ?? 0 ?> tests available</p>
+            </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
+        </a>
+        
+        <!-- Card 5: Active Technicians -->
+        <a href="employees.php?branch=<?= $laboratory['id'] ?>&role=laboratory" class="stat-card">
+            <div class="stat-icon">
+                <i class="fas fa-user-md"></i>
+            </div>
+            <div>
+                <p class="stat-label">Technicians</p>
+                <p class="stat-value"><?= $laboratory['active_technicians'] ?? 0 ?></p>
+                <p class="stat-sub"><?= $laboratory['total_technicians'] ?? 0 ?> total</p>
+            </div>
+            <i class="fas fa-chevron-right stat-arrow"></i>
+        </a>
+        
+        <!-- Card 6: Activities -->
+        <a href="system_logs.php?branch=<?= $laboratory['id'] ?>" class="stat-card">
+            <div class="stat-icon">
+                <i class="fas fa-clock"></i>
+            </div>
+            <div>
+                <p class="stat-label">Activities</p>
+                <p class="stat-value"><?= number_format($laboratory['total_activities'] ?? 0) ?></p>
+                <p class="stat-sub">Lab activities logged</p>
             </div>
             <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
@@ -1323,7 +1310,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-user-md text-blue-600"></i>
+                <i class="fas fa-user-md" style="color:var(--primary);"></i>
                 Lab Technicians (<?= count($technicians) ?>)
             </h3>
             <a href="add_employee.php?branch=<?= $laboratory['id'] ?>&role=laboratory" class="btn btn-sm btn-primary">
@@ -1345,7 +1332,14 @@ include_once '../../components/admin_sidebar.php';
                     <tbody>
                         <?php foreach ($technicians as $tech): ?>
                             <tr>
-                                <td class="font-medium"><?= htmlspecialchars($tech['full_name'] ?? 'N/A') ?></td>
+                                <td class="font-medium">
+                                    <?= htmlspecialchars($tech['full_name'] ?? 'N/A') ?>
+                                    <?php if (isset($tech['is_online']) && $tech['is_online'] == 1): ?>
+                                        <span class="badge badge-success" style="font-size:0.5rem;padding:1px 8px;">
+                                            <i class="fas fa-circle"></i> Online
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?= htmlspecialchars($tech['email'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($tech['phone'] ?? 'N/A') ?></td>
                                 <td>
@@ -1354,16 +1348,19 @@ include_once '../../components/admin_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="view_employee.php?id=<?= $tech['id'] ?>&branch=<?= $laboratory['id'] ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_employee.php?id=<?= $tech['id'] ?>&branch=<?= $laboratory['id'] ?>" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:2px 8px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-user-md text-2xl block mb-2"></i>
-                    <p>No technicians assigned to this laboratory</p>
+                <div class="empty-state">
+                    <i class="fas fa-user-md"></i>
+                    <h4>No Technicians</h4>
+                    <p>No technicians assigned to this laboratory branch.</p>
                     <a href="add_employee.php?branch=<?= $laboratory['id'] ?>&role=laboratory" class="btn btn-sm btn-primary mt-2">
                         <i class="fas fa-plus"></i> Add Technician
                     </a>
@@ -1378,10 +1375,10 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-flask text-purple-600"></i>
+                <i class="fas fa-flask" style="color:var(--purple);"></i>
                 Recent Lab Tests
             </h3>
-            <a href="lab_tests.php?branch=<?= $laboratory['id'] ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="lab_tests.php?branch=<?= $laboratory['id'] ?>" class="text-xs font-medium hover:underline" style="color:var(--primary);">View All →</a>
         </div>
         <div class="overflow-x-auto">
             <?php if (count($recent_tests) > 0): ?>
@@ -1400,7 +1397,10 @@ include_once '../../components/admin_sidebar.php';
                         <?php foreach ($recent_tests as $test): ?>
                             <tr>
                                 <td class="font-medium"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?></td>
+                                <td>
+                                    <?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['patient_code'] ?? '') ?></div>
+                                </td>
                                 <td><?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
                                 <td>
                                     <span class="badge badge-<?= getStatusBadge($test['status'] ?? 'pending') ?>" style="font-size:0.6rem;padding:2px 10px;">
@@ -1410,69 +1410,19 @@ include_once '../../components/admin_sidebar.php';
                                 </td>
                                 <td>TSh <?= number_format($test['test_price'] ?? 0, 0) ?></td>
                                 <td>
-                                    <a href="view_lab_test.php?id=<?= $test['id'] ?>&branch=<?= $laboratory['id'] ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_lab_test.php?id=<?= $test['id'] ?>&branch=<?= $laboratory['id'] ?>" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:2px 8px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-flask text-2xl block mb-2"></i>
-                    <p>No lab tests found</p>
-                </div>
-            <?php endif; ?>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- RECENT LAB REQUESTS -->
-    <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-clipboard-list text-indigo-600"></i>
-                Recent Lab Requests
-            </h3>
-            <a href="lab_requests.php?branch=<?= $laboratory['id'] ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
-        </div>
-        <div class="overflow-x-auto">
-            <?php if (count($recent_requests) > 0): ?>
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Request #</th>
-                            <th>Patient</th>
-                            <th>Doctor</th>
-                            <th>Items</th>
-                            <th>Status</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($recent_requests as $request): ?>
-                            <tr>
-                                <td class="font-mono text-xs"><?= htmlspecialchars($request['request_number'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($request['patient_name'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($request['doctor_name'] ?? 'N/A') ?></td>
-                                <td><?= number_format($request['total_items'] ?? 0) ?></td>
-                                <td>
-                                    <span class="badge badge-<?= getStatusBadge($request['status'] ?? 'pending') ?>" style="font-size:0.6rem;padding:2px 10px;">
-                                        <i class="fas <?= getStatusIcon($request['status'] ?? 'pending') ?>"></i>
-                                        <?= ucfirst(str_replace('_', ' ', $request['status'] ?? 'Pending')) ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <a href="view_lab_request.php?id=<?= $request['id'] ?>&branch=<?= $laboratory['id'] ?>" class="text-blue-600 text-xs hover:underline">View</a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-clipboard-list text-2xl block mb-2"></i>
-                    <p>No lab requests found</p>
+                <div class="empty-state">
+                    <i class="fas fa-flask"></i>
+                    <h4>No Lab Tests</h4>
+                    <p>No lab tests found for this laboratory.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1481,13 +1431,13 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- RECENT ACTIVITIES -->
     <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.25s;">
+    <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-clock text-gray-500"></i>
+                <i class="fas fa-clock" style="color:var(--gray-500);"></i>
                 Recent Activities
             </h3>
-            <a href="system_logs.php?branch=<?= $laboratory['id'] ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="system_logs.php?branch=<?= $laboratory['id'] ?>" class="text-xs font-medium hover:underline" style="color:var(--primary);">View All →</a>
         </div>
         <div class="max-h-60 overflow-y-auto">
             <?php if (count($recent_activities) > 0): ?>
@@ -1497,8 +1447,19 @@ include_once '../../components/admin_sidebar.php';
                             <i class="fas fa-circle text-[6px]"></i>
                         </div>
                         <div>
-                            <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($activity['action'] ?? 'Action') ?></p>
-                            <p class="text-xs text-gray-500 dark:text-gray-400"><?= htmlspecialchars($activity['details'] ?? '') ?></p>
+                            <p class="font-medium text-sm text-gray-800 dark:text-gray-200">
+                                <?php 
+                                    $action_display = $activity['action'] ?? 'Action';
+                                    $action_display = ucwords(str_replace('_', ' ', $action_display));
+                                    echo htmlspecialchars($action_display);
+                                ?>
+                            </p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                <?= htmlspecialchars($activity['details'] ?? '') ?>
+                                <?php if (!empty($activity['user_name'])): ?>
+                                    <span class="text-gray-400">by <?= htmlspecialchars($activity['user_name']) ?></span>
+                                <?php endif; ?>
+                            </p>
                             <p class="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
                                 <?= isset($activity['created_at']) ? date('M d, Y h:i A', strtotime($activity['created_at'])) : 'Just now' ?>
                             </p>
@@ -1506,11 +1467,35 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 <?php endforeach; ?>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-clock text-2xl block mb-2"></i>
-                    <p>No activities found</p>
+                <div class="empty-state">
+                    <i class="fas fa-clock"></i>
+                    <h4>No Activities</h4>
+                    <p>No activities found for this laboratory.</p>
                 </div>
             <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- QUICK ACTIONS -->
+    <!-- ================================================================ -->
+    <div class="detail-card animate-fade-in-up" style="animation-delay:0.25s;">
+        <h3 class="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
+            <i class="fas fa-bolt" style="color:var(--primary);"></i> Quick Actions
+        </h3>
+        <div class="flex flex-wrap gap-3">
+            <a href="edit_branch.php?id=<?= $laboratory['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-primary">
+                <i class="fas fa-edit"></i> Edit Branch
+            </a>
+            <a href="add_employee.php?branch=<?= $laboratory['id'] ?>&role=laboratory" class="btn btn-primary">
+                <i class="fas fa-user-plus"></i> Add Technician
+            </a>
+            <a href="lab_tests.php?branch=<?= $laboratory['id'] ?>" class="btn btn-primary">
+                <i class="fas fa-flask"></i> View Tests
+            </a>
+            <a href="laboratories.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                <i class="fas fa-arrow-left"></i> Back to List
+            </a>
         </div>
     </div>
 
@@ -1641,10 +1626,9 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🧪 Total Tests: <?= number_format($laboratory['total_tests_done'] ?? 0) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📋 Completed: <?= number_format($laboratory['completed_tests'] ?? 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c⏳ In Progress: <?= number_format($laboratory['in_progress_tests'] ?? 0) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c💰 Revenue: TSh <?= number_format($laboratory['lab_revenue'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ All 6 stat cards have BLUE BACKGROUND with white text', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
     console.log('%c🔑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ All 6 stat cards have BLUE BACKGROUND with white text', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

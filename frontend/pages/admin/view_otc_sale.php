@@ -4,6 +4,8 @@
 // SUPER ADMIN - VIEW OTC SALE DETAILS WITH ITEMS
 // FIXED: Properly fetches OTC sale items from database
 // REMOVED: Print Receipt button & Delete button
+// FIXED: Uses correct column names from database
+// BRAICK DISPENSARY
 // ================================================================
 
 // ================================================================
@@ -80,20 +82,19 @@ if ($sale_id <= 0) {
 // ================================================================
 // GET OTC SALE DETAILS
 // ================================================================
-$sql = "
-    SELECT 
-        os.*,
-        b.name as branch_name,
-        u.full_name as sold_by_name,
-        COALESCE((SELECT COUNT(*) FROM otc_sale_items WHERE sale_id = os.id), 0) as total_items
-    FROM otc_sales os
-    LEFT JOIN branches b ON os.branch_id = b.id
-    LEFT JOIN users u ON os.sold_by = u.id
-    WHERE os.id = ?
-";
-
 $otc_sale = null;
 try {
+    $sql = "
+        SELECT 
+            os.*,
+            b.name as branch_name,
+            u.full_name as sold_by_name,
+            COALESCE((SELECT COUNT(*) FROM otc_sale_items WHERE sale_id = os.id), 0) as total_items
+        FROM otc_sales os
+        LEFT JOIN branches b ON os.branch_id = b.id
+        LEFT JOIN users u ON os.sold_by = u.id
+        WHERE os.id = ?
+    ";
     $stmt = $db->prepare($sql);
     $stmt->execute([$sale_id]);
     $otc_sale = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -111,6 +112,7 @@ if (!$otc_sale) {
 // ================================================================
 $sale_items = [];
 try {
+    // First try with inventory join
     $stmt = $db->prepare("
         SELECT 
             osi.*,
@@ -126,6 +128,7 @@ try {
     $stmt->execute([$sale_id]);
     $sale_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
+    // If no items found, try without join
     if (empty($sale_items)) {
         $stmt = $db->prepare("
             SELECT 
@@ -133,9 +136,11 @@ try {
                 sale_id,
                 inventory_id,
                 medicine_name,
+                item_name,
                 quantity,
                 unit_price,
                 total_price,
+                instructions,
                 created_at
             FROM otc_sale_items 
             WHERE sale_id = ?
@@ -926,7 +931,7 @@ function format_currency($amount) {
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($otc_sale['branch_name'] ?? 'N/A') ?>
                 </span>
                 <span class="header-badge revenue">
-                    <i class="fas fa-money-bill-wave"></i> <?= format_currency($otc_sale['net_amount'] ?? 0) ?>
+                    <i class="fas fa-money-bill-wave"></i> <?= format_currency($otc_sale['total_amount'] ?? 0) ?>
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#6EE7B7;">
                     <i class="fas fa-<?= ($otc_sale['payment_status'] ?? 'pending') == 'paid' ? 'check-circle' : 'clock' ?>"></i>
@@ -987,8 +992,8 @@ function format_currency($amount) {
                 <span class="value warning">- <?= format_currency($otc_sale['discount_amount'] ?? 0) ?></span>
             </div>
             <div class="detail-row" style="border-bottom: 2px solid var(--border-color); padding-bottom: 10px;">
-                <span class="label"><i class="fas fa-coins"></i> Net Amount</span>
-                <span class="value success" style="font-size:1.2rem;"><?= format_currency($otc_sale['net_amount'] ?? 0) ?></span>
+                <span class="label"><i class="fas fa-coins"></i> Subtotal</span>
+                <span class="value success" style="font-size:1.2rem;"><?= format_currency($otc_sale['subtotal'] ?? 0) ?></span>
             </div>
             <div class="detail-row">
                 <span class="label"><i class="fas fa-credit-card"></i> Payment Method</span>
@@ -1031,12 +1036,12 @@ function format_currency($amount) {
             <table>
                 <thead>
                     <tr>
-                        <th>#</th>
-                        <th>Item Name</th>
-                        <th>Batch / Unit</th>
-                        <th class="text-right">Qty</th>
-                        <th class="text-right">Unit Price</th>
-                        <th class="text-right">Total</th>
+                        <th style="width:5%;">#</th>
+                        <th style="width:30%;">Item Name</th>
+                        <th style="width:20%;">Batch / Unit</th>
+                        <th style="width:10%;text-align:right;">Qty</th>
+                        <th style="width:15%;text-align:right;">Unit Price</th>
+                        <th style="width:20%;text-align:right;">Total</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -1044,9 +1049,15 @@ function format_currency($amount) {
                     <tr>
                         <td><?= $counter++ ?></td>
                         <td>
-                            <strong><?= htmlspecialchars($item['medication_name'] ?? $item['medicine_name'] ?? 'Unknown Item') ?></strong>
+                            <strong><?= htmlspecialchars($item['medication_name'] ?? $item['medicine_name'] ?? $item['item_name'] ?? 'Unknown Item') ?></strong>
                             <?php if (!empty($item['unit'])): ?>
                                 <span class="text-xs text-gray-400"> (<?= htmlspecialchars($item['unit']) ?>)</span>
+                            <?php endif; ?>
+                            <?php if (!empty($item['instructions'])): ?>
+                                <div class="text-xs text-gray-500 mt-1" style="font-style:italic;">
+                                    <i class="fas fa-info-circle"></i> <?= htmlspecialchars(substr($item['instructions'], 0, 50)) ?>
+                                    <?= strlen($item['instructions'] ?? '') > 50 ? '...' : '' ?>
+                                </div>
                             <?php endif; ?>
                         </td>
                         <td class="text-xs">
@@ -1054,6 +1065,9 @@ function format_currency($amount) {
                                 Batch: <?= htmlspecialchars($item['batch_number']) ?>
                             <?php else: ?>
                                 <span class="text-gray-400">N/A</span>
+                            <?php endif; ?>
+                            <?php if (!empty($item['unit'])): ?>
+                                <div class="text-gray-400">Unit: <?= htmlspecialchars($item['unit']) ?></div>
                             <?php endif; ?>
                         </td>
                         <td class="text-right font-semibold"><?= number_format($item['quantity'] ?? 0) ?></td>
@@ -1066,7 +1080,7 @@ function format_currency($amount) {
                     <tr style="border-top:2px solid var(--border-color);font-weight:700;">
                         <td colspan="5" style="text-align:right;padding:10px 14px;">Subtotal:</td>
                         <td style="padding:10px 14px;color:var(--primary);font-size:1.1rem;">
-                            <?= format_currency($otc_sale['total_amount'] ?? 0) ?>
+                            <?= format_currency($otc_sale['subtotal'] ?? 0) ?>
                         </td>
                     </tr>
                     <tr style="font-weight:600;">
@@ -1075,10 +1089,10 @@ function format_currency($amount) {
                             - <?= format_currency($otc_sale['discount_amount'] ?? 0) ?>
                         </td>
                     </tr>
-                    <tr style="font-weight:700;background:var(--primary-bg);">
-                        <td colspan="5" style="text-align:right;padding:8px 14px;color:var(--success);font-size:1.2rem;">Net Total:</td>
+                    <tr style="font-weight:700;background:var(--primary-bg);border-top:2px solid var(--border-color);">
+                        <td colspan="5" style="text-align:right;padding:8px 14px;color:var(--success);font-size:1.2rem;">Total Amount:</td>
                         <td style="padding:8px 14px;color:var(--success);font-size:1.2rem;">
-                            <?= format_currency($otc_sale['net_amount'] ?? 0) ?>
+                            <?= format_currency($otc_sale['total_amount'] ?? 0) ?>
                         </td>
                     </tr>
                 </tfoot>
@@ -1248,9 +1262,12 @@ function format_currency($amount) {
     console.log('%c🏥 Braick Dispensary - View OTC Sale', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Sale: <?= htmlspecialchars($otc_sale['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Customer: <?= htmlspecialchars($otc_sale['customer_name'] ?? 'Walk-in') ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Net Amount: <?= format_currency($otc_sale['net_amount'] ?? 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Subtotal: <?= format_currency($otc_sale['subtotal'] ?? 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Discount: <?= format_currency($otc_sale['discount_amount'] ?? 0) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c💰 Total Amount: <?= format_currency($otc_sale['total_amount'] ?? 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Status: <?= ucfirst($otc_sale['payment_status'] ?? 'Pending') ?>', 'font-size:13px; color:#D97706;');
     console.log('%c📦 Items: <?= count($sale_items) ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Using correct columns: subtotal, total_amount, discount_amount', 'font-size:13px; color:#34D399;');
     console.log('%c❌ Print Receipt Button: REMOVED', 'font-size:13px; color:#DC2626;');
     console.log('%c❌ Delete Button: REMOVED', 'font-size:13px; color:#DC2626;');
 </script>

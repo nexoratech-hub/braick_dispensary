@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/consultation_bills.php
 // ADMIN - VIEW CONSULTATION BILLS ONLY
+// FIXED: Uses bills table (NOT patient_bills)
 // FIXED: Shows correct branch in header
 // FIXED: "All Branches" when no branch selected
 // FIXED: Uses patient's branch from patients table
@@ -55,7 +56,6 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
 
@@ -104,54 +104,69 @@ $from_date = isset($_GET['from_date']) ? trim($_GET['from_date']) : '';
 $to_date = isset($_GET['to_date']) ? trim($_GET['to_date']) : '';
 
 // ================================================================
-// BUILD QUERY FOR CONSULTATION BILLS - ONLY consultation items
-// USING PATIENT'S BRANCH FROM patients table
+// BUILD QUERY FOR CONSULTATION BILLS - USING bills TABLE
 // ================================================================
 $query = "
     SELECT 
-        pb.id,
-        pb.bill_number,
-        pb.total_amount,
-        pb.paid_amount,
-        pb.balance,
-        pb.status,
-        pb.created_at,
-        pb.updated_at,
+        b.id,
+        b.bill_number,
+        b.total_amount,
+        b.paid_amount,
+        b.balance,
+        b.status,
+        b.subtotal,
+        b.discount_amount,
+        b.total_discount,
+        b.payment_method,
+        b.created_at,
+        b.updated_at,
         pat.id as patient_id,
         pat.full_name as patient_name,
+        pat.patient_id as patient_code,
         pat.phone as patient_phone,
         pat.email as patient_email,
         pat.branch_id as patient_branch_id,
-        b.id as branch_id,
-        b.name as branch_name,
-        b.location as branch_location,
+        br.id as branch_id,
+        br.name as branch_name,
+        br.location as branch_location,
         (
             SELECT COUNT(*) 
             FROM bill_items bi 
-            WHERE bi.bill_id = pb.id 
+            WHERE bi.bill_id = b.id 
             AND bi.item_type = 'consultation'
+            AND bi.status != 'cancelled'
         ) as consultation_count,
         (
             SELECT COALESCE(SUM(bi.total_price), 0)
             FROM bill_items bi 
-            WHERE bi.bill_id = pb.id 
+            WHERE bi.bill_id = b.id 
             AND bi.item_type = 'consultation'
+            AND bi.status != 'cancelled'
         ) as consultation_total,
         (
             SELECT GROUP_CONCAT(DISTINCT bi.item_name SEPARATOR ', ')
             FROM bill_items bi 
-            WHERE bi.bill_id = pb.id 
+            WHERE bi.bill_id = b.id 
             AND bi.item_type = 'consultation'
-        ) as consultation_items
-    FROM patient_bills pb
-    INNER JOIN patients pat ON pb.patient_id = pat.id
-    LEFT JOIN branches b ON pat.branch_id = b.id
+            AND bi.status != 'cancelled'
+            LIMIT 3
+        ) as consultation_items,
+        (
+            SELECT COUNT(*) 
+            FROM bill_items bi 
+            WHERE bi.bill_id = b.id 
+            AND bi.status != 'cancelled'
+        ) as total_items
+    FROM bills b
+    INNER JOIN patients pat ON b.patient_id = pat.id
+    LEFT JOIN branches br ON pat.branch_id = br.id
     WHERE 1=1
     AND EXISTS (
         SELECT 1 
         FROM bill_items bi 
-        WHERE bi.bill_id = pb.id 
+        WHERE bi.bill_id = b.id 
         AND bi.item_type = 'consultation'
+        AND bi.status != 'cancelled'
     )
 ";
 
@@ -165,30 +180,30 @@ if ($branch_id > 0) {
 
 // Status filter
 if ($status_filter !== 'all') {
-    $query .= " AND pb.status = ?";
+    $query .= " AND b.status = ?";
     $params[] = $status_filter;
 }
 
 // Date range filter
 if (!empty($from_date)) {
-    $query .= " AND DATE(pb.created_at) >= ?";
+    $query .= " AND DATE(b.created_at) >= ?";
     $params[] = $from_date;
 }
 if (!empty($to_date)) {
-    $query .= " AND DATE(pb.created_at) <= ?";
+    $query .= " AND DATE(b.created_at) <= ?";
     $params[] = $to_date;
 }
 
 // Search filter
 if (!empty($search)) {
-    $query .= " AND (pb.bill_number LIKE ? OR pat.full_name LIKE ? OR pat.phone LIKE ?)";
+    $query .= " AND (b.bill_number LIKE ? OR pat.full_name LIKE ? OR pat.phone LIKE ?)";
     $search_term = "%$search%";
     $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
 }
 
-$query .= " ORDER BY pb.created_at DESC";
+$query .= " ORDER BY b.created_at DESC";
 
 // Execute query
 $consultation_bills = [];
@@ -239,15 +254,13 @@ foreach ($consultation_bills as $bill) {
 }
 
 // ================================================================
-// DETERMINE BRANCH DISPLAY NAME - FIXED
+// DETERMINE BRANCH DISPLAY NAME
 // ================================================================
 $branch_display_name = 'All Branches';
 
 if ($branch_id > 0) {
-    // If a specific branch is selected, use its name
     $branch_display_name = $branch_name;
 } else {
-    // If "All Branches" is selected
     if (count($unique_branches) == 1) {
         $branch_display_name = $unique_branches[0];
     } elseif (count($unique_branches) > 1) {
@@ -704,8 +717,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           STATS CARDS - WITH BACKGROUND COLORS AND WHITE TEXT
-           BLUE THEME
+           STATS CARDS
            ================================================================ */
         .stats-grid {
             display: grid;
@@ -798,9 +810,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             z-index: 0;
         }
         
-        /* ================================================================
-           CARD COLOR CLASSES - BLUE THEME
-           ================================================================ */
+        /* Card Colors */
         .card-blue-dark { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         .card-blue-dark:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
         
@@ -1148,8 +1158,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER - BLUE THEME (NO "NEW BILL" BUTTON) -->
-    <!-- FIXED: Shows correct branch name or "All Branches" -->
+    <!-- PAGE HEADER - BLUE THEME -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -1183,12 +1192,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- SUMMARY STATS - WITH BACKGROUND COLORS AND WHITE TEXT -->
-    <!-- BLUE THEME -->
+    <!-- SUMMARY STATS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
-        <!-- 1. Total Bills - BLUE DARK -->
         <div class="stat-card card-blue-dark">
             <div class="stat-icon-bg"><i class="fas fa-file-invoice"></i></div>
             <p class="stat-label"><i class="fas fa-file-invoice mr-1"></i> Total Bills</p>
@@ -1196,7 +1203,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <p class="stat-sub">All consultation bills</p>
         </div>
         
-        <!-- 2. Paid - BLUE GREEN -->
         <div class="stat-card card-blue-green">
             <div class="stat-icon-bg"><i class="fas fa-check-circle"></i></div>
             <p class="stat-label"><i class="fas fa-check-circle mr-1"></i> Paid</p>
@@ -1204,7 +1210,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <p class="stat-sub"><?= $total_bills > 0 ? round(($total_paid / $total_bills) * 100, 1) : 0 ?>% of total</p>
         </div>
         
-        <!-- 3. Pending - BLUE ORANGE -->
         <div class="stat-card card-blue-orange">
             <div class="stat-icon-bg"><i class="fas fa-clock"></i></div>
             <p class="stat-label"><i class="fas fa-clock mr-1"></i> Pending</p>
@@ -1212,7 +1217,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <p class="stat-sub">Awaiting payment</p>
         </div>
         
-        <!-- 4. Cancelled - BLUE RED -->
         <div class="stat-card card-blue-red">
             <div class="stat-icon-bg"><i class="fas fa-times-circle"></i></div>
             <p class="stat-label"><i class="fas fa-times-circle mr-1"></i> Cancelled</p>
@@ -1220,7 +1224,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <p class="stat-sub">Voided transactions</p>
         </div>
         
-        <!-- 5. Total Revenue - PURPLE (Consultation only) -->
         <div class="stat-card card-purple">
             <div class="stat-icon-bg"><i class="fas fa-money-bill-wave"></i></div>
             <p class="stat-label"><i class="fas fa-money-bill-wave mr-1"></i> Consult Revenue</p>
@@ -1368,7 +1371,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <?php endif; ?>
                 </div>
                 <div class="text-gray-500">
-                    <i class="fas fa-info-circle"></i> Using patient's branch from <strong class="text-blue">patients</strong> table
+                    <i class="fas fa-info-circle"></i> Using <strong class="text-blue">bills</strong> table with <strong class="text-blue">bill_items</strong> join
                 </div>
             </div>
             
@@ -1492,25 +1495,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     console.log('%c🔵 Braick Dispensary - Consultation Bills', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ USING: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ JOIN: bill_items WHERE item_type = "consultation"', 'font-size:13px; color:#34D399;');
     console.log('%c🏢 Branch Display: <?= htmlspecialchars($branch_display_name) ?> (Filter ID: <?= $branch_id ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Total Bills: <?= number_format($total_bills) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Consult Revenue: <?= formatCurrency($total_consultation_revenue) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Using patient\'s branch from patients table', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Filtered: item_type = "consultation" ONLY', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ "New Bill" button REMOVED', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Header shows: "<?= htmlspecialchars($branch_display_name) ?>"', 'font-size:13px; color:#34D399;');
-    
-    <?php if (!empty($consultation_bills)): ?>
-        console.log('%c📋 Branch details from patients:', 'font-size:12px; font-weight:bold; color:#34D399;');
-        <?php 
-        $count = 0;
-        foreach ($consultation_bills as $bill): 
-            if ($count >= 5) break;
-            $count++;
-        ?>
-            console.log('  Bill #<?= $bill['bill_number'] ?>: Patient = "<?= addslashes($bill['patient_name'] ?? 'N/A') ?>" | Branch = "<?= addslashes($bill['branch_name'] ?? 'N/A') ?>"');
-        <?php endforeach; ?>
-    <?php endif; ?>
 </script>
 
 </body>

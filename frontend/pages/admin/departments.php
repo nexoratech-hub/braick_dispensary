@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/departments.php
-// SUPER ADMIN - DEPARTMENT MANAGEMENT
+// SUPER ADMIN - BRANCH / ROLE MANAGEMENT
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // WITH SHARED HEADER & SIDEBAR
 // BLUE & GREEN THEME
 // ================================================================
@@ -27,7 +27,6 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 // CHECK IF USER HAS ADMIN ACCESS
 // ================================================================
 if ($_SESSION['role'] !== 'admin') {
-    // Redirect based on role
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
@@ -52,49 +51,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($user_username) && !empty($user_username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$user_username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -145,99 +106,71 @@ $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER 
 $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// HANDLE DELETE
+// HANDLE DELETE - For roles (since no departments table)
 // ================================================================
 $message = '';
 $message_type = '';
 
-if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])) {
-    $dept_id = (int)$_GET['id'];
-    
-    // Check if department has employees
-    try {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM employee_departments WHERE department_id = ?");
-        $stmt->execute([$dept_id]);
-        $employee_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        
-        if ($employee_count > 0) {
-            $message = "Cannot delete department! There are <strong>$employee_count</strong> employees assigned to this department.";
-            $message_type = 'error';
-        } else {
-            $stmt = $db->prepare("DELETE FROM departments WHERE id = ?");
-            if ($stmt->execute([$dept_id])) {
-                // Log activity
-                try {
-                    $stmt = $db->prepare("
-                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
-                        VALUES (?, ?, 'department_deleted', ?, NOW())
-                    ");
-                    $stmt->execute([
-                        $user_id,
-                        $user_branch_id,
-                        "Department deleted (ID: $dept_id)"
-                    ]);
-                } catch (Exception $e) {}
-                
-                $message = "Department deleted successfully!";
-                $message_type = 'success';
-            } else {
-                $message = "Failed to delete department!";
-                $message_type = 'error';
-            }
-        }
-    } catch (Exception $e) {
-        // If employee_departments table doesn't exist, try direct delete
-        $stmt = $db->prepare("DELETE FROM departments WHERE id = ?");
-        if ($stmt->execute([$dept_id])) {
-            // Log activity
-            try {
-                $stmt = $db->prepare("
-                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
-                    VALUES (?, ?, 'department_deleted', ?, NOW())
-                ");
-                $stmt->execute([
-                    $user_id,
-                    $user_branch_id,
-                    "Department deleted (ID: $dept_id)"
-                ]);
-            } catch (Exception $e) {}
-            
-            $message = "Department deleted successfully!";
-            $message_type = 'success';
-        } else {
-            $message = "Failed to delete department!";
-            $message_type = 'error';
-        }
-    }
+// ================================================================
+// AVAILABLE ROLES (From users table ENUM)
+// ================================================================
+$available_roles = [
+    'doctor' => [
+        'name' => 'Medical Doctor',
+        'description' => 'Provides medical consultations, diagnoses, and treatments to patients. Prescribes medications and orders lab tests.',
+        'icon' => 'fa-user-md',
+        'color' => '#059669'
+    ],
+    'pharmacy' => [
+        'name' => 'Pharmacy Staff',
+        'description' => 'Dispenses medications to patients based on prescriptions. Manages medication inventory and handles OTC sales.',
+        'icon' => 'fa-prescription-bottle',
+        'color' => '#7C3AED'
+    ],
+    'reception' => [
+        'name' => 'Receptionist',
+        'description' => 'Handles patient registration, appointment scheduling, and front desk operations. First point of contact for patients.',
+        'icon' => 'fa-headset',
+        'color' => '#0B5ED7'
+    ],
+    'laboratory' => [
+        'name' => 'Lab Technician',
+        'description' => 'Conducts laboratory tests and analyzes samples. Prepares test results and maintains lab equipment.',
+        'icon' => 'fa-flask',
+        'color' => '#0D9488'
+    ],
+    'cashier' => [
+        'name' => 'Cashier',
+        'description' => 'Handles patient billing, payment collections, and financial transactions. Manages receipts and payment records.',
+        'icon' => 'fa-cash-register',
+        'color' => '#D97706'
+    ],
+    'admin' => [
+        'name' => 'Administrator',
+        'description' => 'Manages system settings, user accounts, and overall system operations. Has full access to all features.',
+        'icon' => 'fa-user-tie',
+        'color' => '#DC2626'
+    ]
+];
+
+// ================================================================
+// GET STAFF COUNT PER ROLE
+// ================================================================
+$role_counts = [];
+foreach (array_keys($available_roles) as $role_key) {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = ? AND status = 'active'");
+    $stmt->execute([$role_key]);
+    $role_counts[$role_key] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
 
 // ================================================================
-// GET ALL DEPARTMENTS
+// GET TOTAL USERS PER ROLE
 // ================================================================
-$departments = [];
-$stmt = $db->query("SELECT * FROM departments ORDER BY name");
-$departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// If no departments exist, create default ones
-if (empty($departments)) {
-    $default_departments = [
-        ['Medical Department', 'Handles all medical consultations and treatments'],
-        ['Laboratory Department', 'Handles all laboratory tests and results'],
-        ['Pharmacy Department', 'Handles medicine dispensing and inventory'],
-        ['Reception Department', 'Handles patient registration and appointments'],
-        ['Finance Department', 'Handles billing, payments and financial records'],
-        ['Administration Department', 'Handles administrative tasks and management'],
-        ['IT Department', 'Handles system maintenance and support']
-    ];
-    
-    foreach ($default_departments as $dept) {
-        $stmt = $db->prepare("INSERT INTO departments (name, description, status) VALUES (?, ?, 'active')");
-        $stmt->execute([$dept[0], $dept[1]]);
-    }
-    
-    // Refresh departments
-    $stmt = $db->query("SELECT * FROM departments ORDER BY name");
-    $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$total_users_per_role = [];
+foreach (array_keys($available_roles) as $role_key) {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = ?");
+    $stmt->execute([$role_key]);
+    $total_users_per_role[$role_key] = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 }
 
 // ================================================================
@@ -265,7 +198,7 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR - FIXED PATHS
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
@@ -273,7 +206,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 // ================================================================
 // PAGE TITLE
 // ================================================================
-$page_title = 'Department Management';
+$page_title = 'Role / Department Management';
 ?>
 
 <!DOCTYPE html>
@@ -281,7 +214,7 @@ $page_title = 'Department Management';
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Department Management - Braick Dispensary</title>
+    <title>Role Management - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
@@ -290,16 +223,12 @@ $page_title = 'Department Management';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
             --primary-bg: #E8F0FE;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            
             --success: #059669;
             --success-bg: #D1FAE5;
             --danger: #DC2626;
@@ -310,7 +239,6 @@ $page_title = 'Department Management';
             --purple-bg: #EDE9FE;
             --teal: #0D9488;
             --teal-bg: #ECFDF5;
-            
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -322,12 +250,10 @@ $page_title = 'Department Management';
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
-            
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            
             --bg-body: #F0F4F8;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -369,9 +295,6 @@ $page_title = 'Department Management';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -540,9 +463,6 @@ $page_title = 'Department Management';
             border-color: var(--primary);
         }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -550,9 +470,6 @@ $page_title = 'Department Management';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: var(--radius-lg);
@@ -669,9 +586,6 @@ $page_title = 'Department Management';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           CARD
-           ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -707,9 +621,6 @@ $page_title = 'Department Management';
         
         .card-title .title-blue { color: var(--primary); }
         
-        /* ================================================================
-           TABLE
-           ================================================================ */
         .table-wrap {
             overflow-x: auto;
         }
@@ -764,9 +675,6 @@ $page_title = 'Department Management';
             vertical-align: middle;
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge {
             padding: 3px 12px;
             border-radius: 20px;
@@ -779,24 +687,11 @@ $page_title = 'Department Management';
             border: none;
         }
         
-        .badge-success {
-            background: var(--success);
-            color: white;
-        }
+        .badge-success { background: var(--success); color: white; }
+        .badge-danger { background: var(--danger); color: white; }
+        .badge-info { background: var(--primary); color: white; }
+        .badge-warning { background: var(--warning); color: white; }
         
-        .badge-danger {
-            background: var(--danger);
-            color: white;
-        }
-        
-        .badge-info {
-            background: var(--primary);
-            color: white;
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -827,7 +722,7 @@ $page_title = 'Department Management';
             color: white;
         }
         .btn-green:hover {
-            background: var(--success-dark);
+            background: #047857;
             transform: translateY(-1px);
             box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
         }
@@ -865,33 +760,10 @@ $page_title = 'Department Management';
             border-radius: 6px;
         }
         .btn-edit:hover {
-            background: var(--success-dark);
+            background: #047857;
             transform: scale(1.05);
         }
         
-        .btn-delete {
-            background: var(--danger);
-            color: white;
-            padding: 4px 10px;
-            font-size: 0.7rem;
-            border-radius: 6px;
-        }
-        .btn-delete:hover {
-            background: var(--danger-dark);
-            transform: scale(1.05);
-        }
-        
-        .action-buttons {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-            flex-wrap: nowrap;
-            justify-content: center;
-        }
-        
-        /* ================================================================
-           STAT CARDS
-           ================================================================ */
         .stat-card {
             background: var(--bg-card);
             border-radius: var(--radius);
@@ -913,13 +785,10 @@ $page_title = 'Department Management';
             color: var(--primary);
         }
         
-        .stat-card .stat-number.green {
-            color: var(--success);
-        }
-        
-        .stat-card .stat-number.red {
-            color: var(--danger);
-        }
+        .stat-card .stat-number.green { color: var(--success); }
+        .stat-card .stat-number.red { color: var(--danger); }
+        .stat-card .stat-number.purple { color: var(--purple); }
+        .stat-card .stat-number.orange { color: var(--warning); }
         
         .stat-card .stat-label {
             font-size: 0.75rem;
@@ -927,9 +796,6 @@ $page_title = 'Department Management';
             font-weight: 500;
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -944,9 +810,6 @@ $page_title = 'Department Management';
             font-weight: 700;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -965,19 +828,71 @@ $page_title = 'Department Management';
             box-shadow: var(--shadow-lg);
         }
         
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        .role-card {
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            padding: 20px 24px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+        
+        .role-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .role-card .role-icon {
+            width: 52px;
+            height: 52px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            color: white;
+            flex-shrink: 0;
+        }
+        
+        .role-card .role-info {
+            flex: 1;
+        }
+        
+        .role-card .role-info .role-name {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .role-card .role-info .role-description {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        
+        .role-card .role-stats {
+            text-align: right;
+        }
+        
+        .role-card .role-stats .stat-number {
+            font-size: 1.4rem;
+            font-weight: 700;
+        }
+        
+        .role-card .role-stats .stat-label {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+        }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -991,21 +906,17 @@ $page_title = 'Department Management';
             .page-header .page-title { font-size: 1.3rem; }
             .card { padding: 16px; }
             .data-table { font-size: 0.75rem; }
-            .data-table th,
-            .data-table td { padding: 6px 8px; }
+            .data-table th, .data-table td { padding: 6px 8px; }
             .stat-card .stat-number { font-size: 1.4rem; }
+            .role-card { flex-direction: column; text-align: center; }
+            .role-card .role-stats { text-align: center; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
-            .action-buttons { flex-direction: column; gap: 3px; }
-            .action-buttons .btn { width: 100%; justify-content: center; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1016,17 +927,18 @@ $page_title = 'Department Management';
             opacity: 0;
         }
         
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        
-        @keyframes spin { to { transform: rotate(360deg); } }
+        .grid { display: grid; }
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .md\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .md\:grid-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+        .gap-4 { gap: 16px; }
+        .mt-5 { margin-top: 20px; }
+        .mb-2 { margin-bottom: 8px; }
+        .text-center { text-align: center; }
+        .py-8 { padding-top: 32px; padding-bottom: 32px; }
+        .text-3xl { font-size: 1.875rem; }
+        .block { display: block; }
     </style>
 </head>
 <body>
@@ -1042,7 +954,7 @@ $page_title = 'Department Management';
         
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search departments...">
+            <input type="text" id="searchInput" placeholder="Search...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
@@ -1061,7 +973,6 @@ $page_title = 'Department Management';
         
         <span class="datetime" id="currentDateTime"></span>
         
-        <!-- Dark Mode Toggle -->
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
@@ -1088,65 +999,117 @@ $page_title = 'Department Management';
     <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-building"></i>
-                Department Management
+                <i class="fas fa-users-cog"></i>
+                Role & Department Management
                 <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
-                Manage all departments in the organization
+                Manage all roles and departments in the organization
                 <span class="header-badge" style="background:rgba(255,255,255,0.15);">
-                    <i class="fas fa-list"></i> <?= count($departments) ?> departments
+                    <i class="fas fa-list"></i> <?= count($available_roles) ?> Roles
                 </span>
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-check-circle"></i> 
-                    <?php 
-                        $active = 0;
-                        foreach ($departments as $d) {
-                            if (($d['status'] ?? 'active') === 'active') $active++;
-                        }
-                        echo $active;
-                    ?> Active
+                    <i class="fas fa-users"></i> <?= $total_employees ?> Staff
                 </span>
-                <span class="header-badge" style="background:rgba(248,113,113,0.2);border-color:rgba(248,113,113,0.3);color:#F87171;">
-                    <i class="fas fa-times-circle"></i>
-                    <?php 
-                        $inactive = 0;
-                        foreach ($departments as $d) {
-                            if (($d['status'] ?? 'active') === 'inactive') $inactive++;
-                        }
-                        echo $inactive;
-                    ?> Inactive
+                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                    <i class="fas fa-user-md"></i> <?= $total_doctors ?> Doctors
                 </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="add_department.php" class="btn-outline-light">
-                <i class="fas fa-plus"></i> Add Department
+            <a href="add_employee.php" class="btn-outline-light">
+                <i class="fas fa-user-plus"></i> Add Staff
+            </a>
+            <a href="employees.php" class="btn-outline-light">
+                <i class="fas fa-users"></i> All Staff
             </a>
         </div>
     </div>
 
-    <!-- Message -->
-    <?php if ($message): ?>
-        <div class="alert-modern alert-modern-<?= $message_type === 'success' ? 'success' : 'error' ?>" style="max-width:1100px;margin:0 auto 16px;">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <div><?= $message ?></div>
-        </div>
-    <?php endif; ?>
-
     <!-- ================================================================ -->
-    <!-- DEPARTMENTS TABLE -->
+    <!-- ROLES CARDS -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list title-blue"></i> All Departments
-                <span class="text-sm font-normal text-gray-400">(<?= count($departments) ?> departments)</span>
+                <i class="fas fa-user-tag title-blue"></i> Available Roles / Departments
+                <span class="text-sm font-normal text-gray-400">(<?= count($available_roles) ?> roles)</span>
+            </h3>
+        </div>
+        
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <?php foreach ($available_roles as $role_key => $role_data): 
+                $active_count = $role_counts[$role_key] ?? 0;
+                $total_count = $total_users_per_role[$role_key] ?? 0;
+                $icon = $role_data['icon'] ?? 'fa-user';
+                $color = $role_data['color'] ?? '#0B5ED7';
+            ?>
+                <div class="role-card">
+                    <div class="role-icon" style="background:<?= $color ?>;">
+                        <i class="fas <?= $icon ?>"></i>
+                    </div>
+                    <div class="role-info">
+                        <div class="role-name"><?= htmlspecialchars($role_data['name']) ?></div>
+                        <div class="role-description"><?= htmlspecialchars($role_data['description']) ?></div>
+                        <div style="margin-top:6px;">
+                            <span class="badge badge-success" style="font-size:0.6rem;">
+                                <i class="fas fa-user"></i> <?= $active_count ?> active
+                            </span>
+                            <?php if ($total_count > $active_count): ?>
+                                <span class="badge badge-danger" style="font-size:0.6rem;">
+                                    <i class="fas fa-user-slash"></i> <?= $total_count - $active_count ?> inactive
+                                </span>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="role-stats">
+                        <div class="stat-number" style="color:<?= $color ?>;"><?= $total_count ?></div>
+                        <div class="stat-label">Total Staff</div>
+                        <a href="employees.php?role=<?= $role_key ?>&branch=<?= $selected_branch_id ?>" 
+                           class="btn btn-blue btn-sm" style="margin-top:4px;font-size:0.6rem;">
+                            <i class="fas fa-eye"></i> View
+                        </a>
+                    </div>
+                </div>
+            <?php endforeach; ?>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- QUICK STATS -->
+    <!-- ================================================================ -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5 animate-fade-in-up" style="animation-delay:0.1s;">
+        <div class="stat-card">
+            <p class="stat-number"><?= count($available_roles) ?></p>
+            <p class="stat-label">Total Roles</p>
+        </div>
+        <div class="stat-card">
+            <p class="stat-number green"><?= $total_employees ?></p>
+            <p class="stat-label">Active Staff</p>
+        </div>
+        <div class="stat-card">
+            <p class="stat-number purple"><?= $total_doctors ?></p>
+            <p class="stat-label">Doctors</p>
+        </div>
+        <div class="stat-card">
+            <p class="stat-number orange"><?= $total_branches ?></p>
+            <p class="stat-label">Branches</p>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- ROLE STAFF LIST -->
+    <!-- ================================================================ -->
+    <div class="card animate-fade-in-up" style="animation-delay:0.15s;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-users title-blue"></i> Staff by Role
+                <span class="text-sm font-normal text-gray-400">(<?= $total_employees ?> total)</span>
             </h3>
             <div class="flex gap-2">
-                <button onclick="exportTable()" class="btn btn-outline btn-sm">
-                    <i class="fas fa-file-export"></i> Export
-                </button>
+                <a href="employees.php?branch=<?= $selected_branch_id ?>" class="btn btn-blue btn-sm">
+                    <i class="fas fa-users"></i> View All Staff
+                </a>
             </div>
         </div>
         
@@ -1155,106 +1118,53 @@ $page_title = 'Department Management';
                 <thead>
                     <tr>
                         <th style="border-radius: 8px 0 0 0;">#</th>
-                        <th>Department Name</th>
+                        <th>Role</th>
                         <th>Description</th>
-                        <th>Head of Department</th>
-                        <th>Status</th>
-                        <th style="border-radius: 0 8px 0 0; text-align: center;">Actions</th>
+                        <th>Active Staff</th>
+                        <th>Total Staff</th>
+                        <th style="border-radius: 0 8px 0 0; text-align: center;">Action</th>
                     </tr>
                 </thead>
                 <tbody>
-                    <?php if (count($departments) > 0): ?>
-                        <?php foreach ($departments as $index => $dept): ?>
-                            <tr>
-                                <td><?= $index + 1 ?></td>
-                                <td class="font-medium"><?= htmlspecialchars($dept['name'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($dept['description'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($dept['head_of_department'] ?? 'Not assigned') ?></td>
-                                <td>
-                                    <span class="badge <?= ($dept['status'] ?? 'active') === 'active' ? 'badge-success' : 'badge-danger' ?>">
-                                        <i class="fas fa-circle text-[5px]"></i>
-                                        <?= ucfirst($dept['status'] ?? 'Active') ?>
-                                    </span>
-                                </td>
-                                <td>
-                                    <div class="action-buttons">
-                                        <!-- VIEW Button - Blue -->
-                                        <a href="view_department.php?id=<?= $dept['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                           class="btn btn-view" 
-                                           title="View Department">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        
-                                        <!-- EDIT Button - Green -->
-                                        <a href="edit_department.php?id=<?= $dept['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                           class="btn btn-edit" 
-                                           title="Edit Department">
-                                            <i class="fas fa-edit"></i>
-                                        </a>
-                                        
-                                        <!-- DELETE Button - Red -->
-                                        <a href="?action=delete&id=<?= $dept['id'] ?>" 
-                                           class="btn btn-delete" 
-                                           title="Delete Department"
-                                           onclick="return confirmDelete(<?= $dept['id'] ?>);">
-                                            <i class="fas fa-trash"></i>
-                                        </a>
-                                    </div>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    <?php else: ?>
+                    <?php 
+                    $index = 1;
+                    foreach ($available_roles as $role_key => $role_data): 
+                        $active_count = $role_counts[$role_key] ?? 0;
+                        $total_count = $total_users_per_role[$role_key] ?? 0;
+                    ?>
                         <tr>
-                            <td colspan="6" class="text-center py-8 text-gray-400">
-                                <i class="fas fa-building text-3xl block mb-2"></i>
-                                No departments found. Click "Add Department" to get started.
+                            <td><?= $index++ ?></td>
+                            <td>
+                                <span class="badge badge-info" style="background:<?= $role_data['color'] ?? '#0B5ED7' ?>;">
+                                    <i class="fas <?= $role_data['icon'] ?? 'fa-user' ?>"></i>
+                                    <?= htmlspecialchars($role_data['name']) ?>
+                                </span>
+                            </td>
+                            <td><?= htmlspecialchars($role_data['description']) ?></td>
+                            <td>
+                                <span class="badge badge-success"><?= $active_count ?></span>
+                            </td>
+                            <td>
+                                <span class="badge badge-info"><?= $total_count ?></span>
+                            </td>
+                            <td>
+                                <div class="flex gap-2 justify-center">
+                                    <a href="employees.php?role=<?= $role_key ?>&branch=<?= $selected_branch_id ?>" 
+                                       class="btn btn-view btn-sm">
+                                        <i class="fas fa-eye"></i>
+                                    </a>
+                                    <a href="add_employee.php?role=<?= $role_key ?>&branch=<?= $selected_branch_id ?>" 
+                                       class="btn btn-green btn-sm">
+                                        <i class="fas fa-plus"></i>
+                                    </a>
+                                </div>
                             </td>
                         </tr>
-                    <?php endif; ?>
+                    <?php endforeach; ?>
                 </tbody>
             </table>
         </div>
     </div>
-
-    <!-- ================================================================ -->
-    <!-- QUICK STATS - Blue & Green Cards -->
-    <!-- ================================================================ -->
-    <?php if (count($departments) > 0): ?>
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mt-5 animate-fade-in-up" style="animation-delay:0.1s;">
-        <div class="stat-card">
-            <p class="stat-number"><?= count($departments) ?></p>
-            <p class="stat-label">Total Departments</p>
-        </div>
-        <div class="stat-card">
-            <p class="stat-number green">
-                <?php
-                    $active = 0;
-                    foreach ($departments as $d) {
-                        if (($d['status'] ?? 'active') === 'active') $active++;
-                    }
-                    echo $active;
-                ?>
-            </p>
-            <p class="stat-label">Active Departments</p>
-        </div>
-        <div class="stat-card">
-            <p class="stat-number red">
-                <?php
-                    $inactive = 0;
-                    foreach ($departments as $d) {
-                        if (($d['status'] ?? 'active') === 'inactive') $inactive++;
-                    }
-                    echo $inactive;
-                ?>
-            </p>
-            <p class="stat-label">Inactive Departments</p>
-        </div>
-        <div class="stat-card">
-            <p class="stat-number" style="color:var(--purple);"><?= $total_employees ?></p>
-            <p class="stat-label">Total Employees</p>
-        </div>
-    </div>
-    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -1263,7 +1173,7 @@ $page_title = 'Department Management';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
-            Department Management
+            Role & Department Management
             <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 dark:text-gray-700 mx-2">|</span>
@@ -1325,12 +1235,9 @@ $page_title = 'Department Management';
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var branchSelector = document.getElementById('branchSelector');
-    var toast = document.getElementById('toast');
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1343,63 +1250,6 @@ $page_title = 'Department Management';
         }
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
-    // CONFIRM DELETE
-    // ================================================================
-    function confirmDelete(deptId) {
-        if (confirm('⚠️ Are you sure you want to DELETE this department?\n\nThis action CANNOT be undone!\n\nAll employees assigned to this department must be removed first.')) {
-            return true;
-        }
-        return false;
-    }
-
-    // ================================================================
-    // EXPORT
-    // ================================================================
-    function exportTable() {
-        showToast('Export', 'Preparing department list export...', 'info');
-        var branch = '<?= $selected_branch_id ?>';
-        window.location.href = 'reports.php?export=departments&branch=' + branch;
-    }
-
-    // ================================================================
-    // TOAST
-    // ================================================================
-    function showToast(title, message, type) {
-        var toast = document.getElementById('toast');
-        var toastTitle = document.getElementById('toastTitle');
-        var toastMessage = document.getElementById('toastMessage');
-        
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
-        toast.style.display = 'flex';
-        
-        toast.classList.add('show');
-        clearTimeout(toast.timeout);
-        toast.timeout = setTimeout(function() {
-            toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
-        }, 3500);
-    }
-
-    // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
@@ -1413,9 +1263,12 @@ $page_title = 'Department Management';
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
+    function switchBranch(branchId) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('branch', branchId);
+        window.location.href = url.toString();
+    }
+
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1433,13 +1286,14 @@ $page_title = 'Department Management';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏢 Braick - Department Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Shared Header & Sidebar: ACTIVE', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Total Departments: <?= count($departments) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🎨 Blue & Green Theme', 'font-size:13px; color:#059669;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
-    console.log('%c🌙 Dark Mode: ' + (localStorage.getItem('darkMode') === 'true' ? 'ON' : 'OFF'), 'font-size:13px; color:#64748B;');
+    console.log('%c🏢 Braick - Role & Department Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📋 Roles: <?= count($available_roles) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c👥 Total Staff: <?= $total_employees ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🩺 Doctors: <?= $total_doctors ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🏢 Branches: <?= $total_branches ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Using users table roles as departments', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

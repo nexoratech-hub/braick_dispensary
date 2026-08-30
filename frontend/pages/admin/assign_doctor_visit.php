@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/assign_doctor.php
 // ADMIN / RECEPTION - ASSIGN / CHANGE DOCTOR & LAB REQUESTS
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -53,18 +54,18 @@ $selected_branch_id = isset($_GET['branch_id']) ? (int)$_GET['branch_id'] : $use
 $branch_name = $user_branch_name;
 
 // Admin anaweza kuona branches zote
-if ($user_role === 'admin') {
-    // Admin can see all branches
-} else {
+if ($user_role !== 'admin') {
     $selected_branch_id = $user_branch_id;
     $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 }
 
 // ================================================================
-// PATH SAHIHI
+// INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/config.php';
-require_once __DIR__ . '/../../../backend/config/database.php';
+require_once '../../../backend/config/database.php';
+require_once '../../../backend/helpers/functions.php';
+
+$db = Database::getInstance()->getConnection();
 
 $message = '';
 $message_type = '';
@@ -88,24 +89,21 @@ $selected_patient_data = null;
 $change_mode = isset($_GET['change']) && $_GET['change'] == 1;
 $lab_tests_catalog = [];
 $unread_notifications = 0;
+$branches = [];
 
 try {
-    $db = getDB();
-    
     // ================================================================
     // GET UNREAD NOTIFICATIONS
     // ================================================================
-    if (isset($_SESSION['user_id'])) {
-        $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-        $stmt->execute([$_SESSION['user_id']]);
-        $unread_notifications = $stmt->fetch()['total'] ?? 0;
-    }
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
     // ================================================================
     // GET BRANCH NAME
     // ================================================================
     if ($selected_branch_id > 0) {
-        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
         $stmt->execute([$selected_branch_id]);
         $branch = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($branch) {
@@ -116,31 +114,48 @@ try {
     // ================================================================
     // GET ALL BRANCHES (FOR ADMIN)
     // ================================================================
-    $branches = [];
     if ($user_role === 'admin') {
         $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
         $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
     // ================================================================
-    // GET CONSULTATION SERVICES FROM SERVICES TABLE (category_id = 2)
+    // GET CONSULTATION SERVICES FROM SERVICES TABLE
+    // Using service_categories to find consultation services
     // ================================================================
     $stmt = $db->prepare("
-        SELECT id, service_name, description, price, unit, is_active
-        FROM services 
-        WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
+        SELECT s.id, s.service_name, s.description, s.price, s.unit, s.is_active
+        FROM services s
+        LEFT JOIN service_categories sc ON s.category_id = sc.id
+        WHERE sc.category_name LIKE '%Consultation%' 
+        AND s.is_active = 1 
+        AND (s.branch_id = ? OR s.branch_id IS NULL)
         ORDER BY 
             CASE 
-                WHEN service_name LIKE '%New%' OR service_name LIKE '%General%' THEN 0
-                WHEN service_name LIKE '%Emergency%' THEN 1
-                WHEN service_name LIKE '%Specialist%' THEN 2
-                WHEN service_name LIKE '%Follow%' THEN 3
+                WHEN s.service_name LIKE '%New%' OR s.service_name LIKE '%General%' THEN 0
+                WHEN s.service_name LIKE '%Emergency%' THEN 1
+                WHEN s.service_name LIKE '%Specialist%' THEN 2
+                WHEN s.service_name LIKE '%Follow%' THEN 3
                 ELSE 4
             END,
-            service_name
+            s.service_name
     ");
     $stmt->execute([$selected_branch_id]);
     $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // If no consultation services found, use fallback
+    if (empty($consultation_services)) {
+        // Try to get all services from consultation category
+        $stmt = $db->prepare("
+            SELECT id, service_name, description, price, unit, is_active
+            FROM services 
+            WHERE is_active = 1 
+            AND (branch_id = ? OR branch_id IS NULL)
+            ORDER BY service_name
+        ");
+        $stmt->execute([$selected_branch_id]);
+        $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
     
     // Build visit type options
     $visit_type_options = [];
@@ -172,10 +187,10 @@ try {
             'id' => $service['id'],
             'name' => $service_name,
             'display_name' => $display_name,
-            'price' => (float)$service['price'],
+            'price' => (float)($service['price'] ?? 15000),
             'unit' => $service['unit'] ?? 'each',
             'description' => $service['description'] ?? '',
-            'is_active' => $service['is_active'],
+            'is_active' => $service['is_active'] ?? 1,
             'icon' => $icon
         ];
         
@@ -235,8 +250,14 @@ try {
     // ================================================================
     // GET LAB TESTS CATALOG
     // ================================================================
-    $stmt = $db->prepare("SELECT id, test_name, price, category FROM lab_tests_catalog WHERE is_active = 1 ORDER BY category, test_name");
-    $stmt->execute();
+    $stmt = $db->prepare("
+        SELECT id, test_name, test_code, category, price, description, reference_range 
+        FROM lab_tests_catalog 
+        WHERE is_active = 1 
+        AND (branch_id = ? OR branch_id IS NULL)
+        ORDER BY category, test_name
+    ");
+    $stmt->execute([$selected_branch_id]);
     $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
@@ -263,18 +284,17 @@ try {
             v.created_at as visit_created_at,
             v.doctor_id as visit_doctor_id,
             v.consultation_fee,
-            v.registration_fee,
-            v.payment_status,
+            v.status as visit_status,
             DATEDIFF(NOW(), p.created_at) as patient_days
         FROM patients p
-        LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
+        LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test')
         LEFT JOIN users u ON v.doctor_id = u.id
         WHERE p.branch_id = ?
         GROUP BY p.id
         ORDER BY p.created_at DESC, p.id DESC
     ");
     $stmt->execute([$selected_branch_id]);
-    $all_patients = $stmt->fetchAll();
+    $all_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
     // GET SELECTED PATIENT DATA
@@ -301,7 +321,7 @@ try {
         $patient['patient_days'] = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
         
         if ($patient['has_active_visit']) {
-            if (in_array($patient['visit_status'], ['new', 'pending', 'lab_test'])) {
+            if (in_array($patient['visit_status'], ['pending', 'lab_test'])) {
                 $pending_patients[] = $patient;
                 $pending_count++;
             } 
@@ -338,7 +358,7 @@ try {
         ORDER BY is_online DESC, full_name
     ");
     $stmt->execute([$selected_branch_id]);
-    $doctors = $stmt->fetchAll();
+    $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     $online_doctors = [];
     $offline_doctors = [];
@@ -357,24 +377,20 @@ try {
     $total_doctors = count($doctors);
     
     // ================================================================
-    // GET LAB REQUESTS FOR SELECTED PATIENT
+    // GET LAB TESTS FOR SELECTED PATIENT
     // ================================================================
-    $lab_requests = [];
+    $lab_tests = [];
     if ($selected_patient_id > 0) {
         $stmt = $db->prepare("
-            SELECT lr.*, 
-                   GROUP_CONCAT(lri.test_name SEPARATOR ', ') as test_names,
-                   COUNT(lri.id) as test_count,
-                   SUM(lri.price) as lab_total
-            FROM lab_requests lr
-            LEFT JOIN lab_request_items lri ON lr.id = lri.request_id
-            WHERE lr.patient_id = ? AND lr.branch_id = ?
-            GROUP BY lr.id
-            ORDER BY lr.created_at DESC
+            SELECT lt.*, ltc.test_name, ltc.category, ltc.price
+            FROM lab_tests lt
+            LEFT JOIN lab_tests_catalog ltc ON lt.test_id = ltc.id
+            WHERE lt.patient_id = ? AND lt.branch_id = ?
+            ORDER BY lt.created_at DESC
             LIMIT 10
         ");
         $stmt->execute([$selected_patient_id, $selected_branch_id]);
-        $lab_requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
     
     // ================================================================
@@ -384,7 +400,7 @@ try {
         // Check if there's an existing pending bill for this visit
         $stmt = $db->prepare("
             SELECT id, bill_number, status 
-            FROM patient_bills 
+            FROM bills 
             WHERE visit_id = ? AND status IN ('pending', 'partial')
             LIMIT 1
         ");
@@ -392,10 +408,10 @@ try {
         $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($existing_bill) {
+            // Update existing bill
             $stmt = $db->prepare("
-                UPDATE patient_bills 
-                SET consultation_fee = ?, 
-                    subtotal = ?, 
+                UPDATE bills 
+                SET subtotal = ?, 
                     total_amount = ?, 
                     balance = ?,
                     updated_at = NOW()
@@ -405,10 +421,10 @@ try {
                 $consultation_fee,
                 $consultation_fee,
                 $consultation_fee,
-                $consultation_fee,
                 $existing_bill['id']
             ]);
             
+            // Update bill item
             $stmt = $db->prepare("
                 UPDATE bill_items 
                 SET unit_price = ?, total_price = ?, item_name = ?
@@ -429,23 +445,20 @@ try {
         $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
         
         $stmt = $db->prepare("
-            INSERT INTO patient_bills (
-                bill_number, patient_id, visit_id, 
-                consultation_fee, subtotal, total_amount, balance, 
-                status, created_by, branch_id, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NOW())
+            INSERT INTO bills (
+                bill_number, patient_id, visit_id, branch_id, created_by,
+                subtotal, total_amount, balance, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
         ");
-        $subtotal = $consultation_fee;
         $stmt->execute([
             $bill_number,
             $patient_id,
             $visit_id,
-            $consultation_fee,
-            $subtotal,
-            $subtotal,
-            $subtotal,
+            $branch_id,
             $user_id,
-            $branch_id
+            $consultation_fee,
+            $consultation_fee,
+            $consultation_fee
         ]);
         $bill_id = $db->lastInsertId();
         
@@ -454,12 +467,11 @@ try {
         
         $stmt = $db->prepare("
             INSERT INTO bill_items (
-                bill_id, item_type, item_name, 
-                quantity, unit_price, total_price, 
-                payment_status, is_paid, status, created_at
-            ) VALUES (?, 'consultation', ?, 1, ?, ?, 'pending', 0, 'pending', NOW())
+                bill_id, patient_id, branch_id, item_type, item_name, 
+                quantity, unit_price, total_price, status, created_at
+            ) VALUES (?, ?, ?, 'consultation', ?, 1, ?, ?, 'pending', NOW())
         ");
-        $stmt->execute([$bill_id, $item_name, $consultation_fee, $consultation_fee]);
+        $stmt->execute([$bill_id, $patient_id, $branch_id, $item_name, $consultation_fee, $consultation_fee]);
         
         // NOTIFY CASHIER - Bill created
         try {
@@ -469,11 +481,12 @@ try {
             
             foreach ($cashiers as $cashier) {
                 $stmt = $db->prepare("
-                    INSERT INTO notifications (user_id, title, message, type, link, is_read, created_at)
-                    VALUES (?, '💰 New Bill Created', ?, 'bill', ?, 0, NOW())
+                    INSERT INTO notifications (user_id, branch_id, title, message, type, link, is_read, created_at)
+                    VALUES (?, ?, '💰 New Bill Created', ?, 'info', ?, 0, NOW())
                 ");
                 $stmt->execute([
                     $cashier['id'],
+                    $branch_id,
                     "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient ID #$patient_id",
                     "cashier_dashboard.php"
                 ]);
@@ -520,19 +533,18 @@ try {
                     v.visit_number,
                     v.doctor_id as visit_doctor_id,
                     v.consultation_fee,
-                    v.registration_fee,
                     v.visit_type,
                     v.created_at as visit_created_at,
                     DATEDIFF(NOW(), p.created_at) as patient_days
                 FROM patients p
-                LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
+                LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test')
                 LEFT JOIN users u ON v.doctor_id = u.id
                 WHERE p.branch_id = ?
                 GROUP BY p.id
                 ORDER BY p.created_at DESC, p.id DESC
             ");
             $stmt->execute([$selected_branch_id]);
-            $updated_patients = $stmt->fetchAll();
+            $updated_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             $stmt = $db->prepare("
                 SELECT id, full_name, specialty, is_online 
@@ -541,7 +553,7 @@ try {
                 ORDER BY is_online DESC, full_name
             ");
             $stmt->execute([$selected_branch_id]);
-            $updated_doctors = $stmt->fetchAll();
+            $updated_doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             $online = 0;
             $offline = 0;
@@ -553,19 +565,14 @@ try {
                 }
             }
             
+            // Get consultation services for visit type options
             $stmt = $db->prepare("
-                SELECT id, service_name, description, price, unit, is_active
-                FROM services 
-                WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL)
-                ORDER BY 
-                    CASE 
-                        WHEN service_name LIKE '%New%' OR service_name LIKE '%General%' THEN 0
-                        WHEN service_name LIKE '%Emergency%' THEN 1
-                        WHEN service_name LIKE '%Specialist%' THEN 2
-                        WHEN service_name LIKE '%Follow%' THEN 3
-                        ELSE 4
-                    END,
-                    service_name
+                SELECT s.id, s.service_name, s.description, s.price, s.unit, s.is_active
+                FROM services s
+                LEFT JOIN service_categories sc ON s.category_id = sc.id
+                WHERE s.is_active = 1 
+                AND (s.branch_id = ? OR s.branch_id IS NULL)
+                ORDER BY service_name
             ");
             $stmt->execute([$selected_branch_id]);
             $updated_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -595,8 +602,8 @@ try {
                             strpos(strtolower($service_name), 'general') !== false) ? 'selected' : '';
                 
                 $visit_type_options_html .= '
-                    <option value="' . htmlspecialchars($key) . '" data-price="' . $service['price'] . '" data-id="' . $service['id'] . '" ' . $selected . '>
-                        ' . $icon . ' ' . htmlspecialchars($service_name) . ' - TSh ' . number_format($service['price'], 0) . '
+                    <option value="' . htmlspecialchars($key) . '" data-price="' . ($service['price'] ?? 15000) . '" data-id="' . $service['id'] . '" ' . $selected . '>
+                        ' . $icon . ' ' . htmlspecialchars($service_name) . ' - TSh ' . number_format($service['price'] ?? 15000, 0) . '
                     </option>
                 ';
             }
@@ -606,7 +613,7 @@ try {
             
             foreach ($updated_patients as $p) {
                 if (!empty($p['visit_id'])) {
-                    if (in_array($p['visit_status'], ['new', 'pending', 'lab_test'])) {
+                    if (in_array($p['visit_status'], ['pending', 'lab_test'])) {
                         $pending++;
                     } elseif ($p['visit_status'] === 'assigned' || $p['visit_status'] === 'with_doctor') {
                         $assigned++;
@@ -614,7 +621,7 @@ try {
                 }
             }
             
-            // Build patient options with BLUE DAYS CARD
+            // Build patient options
             $patient_options = '';
             $patient_options .= '<optgroup label="📋 All Patients (' . count($updated_patients) . ')">';
             
@@ -624,7 +631,7 @@ try {
                 $status_icon = '📋';
                 
                 if (!empty($p['visit_id'])) {
-                    if (in_array($p['visit_status'], ['new', 'pending', 'lab_test'])) {
+                    if (in_array($p['visit_status'], ['pending', 'lab_test'])) {
                         if ($p['visit_status'] === 'lab_test' && empty($p['visit_doctor_id'])) {
                             $status_label = '🧪 Lab Only';
                             $status_class = 'lab_only';
@@ -676,7 +683,7 @@ try {
                 $patient_options = '<option value="" disabled>No patients found</option>';
             }
             
-            // Build assigned patients list HTML with BLUE DAYS CARD
+            // Build assigned patients list HTML
             $assigned_html = '';
             $assigned_count_list = 0;
             foreach ($updated_patients as $p) {
@@ -814,14 +821,14 @@ try {
                         p.created_at as patient_created_at,
                         u.full_name as assigned_doctor_name,
                         v.id as visit_id, v.status as visit_status, v.visit_number,
-                        v.consultation_fee, v.registration_fee,
+                        v.consultation_fee,
                         v.doctor_id as visit_doctor_id,
                         v.visit_type,
                         v.created_at as visit_date,
                         DATEDIFF(NOW(), p.created_at) as patient_days,
                         DATEDIFF(NOW(), v.created_at) as visit_days
                     FROM patients p
-                    LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
+                    LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('pending', 'assigned', 'with_doctor', 'lab_test')
                     LEFT JOIN users u ON v.doctor_id = u.id
                     WHERE p.id = ? AND p.branch_id = ?
                 ");
@@ -838,7 +845,6 @@ try {
                         'assigned_doctor_id' => $patient['assigned_doctor_id'] ?? null,
                         'is_lab_only' => ($patient['visit_status'] === 'lab_test' && empty($patient['visit_doctor_id'])),
                         'consultation_fee' => $patient['consultation_fee'] ?? 0,
-                        'registration_fee' => $patient['registration_fee'] ?? 0,
                         'visit_type' => $patient['visit_type'] ?? 'general_consultation',
                         'patient_days' => $patient['patient_days'] ?? 0,
                         'visit_days' => $patient['visit_days'] ?? 0
@@ -893,15 +899,16 @@ try {
                 $consultation_service_name = $visit_type_options[$visit_type_key]['name'] ?? 'Consultation';
                 $consultation_service_id = $visit_type_options[$visit_type_key]['id'] ?? null;
                 
+                // Check for lab-only visit
                 $stmt = $db->prepare("
-                    SELECT id, status, doctor_id, visit_number, consultation_fee, registration_fee, visit_type
+                    SELECT id, status, doctor_id, visit_number, consultation_fee, visit_type
                     FROM visits 
                     WHERE patient_id = ? AND status = 'lab_test' AND doctor_id IS NULL
                     AND branch_id = ?
                     ORDER BY id DESC LIMIT 1
                 ");
                 $stmt->execute([$patient_id, $selected_branch_id]);
-                $lab_only_visit = $stmt->fetch();
+                $lab_only_visit = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 $visit_id = null;
                 $visit_number = '';
@@ -934,15 +941,16 @@ try {
                     ]);
                     
                 } else {
+                    // Check for existing visit
                     $stmt = $db->prepare("
                         SELECT id, status, visit_type, doctor_id, visit_number 
                         FROM visits 
-                        WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor') 
+                        WHERE patient_id = ? AND status IN ('pending', 'assigned', 'with_doctor') 
                         AND branch_id = ?
                         ORDER BY id DESC LIMIT 1
                     ");
                     $stmt->execute([$patient_id, $selected_branch_id]);
-                    $existing_visit = $stmt->fetch();
+                    $existing_visit = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     if ($existing_visit) {
                         $visit_id = $existing_visit['id'];
@@ -965,24 +973,7 @@ try {
                             ]);
                             $visit_id = $db->lastInsertId();
                         } else {
-                            $old_visit_type = $existing_visit['visit_type'] ?? 'general_consultation';
-                            
-                            if ($old_visit_type !== $visit_type_key) {
-                                $stmt = $db->prepare("
-                                    UPDATE patient_bills 
-                                    SET status = 'cancelled', updated_at = NOW() 
-                                    WHERE visit_id = ? AND status IN ('pending', 'partial')
-                                ");
-                                $stmt->execute([$visit_id]);
-                                
-                                $stmt = $db->prepare("
-                                    UPDATE bill_items 
-                                    SET status = 'cancelled' 
-                                    WHERE bill_id IN (SELECT id FROM patient_bills WHERE visit_id = ? AND status = 'cancelled')
-                                ");
-                                $stmt->execute([$visit_id]);
-                            }
-                            
+                            // Update existing visit
                             $stmt = $db->prepare("
                                 UPDATE visits 
                                 SET doctor_id = ?, status = 'assigned', 
@@ -1002,6 +993,7 @@ try {
                             ]);
                         }
                     } else {
+                        // Create new visit
                         $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                         
                         $stmt = $db->prepare("
@@ -1020,10 +1012,12 @@ try {
                     }
                 }
                 
+                // Create bill if consultation fee > 0
                 if ($consultation_fee > 0) {
                     $bill_result = createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consultation_fee, $user_id, $selected_branch_id);
                 }
                 
+                // Save vital signs
                 $temperature = $_POST['temperature'] ?? null;
                 $bp_systolic = $_POST['bp_systolic'] ?? null;
                 $bp_diastolic = $_POST['bp_diastolic'] ?? null;
@@ -1069,6 +1063,7 @@ try {
                     ]);
                 }
                 
+                // Update patient assigned doctor
                 $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
                 $stmt->execute([$doctor_id, $patient_id]);
                 
@@ -1153,6 +1148,7 @@ try {
                     $new_doctor_name = $doctor_data['full_name'] ?? '';
                     $new_doctor_online = $doctor_data['is_online'] ?? 0;
                     
+                    // Check for lab-only visit
                     $stmt = $db->prepare("
                         SELECT id, status, doctor_id, visit_number, visit_type
                         FROM visits 
@@ -1161,7 +1157,7 @@ try {
                         ORDER BY id DESC LIMIT 1
                     ");
                     $stmt->execute([$patient_id, $selected_branch_id]);
-                    $lab_only_visit = $stmt->fetch();
+                    $lab_only_visit = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     $visit_id = null;
                     $visit_number = '';
@@ -1195,15 +1191,16 @@ try {
                         ]);
                         
                     } else {
+                        // Check for existing visit
                         $stmt = $db->prepare("
                             SELECT id, status, visit_type, doctor_id, visit_number 
                             FROM visits 
-                            WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor') 
+                            WHERE patient_id = ? AND status IN ('pending', 'assigned', 'with_doctor') 
                             AND branch_id = ?
                             ORDER BY id DESC LIMIT 1
                         ");
                         $stmt->execute([$patient_id, $selected_branch_id]);
-                        $existing_visit = $stmt->fetch();
+                        $existing_visit = $stmt->fetch(PDO::FETCH_ASSOC);
                         
                         if ($existing_visit) {
                             $visit_id = $existing_visit['id'];
@@ -1226,24 +1223,6 @@ try {
                                 ]);
                                 $visit_id = $db->lastInsertId();
                             } else {
-                                $old_visit_type = $existing_visit['visit_type'] ?? 'general_consultation';
-                                
-                                if ($old_visit_type !== $visit_type_key) {
-                                    $stmt = $db->prepare("
-                                        UPDATE patient_bills 
-                                        SET status = 'cancelled', updated_at = NOW() 
-                                        WHERE visit_id = ? AND status IN ('pending', 'partial')
-                                    ");
-                                    $stmt->execute([$visit_id]);
-                                    
-                                    $stmt = $db->prepare("
-                                        UPDATE bill_items 
-                                        SET status = 'cancelled' 
-                                        WHERE bill_id IN (SELECT id FROM patient_bills WHERE visit_id = ? AND status = 'cancelled')
-                                    ");
-                                    $stmt->execute([$visit_id]);
-                                }
-                                
                                 $stmt = $db->prepare("
                                     UPDATE visits 
                                     SET doctor_id = ?, status = 'assigned', 
@@ -1349,12 +1328,8 @@ try {
                     }
                     $message_type = 'success';
                     
-                    echo '<script>
-                        showToast("✅ Success", "' . addslashes($message) . '", "success");
-                        setTimeout(function(){ 
-                            window.location.href = "assign_doctor.php?patient_id=' . $patient_id . '&success=1"; 
-                        }, 2000);
-                    </script>';
+                    header('Location: assign_doctor.php?patient_id=' . $patient_id . '&success=1&branch_id=' . $selected_branch_id);
+                    exit;
                     
                 } catch (Exception $e) {
                     $db->rollBack();
@@ -1369,7 +1344,7 @@ try {
         }
         
         // ================================================================
-        // LAB TEST REQUEST - NO BILL AT ALL
+        // LAB TEST REQUEST
         // ================================================================
         if ($action === 'assign_doctor' && $assignment_type === 'lab') {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -1387,14 +1362,15 @@ try {
                 try {
                     $db->beginTransaction();
                     
+                    // Check for existing visit
                     $stmt = $db->prepare("
                         SELECT id, status, doctor_id FROM visits 
-                        WHERE patient_id = ? AND status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test') 
+                        WHERE patient_id = ? AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test') 
                         AND branch_id = ?
                         ORDER BY id DESC LIMIT 1
                     ");
                     $stmt->execute([$patient_id, $selected_branch_id]);
-                    $existing_visit = $stmt->fetch();
+                    $existing_visit = $stmt->fetch(PDO::FETCH_ASSOC);
                     
                     $visit_id = null;
                     $visit_number = '';
@@ -1408,16 +1384,14 @@ try {
                                 symptoms = ?, complaint = ?, notes = ?, 
                                 updated_at = NOW(),
                                 doctor_id = NULL,
-                                consultation_fee = 0,
-                                registration_fee = 0,
-                                visit_total = 0
+                                consultation_fee = 0
                             WHERE id = ?
                         ");
                         $stmt->execute([$symptoms, $complaint, $notes, $visit_id]);
                         
                         $stmt = $db->prepare("SELECT visit_number FROM visits WHERE id = ?");
                         $stmt->execute([$visit_id]);
-                        $visit = $stmt->fetch();
+                        $visit = $stmt->fetch(PDO::FETCH_ASSOC);
                         $visit_number = $visit['visit_number'] ?? '';
                         
                     } else {
@@ -1428,8 +1402,8 @@ try {
                                 visit_number, patient_id, doctor_id, branch_id, 
                                 visit_type, status, symptoms, complaint, notes, 
                                 created_at, updated_at, receptionist_id,
-                                consultation_fee, registration_fee, visit_total
-                            ) VALUES (?, ?, NULL, ?, 'lab_only', 'lab_test', ?, ?, ?, NOW(), NOW(), ?, 0, 0, 0)
+                                consultation_fee
+                            ) VALUES (?, ?, NULL, ?, 'lab_only', 'lab_test', ?, ?, ?, NOW(), NOW(), ?, 0)
                         ");
                         
                         $stmt->execute([
@@ -1439,24 +1413,7 @@ try {
                         $visit_id = $db->lastInsertId();
                     }
                     
-                    $request_number = 'LAB-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
-                    
-                    $stmt = $db->prepare("
-                        INSERT INTO lab_requests (
-                            request_number, visit_id, patient_id, doctor_id,
-                            status, notes, requested_at, created_by, branch_id
-                        ) VALUES (?, ?, ?, NULL, 'pending', ?, NOW(), ?, ?)
-                    ");
-                    $stmt->execute([
-                        $request_number,
-                        $visit_id,
-                        $patient_id,
-                        $lab_notes,
-                        $user_id,
-                        $selected_branch_id
-                    ]);
-                    $request_id = $db->lastInsertId();
-                    
+                    // Create lab test records
                     $lab_total = 0;
                     $test_names = [];
                     foreach ($lab_test_ids as $test_id) {
@@ -1469,34 +1426,40 @@ try {
                         if ($test) {
                             $lab_total += $test['price'];
                             $test_names[] = $test['test_name'];
+                            
                             $stmt = $db->prepare("
-                                INSERT INTO lab_request_items (
-                                    request_id, test_id, test_name, price, status, created_at
-                                ) VALUES (?, ?, ?, ?, 'pending', NOW())
+                                INSERT INTO lab_tests (
+                                    visit_id, patient_id, doctor_id, test_id,
+                                    test_name, test_price, status, branch_id, notes, created_at
+                                ) VALUES (?, ?, NULL, ?, ?, ?, 'pending', ?, ?, NOW())
                             ");
                             $stmt->execute([
-                                $request_id,
+                                $visit_id,
+                                $patient_id,
                                 $test_id,
                                 $test['test_name'],
-                                $test['price']
+                                $test['price'],
+                                $selected_branch_id,
+                                $lab_notes
                             ]);
                         }
                     }
                     
+                    // Update patient assigned doctor to NULL
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
                     $stmt->execute([$patient_id]);
                     
                     $db->commit();
                     
                     $message = "✅ Lab test request created successfully!";
-                    $message .= "<br>📋 Request #: <strong>$request_number</strong>";
+                    $message .= "<br>📋 Visit #: <strong>$visit_number</strong>";
                     $message .= "<br>🧪 Tests: <strong>" . count($lab_test_ids) . "</strong> test(s) requested";
                     $message .= "<br>💰 Lab Total: <strong>TSh " . number_format($lab_total) . "</strong>";
                     $message .= "<br>👨‍⚕️ Doctor: <strong>Not assigned</strong> (lab only)";
                     $message .= "<br>💳 <strong>NO bill created</strong> - Bill will be created by Lab when results are confirmed";
                     $message_type = 'success';
                     
-                    header('Location: assign_doctor.php?patient_id=' . $patient_id . '&success=1');
+                    header('Location: assign_doctor.php?patient_id=' . $patient_id . '&success=1&branch_id=' . $selected_branch_id);
                     exit;
                     
                 } catch (Exception $e) {
@@ -1557,7 +1520,7 @@ $common_symptoms = [
 ];
 
 // ================================================================
-// INCLUDE HEADER & SIDEBAR - KULINGANA NA ROLE
+// INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
 
@@ -1569,7 +1532,7 @@ if ($user_role === 'admin') {
 ?>
 
 <!-- ================================================================ -->
-<!-- REST OF THE PAGE (HTML CONTENT) - SAME AS BEFORE -->
+<!-- HTML CONTENT - SAME AS ORIGINAL WITH MINOR ADJUSTMENTS -->
 <!-- ================================================================ -->
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
@@ -1812,7 +1775,6 @@ if ($user_role === 'admin') {
         
         .dark-toggle-btn i { font-size: 0.9rem; }
         
-        /* Branch Selector for Admin */
         .branch-selector {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
@@ -2709,11 +2671,10 @@ if ($user_role === 'admin') {
     </style>
 </head>
 <body>
-<!-- ================================================================ -->
-<!-- THE REST OF THE HTML CONTENT (SAME AS ORIGINAL) -->
-<!-- ================================================================ -->
 
+<!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
+<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -2759,7 +2720,7 @@ if ($user_role === 'admin') {
 </nav>
 
 <!-- ================================================================ -->
-<!-- MAIN CONTENT - SAME AS ORIGINAL -->
+<!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
@@ -2889,20 +2850,28 @@ if ($user_role === 'admin') {
                                 </td>
                             </tr>
                         <?php endforeach; ?>
+                        <?php if (empty($assigned_patients)): ?>
+                            <tr>
+                                <td colspan="5" style="padding:30px 12px;text-align:center;color:var(--text-secondary);">
+                                    <i class="fas fa-user-check text-2xl block mb-2"></i>
+                                    <p>No patients currently assigned</p>
+                                </td>
+                            </tr>
+                        <?php endif; ?>
                     </tbody>
                 </table>
             </div>
         </div>
     </div>
 
-    <!-- Lab Requests List -->
-    <?php if ($selected_patient_id > 0): ?>
+    <!-- Lab Tests List -->
+    <?php if ($selected_patient_id > 0 && !empty($lab_tests)): ?>
     <div class="modern-card animate-fade-in-up" style="border-color:var(--purple);border-width:2px;background:var(--purple-bg);">
         <div class="card-header" style="border-color:var(--purple);">
             <div class="card-title">
                 <i class="fas fa-flask" style="color:var(--purple);"></i>
-                Lab Requests
-                <span class="card-badge" style="background:var(--purple);color:white;"><?= count($lab_requests) ?></span>
+                Lab Tests
+                <span class="card-badge" style="background:var(--purple);color:white;"><?= count($lab_tests) ?></span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
                 <span class="text-xs text-gray-500">Auto-updated live</span>
@@ -2912,60 +2881,49 @@ if ($user_role === 'admin') {
             </div>
         </div>
         
-        <div id="labRequestsList">
-            <?php if (count($lab_requests) > 0): ?>
-                <div style="overflow-x:auto;">
-                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-                        <thead>
-                            <tr style="border-bottom:2px solid var(--purple);">
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Request #</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Tests</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Total</th>
-                                <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Date</th>
+        <div id="labTestsList">
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                    <thead>
+                        <tr style="border-bottom:2px solid var(--purple);">
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Test Name</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Category</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Status</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Price</th>
+                            <th style="padding:10px 12px;text-align:left;font-weight:500;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($lab_tests as $test): 
+                            $status_class = $test['status'] ?? 'pending';
+                            $status_label = ucfirst(str_replace('_', ' ', $test['status'] ?? 'Pending'));
+                            $icon = $status_class === 'completed' ? '✅' : ($status_class === 'in_progress' ? '⏳' : '⏰');
+                        ?>
+                            <tr style="border-bottom:1px solid var(--border-color);">
+                                <td style="padding:10px 12px;font-weight:500;"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 12px;font-size:0.8rem;color:var(--text-secondary);"><?= htmlspecialchars($test['category'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 12px;">
+                                    <span class="status-badge-dropdown <?= $status_class ?>">
+                                        <?= $icon ?> <?= $status_label ?>
+                                    </span>
+                                </td>
+                                <td style="padding:10px 12px;font-weight:500;color:var(--success);">
+                                    TSh <?= number_format($test['price'] ?? 0, 0) ?>
+                                </td>
+                                <td style="padding:10px 12px;font-size:0.8rem;color:var(--text-secondary);">
+                                    <?= date('d/m/Y H:i', strtotime($test['created_at'] ?? 'now')) ?>
+                                </td>
                             </tr>
-                        </thead>
-                        <tbody>
-                            <?php foreach ($lab_requests as $req): 
-                                $status_class = $req['status'] ?? 'pending';
-                                $status_label = ucfirst(str_replace('_', ' ', $req['status'] ?? 'Pending'));
-                                $icon = $status_class === 'completed' ? '✅' : ($status_class === 'in_progress' ? '⏳' : '⏰');
-                                $lab_total = $req['lab_total'] ?? 0;
-                            ?>
-                                <tr style="border-bottom:1px solid var(--border-color);">
-                                    <td style="padding:10px 12px;font-family:monospace;font-size:0.8rem;font-weight:500;"><?= htmlspecialchars($req['request_number'] ?? 'N/A') ?></td>
-                                    <td style="padding:10px 12px;">
-                                        <?= htmlspecialchars($req['test_names'] ?? 'No tests') ?>
-                                        <span class="text-xs text-gray-400">(<?= $req['test_count'] ?? 0 ?> tests)</span>
-                                    </td>
-                                    <td style="padding:10px 12px;">
-                                        <span class="lab-status-badge <?= $status_class ?>">
-                                            <?= $icon ?> <?= $status_label ?>
-                                        </span>
-                                    </td>
-                                    <td style="padding:10px 12px;font-weight:500;color:var(--purple);">
-                                        <?= $lab_total > 0 ? 'TSh ' . number_format($lab_total, 0) : 'TSh 0' ?>
-                                    </td>
-                                    <td style="padding:10px 12px;font-size:0.8rem;color:var(--text-secondary);">
-                                        <?= date('d/m/Y H:i', strtotime($req['created_at'] ?? 'now')) ?>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        </tbody>
-                    </table>
-                </div>
-            <?php else: ?>
-                <div class="text-center py-6 text-gray-500">
-                    <i class="fas fa-flask text-2xl block mb-2"></i>
-                    <p>No lab requests for this patient</p>
-                </div>
-            <?php endif; ?>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
         </div>
     </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ASSIGN FORM - SAME AS ORIGINAL -->
+    <!-- ASSIGN FORM -->
     <!-- ================================================================ -->
     <div class="form-card-modern animate-fade-in-up <?= $change_mode ? 'change-mode-active-modern' : '' ?>" id="mainFormCard" style="animation-delay:0.1s;">
         <!-- Form Header -->
@@ -3009,9 +2967,7 @@ if ($user_role === 'admin') {
                     <select name="patient_id" class="form-control-modern" required id="patientSelect" <?= $change_mode ? 'style="border-color:var(--warning);"' : '' ?>>
                         <option value="">-- Select Patient --</option>
                         
-                        <?php 
-                        if (!empty($all_patients) && is_array($all_patients) && count($all_patients) > 0): 
-                        ?>
+                        <?php if (!empty($all_patients) && is_array($all_patients) && count($all_patients) > 0): ?>
                             <optgroup label="📋 All Patients (<?= count($all_patients) ?> - Newest First)">
                                 <?php foreach ($all_patients as $patient): 
                                     $status_label = '📋 No Visit';
@@ -3019,7 +2975,7 @@ if ($user_role === 'admin') {
                                     $status_icon = '📋';
                                     
                                     if (!empty($patient['visit_id'])) {
-                                        if (in_array($patient['visit_status'], ['new', 'pending', 'lab_test'])) {
+                                        if (in_array($patient['visit_status'], ['pending', 'lab_test'])) {
                                             if ($patient['visit_status'] === 'lab_test' && empty($patient['visit_doctor_id'])) {
                                                 $status_label = '🧪 Lab Only';
                                                 $status_class = 'lab_only';
@@ -3056,7 +3012,12 @@ if ($user_role === 'admin') {
                                     $is_new = (strtotime($patient['patient_created_at'] ?? 'now') > strtotime('-7 days'));
                                     $new_badge = $is_new ? ' <span class="new-patient-badge">New</span>' : '';
                                 ?>
-                                    <option value="<?= $patient['id'] ?>" data-status="<?= $status_class ?>" data-doctor="<?= htmlspecialchars($patient['assigned_doctor_name'] ?? '') ?>" <?= $selected ?>> <?= $status_icon ?> <?= htmlspecialchars($patient['full_name']) ?> (<?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>) <?php if (!empty($patient['phone'])): ?> - <?= htmlspecialchars($patient['phone']) ?> <?php endif; ?> <?= $days_text ?> <?= $assigned_days_text ?> <?= $new_badge ?> <?= $doctor_info ?> <span class="status-badge-dropdown <?= $status_class ?>"><?= $status_label ?></span> </option>
+                                    <option value="<?= $patient['id'] ?>" data-status="<?= $status_class ?>" data-doctor="<?= htmlspecialchars($patient['assigned_doctor_name'] ?? '') ?>" <?= $selected ?>>
+                                        <?= $status_icon ?> <?= htmlspecialchars($patient['full_name']) ?> (<?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>)
+                                        <?php if (!empty($patient['phone'])): ?> - <?= htmlspecialchars($patient['phone']) ?> <?php endif; ?>
+                                        <?= $days_text ?> <?= $assigned_days_text ?> <?= $new_badge ?> <?= $doctor_info ?>
+                                        <span class="status-badge-dropdown <?= $status_class ?>"><?= $status_label ?></span>
+                                    </option>
                                 <?php endforeach; ?>
                             </optgroup>
                         <?php else: ?>
@@ -3486,7 +3447,7 @@ if ($user_role === 'admin') {
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT (SAME AS ORIGINAL) -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -3983,14 +3944,18 @@ if ($user_role === 'admin') {
         
         // Update assigned patients list
         var assignedTableBody = document.getElementById('assignedPatientsTableBody');
-        var noAssigned = document.getElementById('noAssignedPatients');
         if (assignedTableBody && data.assigned_list_html !== undefined) {
             if (data.assigned_list_count > 0) {
                 assignedTableBody.innerHTML = data.assigned_list_html;
-                if (noAssigned) noAssigned.style.display = 'none';
             } else {
-                assignedTableBody.innerHTML = '';
-                if (noAssigned) noAssigned.style.display = 'block';
+                assignedTableBody.innerHTML = `
+                    <tr>
+                        <td colspan="5" style="padding:30px 12px;text-align:center;color:var(--text-secondary);">
+                            <i class="fas fa-user-check text-2xl block mb-2"></i>
+                            <p>No patients currently assigned</p>
+                        </td>
+                    </tr>
+                `;
             }
         }
         

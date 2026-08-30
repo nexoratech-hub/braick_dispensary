@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_branch.php
 // VIEW BRANCH DETAILS - WITH SHARED HEADER & SIDEBAR
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DATABASE TABLES
 // ================================================================
 
 // ================================================================
@@ -78,7 +78,7 @@ $branch_created = $branch['created_at'] ?? date('Y-m-d H:i:s');
 $branch_updated = $branch['updated_at'] ?? date('Y-m-d H:i:s');
 
 // ================================================================
-// GET STATISTICS - EACH QUERY HAS WHERE branch_id = ? 
+// GET STATISTICS - USING EXISTING TABLES
 // ================================================================
 
 // Total Employees
@@ -115,46 +115,48 @@ $stmt->execute([$branch_id]);
 $total_patients = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
 // Total Visits
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE branch_id = ?");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM visits WHERE branch_id = ? AND status != 'cancelled'");
 $stmt->execute([$branch_id]);
 $total_visits = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
 // Total Prescriptions
-$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE branch_id = ?");
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions WHERE branch_id = ? AND status != 'cancelled'");
 $stmt->execute([$branch_id]);
 $total_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-// OTC Sales
-$stmt = $db->prepare("SELECT COUNT(*) as total_otc, COALESCE(SUM(net_amount), 0) as total_otc_amount FROM otc_sales WHERE branch_id = ?");
+// Total Lab Tests
+$stmt = $db->prepare("SELECT COUNT(*) as total FROM lab_tests WHERE branch_id = ?");
 $stmt->execute([$branch_id]);
-$otc_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_otc = (int)($otc_data['total_otc'] ?? 0);
-$total_otc_amount = (float)($otc_data['total_otc_amount'] ?? 0);
+$total_lab_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
 
-// Prescription Sales
-$stmt = $db->prepare("SELECT COUNT(*) as total_prescription_sales, COALESCE(SUM(total_amount), 0) as total_prescription_amount FROM prescription_sales WHERE branch_id = ? AND status = 'dispensed'");
+// Total Bills (from bills table)
+$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(total_amount), 0) as total_amount FROM bills WHERE branch_id = ? AND status = 'paid'");
 $stmt->execute([$branch_id]);
-$prescription_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_prescription_sales = (int)($prescription_data['total_prescription_sales'] ?? 0);
-$total_prescription_amount = (float)($prescription_data['total_prescription_amount'] ?? 0);
+$bill_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_bills = (int)($bill_data['total'] ?? 0);
+$bill_revenue = (float)($bill_data['total_amount'] ?? 0);
 
-// Bill Revenue
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_amount), 0) as total_revenue FROM patient_bills WHERE branch_id = ? AND status = 'paid'");
+// Total Payments (from payments table)
+$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(amount), 0) as total_amount FROM payments WHERE branch_id = ?");
 $stmt->execute([$branch_id]);
-$bill_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total_revenue'] ?? 0);
+$payments_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_payments = (int)($payments_data['total'] ?? 0);
+$payments_amount = (float)($payments_data['total_amount'] ?? 0);
 
-// Total Revenue
-$total_revenue = $bill_revenue + $total_otc_amount + $total_prescription_amount;
-
-// Pending Revenue
-$stmt = $db->prepare("SELECT COALESCE(SUM(total_amount), 0) as pending_revenue FROM patient_bills WHERE branch_id = ? AND status = 'pending'");
+// Pending Bills (from bills table)
+$stmt = $db->prepare("SELECT COUNT(*) as total, COALESCE(SUM(total_amount), 0) as pending_amount FROM bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
 $stmt->execute([$branch_id]);
-$pending_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['pending_revenue'] ?? 0);
+$pending_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$pending_bills = (int)($pending_data['total'] ?? 0);
+$pending_revenue = (float)($pending_data['pending_amount'] ?? 0);
 
-// Expenses
+// Total Expenses
 $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_expenses FROM expenses WHERE branch_id = ? AND status = 'paid'");
 $stmt->execute([$branch_id]);
 $total_expenses = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total_expenses'] ?? 0);
+
+// Total Revenue (bills paid + payments)
+$total_revenue = $bill_revenue + $payments_amount;
 
 // Net Profit
 $net_profit = $total_revenue - $total_expenses;
@@ -170,13 +172,27 @@ $stmt = $db->prepare("SELECT id, full_name, username, role, status, created_at F
 $stmt->execute([$branch_id]);
 $recent_employees = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-$stmt = $db->prepare("SELECT p.id, p.prescription_number, p.status, p.created_at, pat.full_name as patient_name FROM prescriptions p JOIN patients pat ON p.patient_id = pat.id WHERE p.branch_id = ? ORDER BY p.created_at DESC LIMIT 10");
+$stmt = $db->prepare("
+    SELECT p.id, p.prescription_number, p.status, p.created_at, pat.full_name as patient_name 
+    FROM prescriptions p 
+    JOIN patients pat ON p.patient_id = pat.id 
+    WHERE p.branch_id = ? 
+    ORDER BY p.created_at DESC 
+    LIMIT 10
+");
 $stmt->execute([$branch_id]);
 $recent_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-$stmt = $db->prepare("SELECT id, sale_number, customer_name, total_amount, net_amount, payment_status, created_at FROM otc_sales WHERE branch_id = ? ORDER BY created_at DESC LIMIT 10");
+$stmt = $db->prepare("
+    SELECT b.id, b.bill_number, b.total_amount, b.status, b.created_at, p.full_name as patient_name 
+    FROM bills b 
+    JOIN patients p ON b.patient_id = p.id 
+    WHERE b.branch_id = ? 
+    ORDER BY b.created_at DESC 
+    LIMIT 10
+");
 $stmt->execute([$branch_id]);
-$recent_otc = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$recent_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // UNREAD NOTIFICATIONS
@@ -497,6 +513,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
         .stat-card.red:hover { background: #B91C1C; }
         .stat-card.orange { background: #D97706; }
         .stat-card.orange:hover { background: #B45309; }
+        .stat-card.purple { background: #7C3AED; }
+        .stat-card.purple:hover { background: #6D28D9; }
         
         /* DETAIL CARDS */
         .detail-card {
@@ -866,6 +884,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             <div>
                 <p class="stat-label">Pending Revenue</p>
                 <p class="stat-value">TSh <?= number_format($pending_revenue, 0) ?></p>
+                <p class="stat-sub"><?= number_format($pending_bills) ?> pending bills</p>
             </div>
         </div>
         
@@ -960,8 +979,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                     <p style="font-size:1.3rem;font-weight:700;color:var(--success);margin:0;">TSh <?= number_format($total_revenue, 0) ?></p>
                     <div style="display:flex;gap:8px;font-size:0.55rem;color:var(--text-secondary);margin-top:4px;flex-wrap:wrap;">
                         <span>📋 Bills: TSh <?= number_format($bill_revenue, 0) ?></span>
-                        <span>💊 Presc: TSh <?= number_format($total_prescription_amount, 0) ?></span>
-                        <span>🛒 OTC: TSh <?= number_format($total_otc_amount, 0) ?></span>
+                        <span>💳 Payments: TSh <?= number_format($payments_amount, 0) ?></span>
                     </div>
                 </div>
                 
@@ -978,28 +996,27 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                 <div style="background:var(--warning-bg);border-radius:var(--radius);padding:14px 16px;">
                     <p style="font-size:0.7rem;font-weight:500;color:var(--text-secondary);margin:0;">⏳ Pending Revenue</p>
                     <p style="font-size:1.3rem;font-weight:700;color:var(--warning);margin:0;">TSh <?= number_format($pending_revenue, 0) ?></p>
+                    <p style="font-size:0.55rem;color:var(--text-secondary);margin:0;"><?= number_format($pending_bills) ?> pending bills</p>
                 </div>
             </div>
             
             <!-- Additional Stats -->
             <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;padding-top:12px;border-top:1px solid var(--border-color);">
                 <div style="text-align:center;">
-                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:0;">📦 Prescriptions</p>
+                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:0;">💊 Prescriptions</p>
                     <p style="font-size:1.1rem;font-weight:700;color:var(--text-primary);margin:0;"><?= number_format($total_prescriptions) ?></p>
                 </div>
                 <div style="text-align:center;">
-                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:0;">💊 Prescription Sales</p>
-                    <p style="font-size:1.1rem;font-weight:700;color:var(--text-primary);margin:0;"><?= number_format($total_prescription_sales) ?></p>
-                    <p style="font-size:0.55rem;color:var(--text-secondary);margin:0;">TSh <?= number_format($total_prescription_amount, 0) ?></p>
+                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:0;">🧪 Lab Tests</p>
+                    <p style="font-size:1.1rem;font-weight:700;color:var(--text-primary);margin:0;"><?= number_format($total_lab_tests) ?></p>
                 </div>
                 <div style="text-align:center;">
-                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:0;">🛒 OTC Sales</p>
-                    <p style="font-size:1.1rem;font-weight:700;color:var(--text-primary);margin:0;"><?= number_format($total_otc) ?></p>
-                    <p style="font-size:0.55rem;color:var(--text-secondary);margin:0;">TSh <?= number_format($total_otc_amount, 0) ?></p>
-                </div>
-                <div style="text-align:center;">
-                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:0;">🏥 Total Visits</p>
+                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:0;">🏥 Visits</p>
                     <p style="font-size:1.1rem;font-weight:700;color:var(--text-primary);margin:0;"><?= number_format($total_visits) ?></p>
+                </div>
+                <div style="text-align:center;">
+                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:0;">💳 Payments</p>
+                    <p style="font-size:1.1rem;font-weight:700;color:var(--text-primary);margin:0;"><?= number_format($total_payments) ?></p>
                 </div>
             </div>
         </div>
@@ -1066,7 +1083,7 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                                 </div>
                             </div>
                             <div class="item-actions">
-                                <a href="view_employee.php?id=<?= $employee['id'] ?>" class="btn-sm">
+                                <a href="view_user.php?id=<?= $employee['id'] ?>" class="btn-sm">
                                     <i class="fas fa-eye"></i> View
                                 </a>
                             </div>
@@ -1119,32 +1136,31 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
             </div>
         </div>
         
-        <!-- Recent OTC Sales -->
+        <!-- Recent Bills -->
         <div class="detail-card animate-fade-in-up" style="animation-delay:0.35s;">
             <div class="card-title">
-                <i class="fas fa-shopping-cart"></i>
-                Recent OTC Sales
-                <span class="badge-count"><?= count($recent_otc) ?></span>
+                <i class="fas fa-file-invoice"></i>
+                Recent Bills
+                <span class="badge-count"><?= count($recent_bills) ?></span>
             </div>
             
             <div class="scroll-container">
-                <?php if (count($recent_otc) > 0): ?>
-                    <?php foreach ($recent_otc as $sale): ?>
+                <?php if (count($recent_bills) > 0): ?>
+                    <?php foreach ($recent_bills as $bill): ?>
                         <div class="list-item">
                             <div class="item-info">
-                                <div class="name"><?= htmlspecialchars($sale['customer_name'] ?? 'Walk-in') ?></div>
+                                <div class="name"><?= htmlspecialchars($bill['patient_name'] ?? 'Unknown') ?></div>
                                 <div class="sub">
-                                    <i class="fas fa-receipt"></i> <?= htmlspecialchars($sale['sale_number']) ?>
-                                    <i class="fas fa-money-bill-wave ml-2"></i> 
-                                    TSh <?= number_format($sale['net_amount'] ?? $sale['total_amount'] ?? 0, 0) ?>
-                                    <span class="status-badge <?= ($sale['payment_status'] ?? 'pending') === 'paid' ? 'active' : 'pending' ?>" 
+                                    <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($bill['bill_number']) ?>
+                                    <i class="fas fa-money-bill-wave ml-2"></i> TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>
+                                    <span class="status-badge <?= $bill['status'] === 'paid' ? 'active' : ($bill['status'] === 'partial' ? 'pending' : 'inactive') ?>" 
                                           style="font-size:0.5rem;padding:1px 8px;margin-left:4px;">
-                                        <?= ucfirst($sale['payment_status'] ?? 'pending') ?>
+                                        <?= ucfirst($bill['status'] ?? 'pending') ?>
                                     </span>
                                 </div>
                             </div>
                             <div class="item-actions">
-                                <a href="view_otc_sale.php?id=<?= $sale['id'] ?>" class="btn-sm">
+                                <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn-sm">
                                     <i class="fas fa-eye"></i> View
                                 </a>
                             </div>
@@ -1152,8 +1168,8 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
                     <?php endforeach; ?>
                 <?php else: ?>
                     <div class="empty-state">
-                        <i class="fas fa-shopping-cart"></i>
-                        <p>No OTC sales available</p>
+                        <i class="fas fa-file-invoice"></i>
+                        <p>No bills available</p>
                     </div>
                 <?php endif; ?>
             </div>
@@ -1278,13 +1294,14 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏢 Braick Dispensary - View Branch', 'font-size:18px; font-weight:bold; color:#1A56DB;');
+    console.log('%c🏢 Braick Dispensary - View Branch (FIXED)', 'font-size:18px; font-weight:bold; color:#1A56DB;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#1A56DB;');
     console.log('%c👥 Employees: <?= $total_employees ?>, Patients: <?= $total_patients ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c💰 Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#16A34A;');
     console.log('%c📤 Expenses: TSh <?= number_format($total_expenses, 0) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit, 0) ?>', 'font-size:13px; color:#16A34A;');
     console.log('%c⏳ Pending: TSh <?= number_format($pending_revenue, 0) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c📊 Using tables: branches, users, patients, visits, prescriptions, lab_tests, bills, payments, expenses', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

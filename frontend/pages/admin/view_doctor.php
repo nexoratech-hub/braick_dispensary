@@ -5,8 +5,11 @@
 // WITH ALL PATIENT DATA, LAB TESTS, RESULTS, DIAGNOSIS, 
 // PRESCRIPTIONS, PROCEDURES, TOOLS & BILLS
 // WITH VIEW, EDIT & DELETE BUTTONS FOR EACH SECTION
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // FIXED: Blue background on table headers only
+// FIXED: Uses bills table instead of patient_bills
+// FIXED: Uses prescriptions/prescription_items for revenue
+// FIXED: Functions defined before use
 // ================================================================
 
 // ================================================================
@@ -54,6 +57,39 @@ require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
 $db = Database::getInstance()->getConnection();
+
+// ================================================================
+// HELPER FUNCTIONS - DEFINED BEFORE USE
+// ================================================================
+function getUserColor($name) {
+    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777', '#4F46E5', '#0891B2', '#2563EB'];
+    $index = abs(crc32($name)) % count($colors);
+    return $colors[$index];
+}
+
+function getStatusBadge($status) {
+    $classes = [
+        'pending' => 'warning',
+        'paid' => 'success',
+        'partial' => 'warning',
+        'cancelled' => 'danger',
+        'completed' => 'success',
+        'confirmed' => 'info',
+        'dispensed' => 'success',
+        'in_progress' => 'info',
+        'scheduled' => 'info',
+        'assigned' => 'primary',
+        'active' => 'success',
+        'inactive' => 'danger',
+        'online' => 'success',
+        'offline' => 'danger',
+        'with_doctor' => 'primary',
+        'lab_test' => 'info',
+        'lab_completed' => 'success',
+        'prescribed' => 'info'
+    ];
+    return $classes[$status] ?? 'secondary';
+}
 
 // ================================================================
 // GET DOCTOR ID
@@ -125,12 +161,13 @@ $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = 
 $stmt->execute([$doctor_id]);
 $pending_lab_tests = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// 6. Revenue Generated
+// 6. Revenue Generated - FIXED: Uses bills and bill_items
 $stmt = $db->prepare("
-    SELECT COALESCE(SUM(ps.net_amount), 0) as revenue 
-    FROM prescription_sales ps
-    JOIN prescriptions p ON ps.prescription_id = p.id
-    WHERE p.doctor_id = ? AND ps.payment_status = 'paid'
+    SELECT COALESCE(SUM(bi.total_price), 0) as revenue 
+    FROM bill_items bi
+    INNER JOIN bills b ON bi.bill_id = b.id
+    INNER JOIN visits v ON b.visit_id = v.id
+    WHERE v.doctor_id = ? AND b.status = 'paid'
 ");
 $stmt->execute([$doctor_id]);
 $revenue = $stmt->fetch(PDO::FETCH_ASSOC)['revenue'] ?? 0;
@@ -171,8 +208,8 @@ $stmt = $db->prepare("
         (SELECT COUNT(*) FROM prescriptions pr 
          JOIN visits v ON pr.visit_id = v.id 
          WHERE v.patient_id = p.id AND pr.doctor_id = ?) as total_prescriptions,
-        (SELECT COUNT(*) FROM patient_bills pb 
-         JOIN visits v ON pb.visit_id = v.id 
+        (SELECT COUNT(*) FROM bills b 
+         JOIN visits v ON b.visit_id = v.id 
          WHERE v.patient_id = p.id) as total_bills
     FROM patients p
     JOIN visits v ON p.id = v.patient_id
@@ -243,7 +280,7 @@ $stmt->execute([$doctor_id]);
 $all_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET ALL PROCEDURES & TOOLS
+// GET ALL PROCEDURES & TOOLS - FIXED: Uses bills table
 // ================================================================
 $all_procedures = [];
 $stmt = $db->prepare("
@@ -251,11 +288,11 @@ $stmt = $db->prepare("
         bi.*,
         p.full_name as patient_name,
         p.patient_id as patient_code,
-        pb.bill_number,
+        b.bill_number,
         v.visit_number
     FROM bill_items bi
-    LEFT JOIN patient_bills pb ON bi.bill_id = pb.id
-    LEFT JOIN visits v ON pb.visit_id = v.id
+    LEFT JOIN bills b ON bi.bill_id = b.id
+    LEFT JOIN visits v ON b.visit_id = v.id
     LEFT JOIN patients p ON v.patient_id = p.id
     WHERE bi.item_type IN ('procedure', 'tool')
     AND v.doctor_id = ?
@@ -265,22 +302,22 @@ $stmt->execute([$doctor_id]);
 $all_procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET ALL BILLS
+// GET ALL BILLS - FIXED: Uses bills table
 // ================================================================
 $all_bills = [];
 $stmt = $db->prepare("
     SELECT 
-        pb.*,
+        b.*,
         p.full_name as patient_name,
         p.patient_id as patient_code,
         u.full_name as created_by_name,
         v.visit_number
-    FROM patient_bills pb
-    LEFT JOIN patients p ON pb.patient_id = p.id
-    LEFT JOIN users u ON pb.created_by = u.id
-    LEFT JOIN visits v ON pb.visit_id = v.id
+    FROM bills b
+    LEFT JOIN patients p ON b.patient_id = p.id
+    LEFT JOIN users u ON b.created_by = u.id
+    LEFT JOIN visits v ON b.visit_id = v.id
     WHERE v.doctor_id = ?
-    ORDER BY pb.created_at DESC
+    ORDER BY b.created_at DESC
 ");
 $stmt->execute([$doctor_id]);
 $all_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -370,643 +407,1002 @@ include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<style>
-    /* ================================================================
-       VIEW DOCTOR - BLUE THEME (Headers only)
-       ================================================================ */
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>View Doctor - <?= htmlspecialchars($doctor['full_name']) ?></title>
     
-    :root {
-        --primary-blue: #0B5ED7;
-        --primary-dark: #0A4CA8;
-        --primary-light: #3B82F6;
-        --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #073B8A);
+    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    
+    <style>
+        /* ================================================================
+           VIEW DOCTOR - BLUE THEME (Headers only)
+           ================================================================ */
         
-        --success: #059669;
-        --danger: #DC2626;
-        --warning: #D97706;
-        --purple: #7C3AED;
-        --teal: #0D9488;
-        --orange: #F59E0B;
+        :root {
+            --primary-blue: #0B5ED7;
+            --primary-dark: #0A4CA8;
+            --primary-light: #3B82F6;
+            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #073B8A);
+            
+            --success: #059669;
+            --danger: #DC2626;
+            --warning: #D97706;
+            --purple: #7C3AED;
+            --teal: #0D9488;
+            --orange: #F59E0B;
+            
+            --bg-card: #FFFFFF;
+            --bg-body: #F0F4F8;
+            --border-color: #E2E8F0;
+            --text-primary: #0F172A;
+            --text-secondary: #475569;
+            --text-muted: #94A3B8;
+        }
         
-        --bg-card: #FFFFFF;
-        --bg-body: #F0F4F8;
-        --border-color: #E2E8F0;
-        --text-primary: #0F172A;
-        --text-secondary: #475569;
-        --text-muted: #94A3B8;
-    }
-    
-    [data-theme="dark"] {
-        --bg-card: #1E293B;
-        --bg-body: #0F172A;
-        --border-color: #334155;
-        --text-primary: #F1F5F9;
-        --text-secondary: #94A3B8;
-        --text-muted: #64748B;
-    }
-    
-    /* ================================================================
-       SECTION TITLE
-       ================================================================ */
-    .section-header-clean {
-        padding: 12px 0 12px 0;
-        border-bottom: 2px solid var(--border-color);
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        flex-wrap: wrap;
-        gap: 10px;
-    }
-    
-    .section-header-clean .section-title {
-        color: var(--text-primary);
-        font-size: 0.95rem;
-        font-weight: 700;
-        margin: 0;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .section-header-clean .section-title i {
-        color: var(--primary-blue);
-    }
-    
-    .section-header-clean .section-badge {
-        background: var(--bg-body);
-        color: var(--text-secondary);
-        padding: 2px 12px;
-        border-radius: 20px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        border: 1px solid var(--border-color);
-    }
-    
-    /* ================================================================
-       DOCTOR HEADER
-       ================================================================ */
-    .doctor-header {
-        background: var(--bg-card);
-        border-radius: 18px;
-        padding: 24px 28px;
-        border: 2px solid var(--border-color);
-        margin-bottom: 24px;
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: space-between;
-        align-items: center;
-        transition: all 0.3s ease;
-    }
-    
-    .doctor-header:hover {
-        border-color: var(--primary-blue);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.1);
-    }
-    
-    .doctor-info {
-        display: flex;
-        align-items: center;
-        gap: 20px;
-    }
-    
-    .doctor-avatar-large {
-        width: 80px;
-        height: 80px;
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 2rem;
-        font-weight: 700;
-        color: #FFFFFF;
-        flex-shrink: 0;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.2);
-    }
-    
-    .doctor-name {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-    
-    .doctor-specialty-badge {
-        display: inline-block;
-        background: #E8F0FE;
-        color: var(--primary-blue);
-        padding: 2px 14px;
-        border-radius: 20px;
-        font-size: 0.75rem;
-        font-weight: 600;
-    }
-    
-    [data-theme="dark"] .doctor-specialty-badge {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    
-    .doctor-meta {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-        margin-top: 8px;
-    }
-    
-    .doctor-meta span {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-        background: var(--bg-body);
-        padding: 4px 12px;
-        border-radius: 8px;
-        border: 1px solid var(--border-color);
-    }
-    
-    .doctor-meta span i {
-        font-size: 0.8rem;
-        color: var(--primary-blue);
-    }
-    
-    .online-dot {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: var(--success);
-        animation: pulse-dot 1.5s infinite;
-    }
-    
-    .offline-dot {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 50%;
-        background: #94A3B8;
-    }
-    
-    @keyframes pulse-dot {
-        0%, 100% { opacity: 1; }
-        50% { opacity: 0.4; }
-    }
-    
-    .badge-status {
-        padding: 4px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        color: #FFFFFF;
-        border: none;
-    }
-    
-    .badge-status.success { background: var(--success); }
-    .badge-status.danger { background: var(--danger); }
-    .badge-status.warning { background: var(--warning); }
-    
-    .admin-actions {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-    }
-    
-    .btn {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        padding: 6px 14px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.75rem;
-        transition: all 0.3s ease;
-        cursor: pointer;
-        border: none;
-        text-decoration: none;
-        white-space: nowrap;
-        color: #FFFFFF !important;
-    }
-    
-    .btn-blue {
-        background: var(--primary-blue);
-        color: #FFFFFF !important;
-    }
-    .btn-blue:hover {
-        background: #0A4CA8;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-green {
-        background: var(--success);
-        color: #FFFFFF !important;
-    }
-    .btn-green:hover {
-        background: #047857;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
-    
-    .btn-red {
-        background: var(--danger);
-        color: #FFFFFF !important;
-    }
-    .btn-red:hover {
-        background: #B91C1C;
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary) !important;
-        border: 2px solid var(--border-color);
-    }
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: var(--primary-blue);
-        color: var(--primary-blue) !important;
-    }
-    
-    .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
-    
-    /* ================================================================
-       STATISTICS CARDS - BLUE BACKGROUND
-       ================================================================ */
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 16px;
-        margin-bottom: 24px;
-    }
-    
-    .stat-card-blue {
-        background: var(--primary-gradient-strong);
-        border-radius: 14px;
-        padding: 18px 20px;
-        border: none;
-        display: flex;
-        align-items: center;
-        gap: 16px;
-        transition: all 0.3s ease;
-        cursor: default;
-        box-shadow: 0 4px 15px rgba(10, 76, 168, 0.25);
-    }
-    
-    .stat-card-blue:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 8px 30px rgba(10, 76, 168, 0.35);
-    }
-    
-    .stat-card-blue .stat-icon {
-        width: 48px;
-        height: 48px;
-        border-radius: 12px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 1.3rem;
-        flex-shrink: 0;
-        background: rgba(255,255,255,0.15);
-        color: #FFFFFF;
-        border: 1px solid rgba(255,255,255,0.1);
-    }
-    
-    .stat-card-blue .stat-number {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: #FFFFFF !important;
-    }
-    
-    .stat-card-blue .stat-label {
-        font-size: 0.75rem;
-        color: rgba(255,255,255,0.8) !important;
-        font-weight: 500;
-        margin-top: 2px;
-    }
-    
-    /* ================================================================
-       DASHBOARD GRID
-       ================================================================ */
-    .dashboard-grid {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 20px;
-        margin-bottom: 20px;
-    }
-    
-    /* ================================================================
-       CARDS
-       ================================================================ */
-    .card-clean {
-        background: var(--bg-card);
-        border-radius: 14px;
-        border: 2px solid var(--border-color);
-        overflow: hidden;
-        transition: all 0.3s ease;
-    }
-    
-    .card-clean:hover {
-        border-color: var(--primary-blue);
-        box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
-    }
-    
-    .card-clean .card-body {
-        padding: 16px 18px;
-    }
-    
-    .card-clean .card-body .empty-state {
-        text-align: center;
-        padding: 15px;
-        color: var(--text-secondary);
-    }
-    
-    .card-clean .card-body .empty-state i {
-        font-size: 2rem;
-        color: var(--border-color);
-        display: block;
-        margin-bottom: 6px;
-    }
-    
-    .card-clean .card-body .empty-state p {
-        font-size: 0.85rem;
-    }
-    
-    /* Chart Container */
-    .chart-container {
-        height: 110px !important;
-        max-height: 110px !important;
-    }
-    .chart-container canvas {
-        height: 100% !important;
-        max-height: 110px !important;
-    }
-    
-    /* Appointments */
-    .appointments-container {
-        max-height: 160px;
-        overflow-y: auto;
-    }
-    .appointments-container::-webkit-scrollbar { width: 4px; }
-    .appointments-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
-    .appointments-container::-webkit-scrollbar-thumb { background: var(--primary-blue); border-radius: 4px; }
-    
-    .appointment-item {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 6px 10px;
-        border-bottom: 1px solid var(--border-color);
-    }
-    .appointment-item:hover { background: var(--bg-body); }
-    .appointment-item:last-child { border-bottom: none; }
-    .appointment-time { font-weight: 600; font-size: 0.8rem; min-width: 55px; }
-    .appointment-patient .name { font-weight: 500; font-size: 0.85rem; }
-    .appointment-patient .phone { font-size: 0.65rem; color: var(--text-secondary); }
-    .appointment-status { font-size: 0.65rem; font-weight: 600; padding: 2px 10px; border-radius: 12px; }
-    .appointment-status.scheduled { background: #E8F0FE; color: var(--primary-blue); }
-    .appointment-status.confirmed { background: #D1FAE5; color: var(--success); }
-    .appointment-status.completed { background: #D1FAE5; color: var(--success); }
-    .appointment-status.cancelled { background: #FEE2E2; color: var(--danger); }
-    .appointment-status.pending { background: #FEF3C7; color: var(--warning); }
-    
-    /* ================================================================
-       DATA TABLE - BLUE HEADERS ONLY
-       ================================================================ */
-    .table-container {
-        overflow-x: auto;
-        padding: 0;
-    }
-    
-    .data-table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 0.8rem;
-    }
-    
-    .data-table thead th {
-        background: var(--primary-gradient-strong);
-        color: white;
-        font-weight: 700;
-        padding: 12px 14px;
-        font-size: 0.6rem;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        white-space: nowrap;
-        border-bottom: 3px solid var(--primary-dark);
-        text-align: left;
-    }
-    
-    .data-table thead th:first-child { border-radius: 8px 0 0 0; }
-    .data-table thead th:last-child { border-radius: 0 8px 0 0; }
-    
-    .data-table td {
-        padding: 12px 14px;
-        border-bottom: 1px solid var(--border-color);
-        color: var(--text-primary);
-        vertical-align: middle;
-        font-size: 0.8rem;
-        min-height: 60px;
-    }
-    
-    .data-table tbody tr {
-        transition: background 0.2s ease;
-        min-height: 60px;
-    }
-    
-    .data-table tbody tr:nth-child(even) { background: var(--bg-body); }
-    .data-table tbody tr:hover { background: var(--primary-bg); }
-    .data-table tbody tr:last-child td { border-bottom: none; }
-    
-    [data-theme="dark"] .data-table tbody tr:hover { background: #1E3A5F; }
-    
-    /* ================================================================
-       ACTION BUTTONS - VERTICAL IN ONE ROW
-       ================================================================ */
-    .action-btns {
-        display: flex;
-        flex-direction: row;
-        gap: 4px;
-        flex-wrap: wrap;
-        align-items: center;
-    }
-    
-    .btn-action {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 4px 10px;
-        border-radius: 6px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        border: none;
-        cursor: pointer;
-        white-space: nowrap;
-        min-height: 30px;
-    }
-    
-    .btn-action i { font-size: 0.65rem; }
-    
-    .btn-action.view {
-        background: #E8F0FE;
-        color: #0B5ED7;
-        border: 1px solid rgba(11, 94, 215, 0.15);
-    }
-    .btn-action.view:hover {
-        background: #0B5ED7;
-        color: white;
-        transform: translateY(-1px);
-    }
-    
-    .btn-action.edit {
-        background: #FEF3C7;
-        color: #D97706;
-        border: 1px solid rgba(217, 119, 6, 0.15);
-    }
-    .btn-action.edit:hover {
-        background: #D97706;
-        color: white;
-        transform: translateY(-1px);
-    }
-    
-    .btn-action.delete {
-        background: #FEE2E2;
-        color: #DC2626;
-        border: 1px solid rgba(220, 38, 38, 0.15);
-    }
-    .btn-action.delete:hover {
-        background: #DC2626;
-        color: white;
-        transform: translateY(-1px);
-    }
-    
-    [data-theme="dark"] .btn-action.view {
-        background: #1E3A5F;
-        color: #6EA8FE;
-        border-color: rgba(59, 130, 246, 0.2);
-    }
-    [data-theme="dark"] .btn-action.view:hover {
-        background: #0B5ED7;
-        color: white;
-    }
-    
-    [data-theme="dark"] .btn-action.edit {
-        background: #3D2E0A;
-        color: #FBBF24;
-        border-color: rgba(251, 191, 36, 0.2);
-    }
-    [data-theme="dark"] .btn-action.edit:hover {
-        background: #D97706;
-        color: white;
-    }
-    
-    [data-theme="dark"] .btn-action.delete {
-        background: #3A1A1A;
-        color: #F87171;
-        border-color: rgba(248, 113, 113, 0.2);
-    }
-    [data-theme="dark"] .btn-action.delete:hover {
-        background: #DC2626;
-        color: white;
-    }
-    
-    /* Badge */
-    .badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 3px 12px;
-        border-radius: 12px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        color: white;
-    }
-    .badge-info { background: #0B5ED7; }
-    .badge-success { background: #059669; }
-    .badge-danger { background: #DC2626; }
-    .badge-warning { background: #D97706; color: #1E293B; }
-    .badge-purple { background: #7C3AED; }
-    .badge-teal { background: #0D9488; }
-    .badge-secondary { background: #64748B; }
-    
-    /* ================================================================
-       FOOTER
-       ================================================================ */
-    .footer {
-        padding: 14px 0;
-        border-top: 2px solid var(--border-color);
-        margin-top: 20px;
-        text-align: center;
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-    }
-    .footer .footer-brand { color: var(--primary-blue); font-weight: 600; }
-    
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
-    @media (max-width: 768px) {
-        .dashboard-grid { grid-template-columns: 1fr; }
-        .doctor-header { flex-direction: column; align-items: flex-start; gap: 16px; }
-        .doctor-info { flex-wrap: wrap; }
-        .doctor-avatar-large { width: 60px; height: 60px; font-size: 1.5rem; }
-        .doctor-name { font-size: 1.2rem; }
-        .stats-grid { grid-template-columns: repeat(2, 1fr); }
-        .chart-container { height: 90px !important; }
-        .appointments-container { max-height: 140px; }
-        .data-table td { font-size: 0.7rem; padding: 8px 8px; }
-        .data-table thead th { font-size: 0.5rem; padding: 6px 8px; }
-        .action-btns { flex-direction: row; flex-wrap: wrap; gap: 3px; }
-        .btn-action { font-size: 0.55rem; padding: 3px 6px; }
-    }
-    
-    @media (max-width: 480px) {
-        .stats-grid { grid-template-columns: 1fr; }
-        .doctor-meta span { font-size: 0.7rem; padding: 2px 8px; }
-        .stat-card-blue .stat-number { font-size: 1.2rem; }
-        .chart-container { height: 80px !important; }
-        .data-table td { font-size: 0.6rem; padding: 6px 6px; }
-        .btn-action { font-size: 0.5rem; padding: 2px 5px; }
-        .btn-action i { font-size: 0.5rem; }
-    }
-    
-    @keyframes fadeInUp {
-        from { opacity: 0; transform: translateY(20px); }
-        to { opacity: 1; transform: translateY(0); }
-    }
-    .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
-</style>
+        [data-theme="dark"] {
+            --bg-card: #1E293B;
+            --bg-body: #0F172A;
+            --border-color: #334155;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+        }
+        
+        /* ================================================================
+           TOP NAV
+           ================================================================ */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
+        
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
+        }
+        
+        .top-nav .search-wrapper:focus-within {
+            border-color: var(--primary-blue);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+        }
+        
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .top-nav .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .top-nav .search-wrapper .search-btn {
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .top-nav .search-wrapper .search-btn:hover {
+            transform: scale(1.02);
+        }
+        
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .top-nav .datetime i {
+            color: var(--primary-light);
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .top-nav .avatar:hover {
+            border-color: var(--primary-blue);
+            transform: scale(1.05);
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: var(--primary-blue);
+        }
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .dark-toggle-btn:hover {
+            border-color: var(--primary-blue);
+            background: var(--bg-card);
+        }
+        
+        .branch-selector {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            font-size: 0.78rem;
+            color: var(--text-primary);
+            outline: none;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .branch-selector:focus {
+            border-color: var(--primary-blue);
+        }
+        
+        /* ================================================================
+           MAIN CONTENT
+           ================================================================ */
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+        
+        /* ================================================================
+           SECTION TITLE
+           ================================================================ */
+        .section-header-clean {
+            padding: 12px 0 12px 0;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        
+        .section-header-clean .section-title {
+            color: var(--text-primary);
+            font-size: 0.95rem;
+            font-weight: 700;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .section-header-clean .section-title i {
+            color: var(--primary-blue);
+        }
+        
+        .section-header-clean .section-badge {
+            background: var(--bg-body);
+            color: var(--text-secondary);
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            border: 1px solid var(--border-color);
+        }
+        
+        /* ================================================================
+           DOCTOR HEADER
+           ================================================================ */
+        .doctor-header {
+            background: var(--bg-card);
+            border-radius: 18px;
+            padding: 24px 28px;
+            border: 2px solid var(--border-color);
+            margin-bottom: 24px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.3s ease;
+        }
+        
+        .doctor-header:hover {
+            border-color: var(--primary-blue);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.1);
+        }
+        
+        .doctor-info {
+            display: flex;
+            align-items: center;
+            gap: 20px;
+        }
+        
+        .doctor-avatar-large {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            font-weight: 700;
+            color: #FFFFFF;
+            flex-shrink: 0;
+            box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+        }
+        
+        .doctor-name {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        
+        .doctor-specialty-badge {
+            display: inline-block;
+            background: #E8F0FE;
+            color: var(--primary-blue);
+            padding: 2px 14px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        
+        [data-theme="dark"] .doctor-specialty-badge {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+        
+        .doctor-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 8px;
+        }
+        
+        .doctor-meta span {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            background: var(--bg-body);
+            padding: 4px 12px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .doctor-meta span i {
+            font-size: 0.8rem;
+            color: var(--primary-blue);
+        }
+        
+        .online-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse-dot 1.5s infinite;
+        }
+        
+        .offline-dot {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #94A3B8;
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        
+        .badge-status {
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #FFFFFF;
+            border: none;
+        }
+        
+        .badge-status.success { background: var(--success); }
+        .badge-status.danger { background: var(--danger); }
+        .badge-status.warning { background: var(--warning); }
+        
+        .admin-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            white-space: nowrap;
+            color: #FFFFFF !important;
+        }
+        
+        .btn-blue {
+            background: var(--primary-blue);
+            color: #FFFFFF !important;
+        }
+        .btn-blue:hover {
+            background: #0A4CA8;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-green {
+            background: var(--success);
+            color: #FFFFFF !important;
+        }
+        .btn-green:hover {
+            background: #047857;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-red {
+            background: var(--danger);
+            color: #FFFFFF !important;
+        }
+        .btn-red:hover {
+            background: #B91C1C;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary) !important;
+            border: 2px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: var(--primary-blue);
+            color: var(--primary-blue) !important;
+        }
+        
+        .btn-sm { padding: 4px 10px; font-size: 0.7rem; border-radius: 6px; }
+        
+        /* ================================================================
+           STATISTICS CARDS - BLUE BACKGROUND
+           ================================================================ */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .stat-card-blue {
+            background: var(--primary-gradient-strong);
+            border-radius: 14px;
+            padding: 18px 20px;
+            border: none;
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            transition: all 0.3s ease;
+            cursor: default;
+            box-shadow: 0 4px 15px rgba(10, 76, 168, 0.25);
+        }
+        
+        .stat-card-blue:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 8px 30px rgba(10, 76, 168, 0.35);
+        }
+        
+        .stat-card-blue .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.3rem;
+            flex-shrink: 0;
+            background: rgba(255,255,255,0.15);
+            color: #FFFFFF;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .stat-card-blue .stat-number {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #FFFFFF !important;
+        }
+        
+        .stat-card-blue .stat-label {
+            font-size: 0.75rem;
+            color: rgba(255,255,255,0.8) !important;
+            font-weight: 500;
+            margin-top: 2px;
+        }
+        
+        /* ================================================================
+           DASHBOARD GRID
+           ================================================================ */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+        
+        /* ================================================================
+           CARDS
+           ================================================================ */
+        .card-clean {
+            background: var(--bg-card);
+            border-radius: 14px;
+            border: 2px solid var(--border-color);
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        .card-clean:hover {
+            border-color: var(--primary-blue);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.08);
+        }
+        
+        .card-clean .card-body {
+            padding: 16px 18px;
+        }
+        
+        .card-clean .card-body .empty-state {
+            text-align: center;
+            padding: 15px;
+            color: var(--text-secondary);
+        }
+        
+        .card-clean .card-body .empty-state i {
+            font-size: 2rem;
+            color: var(--border-color);
+            display: block;
+            margin-bottom: 6px;
+        }
+        
+        .card-clean .card-body .empty-state p {
+            font-size: 0.85rem;
+        }
+        
+        /* Chart Container */
+        .chart-container {
+            height: 110px !important;
+            max-height: 110px !important;
+        }
+        .chart-container canvas {
+            height: 100% !important;
+            max-height: 110px !important;
+        }
+        
+        /* Appointments */
+        .appointments-container {
+            max-height: 160px;
+            overflow-y: auto;
+        }
+        .appointments-container::-webkit-scrollbar { width: 4px; }
+        .appointments-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
+        .appointments-container::-webkit-scrollbar-thumb { background: var(--primary-blue); border-radius: 4px; }
+        
+        .appointment-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .appointment-item:hover { background: var(--bg-body); }
+        .appointment-item:last-child { border-bottom: none; }
+        .appointment-time { font-weight: 600; font-size: 0.8rem; min-width: 55px; }
+        .appointment-patient .name { font-weight: 500; font-size: 0.85rem; }
+        .appointment-patient .phone { font-size: 0.65rem; color: var(--text-secondary); }
+        .appointment-status { font-size: 0.65rem; font-weight: 600; padding: 2px 10px; border-radius: 12px; }
+        .appointment-status.scheduled { background: #E8F0FE; color: var(--primary-blue); }
+        .appointment-status.confirmed { background: #D1FAE5; color: var(--success); }
+        .appointment-status.completed { background: #D1FAE5; color: var(--success); }
+        .appointment-status.cancelled { background: #FEE2E2; color: var(--danger); }
+        .appointment-status.pending { background: #FEF3C7; color: var(--warning); }
+        
+        /* ================================================================
+           DATA TABLE - BLUE HEADERS ONLY
+           ================================================================ */
+        .table-container {
+            overflow-x: auto;
+            padding: 0;
+        }
+        
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.8rem;
+        }
+        
+        .data-table thead th {
+            background: var(--primary-gradient-strong);
+            color: white;
+            font-weight: 700;
+            padding: 12px 14px;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            white-space: nowrap;
+            border-bottom: 3px solid var(--primary-dark);
+            text-align: left;
+        }
+        
+        .data-table thead th:first-child { border-radius: 8px 0 0 0; }
+        .data-table thead th:last-child { border-radius: 0 8px 0 0; }
+        
+        .data-table td {
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+            font-size: 0.8rem;
+            min-height: 60px;
+        }
+        
+        .data-table tbody tr {
+            transition: background 0.2s ease;
+            min-height: 60px;
+        }
+        
+        .data-table tbody tr:nth-child(even) { background: var(--bg-body); }
+        .data-table tbody tr:hover { background: var(--primary-bg); }
+        .data-table tbody tr:last-child td { border-bottom: none; }
+        
+        [data-theme="dark"] .data-table tbody tr:hover { background: #1E3A5F; }
+        
+        /* ================================================================
+           ACTION BUTTONS - VERTICAL IN ONE ROW
+           ================================================================ */
+        .action-btns {
+            display: flex;
+            flex-direction: row;
+            gap: 4px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        
+        .btn-action {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            border: none;
+            cursor: pointer;
+            white-space: nowrap;
+            min-height: 30px;
+        }
+        
+        .btn-action i { font-size: 0.65rem; }
+        
+        .btn-action.view {
+            background: #E8F0FE;
+            color: #0B5ED7;
+            border: 1px solid rgba(11, 94, 215, 0.15);
+        }
+        .btn-action.view:hover {
+            background: #0B5ED7;
+            color: white;
+            transform: translateY(-1px);
+        }
+        
+        .btn-action.edit {
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid rgba(217, 119, 6, 0.15);
+        }
+        .btn-action.edit:hover {
+            background: #D97706;
+            color: white;
+            transform: translateY(-1px);
+        }
+        
+        .btn-action.delete {
+            background: #FEE2E2;
+            color: #DC2626;
+            border: 1px solid rgba(220, 38, 38, 0.15);
+        }
+        .btn-action.delete:hover {
+            background: #DC2626;
+            color: white;
+            transform: translateY(-1px);
+        }
+        
+        [data-theme="dark"] .btn-action.view {
+            background: #1E3A5F;
+            color: #6EA8FE;
+            border-color: rgba(59, 130, 246, 0.2);
+        }
+        [data-theme="dark"] .btn-action.view:hover {
+            background: #0B5ED7;
+            color: white;
+        }
+        
+        [data-theme="dark"] .btn-action.edit {
+            background: #3D2E0A;
+            color: #FBBF24;
+            border-color: rgba(251, 191, 36, 0.2);
+        }
+        [data-theme="dark"] .btn-action.edit:hover {
+            background: #D97706;
+            color: white;
+        }
+        
+        [data-theme="dark"] .btn-action.delete {
+            background: #3A1A1A;
+            color: #F87171;
+            border-color: rgba(248, 113, 113, 0.2);
+        }
+        [data-theme="dark"] .btn-action.delete:hover {
+            background: #DC2626;
+            color: white;
+        }
+        
+        /* Badge */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 3px 12px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            color: white;
+        }
+        .badge-info { background: #0B5ED7; }
+        .badge-success { background: #059669; }
+        .badge-danger { background: #DC2626; }
+        .badge-warning { background: #D97706; color: #1E293B; }
+        .badge-purple { background: #7C3AED; }
+        .badge-teal { background: #0D9488; }
+        .badge-secondary { background: #64748B; }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        .footer .footer-brand { color: var(--primary-blue); font-weight: 600; }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 9999;
+            max-width: 420px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+        }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
+        .toast-custom.success { background: #059669; }
+        .toast-custom.error { background: #DC2626; }
+        .toast-custom.warning { background: #D97706; color: #1E293B; }
+        .toast-custom.info { background: #0B5ED7; }
+        
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .sidebar { transform: translateX(-100%) !important; }
+            .sidebar.open { transform: translateX(0) !important; }
+        }
+        
+        @media (max-width: 768px) {
+            .dashboard-grid { grid-template-columns: 1fr; }
+            .doctor-header { flex-direction: column; align-items: flex-start; gap: 16px; }
+            .doctor-info { flex-wrap: wrap; }
+            .doctor-avatar-large { width: 60px; height: 60px; font-size: 1.5rem; }
+            .doctor-name { font-size: 1.2rem; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .chart-container { height: 90px !important; }
+            .appointments-container { max-height: 140px; }
+            .data-table td { font-size: 0.7rem; padding: 8px 8px; }
+            .data-table thead th { font-size: 0.5rem; padding: 6px 8px; }
+            .action-btns { flex-direction: row; flex-wrap: wrap; gap: 3px; }
+            .btn-action { font-size: 0.55rem; padding: 3px 6px; }
+        }
+        
+        @media (max-width: 480px) {
+            .stats-grid { grid-template-columns: 1fr; }
+            .doctor-meta span { font-size: 0.7rem; padding: 2px 8px; }
+            .stat-card-blue .stat-number { font-size: 1.2rem; }
+            .chart-container { height: 80px !important; }
+            .data-table td { font-size: 0.6rem; padding: 6px 6px; }
+            .btn-action { font-size: 0.5rem; padding: 2px 5px; }
+            .btn-action i { font-size: 0.5rem; }
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
+        
+        /* Sidebar */
+        .sidebar {
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            bottom: 0 !important;
+            width: 270px !important;
+            background: #0B4EA8 !important;
+            color: white !important;
+            z-index: 50 !important;
+            overflow-y: auto !important;
+            overflow-x: hidden !important;
+            transition: transform 0.3s ease-in-out !important;
+            transform: translateX(0) !important;
+            box-shadow: 4px 0 20px rgba(0,0,0,0.15) !important;
+        }
+        
+        #sidebarOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 45;
+            display: none;
+            backdrop-filter: blur(2px);
+            -webkit-backdrop-filter: blur(2px);
+        }
+        
+        #sidebarOverlay.active {
+            display: block !important;
+        }
+    </style>
+</head>
+<body>
+
+<!-- ================================================================ -->
+<!-- SIDEBAR OVERLAY -->
+<!-- ================================================================ -->
+<div id="sidebarOverlay"></div>
+
+<!-- ================================================================ -->
+<!-- SIDEBAR -->
+<!-- ================================================================ -->
+<aside class="sidebar" id="sidebar">
+    <div style="padding:18px 16px 14px;border-bottom:2px solid #0B3D8A;background:#0B4EA8;position:sticky;top:0;z-index:5;">
+        <div style="display:flex;align-items:center;gap:12px;">
+            <img src="<?= $logo_url ?>" alt="Braick Logo" style="width:42px;height:42px;border-radius:10px;object-fit:cover;background:white;padding:4px;border:2px solid rgba(255,255,255,0.1);"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+            <div>
+                <p style="color:white;font-weight:700;font-size:0.95rem;line-height:1.2;margin:0;">Braick Dispensary</p>
+                <p style="color:#9EC5FE;font-size:0.65rem;font-weight:500;margin:0;">Super Admin</p>
+            </div>
+        </div>
+    </div>
+    
+    <div style="padding:10px 14px;border-bottom:2px solid #0B3D8A;background:#0B4EA8;">
+        <select id="sidebarBranchSelector" onchange="switchBranch(this.value)" style="width:100%;padding:7px 10px;border-radius:8px;border:none;background:rgba(255,255,255,0.12);color:white;font-size:0.75rem;cursor:pointer;outline:none;transition:all 0.3s ease;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 12 12%22%3E%3Cpath fill=%22white%22 d=%22M6 8L1 3h10z%22/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 10px center;">
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+            <?php foreach ($branches as $branch): ?>
+                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?> style="background:#0B4EA8;color:white;padding:8px;">
+                    🏥 <?= htmlspecialchars($branch['name']) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+    </div>
+    
+    <nav style="padding:10px 8px 20px;">
+        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Main Menu</div>
+        
+        <a href="/dispensary_system/frontend/pages/admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-home"></i> Dashboard
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/admin/employees.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-users"></i> Employees
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/admin/patients.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-injured"></i> Patients
+        </a>
+        
+        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Modules</div>
+        
+        <a href="/dispensary_system/frontend/pages/admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-md"></i> Doctors
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-prescription"></i> Pharmacy
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/admin/view_reception.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-headset"></i> Reception
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-flask"></i> Laboratory
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/admin/view_cashier.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-cash-register"></i> Cashier
+        </a>
+        
+        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Management</div>
+        
+        <a href="/dispensary_system/frontend/pages/admin/branches.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-store-alt"></i> Branches
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/admin/reports.php?branch=<?= $selected_branch_id ?>" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-chart-bar"></i> Reports
+        </a>
+        
+        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Account</div>
+        
+        <a href="/dispensary_system/frontend/pages/admin/profile.php" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-circle"></i> Profile
+        </a>
+        
+        <a href="/dispensary_system/frontend/pages/logout.php" 
+           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;border-top:2px solid rgba(255,255,255,0.08);padding-top:10px;margin-top:6px;color:#FCA5A5;">
+            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-sign-out-alt"></i> Logout
+        </a>
+    </nav>
+</aside>
 
 <!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-3 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn" style="background:transparent; width:auto;">
+        <button id="sidebarToggle" class="lg:hidden icon-btn" style="background:transparent;width:auto;">
             <i class="fas fa-bars text-lg"></i>
         </button>
         
         <div class="search-wrapper">
-            <i class="fas fa-search text-white ml-3 opacity-60"></i>
+            <i class="fas fa-search text-gray-400 ml-3"></i>
             <input type="text" id="searchInput" placeholder="Search...">
             <button id="searchBtn" class="search-btn">
                 <i class="fas fa-search mr-1"></i> Search
             </button>
         </div>
     </div>
-    <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
+    <div class="flex items-center gap-3 no-print">
+        <span class="branch-badge-display" style="background:var(--primary-bg);color:var(--primary-blue);padding:4px 14px;border-radius:20px;font-size:0.78rem;font-weight:500;display:inline-flex;align-items:center;gap:6px;border:1px solid var(--primary-light);">
+            <i class="fas fa-store-alt mr-1"></i> <?= htmlspecialchars($branch_name) ?>
+        </span>
         <span class="datetime" id="currentDateTime"></span>
         <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
@@ -1495,7 +1891,6 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <script>
     // ================================================================
     // DARK MODE
@@ -1695,43 +2090,12 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🧪 Lab Tests: <?= count($all_lab_tests) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c💊 Prescriptions: <?= count($all_prescriptions) ?>', 'font-size:13px; color:#0D9488;');
     console.log('%c💰 Bills: <?= count($all_bills) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Using bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Revenue from bill_items (not prescription_sales)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Functions defined before use', 'font-size:13px; color:#34D399;');
     console.log('%c🔵 Stat Cards have BLUE background', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔵 Table Headers have BLUE background', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Table body has NO blue background (clean design)', 'font-size:13px; color:#34D399;');
-    console.log('%c📐 Buttons are in one row (vertical layout)', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
-
-<?php
-// ================================================================
-// HELPER FUNCTIONS
-// ================================================================
-function getUserColor($name) {
-    $colors = ['#0B5ED7', '#059669', '#7C3AED', '#DC2626', '#D97706', '#0D9488', '#DB2777'];
-    $index = abs(crc32($name)) % count($colors);
-    return $colors[$index];
-}
-
-function getStatusBadge($status) {
-    $classes = [
-        'pending' => 'warning',
-        'paid' => 'success',
-        'partial' => 'warning',
-        'cancelled' => 'danger',
-        'completed' => 'success',
-        'confirmed' => 'info',
-        'dispensed' => 'success',
-        'in_progress' => 'info',
-        'scheduled' => 'info',
-        'assigned' => 'primary',
-        'active' => 'success',
-        'inactive' => 'danger',
-        'online' => 'success',
-        'offline' => 'danger'
-    ];
-    return $classes[$status] ?? 'secondary';
-}
-?>
 
 </body>
 </html>

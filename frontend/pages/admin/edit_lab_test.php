@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_lab_test.php
 // ADMIN - EDIT LAB TEST
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -67,7 +67,7 @@ if ($test_id <= 0) {
 }
 
 // ================================================================
-// FETCH LAB TEST DETAILS
+// FETCH LAB TEST DETAILS - USING CORRECT TABLE STRUCTURE
 // ================================================================
 try {
     $stmt = $db->prepare("
@@ -81,13 +81,17 @@ try {
             v.visit_number,
             v.visit_type,
             v.id as visit_id,
-            b.name as branch_name
+            b.name as branch_name,
+            ltc.test_name as catalog_test_name,
+            ltc.category as test_category,
+            ltc.reference_range as catalog_reference_range
         FROM lab_tests lt
         LEFT JOIN visits v ON lt.visit_id = v.id
-        LEFT JOIN patients p ON v.patient_id = p.id
+        LEFT JOIN patients p ON lt.patient_id = p.id
         LEFT JOIN users u ON lt.doctor_id = u.id
         LEFT JOIN users u2 ON lt.lab_technician_id = u2.id
         LEFT JOIN branches b ON lt.branch_id = b.id
+        LEFT JOIN lab_tests_catalog ltc ON lt.test_id = ltc.id
         WHERE lt.id = ?
     ");
     $stmt->execute([$test_id]);
@@ -198,43 +202,44 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $stmt = $db->prepare($sql);
         $stmt->execute($params);
         
-        // Update lab request status if lab_test is completed
-        if ($status === 'completed') {
-            // Find lab request for this test
-            $stmt = $db->prepare("
-                SELECT lr.id, lr.status, COUNT(lri.id) as total_items, 
-                       SUM(CASE WHEN lri.status = 'completed' THEN 1 ELSE 0 END) as completed_items
-                FROM lab_requests lr
-                LEFT JOIN lab_request_items lri ON lr.id = lri.request_id
-                WHERE lr.visit_id = ? AND lr.patient_id = ?
-                GROUP BY lr.id
-                ORDER BY lr.created_at DESC
-                LIMIT 1
-            ");
-            $stmt->execute([$lab_test['visit_id'], $lab_test['patient_id']]);
-            $lab_request = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($lab_request) {
-                // Check if all items in request are completed
-                $all_completed = ($lab_request['total_items'] == $lab_request['completed_items']);
+        // Update visit status if lab test is completed or in progress
+        if ($status === 'completed' || $status === 'in_progress') {
+            $visit_id = $lab_test['visit_id'];
+            if ($visit_id) {
+                // Check if all lab tests for this visit are completed
+                $stmt = $db->prepare("
+                    SELECT COUNT(*) as total, 
+                           SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+                    FROM lab_tests 
+                    WHERE visit_id = ?
+                ");
+                $stmt->execute([$visit_id]);
+                $test_stats = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                if ($all_completed) {
+                if ($test_stats && $test_stats['total'] > 0 && $test_stats['total'] == $test_stats['completed']) {
+                    // All tests completed - update visit status
                     $stmt = $db->prepare("
-                        UPDATE lab_requests 
-                        SET status = 'completed', 
-                            completed_at = NOW(),
-                            updated_at = NOW()
+                        UPDATE visits 
+                        SET status = 'lab_completed', updated_at = NOW()
                         WHERE id = ?
                     ");
-                    $stmt->execute([$lab_request['id']]);
+                    $stmt->execute([$visit_id]);
+                } else {
+                    // Some tests still pending
+                    $stmt = $db->prepare("
+                        UPDATE visits 
+                        SET status = 'lab_test', updated_at = NOW()
+                        WHERE id = ?
+                    ");
+                    $stmt->execute([$visit_id]);
                 }
             }
         }
         
         // ================================================================
-        // LOG ACTIVITY - FIXED: Use valid user_id from session
+        // LOG ACTIVITY
         // ================================================================
-        $branch_id = !empty($selected_branch_id) && $selected_branch_id !== 'all' ? (int)$selected_branch_id : $user_branch_id;
+        $branch_id = !empty($selected_branch_id) && $selected_branch_id !== 'all' ? (int)$selected_branch_id : $lab_test['branch_id'] ?? $user_branch_id;
         
         // Verify user exists
         $stmt = $db->prepare("SELECT id FROM users WHERE id = ?");
@@ -250,7 +255,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $details = "Lab test #{$test_id} updated - Status: {$status} | Test: {$lab_test['test_name']} | Patient: {$lab_test['patient_name']}";
                 $stmt->execute([$user_id, $branch_id, $details]);
             } catch (Exception $log_error) {
-                // Log error but don't fail the transaction
                 error_log("Activity log error: " . $log_error->getMessage());
             }
         }
@@ -273,13 +277,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 v.visit_number,
                 v.visit_type,
                 v.id as visit_id,
-                b.name as branch_name
+                b.name as branch_name,
+                ltc.test_name as catalog_test_name,
+                ltc.category as test_category
             FROM lab_tests lt
             LEFT JOIN visits v ON lt.visit_id = v.id
-            LEFT JOIN patients p ON v.patient_id = p.id
+            LEFT JOIN patients p ON lt.patient_id = p.id
             LEFT JOIN users u ON lt.doctor_id = u.id
             LEFT JOIN users u2 ON lt.lab_technician_id = u2.id
             LEFT JOIN branches b ON lt.branch_id = b.id
+            LEFT JOIN lab_tests_catalog ltc ON lt.test_id = ltc.id
             WHERE lt.id = ?
         ");
         $stmt->execute([$test_id]);
@@ -326,13 +333,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -1131,26 +1134,6 @@ include_once '../../components/admin_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
-        
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .form-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .page-header {
-                background: #0B5ED7 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-title, .page-subtitle, .header-badge, .role-badge-display {
-                color: white !important;
-            }
-            .badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-        }
     </style>
 </head>
 <body>
@@ -1219,7 +1202,7 @@ include_once '../../components/admin_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-vial"></i>
-                <strong><?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?></strong>
+                <strong><?= htmlspecialchars($lab_test['test_name'] ?? $lab_test['catalog_test_name'] ?? 'N/A') ?></strong>
                 <span class="header-badge">
                     <i class="fas fa-<?= isset($lab_test['status']) && $lab_test['status'] === 'completed' ? 'check-circle' : 'clock' ?>"></i>
                     <?= ucfirst($lab_test['status'] ?? 'Pending') ?>
@@ -1259,6 +1242,14 @@ include_once '../../components/admin_sidebar.php';
         <div class="info-item">
             <span class="label">Test ID</span>
             <span class="value">#<?= $test_id ?></span>
+        </div>
+        <div class="info-item">
+            <span class="label">Test Name</span>
+            <span class="value"><?= htmlspecialchars($lab_test['test_name'] ?? $lab_test['catalog_test_name'] ?? 'N/A') ?></span>
+        </div>
+        <div class="info-item">
+            <span class="label">Category</span>
+            <span class="value"><?= htmlspecialchars($lab_test['test_category'] ?? 'N/A') ?></span>
         </div>
         <div class="info-item">
             <span class="label">Patient</span>
@@ -1382,7 +1373,7 @@ include_once '../../components/admin_sidebar.php';
                         <span class="label-badge">Optional</span>
                     </label>
                     <input type="text" name="reference_range" class="form-control" 
-                           value="<?= htmlspecialchars($lab_test['reference_range'] ?? '') ?>" 
+                           value="<?= htmlspecialchars($lab_test['reference_range'] ?? $lab_test['catalog_reference_range'] ?? '') ?>" 
                            placeholder="e.g. 70-100 mg/dL">
                 </div>
                 
@@ -1462,7 +1453,7 @@ include_once '../../components/admin_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            Edit Lab Test - <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?>
+            Edit Lab Test - <?= htmlspecialchars($lab_test['test_name'] ?? $lab_test['catalog_test_name'] ?? 'N/A') ?>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1639,11 +1630,12 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🧪 Braick Dispensary - Edit Lab Test', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name'] ?? 'N/A') ?> (ID: <?= $test_id ?>)', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔬 Test: <?= htmlspecialchars($lab_test['test_name'] ?? $lab_test['catalog_test_name'] ?? 'N/A') ?> (ID: <?= $test_id ?>)', 'font-size:13px; color:#7C3AED;');
     console.log('%c👤 Patient: <?= htmlspecialchars($lab_test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Status: <?= ucfirst($lab_test['status'] ?? 'Pending') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c📊 Table: lab_tests (using correct columns)', 'font-size:13px; color:#34D399;');
     console.log('%c🔵 Blue Theme Applied', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Activity logging fixed - User ID from session', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Activity logging using user_id from session', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -2,13 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/admin/prescriptions.php
 // PRESCRIPTIONS LIST - VIEW ALL PRESCRIPTIONS
-// FIXED: Branch filter working correctly with statistics
-// FIXED: Shows all prescriptions even without sales
-// FIXED: Branch filter now properly filters by branch_id
+// FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
-// SESSION START
+// START SESSION
 // ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -48,14 +46,20 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// Include database and helpers
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// INCLUDE DATABASE AND HELPERS
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
-// HANDLE DELETE PRESCRIPTION
+// HANDLE DELETE PRESCRIPTION - FIXED: No prescription_sales
 // ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $delete_id = (int)$_GET['delete'];
@@ -71,29 +75,13 @@ if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
         if ($prescription) {
             $patient_id = $prescription['patient_id'];
             
-            $stmt = $db->prepare("DELETE FROM prescription_sales WHERE prescription_id = ?");
-            $stmt->execute([$delete_id]);
-            
+            // Delete prescription items
             $stmt = $db->prepare("DELETE FROM prescription_items WHERE prescription_id = ?");
             $stmt->execute([$delete_id]);
             
+            // Delete prescription
             $stmt = $db->prepare("DELETE FROM prescriptions WHERE id = ?");
             $stmt->execute([$delete_id]);
-            
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE patient_id = ?");
-            $stmt->execute([$patient_id]);
-            $count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-            
-            if ($count == 0) {
-                $stmt = $db->prepare("DELETE FROM patient_bills WHERE patient_id = ?");
-                $stmt->execute([$patient_id]);
-                
-                $stmt = $db->prepare("DELETE FROM bill_items WHERE patient_id = ?");
-                $stmt->execute([$patient_id]);
-                
-                $stmt = $db->prepare("DELETE FROM patients WHERE id = ?");
-                $stmt->execute([$patient_id]);
-            }
         }
         
         $db->commit();
@@ -139,16 +127,15 @@ if ($selected_branch_id !== 'all') {
 }
 
 // ================================================================
-// BUILD QUERY FROM prescriptions TABLE - FIXED
+// BUILD QUERY - FIXED: No medication column
 // ================================================================
 $where_clause = " WHERE 1=1";
 $params = [];
 
 // Search filter
 if (!empty($search)) {
-    $where_clause .= " AND (p.prescription_number LIKE ? OR pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.diagnosis LIKE ? OR p.medication LIKE ?)";
+    $where_clause .= " AND (p.prescription_number LIKE ? OR pat.full_name LIKE ? OR pat.patient_id LIKE ? OR p.diagnosis LIKE ?)";
     $search_param = "%$search%";
-    $params[] = $search_param;
     $params[] = $search_param;
     $params[] = $search_param;
     $params[] = $search_param;
@@ -161,17 +148,17 @@ if (!empty($status_filter)) {
     $params[] = $status_filter;
 }
 
-// Branch filter - FIXED: Always apply branch filter when selected
+// Branch filter
 if ($selected_branch_id !== 'all') {
     $where_clause .= " AND p.branch_id = ?";
     $params[] = (int)$selected_branch_id;
 }
 
 // ================================================================
-// GET PRESCRIPTIONS FROM prescriptions TABLE - FIXED: LEFT JOIN correctly
+// GET PRESCRIPTIONS - FIXED: No prescription_sales
 // ================================================================
 
-// Get total count for pagination
+// Get total count
 $count_sql = "
     SELECT COUNT(*) as total 
     FROM prescriptions p
@@ -183,7 +170,7 @@ $stmt->execute($params);
 $total_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 $total_pages = ceil($total_prescriptions / $per_page);
 
-// Get prescriptions with doctor name and amount - FIXED: Use LEFT JOIN for prescription_sales
+// Get prescriptions with items total price
 $sql = "
     SELECT 
         p.*,
@@ -192,20 +179,28 @@ $sql = "
         pat.id as patient_id,
         u.full_name as doctor_name,
         b.name as branch_name,
-        COALESCE(ps.total_amount, 0) as prescription_amount,
-        COALESCE(ps.sale_number, '') as sale_number,
+        COALESCE((
+            SELECT SUM(pi.total_price) 
+            FROM prescription_items pi 
+            WHERE pi.prescription_id = p.id
+        ), 0) as prescription_amount,
         CASE 
             WHEN p.status = 'pending' THEN 'warning'
             WHEN p.status = 'confirmed' THEN 'info'
             WHEN p.status = 'dispensed' THEN 'success'
             WHEN p.status = 'cancelled' THEN 'danger'
             ELSE 'secondary'
-        END as status_color
+        END as status_color,
+        COALESCE((
+            SELECT GROUP_CONCAT(pi.medication_name SEPARATOR ', ')
+            FROM prescription_items pi 
+            WHERE pi.prescription_id = p.id
+            LIMIT 3
+        ), '') as medication_names
     FROM prescriptions p
     LEFT JOIN patients pat ON p.patient_id = pat.id
     LEFT JOIN users u ON p.doctor_id = u.id
     LEFT JOIN branches b ON p.branch_id = b.id
-    LEFT JOIN prescription_sales ps ON p.id = ps.prescription_id
     $where_clause
     ORDER BY p.created_at DESC
     LIMIT ? OFFSET ?
@@ -217,10 +212,9 @@ $stmt->execute($params);
 $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS - FIXED: Properly filtered by branch
+// GET STATISTICS - FIXED: No prescription_sales
 // ================================================================
 
-// Build WHERE clause for statistics
 $stats_where = " WHERE 1=1";
 $stats_params = [];
 
@@ -229,55 +223,53 @@ if ($selected_branch_id !== 'all') {
     $stats_params[] = (int)$selected_branch_id;
 }
 
-// Total prescriptions (filtered by branch)
+// Total prescriptions
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $stats_where");
 $stmt->execute($stats_params);
 $total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Pending prescriptions (filtered by branch)
+// Pending
 $pending_where = $stats_where . " AND p.status = 'pending'";
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $pending_where");
 $stmt->execute($stats_params);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Confirmed prescriptions (filtered by branch)
+// Confirmed
 $confirmed_where = $stats_where . " AND p.status = 'confirmed'";
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $confirmed_where");
 $stmt->execute($stats_params);
 $confirmed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Dispensed prescriptions (filtered by branch)
+// Dispensed
 $dispensed_where = $stats_where . " AND p.status = 'dispensed'";
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $dispensed_where");
 $stmt->execute($stats_params);
 $dispensed_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Cancelled prescriptions (filtered by branch)
+// Cancelled
 $cancelled_where = $stats_where . " AND p.status = 'cancelled'";
 $stmt = $db->prepare("SELECT COUNT(*) as total FROM prescriptions p $cancelled_where");
 $stmt->execute($stats_params);
 $cancelled_count = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// GET AMOUNT STATISTICS - FIXED: Filtered by branch
+// GET AMOUNTS FROM prescription_items
 // ================================================================
 
-// Build WHERE clause for prescription_sales with branch filter
 $sales_where = " WHERE 1=1";
 $sales_params = [];
 
 if ($selected_branch_id !== 'all') {
-    // Join with prescriptions to filter by branch
     $sales_where = " WHERE p.branch_id = ?";
     $sales_params[] = (int)$selected_branch_id;
 }
 
-// Total amount from prescription_sales (paid/dispensed)
+// Total amount from prescription_items (all dispensed)
 $amount_sql = "
-    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
-    FROM prescription_sales ps
-    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
-    $sales_where AND (ps.status = 'paid' OR ps.status = 'dispensed')
+    SELECT COALESCE(SUM(pi.total_price), 0) as total_amount 
+    FROM prescription_items pi
+    INNER JOIN prescriptions p ON pi.prescription_id = p.id
+    $sales_where AND p.status = 'dispensed'
 ";
 $stmt = $db->prepare($amount_sql);
 $stmt->execute($sales_params);
@@ -285,43 +277,43 @@ $total_amount_all = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 
 // Pending amount
 $pending_amount_sql = "
-    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
-    FROM prescription_sales ps
-    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
-    $sales_where AND ps.status = 'pending'
+    SELECT COALESCE(SUM(pi.total_price), 0) as total_amount 
+    FROM prescription_items pi
+    INNER JOIN prescriptions p ON pi.prescription_id = p.id
+    $sales_where AND p.status = 'pending'
 ";
 $stmt = $db->prepare($pending_amount_sql);
 $stmt->execute($sales_params);
 $pending_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 
-// Dispensed amount
-$dispensed_amount_sql = "
-    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
-    FROM prescription_sales ps
-    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
-    $sales_where AND ps.status = 'dispensed'
-";
-$stmt = $db->prepare($dispensed_amount_sql);
-$stmt->execute($sales_params);
-$dispensed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
-
 // Confirmed amount
 $confirmed_amount_sql = "
-    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
-    FROM prescription_sales ps
-    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
-    $sales_where AND ps.status = 'confirmed'
+    SELECT COALESCE(SUM(pi.total_price), 0) as total_amount 
+    FROM prescription_items pi
+    INNER JOIN prescriptions p ON pi.prescription_id = p.id
+    $sales_where AND p.status = 'confirmed'
 ";
 $stmt = $db->prepare($confirmed_amount_sql);
 $stmt->execute($sales_params);
 $confirmed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
 
+// Dispensed amount
+$dispensed_amount_sql = "
+    SELECT COALESCE(SUM(pi.total_price), 0) as total_amount 
+    FROM prescription_items pi
+    INNER JOIN prescriptions p ON pi.prescription_id = p.id
+    $sales_where AND p.status = 'dispensed'
+";
+$stmt = $db->prepare($dispensed_amount_sql);
+$stmt->execute($sales_params);
+$dispensed_amount = $stmt->fetch(PDO::FETCH_ASSOC)['total_amount'] ?? 0;
+
 // Cancelled amount
 $cancelled_amount_sql = "
-    SELECT COALESCE(SUM(ps.total_amount), 0) as total_amount 
-    FROM prescription_sales ps
-    LEFT JOIN prescriptions p ON ps.prescription_id = p.id
-    $sales_where AND ps.status = 'cancelled'
+    SELECT COALESCE(SUM(pi.total_price), 0) as total_amount 
+    FROM prescription_items pi
+    INNER JOIN prescriptions p ON pi.prescription_id = p.id
+    $sales_where AND p.status = 'cancelled'
 ";
 $stmt = $db->prepare($cancelled_amount_sql);
 $stmt->execute($sales_params);
@@ -337,17 +329,13 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE HEADERS
 // ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
-<!-- CSS STYLES -->
 <style>
-    /* ================================================================
-       5 STAT CARDS WITH BACKGROUND COLORS
-       ================================================================ */
     .stats-grid-5 {
         display: grid;
         grid-template-columns: repeat(5, 1fr);
@@ -485,7 +473,6 @@ include_once '../../components/admin_sidebar.php';
     [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
     [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
     
-    /* Table */
     .table-container { position: relative; overflow: hidden; border-radius: 12px; }
     .table-scroll-wrapper { overflow-x: auto; overflow-y: visible; -webkit-overflow-scrolling: touch; scroll-behavior: smooth; position: relative; }
     .table-scroll-wrapper::-webkit-scrollbar { height: 6px; }
@@ -523,9 +510,6 @@ include_once '../../components/admin_sidebar.php';
     .amount-cell { font-weight: 700; color: #0B5ED7; font-family: 'Courier New', monospace; font-size: 0.85rem; }
     [data-theme="dark"] .amount-cell { color: #60A5FA; }
     
-    /* ================================================================
-       ONLY 3 ACTION BUTTONS: View, Edit, Delete
-       ================================================================ */
     .action-buttons {
         display: flex;
         gap: 6px;
@@ -711,6 +695,16 @@ include_once '../../components/admin_sidebar.php';
     .toast-custom.success { background: #059669; }
     .toast-custom.error { background: #EF4444; }
     .toast-custom.info { background: #0B5ED7; }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
     
     @media (max-width: 1200px) { .stats-grid-5 { grid-template-columns: repeat(3, 1fr); } }
     @media (max-width: 768px) {
@@ -934,7 +928,7 @@ include_once '../../components/admin_sidebar.php';
                             <th style="min-width: 140px;">Patient</th>
                             <th style="min-width: 100px;">Patient ID</th>
                             <th style="min-width: 120px;">Doctor</th>
-                            <th style="min-width: 150px;">Medication</th>
+                            <th style="min-width: 150px;">Medication(s)</th>
                             <th style="min-width: 120px;" class="text-right">Amount</th>
                             <th style="min-width: 100px;">Status</th>
                             <th style="min-width: 100px;">Date</th>
@@ -943,7 +937,10 @@ include_once '../../components/admin_sidebar.php';
                     </thead>
                     <tbody>
                         <?php if (count($prescriptions) > 0): ?>
-                            <?php $i = $offset + 1; foreach ($prescriptions as $prescription): ?>
+                            <?php $i = $offset + 1; foreach ($prescriptions as $prescription): 
+                                $med_names = $prescription['medication_names'] ?? '';
+                                $med_display = !empty($med_names) ? $med_names : 'No medications';
+                            ?>
                                 <tr>
                                     <td class="font-bold text-blue-600 dark:text-blue-400"><?= $i++ ?></td>
                                     <td class="font-mono text-xs font-bold"><?= htmlspecialchars($prescription['prescription_number'] ?? 'N/A') ?></td>
@@ -958,7 +955,9 @@ include_once '../../components/admin_sidebar.php';
                                             <span class="text-gray-400 text-xs">Not assigned</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td><?= htmlspecialchars($prescription['medication'] ?? 'N/A') ?></td>
+                                    <td>
+                                        <span class="text-xs"><?= htmlspecialchars(substr($med_display, 0, 40)) . (strlen($med_display) > 40 ? '...' : '') ?></span>
+                                    </td>
                                     <td class="text-right amount-cell">TSh <?= number_format($prescription['prescription_amount'] ?? 0, 0) ?></td>
                                     <td>
                                         <span class="status-badge <?= $prescription['status_color'] ?? 'secondary' ?>">
@@ -968,7 +967,7 @@ include_once '../../components/admin_sidebar.php';
                                     <td class="text-xs"><?= date('M d, Y', strtotime($prescription['created_at'])) ?></td>
                                     <td>
                                         <div class="action-buttons">
-                                            <a href="view_prescription.php?id=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                                            <a href="prescription_details.php?id=<?= $prescription['id'] ?>&branch=<?= $selected_branch_id ?>" 
                                                class="btn-action btn-view" title="View Prescription">
                                                 <i class="fas fa-eye"></i> View
                                             </a>
@@ -1064,9 +1063,6 @@ include_once '../../components/admin_sidebar.php';
 
 <!-- JAVASCRIPT -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1096,9 +1092,6 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
 
@@ -1114,9 +1107,6 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
@@ -1126,9 +1116,6 @@ include_once '../../components/admin_sidebar.php';
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1159,9 +1146,6 @@ include_once '../../components/admin_sidebar.php';
         showToast('⚠️ Error', 'Failed to delete prescription. Please try again.', 'error');
     <?php endif; ?>
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1182,6 +1166,9 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($selected_branch_name) ?> (ID: <?= $selected_branch_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c💊 Total Prescriptions: <?= $total_all ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Using tables: prescriptions, prescription_items, patients, users, branches', 'font-size:13px; color:#34D399;');
+    console.log('%c❌ prescription_sales table removed - using prescription_items for amounts', 'font-size:13px; color:#34D399;');
+    console.log('%c❌ medication column removed - using prescription_items.medication_name', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Statistics filtered by branch', 'font-size:13px; color:#34D399;');
 </script>
 

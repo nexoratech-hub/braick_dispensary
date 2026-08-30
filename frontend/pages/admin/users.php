@@ -3,7 +3,7 @@
 // FILE: frontend/pages/admin/users.php
 // SUPER ADMIN - USERS MANAGEMENT
 // VIEW AND MANAGE ALL SYSTEM USERS
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DATABASE TABLES
 // ================================================================
 
 // ================================================================
@@ -19,7 +19,11 @@ if (session_status() === PHP_SESSION_NONE) {
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
@@ -93,11 +97,15 @@ $search_term = $_GET['search'] ?? '';
 // GET BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
+}
 
 // ================================================================
-// FETCH USERS - Using profile_pic instead of profile_image
+// FETCH USERS - FIXED: Using profile_pic, bills table
 // ================================================================
 $query = "
     SELECT 
@@ -116,49 +124,39 @@ $query = "
         b.name as branch_name,
         (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id) as visit_count,
         (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id) as prescription_count,
-        (SELECT COUNT(*) FROM patient_bills WHERE created_by = u.id) as bill_count
+        (SELECT COUNT(*) FROM bills WHERE created_by = u.id) as bill_count,
+        (SELECT COUNT(*) FROM bills WHERE created_by = u.id AND status = 'paid') as paid_bill_count
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.id
     WHERE 1=1
 ";
 
+$params = [];
+
 if (!empty($search_term)) {
     $query .= " AND (u.full_name LIKE :search OR u.username LIKE :search OR u.email LIKE :search OR u.phone LIKE :search)";
+    $params[':search'] = '%' . $search_term . '%';
 }
 
 if ($selected_role !== 'all') {
     $query .= " AND u.role = :role";
+    $params[':role'] = $selected_role;
 }
 
 if ($selected_branch_id !== 'all') {
     $query .= " AND u.branch_id = :branch_id";
+    $params[':branch_id'] = (int)$selected_branch_id;
 }
 
 if ($selected_status !== 'all') {
     $query .= " AND u.status = :status";
+    $params[':status'] = $selected_status;
 }
 
 $query .= " ORDER BY u.created_at DESC";
 
 $stmt = $db->prepare($query);
-
-if (!empty($search_term)) {
-    $stmt->bindValue(':search', '%' . $search_term . '%');
-}
-
-if ($selected_role !== 'all') {
-    $stmt->bindValue(':role', $selected_role);
-}
-
-if ($selected_branch_id !== 'all') {
-    $stmt->bindValue(':branch_id', $selected_branch_id);
-}
-
-if ($selected_status !== 'all') {
-    $stmt->bindValue(':status', $selected_status);
-}
-
-$stmt->execute();
+$stmt->execute($params);
 $users = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
@@ -1420,6 +1418,7 @@ include_once '../../components/admin_sidebar.php';
                                             <span title="Visits"><i class="fas fa-stethoscope"></i> <?= $user['visit_count'] ?? 0 ?></span>
                                             <span title="Prescriptions"><i class="fas fa-prescription"></i> <?= $user['prescription_count'] ?? 0 ?></span>
                                             <span title="Bills"><i class="fas fa-file-invoice"></i> <?= $user['bill_count'] ?? 0 ?></span>
+                                            <span title="Paid Bills"><i class="fas fa-check-circle"></i> <?= $user['paid_bill_count'] ?? 0 ?></span>
                                         </div>
                                     <?php endif; ?>
                                 </td>
@@ -1649,6 +1648,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Users: <?= $total_users ?>', 'font-size:13px; color:#059669;');
     console.log('%c✅ Active Users: <?= $active_users ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Using tables: users, branches, visits, prescriptions, bills', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
     console.log('%c🔑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#7C3AED;');
 </script>

@@ -2,7 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/admin/reassign_doctor.php
 // ADMIN - REMOVE DOCTOR FROM PATIENT
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
+// BLUE THEME - WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
 // ================================================================
@@ -63,7 +64,6 @@ $stmt->execute([$user_id]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$user || $user['status'] !== 'active') {
-    // If user not found or inactive, redirect to login
     session_destroy();
     header('Location: ../login.php');
     exit;
@@ -93,10 +93,11 @@ $stmt = $db->prepare("
         v.id as current_visit_id,
         v.visit_number,
         v.status as visit_status,
-        v.visit_date
+        v.visit_date,
+        v.created_at as visit_created_at
     FROM patients p
     LEFT JOIN users u ON p.assigned_doctor_id = u.id
-    LEFT JOIN visits v ON v.patient_id = p.id AND v.status != 'completed' AND v.status != 'cancelled'
+    LEFT JOIN visits v ON v.patient_id = p.id AND v.status NOT IN ('completed', 'cancelled')
     WHERE p.id = ?
     ORDER BY v.created_at DESC
     LIMIT 1
@@ -114,14 +115,14 @@ if (!$patient) {
 // ================================================================
 $branch = [];
 if ($branch_id > 0) {
-    $stmt = $db->prepare("SELECT id, name FROM branches WHERE id = ?");
+    $stmt = $db->prepare("SELECT id, name, location FROM branches WHERE id = ? AND status = 'active'");
     $stmt->execute([$branch_id]);
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
 // If branch not found, try to get from patient
 if (!$branch && $patient['branch_id'] > 0) {
-    $stmt = $db->prepare("SELECT id, name FROM branches WHERE id = ?");
+    $stmt = $db->prepare("SELECT id, name, location FROM branches WHERE id = ? AND status = 'active'");
     $stmt->execute([$patient['branch_id']]);
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
     if ($branch) {
@@ -131,7 +132,7 @@ if (!$branch && $patient['branch_id'] > 0) {
 
 // If still not found, use branch_id=1 (Dodoma)
 if (!$branch) {
-    $stmt = $db->prepare("SELECT id, name FROM branches WHERE id = 1");
+    $stmt = $db->prepare("SELECT id, name, location FROM branches WHERE id = 1 AND status = 'active'");
     $stmt->execute();
     $branch = $stmt->fetch(PDO::FETCH_ASSOC);
     $branch_id = 1;
@@ -223,7 +224,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     v.status as visit_status
                 FROM patients p
                 LEFT JOIN users u ON p.assigned_doctor_id = u.id
-                LEFT JOIN visits v ON v.patient_id = p.id AND v.status != 'completed' AND v.status != 'cancelled'
+                LEFT JOIN visits v ON v.patient_id = p.id AND v.status NOT IN ('completed', 'cancelled')
                 WHERE p.id = ?
                 ORDER BY v.created_at DESC
                 LIMIT 1
@@ -253,13 +254,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -1382,6 +1379,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?> (ID: <?= $patient_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🩺 Current Doctor: <?= $has_doctor ? htmlspecialchars($patient['current_doctor_name']) : 'None' ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c⚠️ Action: Remove doctor - patient will be unassigned', 'font-size:13px; color:#DC2626;');
+    console.log('%c📊 Tables: patients, users, visits, branches, activity_logs', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Login session: ACTIVE', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#0B5ED7;');
 </script>

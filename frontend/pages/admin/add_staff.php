@@ -1,10 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/add_staff.php
-// SUPER ADMIN - ADD STAFF (FIXED - ROLE NAME NOT ID)
+// SUPER ADMIN - ADD STAFF
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // WITH AUTO-GENERATE PASSWORD
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
@@ -49,6 +49,7 @@ $branch_name = '';
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -124,34 +125,16 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
 }
 
 // ================================================================
-// GET ROLES & DEPARTMENTS
+// AVAILABLE ROLES - From users table ENUM
 // ================================================================
-$roles = [];
-try {
-    $stmt = $db->query("SELECT id, name, description FROM roles ORDER BY name");
-    $roles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $roles = [];
-}
-
-if (empty($roles)) {
-    $roles = [
-        ['id' => 1, 'name' => 'doctor', 'description' => 'Medical Doctor'],
-        ['id' => 2, 'name' => 'pharmacy', 'description' => 'Pharmacy Staff'],
-        ['id' => 3, 'name' => 'reception', 'description' => 'Receptionist'],
-        ['id' => 4, 'name' => 'laboratory', 'description' => 'Lab Technician'],
-        ['id' => 5, 'name' => 'cashier', 'description' => 'Cashier'],
-        ['id' => 6, 'name' => 'admin', 'description' => 'Administrator'],
-    ];
-}
-
-$departments = [];
-try {
-    $stmt = $db->query("SELECT id, name, description FROM departments ORDER BY name");
-    $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $departments = [];
-}
+$available_roles = [
+    'doctor' => 'Medical Doctor',
+    'pharmacy' => 'Pharmacy Staff',
+    'reception' => 'Receptionist',
+    'laboratory' => 'Lab Technician',
+    'cashier' => 'Cashier',
+    'admin' => 'Administrator'
+];
 
 // ================================================================
 // AUTO-GENERATE PASSWORD FUNCTION
@@ -214,8 +197,8 @@ $form_data = [
     'phone' => '',
     'password' => '',
     'branch_id' => $branch_id > 0 ? $branch_id : 1,
-    'selected_roles' => [],
-    'selected_departments' => []
+    'role' => 'doctor',
+    'specialty' => ''
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
@@ -225,34 +208,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     $form_data['phone'] = trim($_POST['phone'] ?? '');
     $form_data['password'] = $_POST['password'] ?? '';
     $form_data['branch_id'] = (int)($_POST['branch_id'] ?? 0);
-    $form_data['selected_roles'] = $_POST['roles'] ?? [];
-    $form_data['selected_departments'] = $_POST['departments'] ?? [];
-    
-    $primary_role_name = '';
-    if (!empty($form_data['selected_roles'])) {
-        $first_role_id = $form_data['selected_roles'][0];
-        $role_found = false;
-        foreach ($roles as $role) {
-            if ($role['id'] == $first_role_id) {
-                $primary_role_name = $role['name'];
-                $role_found = true;
-                break;
-            }
-        }
-        if (!$role_found) {
-            $role_name_map = [
-                1 => 'doctor',
-                2 => 'pharmacy',
-                3 => 'reception',
-                4 => 'laboratory',
-                5 => 'cashier',
-                6 => 'admin'
-            ];
-            $primary_role_name = $role_name_map[$first_role_id] ?? 'doctor';
-        }
-    } else {
-        $primary_role_name = 'doctor';
-    }
+    $form_data['role'] = $_POST['role'] ?? 'doctor';
+    $form_data['specialty'] = trim($_POST['specialty'] ?? '');
     
     // Validation
     if (empty($form_data['full_name'])) {
@@ -267,11 +224,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     if (empty($form_data['password'])) {
         $errors[] = 'Password is required';
     }
-    if (empty($form_data['selected_roles'])) {
-        $errors[] = 'At least one role must be selected';
+    if (empty($form_data['role'])) {
+        $errors[] = 'Role is required';
     }
     if ($form_data['branch_id'] <= 0) {
         $errors[] = 'Branch is required';
+    }
+    
+    // Validate email format
+    if (!empty($form_data['email']) && !filter_var($form_data['email'], FILTER_VALIDATE_EMAIL)) {
+        $errors[] = 'Please enter a valid email address';
     }
     
     // Check if username exists
@@ -296,55 +258,60 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     if (empty($errors)) {
         $hashed_password = password_hash($form_data['password'], PASSWORD_DEFAULT);
         
-        $stmt = $db->prepare("
-            INSERT INTO users (username, password, full_name, email, phone, role, branch_id, status, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NOW())
-        ");
-        
-        if ($stmt->execute([
-            $form_data['username'], 
-            $hashed_password, 
-            $form_data['full_name'], 
-            $form_data['email'], 
-            $form_data['phone'], 
-            $primary_role_name,
-            $form_data['branch_id']
-        ])) {
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO users (username, password, full_name, email, phone, role, branch_id, specialty, status, created_at, updated_at) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW(), NOW())
+            ");
+            
+            $stmt->execute([
+                $form_data['username'], 
+                $hashed_password, 
+                $form_data['full_name'], 
+                $form_data['email'], 
+                $form_data['phone'], 
+                $form_data['role'],
+                $form_data['branch_id'],
+                $form_data['specialty']
+            ]);
+            
             $new_user_id = $db->lastInsertId();
-            
-            // Assign all selected roles
-            if (!empty($form_data['selected_roles'])) {
-                foreach ($form_data['selected_roles'] as $role_id) {
-                    try {
-                        $stmt = $db->prepare("INSERT INTO employee_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)");
-                        $stmt->execute([$new_user_id, $role_id, $_SESSION['user_id']]);
-                    } catch (Exception $e) {}
-                }
-            }
-            
-            // Assign selected departments
-            if (!empty($form_data['selected_departments'])) {
-                foreach ($form_data['selected_departments'] as $dept_id) {
-                    try {
-                        $stmt = $db->prepare("INSERT INTO employee_departments (user_id, department_id, assigned_by) VALUES (?, ?, ?)");
-                        $stmt->execute([$new_user_id, $dept_id, $_SESSION['user_id']]);
-                    } catch (Exception $e) {}
-                }
-            }
             
             // Log activity
             try {
-                $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'employee_added', ?, NOW())");
-                $stmt->execute([$_SESSION['user_id'], $form_data['branch_id'], "Staff {$form_data['full_name']} added with role: $primary_role_name"]);
-            } catch (Exception $e) {}
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'employee_added', ?, NOW())
+                ");
+                $details = "Staff {$form_data['full_name']} added with role: {$form_data['role']}";
+                $stmt->execute([$_SESSION['user_id'], $form_data['branch_id'], $details]);
+            } catch (Exception $e) {
+                // Ignore logging errors
+            }
             
-            $message = "Staff added successfully with role: <strong>$primary_role_name</strong>! Password: <strong>{$form_data['password']}</strong>";
+            $message = "✅ Staff added successfully with role: <strong>{$form_data['role']}</strong>! Password: <strong>{$form_data['password']}</strong>";
             $message_type = 'success';
             
-            // Redirect to branch staff page
-            echo '<script>setTimeout(function(){ window.location.href = "branch_staff.php?id=' . $form_data['branch_id'] . '&success=1"; }, 2000);</script>';
-        } else {
-            $errors[] = 'Failed to add staff. Please try again.';
+            // Clear form data on success
+            $form_data = [
+                'full_name' => '',
+                'username' => '',
+                'email' => '',
+                'phone' => '',
+                'password' => '',
+                'branch_id' => $branch_id > 0 ? $branch_id : 1,
+                'role' => 'doctor',
+                'specialty' => ''
+            ];
+            
+            echo '<script>
+                setTimeout(function(){ 
+                    window.location.href = "branch_staff.php?id=' . $form_data['branch_id'] . '&success=1"; 
+                }, 3000);
+            </script>';
+            
+        } catch (PDOException $e) {
+            $errors[] = 'Failed to add staff: ' . $e->getMessage();
         }
     }
     
@@ -771,6 +738,8 @@ $page_title = 'Add Staff';
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
             box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            max-width: 900px;
+            margin: 0 auto;
         }
         
         .form-card:hover {
@@ -963,73 +932,6 @@ $page_title = 'Add Staff';
             color: #0B5ED7;
         }
         
-        .checkbox-group {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 8px;
-            padding: 12px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
-            background: var(--bg-body);
-            min-height: 60px;
-            transition: border-color 0.3s ease;
-        }
-        
-        .checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 14px;
-            border-radius: 10px;
-            background: var(--bg-card);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            cursor: pointer;
-        }
-        
-        .checkbox-item:hover {
-            border-color: #0B5ED7;
-            background: #E8F0FE;
-            transform: translateY(-1px);
-        }
-        
-        [data-theme="dark"] .checkbox-item:hover {
-            background: #1E3A5F;
-        }
-        
-        .checkbox-item.checked {
-            border-color: #0B5ED7;
-            background: #E8F0FE;
-        }
-        
-        [data-theme="dark"] .checkbox-item.checked {
-            background: #1E3A5F;
-        }
-        
-        .checkbox-item input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            accent-color: #0B5ED7;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-        
-        .checkbox-item label {
-            font-size: 0.85rem;
-            font-weight: 500;
-            color: var(--text-primary);
-            cursor: pointer;
-            width: 100%;
-        }
-        
-        .checkbox-item .role-desc {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            font-weight: 400;
-            display: block;
-            opacity: 0.7;
-        }
-        
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1118,80 +1020,6 @@ $page_title = 'Add Staff';
             margin-top: 4px;
         }
         
-        .badge-count {
-            font-size: 0.7rem;
-            font-weight: 400;
-            color: var(--text-secondary);
-            margin-left: 8px;
-        }
-        
-        .tip-card {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 16px 20px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-        }
-        
-        .tip-card:hover {
-            border-color: #0B5ED7;
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.06);
-        }
-        
-        .tip-card .tip-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            flex-shrink: 0;
-        }
-        
-        .tip-card .tip-icon.blue { 
-            background: #E8F0FE; 
-            color: #0B5ED7; 
-        }
-        .tip-card .tip-icon.green { 
-            background: #E6F7EE; 
-            color: #059669; 
-        }
-        .tip-card .tip-icon.yellow { 
-            background: #FEF3C7; 
-            color: #F59E0B; 
-        }
-        
-        .tip-card .tip-text h4 {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin: 0;
-        }
-        
-        .tip-card .tip-text p {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            margin: 0;
-        }
-        
-        [data-theme="dark"] .tip-card .tip-icon.blue { 
-            background: #1E3A5F; 
-            color: #6EA8FE; 
-        }
-        [data-theme="dark"] .tip-card .tip-icon.green { 
-            background: #1A3A2A; 
-            color: #34D399; 
-        }
-        [data-theme="dark"] .tip-card .tip-icon.yellow { 
-            background: #3A2A1A; 
-            color: #FBBF24; 
-        }
-        
         .alert-modern {
             padding: 14px 18px;
             border-radius: var(--radius);
@@ -1199,6 +1027,9 @@ $page_title = 'Add Staff';
             display: flex;
             align-items: flex-start;
             gap: 12px;
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .alert-modern-success {
@@ -1222,6 +1053,9 @@ $page_title = 'Add Staff';
             text-align: center;
             font-size: 0.7rem;
             color: var(--text-secondary);
+            max-width: 900px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .footer .footer-brand {
@@ -1229,7 +1063,6 @@ $page_title = 'Add Staff';
             font-weight: 500;
         }
         
-        /* Toast */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1309,8 +1142,6 @@ $page_title = 'Add Staff';
             .btn { padding: 8px 16px; font-size: 0.8rem; min-height: 38px; min-width: 100%; }
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; justify-content: center; }
-            .checkbox-group { grid-template-columns: 1fr; }
-            .tip-card { padding: 12px 16px; }
             .password-actions { flex-direction: column; align-items: stretch; }
             .btn-generate { width: 100%; justify-content: center; }
         }
@@ -1328,6 +1159,14 @@ $page_title = 'Add Staff';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
+        
+        .grid { display: grid; }
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .md\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .md\:col-span-2 { grid-column: span 2; }
+        .gap-6 { gap: 24px; }
+        .mt-2 { margin-top: 8px; }
+        .mb-2 { margin-bottom: 8px; }
     </style>
 </head>
 <body>
@@ -1458,15 +1297,6 @@ $page_title = 'Add Staff';
     </div>
     
     <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)" style="display:none;">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $branch): ?>
-                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($branch['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-        
         <span class="datetime" id="currentDateTime"></span>
         
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
@@ -1538,7 +1368,7 @@ $page_title = 'Add Staff';
             </div>
             <div>
                 <h3>Staff Information</h3>
-                <p>Enter staff details and assign roles & departments</p>
+                <p>Enter staff details and assign role</p>
             </div>
         </div>
         
@@ -1656,79 +1486,59 @@ $page_title = 'Add Staff';
                 </div>
                 
                 <!-- ================================================================ -->
-                <!-- Roles Selection -->
+                <!-- Role Selection -->
                 <!-- ================================================================ -->
                 <div class="md:col-span-2 mt-2">
                     <h3 class="section-title">
-                        <i class="fas fa-user-tag"></i> Select Roles
+                        <i class="fas fa-user-tag"></i> Select Role
                         <span class="required">*</span>
-                        <span class="badge-count">(<?= count($roles) ?> available)</span>
                     </h3>
-                    <p class="help-text mb-2">Click on a role to select/deselect it. At least one role is required.</p>
+                    <p class="help-text mb-2">Select the primary role for this staff member.</p>
                     <hr class="section-divider">
                     
-                    <div class="checkbox-group" id="rolesContainer">
-                        <?php if (!empty($roles)): ?>
-                            <?php foreach ($roles as $role): ?>
-                                <div class="checkbox-item" onclick="toggleCheckbox(this)">
-                                    <input type="checkbox" name="roles[]" value="<?= $role['id'] ?>" 
-                                           id="role_<?= $role['id'] ?>"
-                                           <?= in_array($role['id'], $form_data['selected_roles']) ? 'checked' : '' ?>>
-                                    <label for="role_<?= $role['id'] ?>">
-                                        <i class="fas fa-circle text-[6px] text-blue-600 mr-1"></i>
-                                        <?= htmlspecialchars($role['name']) ?>
-                                        <?php if (!empty($role['description'])): ?>
-                                            <span class="role-desc"><?= htmlspecialchars($role['description']) ?></span>
-                                        <?php endif; ?>
-                                    </label>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <p class="text-gray-400 text-sm col-span-full text-center">No roles available. Please add roles first.</p>
-                        <?php endif; ?>
+                    <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:10px;">
+                        <?php foreach ($available_roles as $role_key => $role_desc): ?>
+                            <div style="display:flex; align-items:center; gap:10px; padding:10px 14px; border:2px solid <?= $form_data['role'] === $role_key ? '#0B5ED7' : 'var(--border-color)' ?>; border-radius:12px; background: <?= $form_data['role'] === $role_key ? 'var(--primary-bg)' : 'var(--bg-card)' ?>; cursor:pointer; transition:all 0.3s ease;"
+                                 onclick="selectRole(this, '<?= $role_key ?>')"
+                                 onmouseover="this.style.borderColor='#0B5ED7'"
+                                 onmouseout="this.style.borderColor='<?= $form_data['role'] === $role_key ? '#0B5ED7' : 'var(--border-color)' ?>'">
+                                <input type="radio" name="role" value="<?= $role_key ?>" id="role_<?= $role_key ?>" 
+                                       <?= $form_data['role'] === $role_key ? 'checked' : '' ?>
+                                       style="width:18px; height:18px; accent-color:#0B5ED7; cursor:pointer;">
+                                <label for="role_<?= $role_key ?>" style="font-size:0.85rem; font-weight:500; color:var(--text-primary); cursor:pointer;">
+                                    <i class="fas fa-circle text-[6px] text-blue-600 mr-1"></i>
+                                    <?= htmlspecialchars($role_desc) ?>
+                                    <span style="display:block; font-size:0.6rem; color:var(--text-secondary); font-weight:400;">
+                                        <?= ucfirst($role_key) ?>
+                                    </span>
+                                </label>
+                            </div>
+                        <?php endforeach; ?>
                     </div>
-                    <p class="help-text mt-2" id="roleCount">Selected: <strong id="selectedRoleCount">0</strong> roles</p>
                 </div>
                 
                 <!-- ================================================================ -->
-                <!-- Departments Selection -->
+                <!-- Specialty (for doctors) -->
                 <!-- ================================================================ -->
-                <div class="md:col-span-2 mt-2">
+                <div class="md:col-span-2 mt-2" id="specialtySection" style="display: <?= $form_data['role'] === 'doctor' ? 'block' : 'none' ?>;">
                     <h3 class="section-title">
-                        <i class="fas fa-building"></i> Select Departments
-                        <span class="badge-count">(<?= count($departments) ?> available)</span>
+                        <i class="fas fa-stethoscope"></i> Specialty (for Doctors)
                     </h3>
-                    <p class="help-text mb-2">Click on a department to select/deselect it.</p>
                     <hr class="section-divider">
-                    
-                    <div class="checkbox-group" id="departmentsContainer">
-                        <?php if (!empty($departments)): ?>
-                            <?php foreach ($departments as $dept): ?>
-                                <div class="checkbox-item" onclick="toggleCheckbox(this)">
-                                    <input type="checkbox" name="departments[]" value="<?= $dept['id'] ?>" 
-                                           id="dept_<?= $dept['id'] ?>"
-                                           <?= in_array($dept['id'], $form_data['selected_departments']) ? 'checked' : '' ?>>
-                                    <label for="dept_<?= $dept['id'] ?>">
-                                        <i class="fas fa-circle text-[6px] text-green-600 mr-1"></i>
-                                        <?= htmlspecialchars($dept['name']) ?>
-                                        <?php if (!empty($dept['description'])): ?>
-                                            <span class="role-desc"><?= htmlspecialchars($dept['description']) ?></span>
-                                        <?php endif; ?>
-                                    </label>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <p class="text-gray-400 text-sm col-span-full text-center">No departments available. Please add departments first.</p>
-                        <?php endif; ?>
+                    <div class="form-row-icon">
+                        <input type="text" name="specialty" class="form-control" 
+                               placeholder="Enter medical specialty (e.g. General Medicine, Pediatrics)" 
+                               value="<?= htmlspecialchars($form_data['specialty']) ?>">
+                        <span class="input-icon"><i class="fas fa-stethoscope"></i></span>
                     </div>
-                    <p class="help-text mt-2">Selected: <strong id="selectedDeptCount">0</strong> departments</p>
+                    <p class="help-text">Optional - Only required for doctors</p>
                 </div>
                 
             </div>
             
             <!-- Form Actions -->
             <div class="form-actions">
-                <button type="submit" class="btn btn-primary">
+                <button type="submit" class="btn btn-primary" id="submitBtn">
                     <i class="fas fa-save"></i> Save Staff
                 </button>
                 <a href="branch_staff.php?id=<?= $branch_id ?>" class="btn btn-outline">
@@ -1744,41 +1554,41 @@ $page_title = 'Add Staff';
     <!-- ================================================================ -->
     <!-- QUICK TIPS -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-5">
-        <div class="tip-card">
-            <div class="tip-icon blue">
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:16px; max-width:900px; margin:20px auto 0;">
+        <div style="background:var(--bg-card); border-radius:16px; padding:14px 18px; border:2px solid var(--border-color); display:flex; align-items:center; gap:12px; transition:all 0.3s ease;" onmouseover="this.style.borderColor='#0B5ED7'" onmouseout="this.style.borderColor='var(--border-color)'">
+            <div style="width:40px; height:40px; border-radius:10px; background:#E8F0FE; color:#0B5ED7; display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex-shrink:0;">
                 <i class="fas fa-lightbulb"></i>
             </div>
-            <div class="tip-text">
-                <h4>Tip #1</h4>
-                <p>Select at least one role</p>
+            <div>
+                <h4 style="font-size:0.8rem; font-weight:600; color:var(--text-primary); margin:0;">Tip #1</h4>
+                <p style="font-size:0.7rem; color:var(--text-secondary); margin:0;">Select the correct role</p>
             </div>
         </div>
-        <div class="tip-card">
-            <div class="tip-icon green">
+        <div style="background:var(--bg-card); border-radius:16px; padding:14px 18px; border:2px solid var(--border-color); display:flex; align-items:center; gap:12px; transition:all 0.3s ease;" onmouseover="this.style.borderColor='#0B5ED7'" onmouseout="this.style.borderColor='var(--border-color)'">
+            <div style="width:40px; height:40px; border-radius:10px; background:#E6F7EE; color:#059669; display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex-shrink:0;">
                 <i class="fas fa-check-circle"></i>
             </div>
-            <div class="tip-text">
-                <h4>Tip #2</h4>
-                <p>Multiple roles allowed</p>
+            <div>
+                <h4 style="font-size:0.8rem; font-weight:600; color:var(--text-primary); margin:0;">Tip #2</h4>
+                <p style="font-size:0.7rem; color:var(--text-secondary); margin:0;">One role per staff</p>
             </div>
         </div>
-        <div class="tip-card">
-            <div class="tip-icon yellow">
+        <div style="background:var(--bg-card); border-radius:16px; padding:14px 18px; border:2px solid var(--border-color); display:flex; align-items:center; gap:12px; transition:all 0.3s ease;" onmouseover="this.style.borderColor='#0B5ED7'" onmouseout="this.style.borderColor='var(--border-color)'">
+            <div style="width:40px; height:40px; border-radius:10px; background:#FEF3C7; color:#F59E0B; display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex-shrink:0;">
                 <i class="fas fa-key"></i>
             </div>
-            <div class="tip-text">
-                <h4>Tip #3</h4>
-                <p>Click Generate for strong password</p>
+            <div>
+                <h4 style="font-size:0.8rem; font-weight:600; color:var(--text-primary); margin:0;">Tip #3</h4>
+                <p style="font-size:0.7rem; color:var(--text-secondary); margin:0;">Click Generate for strong password</p>
             </div>
         </div>
-        <div class="tip-card">
-            <div class="tip-icon blue">
+        <div style="background:var(--bg-card); border-radius:16px; padding:14px 18px; border:2px solid var(--border-color); display:flex; align-items:center; gap:12px; transition:all 0.3s ease;" onmouseover="this.style.borderColor='#0B5ED7'" onmouseout="this.style.borderColor='var(--border-color)'">
+            <div style="width:40px; height:40px; border-radius:10px; background:#E8F0FE; color:#0B5ED7; display:flex; align-items:center; justify-content:center; font-size:1.1rem; flex-shrink:0;">
                 <i class="fas fa-eye"></i>
             </div>
-            <div class="tip-text">
-                <h4>Tip #4</h4>
-                <p>Click 👁️ to view password</p>
+            <div>
+                <h4 style="font-size:0.8rem; font-weight:600; color:var(--text-primary); margin:0;">Tip #4</h4>
+                <p style="font-size:0.7rem; color:var(--text-secondary); margin:0;">Click 👁️ to view password</p>
             </div>
         </div>
     </div>
@@ -1871,65 +1681,41 @@ $page_title = 'Add Staff';
     }
 
     // ================================================================
-    // TOGGLE CHECKBOX
+    // SELECT ROLE (Radio Button)
     // ================================================================
-    function toggleCheckbox(element) {
-        var checkbox = element.querySelector('input[type="checkbox"]');
-        if (checkbox) {
-            checkbox.checked = !checkbox.checked;
-            if (checkbox.checked) {
-                element.classList.add('checked');
-            } else {
-                element.classList.remove('checked');
-            }
-            var event = new Event('change', { bubbles: true });
-            checkbox.dispatchEvent(event);
-            updateCounts();
-        }
-    }
-
-    // ================================================================
-    // UPDATE CHECKBOX COUNTS
-    // ================================================================
-    function updateCounts() {
-        var rolesChecked = document.querySelectorAll('input[name="roles[]"]:checked');
-        var roleCount = document.getElementById('selectedRoleCount');
-        if (roleCount) roleCount.textContent = rolesChecked.length;
-        
-        var deptsChecked = document.querySelectorAll('input[name="departments[]"]:checked');
-        var deptCount = document.getElementById('selectedDeptCount');
-        if (deptCount) deptCount.textContent = deptsChecked.length;
-    }
-
-    // ================================================================
-    // UPDATE CHECKBOX STYLES ON LOAD
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var checkboxes = document.querySelectorAll('.checkbox-item input[type="checkbox"]');
-        checkboxes.forEach(function(checkbox) {
-            if (checkbox.checked) {
-                checkbox.closest('.checkbox-item').classList.add('checked');
-            }
+    function selectRole(element, roleKey) {
+        // Uncheck all radio buttons
+        document.querySelectorAll('input[name="role"]').forEach(function(radio) {
+            radio.checked = false;
         });
-        updateCounts();
-    });
-
-    // ================================================================
-    // VALIDATION
-    // ================================================================
-    document.getElementById('addStaffForm')?.addEventListener('submit', function(e) {
-        var rolesChecked = document.querySelectorAll('input[name="roles[]"]:checked');
-        if (rolesChecked.length === 0) {
-            e.preventDefault();
-            alert('⚠️ Please select at least one role for this staff member.');
-            document.getElementById('rolesContainer').style.borderColor = '#EF4444';
-            setTimeout(function() {
-                document.getElementById('rolesContainer').style.borderColor = '#E2E8F0';
-            }, 3000);
-            return false;
+        
+        // Check the selected one
+        var radio = document.getElementById('role_' + roleKey);
+        if (radio) {
+            radio.checked = true;
         }
-        return true;
-    });
+        
+        // Update UI - remove border from all
+        document.querySelectorAll('[onclick*="selectRole"]').forEach(function(el) {
+            el.style.borderColor = 'var(--border-color)';
+            el.style.background = 'var(--bg-card)';
+        });
+        
+        // Add border to selected
+        element.style.borderColor = '#0B5ED7';
+        element.style.background = 'var(--primary-bg)';
+        
+        // Show/hide specialty section
+        var specialtySection = document.getElementById('specialtySection');
+        if (roleKey === 'doctor') {
+            specialtySection.style.display = 'block';
+        } else {
+            specialtySection.style.display = 'none';
+        }
+        
+        // Update form_data role
+        document.querySelector('input[name="role"]').value = roleKey;
+    }
 
     // ================================================================
     // TOAST
@@ -2077,11 +1863,27 @@ $page_title = 'Add Staff';
         });
     });
 
+    // ================================================================
+    // PREVENT DOUBLE SUBMIT
+    // ================================================================
+    document.getElementById('addStaffForm')?.addEventListener('submit', function(e) {
+        var submitBtn = document.getElementById('submitBtn');
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+            setTimeout(function() {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-save"></i> Save Staff';
+            }, 10000);
+        }
+    });
+
     console.log('%c👤 Braick - Add Staff', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏥 Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Role saved as NAME not ID', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Using role as ENUM value (doctor, pharmacy, etc.)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Table: users - columns: id, username, password, full_name, email, phone, role, branch_id, specialty, status', 'font-size:13px; color:#059669;');
     console.log('%c🔑 Password format: NAME + BRCODE + UID + ID', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🎨 Design matches add_employee.php', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🎨 Design: Modern, responsive, dark mode ready', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

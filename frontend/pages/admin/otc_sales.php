@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/otc_sales.php
 // SUPER ADMIN - VIEW OTC SALES BY BRANCH
 // FIXED: $db variable defined before use
+// FIXED: net_amount column removed (uses total_amount)
 // ================================================================
 
 // ================================================================
@@ -58,20 +59,24 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
 
 // ================================================================
-// INCLUDE DATABASE - BEFORE DELETE
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
-// GET BRANCH ID FROM URL (needed for delete redirect)
+// GET BRANCH ID FROM URL
 // ================================================================
 $branch_id = isset($_GET['branch']) ? (int)$_GET['branch'] : 0;
 
 // ================================================================
-// ✅ FIXED: HANDLE DELETE OTC SALE (NOW $db IS DEFINED)
+// HANDLE DELETE OTC SALE
 // ================================================================
 if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
     $delete_id = (int)$_GET['delete'];
@@ -149,7 +154,7 @@ try {
 }
 
 // ================================================================
-// BUILD QUERY FOR OTC SALES
+// BUILD QUERY FOR OTC SALES - FIXED: net_amount removed
 // ================================================================
 $sql_display = "
     SELECT 
@@ -197,13 +202,12 @@ try {
 }
 
 // ================================================================
-// CALCULATE TOTALS
+// CALCULATE TOTALS - FIXED: net_amount removed
 // ================================================================
 $total_sales = count($otc_sales);
 $total_revenue_paid = 0;
-$total_net_all = 0;
-$total_discount = 0;
 $total_gross = 0;
+$total_discount = 0;
 $total_paid = 0;
 $total_pending = 0;
 $total_cancelled = 0;
@@ -212,21 +216,23 @@ $pending_amount = 0;
 
 foreach ($otc_sales as $sale) {
     $total_gross += (float)($sale['total_amount'] ?? 0);
-    $total_net_all += (float)($sale['net_amount'] ?? 0);
     $total_discount += (float)($sale['discount_amount'] ?? 0);
     $total_items += (int)($sale['total_items'] ?? 0);
     
     $status = $sale['payment_status'] ?? '';
     if ($status == 'paid') {
         $total_paid++;
-        $total_revenue_paid += (float)($sale['net_amount'] ?? 0);
+        $total_revenue_paid += (float)($sale['total_amount'] ?? 0);
     } elseif ($status == 'pending') {
         $total_pending++;
-        $pending_amount += (float)($sale['net_amount'] ?? 0);
+        $pending_amount += (float)($sale['total_amount'] ?? 0);
     } elseif ($status == 'cancelled') {
         $total_cancelled++;
     }
 }
+
+// Net total is total_gross - total_discount
+$total_net_all = $total_gross - $total_discount;
 
 // ================================================================
 // STATUS BADGE CLASS
@@ -247,11 +253,8 @@ function format_currency($amount) {
     }
     return 'TSh ' . number_format($amount, 0);
 }
-
-// ================================================================
-// SASA NDIO HEADER INAINGIZWA
-// ================================================================
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -1196,9 +1199,7 @@ function format_currency($amount) {
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
+    <!-- Page Header -->
     <div class="page-header-box animate-fade-in-up" style="animation-delay:0.05s;">
         <div>
             <h1 class="page-title">
@@ -1231,9 +1232,7 @@ function format_currency($amount) {
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 8 CARDS -->
-    <!-- ================================================================ -->
     <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.1s;">
         
         <!-- 1. Total Sales - BLUE -->
@@ -1330,9 +1329,7 @@ function format_currency($amount) {
         
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FILTERS -->
-    <!-- ================================================================ -->
+    <!-- Filters -->
     <div class="filter-bar animate-fade-in-up" style="animation-delay:0.15s;">
         <span class="filter-label"><i class="fas fa-filter"></i> Filter</span>
         <form method="GET" class="flex flex-wrap gap-3 items-center w-full">
@@ -1355,9 +1352,7 @@ function format_currency($amount) {
         </form>
     </div>
 
-    <!-- ================================================================ -->
     <!-- OTC SALES TABLE -->
-    <!-- ================================================================ -->
     <?php if (count($otc_sales) > 0): ?>
         <div class="sales-table-wrap animate-fade-in-up" style="animation-delay:0.2s;">
             <div class="table-header">
@@ -1410,7 +1405,7 @@ function format_currency($amount) {
                                 <td class="text-right font-semibold"><?= number_format($sale['total_items'] ?? 0) ?></td>
                                 <td class="text-right font-semibold text-blue-600">TSh <?= number_format($sale['total_amount'] ?? 0, 0) ?></td>
                                 <td class="text-right text-orange-500">TSh <?= number_format($sale['discount_amount'] ?? 0, 0) ?></td>
-                                <td class="text-right font-semibold text-success">TSh <?= number_format($sale['net_amount'] ?? 0, 0) ?></td>
+                                <td class="text-right font-semibold text-success">TSh <?= number_format(($sale['total_amount'] ?? 0) - ($sale['discount_amount'] ?? 0), 0) ?></td>
                                 <td>
                                     <span class="badge badge-<?= getStatusBadge($sale['payment_status'] ?? 'pending') ?>" style="font-size:0.55rem;padding:2px 10px;">
                                         <?= ucfirst($sale['payment_status'] ?? 'Pending') ?>
@@ -1487,9 +1482,7 @@ function format_currency($amount) {
 </main>
 
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
+    // Dark Mode
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1519,9 +1512,7 @@ function format_currency($amount) {
         }
     });
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
+    // Sidebar Toggle
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     var overlay = document.getElementById('sidebarOverlay');
@@ -1559,9 +1550,7 @@ function format_currency($amount) {
         }
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
+    // Branch Switcher
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
@@ -1569,9 +1558,7 @@ function format_currency($amount) {
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
+    // Search
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
@@ -1589,9 +1576,7 @@ function format_currency($amount) {
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
+    // Date & Time
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1608,12 +1593,13 @@ function format_currency($amount) {
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - OTC Sales (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - OTC Sales', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Revenue (PAID): TSh <?= number_format($total_revenue_paid, 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c⏳ Pending: TSh <?= number_format($pending_amount, 0) ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔵🔵🟠🟢🟢🔵🔴🟠 CUSTOM COLORS', 'font-size:13px; color:#34D399;');
     console.log('%c✅ DELETE FIXED: $db defined before use', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ net_amount removed - using total_amount - discount_amount', 'font-size:13px; color:#34D399;');
     console.log('%c✅ View, Print, Delete buttons working', 'font-size:13px; color:#34D399;');
 </script>
 

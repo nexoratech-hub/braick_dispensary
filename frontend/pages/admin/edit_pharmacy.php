@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_pharmacy.php
 // SUPER ADMIN - EDIT PHARMACY BRANCH
-// BRAICK DISPENSARY - BLUE THEME - WITH LOGIN SESSION
+// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
 // ================================================================
@@ -13,7 +13,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -21,7 +21,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER HAS ADMIN ACCESS
+// CHECK ADMIN ACCESS
 // ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
@@ -37,7 +37,7 @@ if ($_SESSION['role'] !== 'admin') {
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET ADMIN DATA
 // ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -48,49 +48,11 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
 // INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-// ================================================================
-// GET DATABASE CONNECTION
-// ================================================================
 try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
@@ -109,7 +71,7 @@ if ($pharmacy_id <= 0) {
 }
 
 // ================================================================
-// FETCH PHARMACY DETAILS
+// FETCH PHARMACY DETAILS (from branches table)
 // ================================================================
 $stmt = $db->prepare("SELECT * FROM branches WHERE id = ?");
 $stmt->execute([$pharmacy_id]);
@@ -140,16 +102,29 @@ try {
 }
 
 // ================================================================
+// GET PHARMACY STAFF COUNT
+// ================================================================
+$staff_count = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE branch_id = ? AND role = 'pharmacy' AND status = 'active'");
+    $stmt->execute([$pharmacy_id]);
+    $staff_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+} catch (Exception $e) {
+    $staff_count = 0;
+}
+
+// ================================================================
 // HANDLE FORM SUBMISSION
 // ================================================================
 $message = '';
 $message_type = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'update_pharmacy') {
     $name = trim($_POST['name'] ?? '');
     $location = trim($_POST['location'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
     $email = trim($_POST['email'] ?? '');
+    $logo = trim($_POST['logo'] ?? '');
     $status = $_POST['status'] ?? 'active';
     
     $errors = [];
@@ -166,6 +141,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Invalid email address';
     }
     
+    // Check if name already exists (excluding current)
+    if (!empty($name)) {
+        try {
+            $stmt = $db->prepare("SELECT id FROM branches WHERE name = ? AND id != ?");
+            $stmt->execute([$name, $pharmacy_id]);
+            if ($stmt->fetch()) {
+                $errors[] = 'A branch with this name already exists';
+            }
+        } catch (Exception $e) {
+            // Skip
+        }
+    }
+    
+    // Check if email already exists (excluding current)
+    if (!empty($email)) {
+        try {
+            $stmt = $db->prepare("SELECT id FROM branches WHERE email = ? AND id != ?");
+            $stmt->execute([$email, $pharmacy_id]);
+            if ($stmt->fetch()) {
+                $errors[] = 'A branch with this email already exists';
+            }
+        } catch (Exception $e) {
+            // Skip
+        }
+    }
+    
     if (empty($errors)) {
         try {
             $stmt = $db->prepare("
@@ -175,25 +176,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     location = ?,
                     phone = ?,
                     email = ?,
+                    logo = ?,
                     status = ?,
                     updated_at = NOW()
                 WHERE id = ?
             ");
-            $stmt->execute([$name, $location, $phone, $email, $status, $pharmacy_id]);
+            $stmt->execute([$name, $location, $phone, $email, $logo, $status, $pharmacy_id]);
             
-            // Log activity with user_id
+            // Log activity
             try {
-                $log_stmt = $db->prepare("
+                $stmt = $db->prepare("
                     INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
                     VALUES (?, ?, 'pharmacy_updated', ?, NOW())
                 ");
                 $details = "Pharmacy updated: " . $name . " (ID: " . $pharmacy_id . ") by " . $user_full_name;
-                $log_stmt->execute([$user_id, $pharmacy_id, $details]);
+                $stmt->execute([$user_id, $pharmacy_id, $details]);
             } catch (Exception $e) {
                 // Silent fail
             }
             
-            $message = 'Pharmacy updated successfully!';
+            $message = '✅ Pharmacy updated successfully!';
             $message_type = 'success';
             
             // Refresh pharmacy data
@@ -201,8 +203,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([$pharmacy_id]);
             $pharmacy = $stmt->fetch(PDO::FETCH_ASSOC);
             
+            // Redirect after success
+            echo '<script>
+                setTimeout(function(){ 
+                    window.location.href = "pharmacies.php?branch=' . $selected_branch_id . '&updated=1"; 
+                }, 2000);
+            </script>';
+            
         } catch (Exception $e) {
-            $message = 'Error updating pharmacy: ' . $e->getMessage();
+            $message = '❌ Error updating pharmacy: ' . $e->getMessage();
             $message_type = 'danger';
         }
     } else {
@@ -221,13 +230,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE HEADERS
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
@@ -245,48 +250,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - BLUE THEME
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
             --primary-light: #3B82F6;
             --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            --primary-gradient-hover: linear-gradient(135deg, #0A4CA8, #083C8A);
-            
             --success: #059669;
-            --success-dark: #047857;
-            --success-light: #34D399;
             --success-bg: #D1FAE5;
-            
             --danger: #DC2626;
-            --danger-dark: #B91C1C;
-            --danger-light: #F87171;
             --danger-bg: #FEE2E2;
-            
             --warning: #D97706;
             --warning-bg: #FEF3C7;
-            
-            --white: #FFFFFF;
-            --gray-50: #F8FAFC;
-            --gray-100: #F1F5F9;
-            --gray-200: #E2E8F0;
-            --gray-300: #CBD5E1;
-            --gray-400: #94A3B8;
-            --gray-500: #64748B;
-            --gray-600: #475569;
-            --gray-700: #334155;
-            --gray-800: #1E293B;
-            --gray-900: #0F172A;
-            
-            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
-            --shadow: 0 1px 3px rgba(0,0,0,0.08);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.12);
-            
             --bg-body: #F0F4F8;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -295,6 +270,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --border-color: #E2E8F0;
             --radius: 12px;
             --radius-lg: 18px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
         }
         
         [data-theme="dark"] {
@@ -305,13 +283,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --text-secondary: #94A3B8;
             --border-color: #334155;
             --primary: #3B82F6;
-            --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
             --primary-bg: #1E3A5F;
-            --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --shadow-xl: 0 20px 40px rgba(0,0,0,0.5);
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -323,13 +297,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
-        ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
-        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
-        
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -343,7 +310,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             justify-content: space-between;
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
             backdrop-filter: blur(10px);
             box-shadow: var(--shadow-sm);
         }
@@ -354,14 +320,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             background: var(--bg-body);
             border-radius: var(--radius);
             border: 2px solid var(--border-color);
-            transition: all 0.3s;
             flex: 1;
             max-width: 500px;
-        }
-        
-        .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
         }
         
         .top-nav .search-wrapper input {
@@ -374,10 +334,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
         .top-nav .search-wrapper .search-btn {
             background: var(--primary-gradient);
             color: white;
@@ -386,25 +342,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-radius: 0 var(--radius) var(--radius) 0;
             cursor: pointer;
             font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-        
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
         }
         
         .top-nav .avatar {
@@ -414,12 +351,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             object-fit: cover;
             border: 2px solid var(--border-color);
             cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
         }
         
         .top-nav .icon-btn {
@@ -430,16 +361,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             align-items: center;
             justify-content: center;
             color: var(--text-secondary);
-            transition: all 0.3s;
             background: transparent;
             border: none;
             cursor: pointer;
             position: relative;
-        }
-        
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: var(--primary);
         }
         
         .notif-dot {
@@ -469,18 +394,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             cursor: pointer;
             font-size: 0.82rem;
             color: var(--text-primary);
-            transition: all 0.3s;
             display: flex;
             align-items: center;
             gap: 6px;
         }
-        
-        .dark-toggle-btn:hover {
-            border-color: var(--primary);
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.9rem; }
         
         .branch-selector {
             background: var(--bg-body);
@@ -491,16 +408,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
             outline: none;
             cursor: pointer;
-            transition: all 0.3s;
         }
         
-        .branch-selector:focus {
-            border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -508,9 +417,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - BLUE THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: var(--radius-lg);
@@ -526,30 +432,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             overflow: hidden;
         }
         
-        .page-header::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 400px;
-            height: 400px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -562,10 +444,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -576,11 +455,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
-        }
-        
-        .page-header .page-subtitle strong {
-            color: white;
-            font-weight: 600;
         }
         
         .page-header .role-badge-display {
@@ -595,6 +469,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             backdrop-filter: blur(4px);
         }
         
+        .page-header .header-badge {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.12);
             color: white;
@@ -603,7 +491,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-radius: var(--radius);
             font-weight: 500;
             font-size: 0.82rem;
-            transition: all 0.3s;
             text-decoration: none;
             display: inline-flex;
             align-items: center;
@@ -619,9 +506,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           FORM CARD - BLUE THEME
-           ================================================================ */
         .form-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -708,19 +592,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-color: #DC2626;
         }
         
-        .form-group .form-control.success {
-            border-color: #059669;
-        }
-        
         .form-group .form-help {
             font-size: 0.7rem;
             color: var(--text-secondary);
             margin-top: 4px;
         }
         
-        /* ================================================================
-           ALERT MESSAGES
-           ================================================================ */
         .alert {
             padding: 14px 18px;
             border-radius: var(--radius);
@@ -743,33 +620,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: #991B1B;
         }
         
-        .alert-warning {
-            background: #FEF3C7;
-            border-color: #FBBF24;
-            color: #92400E;
-        }
-        
-        .alert-info {
-            background: #DBEAFE;
-            border-color: #60A5FA;
-            color: #1E40AF;
-        }
-        
-        .alert i {
-            font-size: 1.2rem;
-            margin-top: 2px;
-            flex-shrink: 0;
-        }
-        
-        .alert .alert-content {
-            flex: 1;
-        }
-        
-        .alert .alert-title {
-            font-weight: 600;
-            margin-bottom: 2px;
-        }
-        
         [data-theme="dark"] .alert-success {
             background: #1A3A2A;
             border-color: #059669;
@@ -782,21 +632,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: #F87171;
         }
         
-        [data-theme="dark"] .alert-warning {
-            background: #3D2E0A;
-            border-color: #D97706;
-            color: #FBBF24;
+        .alert i {
+            font-size: 1.2rem;
+            margin-top: 2px;
+            flex-shrink: 0;
         }
         
-        [data-theme="dark"] .alert-info {
-            background: #1A2A4A;
-            border-color: #2563EB;
-            color: #60A5FA;
-        }
-        
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -817,7 +658,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         .btn-primary:hover {
-            background: var(--primary-gradient-hover);
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(11, 94, 215, 0.35);
         }
@@ -840,7 +680,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         .btn-danger:hover {
-            background: #B91C1C;
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(220, 38, 38, 0.35);
         }
@@ -859,9 +698,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-top: 2px solid var(--border-color);
         }
         
-        /* ================================================================
-           STATUS TOGGLE
-           ================================================================ */
         .status-toggle {
             display: flex;
             gap: 12px;
@@ -900,9 +736,71 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            color: white;
+        }
+        
+        .badge-success { background: #059669; }
+        .badge-danger { background: #DC2626; }
+        .badge-warning { background: #D97706; color: #1E293B; }
+        .badge-info { background: #0B5ED7; }
+        
+        [data-theme="dark"] .badge-warning { color: #1E293B; }
+        
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 999;
+            max-width: 400px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+        }
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        .toast-custom.warning { background: var(--warning); }
+        
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        .footer .footer-brand { color: var(--primary); font-weight: 700; }
+        
+        .grid { display: grid; }
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .md\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .gap-4 { gap: 16px; }
+        .text-xs { font-size: 0.65rem; }
+        .font-medium { font-weight: 500; }
+        .font-semibold { font-weight: 600; }
+        .font-bold { font-weight: 700; }
+        .text-gray-400 { color: var(--text-secondary); }
+        .text-primary { color: var(--primary); }
+        .uppercase { text-transform: uppercase; }
+        .tracking-wider { letter-spacing: 0.05em; }
+        .ml-auto { margin-left: auto; }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -920,6 +818,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .form-actions .btn { width: 100%; justify-content: center; }
             .status-toggle { width: 100%; }
             .status-toggle .status-option { flex: 1; text-align: center; }
+            .md\:grid-cols-2 { grid-template-columns: 1fr; }
         }
         
         @media (max-width: 480px) {
@@ -928,9 +827,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .form-card { margin: 0; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -941,18 +837,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-10px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .alert {
-            animation: slideDown 0.3s ease forwards;
-        }
-        
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
@@ -975,7 +859,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1040,6 +924,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
                     <i class="fas fa-id-badge"></i> ID: #<?= $pharmacy['id'] ?>
                 </span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-users"></i> <?= $staff_count ?> Staff
+                </span>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
@@ -1052,11 +939,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
+    <!-- Message -->
+    <?php if (!empty($message)): ?>
+        <div class="alert alert-<?= $message_type ?>" style="max-width:800px;margin:0 auto 16px;">
+            <i class="fas fa-<?= $message_type === 'success' ? 'check-circle' : 'exclamation-circle' ?>"></i>
+            <div class="alert-content">
+                <div class="alert-title"><?= $message_type === 'success' ? 'Success!' : 'Error!' ?></div>
+                <?= $message ?>
+            </div>
+        </div>
+    <?php endif; ?>
+
     <!-- ================================================================ -->
     <!-- EDIT FORM -->
     <!-- ================================================================ -->
     <div class="form-card animate-fade-in-up">
-        <!-- Form Header -->
         <div class="form-card-header">
             <span class="form-title">
                 <i class="fas fa-pen"></i>
@@ -1067,22 +964,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </span>
         </div>
         
-        <!-- Form Body -->
         <div class="form-card-body">
-            
-            <!-- Alert Messages -->
-            <?php if (!empty($message)): ?>
-                <div class="alert alert-<?= $message_type ?>">
-                    <i class="fas fa-<?= $message_type === 'success' ? 'check-circle' : 'exclamation-circle' ?>"></i>
-                    <div class="alert-content">
-                        <div class="alert-title"><?= $message_type === 'success' ? 'Success!' : 'Error!' ?></div>
-                        <?= $message ?>
-                    </div>
-                </div>
-            <?php endif; ?>
-            
-            <!-- Form -->
             <form method="POST" action="" id="editPharmacyForm">
+                <input type="hidden" name="action" value="update_pharmacy">
                 
                 <!-- Pharmacy Name -->
                 <div class="form-group">
@@ -1124,6 +1008,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <div class="form-help">Official email address for the pharmacy.</div>
                 </div>
                 
+                <!-- Logo URL -->
+                <div class="form-group">
+                    <label for="logo">Logo URL</label>
+                    <input type="text" id="logo" name="logo" class="form-control" 
+                           placeholder="Enter logo image URL" 
+                           value="<?= htmlspecialchars($pharmacy['logo'] ?? '') ?>">
+                    <div class="form-help">Optional - URL to pharmacy logo image.</div>
+                </div>
+                
                 <!-- Status -->
                 <div class="form-group">
                     <label>Status <span class="required">*</span></label>
@@ -1159,7 +1052,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PHARMACY INFO CARD (READ ONLY) -->
+    <!-- PHARMACY INFO CARD -->
     <!-- ================================================================ -->
     <div class="form-card animate-fade-in-up" style="animation-delay:0.1s; max-width:800px; margin:20px auto 0;">
         <div class="form-card-header" style="background: var(--bg-body); border-bottom: 2px solid var(--border-color);">
@@ -1266,9 +1159,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1281,9 +1171,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // SEARCH
-    // ================================================================
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
@@ -1297,14 +1184,28 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
+
+    function updateDateTime() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var dtEl = document.getElementById('currentDateTime');
+        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+        
+        var ftEl = document.getElementById('footerTime');
+        if (ftEl) ftEl.textContent = timeStr;
+    }
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // STATUS TOGGLE
@@ -1339,26 +1240,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
@@ -1390,12 +1271,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var email = document.getElementById('email').value.trim();
         var isValid = true;
         
-        // Reset errors
         document.querySelectorAll('.form-control.error').forEach(function(el) {
             el.classList.remove('error');
-        });
-        document.querySelectorAll('.form-error').forEach(function(el) {
-            el.classList.remove('show');
         });
         
         if (name.length < 2) {
@@ -1419,13 +1296,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    console.log('%c🏥 Braick Dispensary - Edit Pharmacy (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Braick Dispensary - Edit Pharmacy', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💊 Editing: <?= htmlspecialchars($pharmacy['name']) ?> (ID: <?= $pharmacy['id'] ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c📌 Location: <?= htmlspecialchars($pharmacy['location'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📞 Phone: <?= htmlspecialchars($pharmacy['phone'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📧 Email: <?= htmlspecialchars($pharmacy['email'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c👥 Staff: <?= $staff_count ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c📌 Location: <?= htmlspecialchars($pharmacy['location'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Using tables: branches, users, activity_logs', 'font-size:13px; color:#34D399;');
+    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

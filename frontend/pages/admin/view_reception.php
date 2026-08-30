@@ -1,8 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/view_reception.php
-// SUPER ADMIN - VIEW RECEPTION BRANCH DETAILS
+// ADMIN - VIEW RECEPTION BRANCH DETAILS
 // BRAICK DISPENSARY - BLUE THEME
+// WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
 // ================================================================
@@ -18,7 +19,11 @@ if (session_status() === PHP_SESSION_NONE) {
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
@@ -56,39 +61,25 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// VERIFY USER EXISTS IN DATABASE
-// ================================================================
-$stmt = $db->prepare("SELECT id, full_name, role, status FROM users WHERE id = ?");
-$stmt->execute([$user_id]);
-$user = $stmt->fetch(PDO::FETCH_ASSOC);
-
-if (!$user || $user['status'] !== 'active') {
-    session_destroy();
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
-
-// ================================================================
-// GET BRANCH ID
+// GET PARAMETERS
 // ================================================================
 $reception_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 
 if ($reception_id <= 0) {
     header('Location: receptions.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
     exit;
+}
+
+// ================================================================
+// GET BRANCHES FOR FILTER
+// ================================================================
+$branches = [];
+try {
+    $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
 }
 
 // ================================================================
@@ -104,10 +95,18 @@ try {
             (SELECT COUNT(*) FROM patients WHERE branch_id = b.id AND DATE(created_at) = CURDATE()) as today_patients,
             (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'pending') as pending_visits,
             (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'assigned') as assigned_visits,
+            (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'with_doctor') as with_doctor_visits,
+            (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'completed') as completed_visits,
+            (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND status = 'cancelled') as cancelled_visits,
+            (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()) as today_visits,
             (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'scheduled') as scheduled_appointments,
             (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'confirmed') as confirmed_appointments,
+            (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'completed') as completed_appointments,
+            (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND status = 'cancelled') as cancelled_appointments,
             (SELECT COUNT(*) FROM appointments WHERE branch_id = b.id AND DATE(appointment_date) = CURDATE()) as today_appointments,
-            (SELECT COUNT(*) FROM visits WHERE branch_id = b.id AND DATE(visit_date) = CURDATE()) as today_visits
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
+            (SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE branch_id = b.id AND status = 'paid') as total_revenue
         FROM branches b
         WHERE b.id = ?
     ");
@@ -180,7 +179,8 @@ try {
             a.created_at,
             p.full_name as patient_name,
             u.full_name as doctor_name,
-            a.visit_type
+            a.visit_type,
+            a.purpose
         FROM appointments a
         LEFT JOIN patients p ON a.patient_id = p.id
         LEFT JOIN users u ON a.doctor_id = u.id
@@ -228,9 +228,11 @@ try {
 $recent_activities = [];
 try {
     $stmt = $db->prepare("
-        SELECT * FROM activity_logs 
-        WHERE branch_id = ? 
-        ORDER BY created_at DESC 
+        SELECT al.*, u.full_name as user_name
+        FROM activity_logs al
+        LEFT JOIN users u ON al.user_id = u.id
+        WHERE al.branch_id = ?
+        ORDER BY al.created_at DESC 
         LIMIT 10
     ");
     $stmt->execute([$reception_id]);
@@ -240,18 +242,19 @@ try {
 }
 
 // ================================================================
-// GET BRANCHES FOR FILTER
+// GET UNREAD NOTIFICATIONS
 // ================================================================
-$branches = [];
+$unread_notifications = 0;
 try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 } catch (Exception $e) {
-    $branches = [];
+    $unread_notifications = 0;
 }
 
 // ================================================================
-// STATUS BADGE CLASS
+// STATUS FUNCTIONS
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
@@ -262,7 +265,10 @@ function getStatusBadge($status) {
         'confirmed' => 'success',
         'scheduled' => 'warning',
         'completed' => 'success',
-        'cancelled' => 'danger'
+        'cancelled' => 'danger',
+        'with_doctor' => 'primary',
+        'paid' => 'success',
+        'partial' => 'warning'
     ];
     return $classes[$status] ?? 'secondary';
 }
@@ -276,9 +282,29 @@ function getStatusIcon($status) {
         'confirmed' => 'fa-check-double',
         'scheduled' => 'fa-calendar-check',
         'completed' => 'fa-check-circle',
-        'cancelled' => 'fa-times-circle'
+        'cancelled' => 'fa-times-circle',
+        'with_doctor' => 'fa-user-md',
+        'paid' => 'fa-check-circle',
+        'partial' => 'fa-clock'
     ];
     return $icons[$status] ?? 'fa-circle';
+}
+
+function getStatusLabel($status) {
+    $labels = [
+        'pending' => 'Pending',
+        'assigned' => 'Assigned',
+        'confirmed' => 'Confirmed',
+        'scheduled' => 'Scheduled',
+        'completed' => 'Completed',
+        'cancelled' => 'Cancelled',
+        'with_doctor' => 'With Doctor',
+        'paid' => 'Paid',
+        'partial' => 'Partial',
+        'active' => 'Active',
+        'inactive' => 'Inactive'
+    ];
+    return $labels[$status] ?? ucfirst($status);
 }
 
 // ================================================================
@@ -617,18 +643,6 @@ include_once '../../components/admin_sidebar.php';
             pointer-events: none;
         }
         
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -662,7 +676,7 @@ include_once '../../components/admin_sidebar.php';
             font-weight: 600;
         }
         
-        .page-header .role-badge-display {
+        .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 4px 14px;
@@ -725,7 +739,7 @@ include_once '../../components/admin_sidebar.php';
             background: var(--bg-card);
             border-radius: var(--radius-lg);
             padding: 24px 28px;
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--border-color);
             transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
         }
@@ -861,7 +875,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .stat-link-hint {
-            font-size: 0.6rem;
+            font-size: 0.55rem;
             color: rgba(255,255,255,0.5);
             margin-top: 4px;
             position: relative;
@@ -961,7 +975,7 @@ include_once '../../components/admin_sidebar.php';
         .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            border: 1px solid var(--border-color);
+            border: 2px solid var(--border-color);
             overflow: hidden;
             transition: all 0.3s ease;
             box-shadow: var(--shadow-sm);
@@ -975,7 +989,7 @@ include_once '../../components/admin_sidebar.php';
         .card-header {
             padding: 14px 20px;
             background: var(--bg-body);
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 2px solid var(--border-color);
             display: flex;
             justify-content: space-between;
             align-items: center;
@@ -1056,11 +1070,37 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           EMPTY STATE
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 30px 20px;
+            color: var(--text-secondary);
+        }
+        
+        .empty-state i {
+            font-size: 2.5rem;
+            color: var(--border-color);
+            margin-bottom: 12px;
+        }
+        
+        .empty-state h4 {
+            font-size: 1rem;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+        
+        .empty-state p {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+        
+        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
             padding: 14px 0;
-            border-top: 1px solid var(--border-color);
+            border-top: 2px solid var(--border-color);
             margin-top: 24px;
             text-align: center;
             font-size: 0.7rem;
@@ -1101,6 +1141,8 @@ include_once '../../components/admin_sidebar.php';
             .stat-card { padding: 14px 16px; min-height: 70px; }
             .stat-value { font-size: 1.2rem; }
             .stat-icon { width: 40px; height: 40px; font-size: 1rem; }
+            .card-header { flex-direction: column; align-items: flex-start; }
+            .btn { width: 100%; justify-content: center; }
         }
         
         /* ================================================================
@@ -1230,7 +1272,7 @@ include_once '../../components/admin_sidebar.php';
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="edit_reception.php?id=<?= $reception['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+            <a href="edit_branch.php?id=<?= $reception['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-edit"></i> Edit
             </a>
             <a href="receptions.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
@@ -1374,22 +1416,15 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-chevron-right stat-arrow"></i>
         </a>
         
-        <!-- 8. Registration Rate -->
-        <a href="patients.php?branch=<?= $reception_id ?>" class="stat-card">
+        <!-- 8. Revenue -->
+        <a href="reports.php?branch=<?= $reception_id ?>&type=reception" class="stat-card">
             <div class="stat-icon">
-                <i class="fas fa-chart-line"></i>
+                <i class="fas fa-money-bill-wave"></i>
             </div>
             <div>
-                <p class="stat-label">Registration Rate</p>
-                <p class="stat-value">
-                    <?php 
-                        $total = $reception['total_patients'] ?? 0;
-                        $today = $reception['today_patients'] ?? 0;
-                        $rate = $total > 0 ? round(($today / $total) * 100, 1) : 0;
-                        echo $rate . '%';
-                    ?>
-                </p>
-                <p class="stat-sub">Today's registrations</p>
+                <p class="stat-label">Revenue</p>
+                <p class="stat-value">TSh <?= number_format($reception['total_revenue'] ?? 0, 0) ?></p>
+                <p class="stat-sub"><?= $reception['paid_bills'] ?? 0 ?> paid | <?= $reception['pending_bills'] ?? 0 ?> pending</p>
                 <p class="stat-link-hint"><i class="fas fa-arrow-right"></i> View Reports</p>
             </div>
             <i class="fas fa-chevron-right stat-arrow"></i>
@@ -1403,7 +1438,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-user-tie text-teal-600"></i>
+                <i class="fas fa-user-tie" style="color:var(--teal);"></i>
                 Receptionists (<?= count($receptionists) ?>)
             </h3>
             <a href="add_employee.php?branch=<?= $reception_id ?>&role=reception" class="btn btn-sm btn-primary">
@@ -1426,7 +1461,14 @@ include_once '../../components/admin_sidebar.php';
                     <tbody>
                         <?php foreach ($receptionists as $receptionist): ?>
                             <tr>
-                                <td class="font-medium"><?= htmlspecialchars($receptionist['full_name'] ?? 'N/A') ?></td>
+                                <td class="font-medium">
+                                    <?= htmlspecialchars($receptionist['full_name'] ?? 'N/A') ?>
+                                    <?php if (isset($receptionist['is_online']) && $receptionist['is_online'] == 1): ?>
+                                        <span class="badge badge-success" style="font-size:0.5rem;padding:1px 8px;">
+                                            <i class="fas fa-circle"></i> Online
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?= htmlspecialchars($receptionist['email'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($receptionist['phone'] ?? 'N/A') ?></td>
                                 <td>
@@ -1441,16 +1483,19 @@ include_once '../../components/admin_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="view_employee.php?id=<?= $receptionist['id'] ?>&branch=<?= $reception_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_employee.php?id=<?= $receptionist['id'] ?>&branch=<?= $reception_id ?>" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:2px 8px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-user-tie text-2xl block mb-2"></i>
-                    <p>No receptionists assigned to this branch</p>
+                <div class="empty-state">
+                    <i class="fas fa-user-tie"></i>
+                    <h4>No Receptionists</h4>
+                    <p>No receptionists assigned to this branch.</p>
                     <a href="add_employee.php?branch=<?= $reception_id ?>&role=reception" class="btn btn-sm btn-primary mt-2">
                         <i class="fas fa-plus"></i> Add Receptionist
                     </a>
@@ -1465,10 +1510,10 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-user-plus text-blue-600"></i>
+                <i class="fas fa-user-plus" style="color:var(--primary);"></i>
                 Recent Patients Registered
             </h3>
-            <a href="patients.php?branch=<?= $reception_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="patients.php?branch=<?= $reception_id ?>" class="text-xs font-medium hover:underline" style="color:var(--primary);">View All →</a>
         </div>
         <div class="overflow-x-auto">
             <?php if (count($recent_patients) > 0): ?>
@@ -1494,16 +1539,19 @@ include_once '../../components/admin_sidebar.php';
                                 <td><?= htmlspecialchars($patient['registered_by'] ?? 'N/A') ?></td>
                                 <td class="text-xs"><?= date('M d, Y h:i A', strtotime($patient['created_at'] ?? 'now')) ?></td>
                                 <td>
-                                    <a href="view_patient.php?id=<?= $patient['id'] ?>&branch=<?= $reception_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_patient.php?id=<?= $patient['id'] ?>&branch=<?= $reception_id ?>" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:2px 8px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-user-plus text-2xl block mb-2"></i>
-                    <p>No patients registered yet</p>
+                <div class="empty-state">
+                    <i class="fas fa-user-plus"></i>
+                    <h4>No Patients</h4>
+                    <p>No patients registered yet.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1515,10 +1563,10 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-calendar-plus text-purple-600"></i>
+                <i class="fas fa-calendar-plus" style="color:var(--purple);"></i>
                 Recent Appointments
             </h3>
-            <a href="appointments.php?branch=<?= $reception_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="appointments.php?branch=<?= $reception_id ?>" class="text-xs font-medium hover:underline" style="color:var(--primary);">View All →</a>
         </div>
         <div class="overflow-x-auto">
             <?php if (count($recent_appointments) > 0): ?>
@@ -1547,20 +1595,23 @@ include_once '../../components/admin_sidebar.php';
                                 <td>
                                     <span class="badge badge-<?= getStatusBadge($appointment['status'] ?? 'scheduled') ?>" style="font-size:0.55rem;padding:1px 8px;">
                                         <i class="fas <?= getStatusIcon($appointment['status'] ?? 'scheduled') ?>"></i>
-                                        <?= ucfirst($appointment['status'] ?? 'Scheduled') ?>
+                                        <?= getStatusLabel($appointment['status'] ?? 'Scheduled') ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="view_appointment.php?id=<?= $appointment['id'] ?>&branch=<?= $reception_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_appointment.php?id=<?= $appointment['id'] ?>&branch=<?= $reception_id ?>" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:2px 8px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-calendar-plus text-2xl block mb-2"></i>
-                    <p>No appointments found</p>
+                <div class="empty-state">
+                    <i class="fas fa-calendar-plus"></i>
+                    <h4>No Appointments</h4>
+                    <p>No appointments found.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1572,10 +1623,10 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-clinic-medical text-green-600"></i>
+                <i class="fas fa-clinic-medical" style="color:var(--success);"></i>
                 Recent Visits
             </h3>
-            <a href="visits.php?branch=<?= $reception_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="visits.php?branch=<?= $reception_id ?>" class="text-xs font-medium hover:underline" style="color:var(--primary);">View All →</a>
         </div>
         <div class="overflow-x-auto">
             <?php if (count($recent_visits) > 0): ?>
@@ -1605,21 +1656,24 @@ include_once '../../components/admin_sidebar.php';
                                 <td>
                                     <span class="badge badge-<?= getStatusBadge($visit['status'] ?? 'pending') ?>" style="font-size:0.55rem;padding:1px 8px;">
                                         <i class="fas <?= getStatusIcon($visit['status'] ?? 'pending') ?>"></i>
-                                        <?= ucfirst($visit['status'] ?? 'Pending') ?>
+                                        <?= getStatusLabel($visit['status'] ?? 'Pending') ?>
                                     </span>
                                 </td>
                                 <td class="text-xs"><?= date('M d, Y h:i A', strtotime($visit['visit_date'] ?? 'now')) ?></td>
                                 <td>
-                                    <a href="view_visit.php?id=<?= $visit['id'] ?>&branch=<?= $reception_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
+                                    <a href="view_visit.php?id=<?= $visit['id'] ?>&branch=<?= $reception_id ?>" class="btn btn-sm btn-primary" style="font-size:0.6rem;padding:2px 8px;">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>
                 </table>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-clinic-medical text-2xl block mb-2"></i>
-                    <p>No visits found</p>
+                <div class="empty-state">
+                    <i class="fas fa-clinic-medical"></i>
+                    <h4>No Visits</h4>
+                    <p>No visits found.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1631,10 +1685,10 @@ include_once '../../components/admin_sidebar.php';
     <div class="card animate-fade-in-up" style="animation-delay:0.3s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-clock text-gray-500"></i>
+                <i class="fas fa-clock" style="color:var(--gray-500);"></i>
                 Recent Activities
             </h3>
-            <a href="system_logs.php?branch=<?= $reception_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
+            <a href="system_logs.php?branch=<?= $reception_id ?>" class="text-xs font-medium hover:underline" style="color:var(--primary);">View All →</a>
         </div>
         <div class="max-h-60 overflow-y-auto">
             <?php if (count($recent_activities) > 0): ?>
@@ -1644,8 +1698,19 @@ include_once '../../components/admin_sidebar.php';
                             <i class="fas fa-circle text-[6px]"></i>
                         </div>
                         <div>
-                            <p class="font-medium text-sm text-gray-800 dark:text-gray-200"><?= htmlspecialchars($activity['action'] ?? 'Action') ?></p>
-                            <p class="text-xs text-gray-500 dark:text-gray-400"><?= htmlspecialchars($activity['details'] ?? '') ?></p>
+                            <p class="font-medium text-sm text-gray-800 dark:text-gray-200">
+                                <?php 
+                                    $action_display = $activity['action'] ?? 'Action';
+                                    $action_display = ucwords(str_replace('_', ' ', $action_display));
+                                    echo htmlspecialchars($action_display);
+                                ?>
+                            </p>
+                            <p class="text-xs text-gray-500 dark:text-gray-400">
+                                <?= htmlspecialchars($activity['details'] ?? '') ?>
+                                <?php if (!empty($activity['user_name'])): ?>
+                                    <span class="text-gray-400">by <?= htmlspecialchars($activity['user_name']) ?></span>
+                                <?php endif; ?>
+                            </p>
                             <p class="text-[10px] text-gray-400 dark:text-gray-500 mt-0.5">
                                 <?= isset($activity['created_at']) ? date('M d, Y h:i A', strtotime($activity['created_at'])) : 'Just now' ?>
                             </p>
@@ -1653,9 +1718,10 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 <?php endforeach; ?>
             <?php else: ?>
-                <div class="text-center py-6 text-gray-400">
-                    <i class="fas fa-clock text-2xl block mb-2"></i>
-                    <p>No activities found</p>
+                <div class="empty-state">
+                    <i class="fas fa-clock"></i>
+                    <h4>No Activities</h4>
+                    <p>No activities found.</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -1666,22 +1732,22 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4 animate-fade-in-up" style="animation-delay:0.35s;">
         <a href="add_patient.php?branch=<?= $reception_id ?>" 
-           class="bg-card border border-border rounded-lg p-4 text-center hover:border-primary transition-all hover:shadow-md text-decoration-none">
+           class="bg-card border-2 border-border rounded-lg p-4 text-center hover:border-primary transition-all hover:shadow-md text-decoration-none">
             <i class="fas fa-user-plus text-2xl text-blue-600 block mb-2"></i>
             <span class="text-sm font-medium text-text-primary">Register Patient</span>
         </a>
         <a href="add_appointment.php?branch=<?= $reception_id ?>" 
-           class="bg-card border border-border rounded-lg p-4 text-center hover:border-purple-500 transition-all hover:shadow-md text-decoration-none">
+           class="bg-card border-2 border-border rounded-lg p-4 text-center hover:border-purple-500 transition-all hover:shadow-md text-decoration-none">
             <i class="fas fa-calendar-plus text-2xl text-purple-600 block mb-2"></i>
             <span class="text-sm font-medium text-text-primary">Schedule Appointment</span>
         </a>
         <a href="assign_doctor.php?branch=<?= $reception_id ?>" 
-           class="bg-card border border-border rounded-lg p-4 text-center hover:border-green-500 transition-all hover:shadow-md text-decoration-none">
+           class="bg-card border-2 border-border rounded-lg p-4 text-center hover:border-green-500 transition-all hover:shadow-md text-decoration-none">
             <i class="fas fa-user-md text-2xl text-green-600 block mb-2"></i>
             <span class="text-sm font-medium text-text-primary">Assign Doctor</span>
         </a>
         <a href="reports.php?branch=<?= $reception_id ?>&type=reception" 
-           class="bg-card border border-border rounded-lg p-4 text-center hover:border-orange-500 transition-all hover:shadow-md text-decoration-none">
+           class="bg-card border-2 border-border rounded-lg p-4 text-center hover:border-orange-500 transition-all hover:shadow-md text-decoration-none">
             <i class="fas fa-chart-bar text-2xl text-orange-500 block mb-2"></i>
             <span class="text-sm font-medium text-text-primary">View Reports</span>
         </a>
@@ -1814,6 +1880,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c👥 Total Patients: <?= number_format($reception['total_patients'] ?? 0) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Today\'s Appointments: <?= number_format($reception['today_appointments'] ?? 0) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c🔄 Pending Visits: <?= number_format($reception['pending_visits'] ?? 0) ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c💰 Revenue: TSh <?= number_format($reception['total_revenue'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔒 Login session: ACTIVE', 'font-size:13px; color:#34D399;');
     console.log('%c🔑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c✅ All 8 stat cards have BLUE BACKGROUND with white text', 'font-size:13px; color:#34D399;');

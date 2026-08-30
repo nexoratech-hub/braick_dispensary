@@ -4,6 +4,7 @@
 // CASHIER - VIEW BILL DETAILS WITH PDF
 // FIXED: Uses bills table (not patient_bills)
 // WITH PDF GENERATION - Official Stamp & Admin Numbers
+// FIXED: Single table for bill items (removed separate payments table)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -134,17 +135,6 @@ try {
     $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
     // ================================================================
-    // GET PAYMENTS
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT * FROM payments 
-        WHERE bill_id = ? 
-        ORDER BY id DESC
-    ");
-    $stmt->execute([$bill_id]);
-    $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-    // ================================================================
     // CALCULATE TOTALS
     // ================================================================
     $total_items = count($items);
@@ -157,11 +147,6 @@ try {
     $total_amount = (float)$bill['total_amount'];
     $paid_amount = (float)$bill['paid_amount'];
     $balance = (float)$bill['balance'];
-    $total_payments = count($payments);
-    $total_paid_amount = 0;
-    foreach ($payments as $payment) {
-        $total_paid_amount += (float)$payment['amount'];
-    }
 
     // ================================================================
     // GET SYSTEM SETTINGS
@@ -178,15 +163,12 @@ try {
     $message_type = 'error';
     $bill = null;
     $items = [];
-    $payments = [];
     $total_items = 0;
     $subtotal = 0;
     $discount_amount = 0;
     $total_amount = 0;
     $paid_amount = 0;
     $balance = 0;
-    $total_payments = 0;
-    $total_paid_amount = 0;
     $currency = 'TSh';
     $admin_phones = [];
     $branch_phone = '';
@@ -620,7 +602,7 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         /* ================================================================
-           TABLES
+           TABLE - SINGLE TABLE
            ================================================================ */
         .table-wrapper {
             background: var(--bg-card);
@@ -700,12 +682,6 @@ include_once '../../components/cashier_sidebar.php';
         
         .data-table .item-total { font-weight: 600; }
         
-        /* Payments Table */
-        .payments-table thead th {
-            background: var(--primary) !important;
-            border-bottom-color: var(--primary-dark) !important;
-        }
-        
         /* ================================================================
            STATUS BADGE
            ================================================================ */
@@ -731,42 +707,6 @@ include_once '../../components/cashier_sidebar.php';
         .status-badge.cancelled {
             background: var(--badge-cancelled-bg);
             color: var(--badge-cancelled-text);
-        }
-        
-        .payment-method-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 2px 10px;
-            border-radius: 8px;
-        }
-        .payment-method-badge.cash {
-            background: var(--success-bg);
-            color: var(--success);
-        }
-        .payment-method-badge.card {
-            background: #DBEAFE;
-            color: #2563EB;
-        }
-        .payment-method-badge.mobile {
-            background: var(--purple-bg);
-            color: var(--purple);
-        }
-        .payment-method-badge.bank {
-            background: var(--warning-bg);
-            color: var(--warning);
-        }
-        .payment-method-badge.insurance {
-            background: #E0E7FF;
-            color: #4F46E5;
-        }
-        [data-theme="dark"] .payment-method-badge.card {
-            background: #1E3A5F;
-            color: #60A5FA;
-        }
-        [data-theme="dark"] .payment-method-badge.insurance {
-            background: #1E3A5F;
-            color: #818CF8;
         }
         
         /* ================================================================
@@ -1312,8 +1252,8 @@ include_once '../../components/cashier_sidebar.php';
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
-            <a href="pending_bills.php" class="btn-outline-light">
-                <i class="fas fa-list"></i> Pending
+            <a href="paid_bills.php" class="btn-outline-light">
+                <i class="fas fa-list"></i> Paid Bills
             </a>
             <button onclick="generatePDF()" class="btn-outline-light" style="background:rgba(220,38,38,0.2);border-color:rgba(220,38,38,0.3);">
                 <i class="fas fa-file-pdf"></i> Export PDF
@@ -1437,7 +1377,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- BILL ITEMS TABLE -->
+    <!-- BILL ITEMS TABLE - SINGLE TABLE -->
     <div class="table-wrapper animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="table-header">
             <div class="table-title">
@@ -1514,94 +1454,15 @@ include_once '../../components/cashier_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- PAYMENTS TABLE -->
-    <div class="table-wrapper animate-fade-in-up" style="animation-delay:0.15s;">
-        <div class="table-header">
-            <div class="table-title">
-                <i class="fas fa-credit-card"></i>
-                Payment History
-                <span class="text-xs" style="color:var(--text-secondary);">(<?= $total_payments ?>)</span>
-            </div>
-            <div class="text-xs" style="color:var(--text-secondary);">
-                Paid: <strong style="color:var(--success);"><?= $currency ?> <?= number_format($total_paid_amount, 0) ?></strong>
-                | Balance: <strong style="color:<?= $balance > 0 ? 'var(--danger)' : 'var(--success)' ?>;"><?= $currency ?> <?= number_format($balance, 0) ?></strong>
-            </div>
-        </div>
-        
-        <div style="overflow-x:auto;">
-            <table class="data-table payments-table">
-                <thead>
-                    <tr>
-                        <th style="width:35px;text-align:center;">#</th>
-                        <th>Receipt #</th>
-                        <th style="text-align:right;">Amount</th>
-                        <th>Method</th>
-                        <th style="text-align:center;">Status</th>
-                        <th>Date</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    <?php if (count($payments) > 0): ?>
-                        <?php $counter = 1; foreach ($payments as $payment): ?>
-                            <tr>
-                                <td style="text-align:center;"><?= $counter++ ?></td>
-                                <td>
-                                    <span class="font-mono font-semibold" style="color:var(--primary);font-size:0.75rem;">
-                                        <?= htmlspecialchars($payment['receipt_number'] ?? $payment['payment_number'] ?? 'N/A') ?>
-                                    </span>
-                                </td>
-                                <td style="text-align:right;font-weight:600;color:var(--success);font-size:0.8rem;">
-                                    <?= $currency ?> <?= number_format($payment['amount'] ?? 0, 0) ?>
-                                </td>
-                                <td>
-                                    <span class="payment-method-badge <?= $payment['payment_method'] ?? 'cash' ?>">
-                                        <?= ucfirst($payment['payment_method'] ?? 'Cash') ?>
-                                    </span>
-                                </td>
-                                <td style="text-align:center;">
-                                    <span class="status-badge <?= ($payment['status'] ?? 'completed') === 'completed' ? 'paid' : 'pending' ?>">
-                                        <?= ucfirst($payment['status'] ?? 'Completed') ?>
-                                    </span>
-                                </td>
-                                <td style="font-size:0.7rem;color:var(--text-secondary);">
-                                    <?php if (isset($payment['received_at']) && !empty($payment['received_at'])): ?>
-                                        <?= date('M d, Y h:i A', strtotime($payment['received_at'])) ?>
-                                    <?php elseif (isset($payment['created_at']) && !empty($payment['created_at'])): ?>
-                                        <?= date('M d, Y h:i A', strtotime($payment['created_at'])) ?>
-                                    <?php else: ?>
-                                        <?= date('M d, Y h:i A', strtotime($payment['payment_date'] ?? $payment['updated_at'] ?? 'now')) ?>
-                                    <?php endif; ?>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                        <tr style="background:var(--table-stripe);font-weight:700;">
-                            <td colspan="2" style="text-align:right;font-size:0.85rem;">TOTAL PAID</td>
-                            <td style="text-align:right;font-size:0.85rem;color:var(--success);">
-                                <?= $currency ?> <?= number_format($total_paid_amount, 0) ?>
-                            </td>
-                            <td colspan="3"></td>
-                        </tr>
-                    <?php else: ?>
-                        <tr>
-                            <td colspan="6" style="text-align:center;padding:25px 20px;color:var(--text-secondary);font-size:0.85rem;">
-                                <i class="fas fa-info-circle mr-1"></i> No payments recorded
-                            </td>
-                        </tr>
-                    <?php endif; ?>
-                </tbody>
-            </table>
-        </div>
-    </div>
-
     <!-- ACTION BUTTONS -->
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:6px;">
         <?php if ($bill['status'] !== 'paid' && $bill['status'] !== 'cancelled'): ?>
-            <a href="process_payment.php?bill_id=<?= $bill_id ?>" class="btn btn-success">
-                <i class="fas fa-money-bill-wave"></i> Process Payment
+            <a href="make_payment.php?bill_id=<?= $bill_id ?>" class="btn btn-success">
+                <i class="fas fa-money-bill-wave"></i> Make Payment
             </a>
         <?php endif; ?>
-        <a href="pending_bills.php" class="btn btn-primary">
-            <i class="fas fa-list"></i> Pending Bills
+        <a href="paid_bills.php" class="btn btn-primary">
+            <i class="fas fa-list"></i> Paid Bills
         </a>
         <button onclick="generatePDF()" class="btn btn-outline">
             <i class="fas fa-file-pdf"></i> PDF
@@ -1807,7 +1668,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // PDF GENERATION - WITH OFFICIAL STAMP AND ADMIN NUMBERS
+    // PDF GENERATION - SINGLE TABLE
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -1850,22 +1711,6 @@ include_once '../../components/cashier_sidebar.php';
                 </tr>
             `;
             counter++;
-        <?php endforeach; ?>
-        
-        var paymentsHtml = '';
-        var payCounter = 1;
-        <?php foreach ($payments as $payment): ?>
-            paymentsHtml += `
-                <tr>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:13px;">${payCounter}</td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;font-weight:600;color:#059669;"><?= htmlspecialchars($payment['receipt_number'] ?? $payment['payment_number'] ?? 'N/A') ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:right;font-weight:600;font-size:13px;color:#059669;"><?= $currency ?> <?= number_format($payment['amount'] ?? 0, 0) ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:13px;text-transform:capitalize;"><?= ucfirst($payment['payment_method'] ?? 'Cash') ?></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:13px;"><span style="background:#D1FAE5;color:#059669;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:600;"><?= ucfirst($payment['status'] ?? 'Completed') ?></span></td>
-                    <td style="padding:3px 8px;border-bottom:1px solid #E2E8F0;font-size:12px;color:#64748B;"><?= isset($payment['received_at']) ? date('M d, Y h:i A', strtotime($payment['received_at'])) : date('M d, Y h:i A', strtotime($payment['created_at'] ?? 'now')) ?></td>
-                </tr>
-            `;
-            payCounter++;
         <?php endforeach; ?>
         
         var html = `
@@ -1925,7 +1770,7 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- BILL ITEMS -->
+            <!-- BILL ITEMS - SINGLE TABLE -->
             <div style="margin-bottom:8px;">
                 <div class="pdf-section-title"><i class="fas fa-list-ul"></i> Bill Items (${totalItems})</div>
                 <div class="pdf-table-wrap">
@@ -1949,30 +1794,6 @@ include_once '../../components/cashier_sidebar.php';
                     <span style="font-size:14px;font-weight:700;">Grand Total: <strong style="color:#059669;">${currency} ${total.toLocaleString()}</strong></span>
                 </div>
                 ` : ''}
-            </div>
-            
-            <!-- PAYMENTS -->
-            <div style="margin-bottom:8px;">
-                <div class="pdf-section-title"><i class="fas fa-credit-card"></i> Payment History (${<?= $total_payments ?>})</div>
-                <?php if (count($payments) > 0): ?>
-                <div class="pdf-table-wrap">
-                    <table class="pdf-table">
-                        <thead>
-                            <tr><th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:12px;">#</th><th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:12px;">Receipt #</th><th style="background:#059669;color:white;padding:4px 8px;text-align:right;font-size:12px;">Amount</th><th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:12px;">Method</th><th style="background:#059669;color:white;padding:4px 8px;text-align:center;font-size:12px;">Status</th><th style="background:#059669;color:white;padding:4px 8px;text-align:left;font-size:12px;">Date</th></tr>
-                        </thead>
-                        <tbody>
-                            ${paymentsHtml}
-                            <tr style="background:#D1FAE5;font-weight:700;">
-                                <td colspan="2" style="text-align:right;font-size:14px;padding:5px 10px;">TOTAL PAID</td>
-                                <td style="text-align:right;font-size:14px;color:#059669;padding:5px 10px;">${currency} ${paid.toLocaleString()}</td>
-                                <td colspan="3"></td>
-                            </tr>
-                        </tbody>
-                    </table>
-                </div>
-                <?php else: ?>
-                <div class="pdf-empty">No payments recorded for this bill</div>
-                <?php endif; ?>
             </div>
             
             <!-- PDF FOOTER WITH OFFICIAL STAMP -->
@@ -2049,14 +1870,13 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c🟢 Braick - View Bill (Fixed - bills table)', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c🟢 Braick - View Bill (Single Table)', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c✅ ALLOWED ROLES: Cashier, Reception, Admin', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Single table for bill items (no separate payments table)', 'font-size:12px; color:#34D399;');
     console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:12px; color:#64748B;');
     console.log('%c💰 Total: <?= $currency ?> <?= number_format($total_amount, 0) ?> | Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?>', 'font-size:12px; color:#059669;');
     console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c✅ PDF with Official Stamp & Admin Numbers', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

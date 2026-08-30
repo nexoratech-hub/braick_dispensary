@@ -3,7 +3,7 @@
 // FILE: frontend/pages/admin/view_employee.php
 // SUPER ADMIN - VIEW EMPLOYEE DETAILS
 // VIEW SINGLE EMPLOYEE INFORMATION
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING YOUR DATABASE
 // ================================================================
 
 // ================================================================
@@ -16,10 +16,14 @@ if (session_status() === PHP_SESSION_NONE) {
 // ================================================================
 // INCLUDE DATABASE
 // ================================================================
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
@@ -85,7 +89,7 @@ try {
 // GET EMPLOYEE ID
 // ================================================================
 $employee_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 
 if ($employee_id <= 0) {
     header('Location: employees.php?branch=' . $selected_branch_id);
@@ -93,7 +97,7 @@ if ($employee_id <= 0) {
 }
 
 // ================================================================
-// FETCH EMPLOYEE DETAILS
+// FETCH EMPLOYEE DETAILS - USING YOUR DATABASE
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -115,10 +119,13 @@ $stmt = $db->prepare("
         b.name as branch_name,
         b.location as branch_location,
         b.phone as branch_phone,
+        b.email as branch_email,
         (SELECT COUNT(*) FROM activity_logs WHERE user_id = u.id) as total_activities,
         (SELECT COUNT(*) FROM patients WHERE created_by = u.id) as total_patients,
         (SELECT COUNT(*) FROM visits WHERE doctor_id = u.id) as total_visits,
-        (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id) as total_prescriptions
+        (SELECT COUNT(*) FROM prescriptions WHERE doctor_id = u.id) as total_prescriptions,
+        (SELECT COUNT(*) FROM lab_tests WHERE doctor_id = u.id) as total_lab_tests,
+        (SELECT COUNT(*) FROM bills WHERE created_by = u.id) as total_bills
     FROM users u
     LEFT JOIN branches b ON u.branch_id = b.id
     WHERE u.id = ? AND u.role != 'admin'
@@ -135,8 +142,12 @@ if (!$employee) {
 // GET BRANCHES FOR FILTER
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active'");
-$branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+    $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
+}
 
 // ================================================================
 // GET RECENT ACTIVITIES
@@ -170,6 +181,11 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
+// Employee profile pic
+$employee_profile_pic_url = !empty($employee['profile_pic']) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $employee['profile_pic'] 
+    : '';
+
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
@@ -189,14 +205,10 @@ function time_ago($timestamp) {
 }
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
-include_once '../../components/admin_sidebar.php';
+include_once __DIR__ . '/../../components/admin_header.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
 <!DOCTYPE html>
@@ -251,164 +263,6 @@ include_once '../../components/admin_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
 
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
-        .top-nav {
-            position: fixed;
-            top: 0;
-            left: 270px;
-            right: 0;
-            height: 68px;
-            background: var(--bg-nav);
-            z-index: 40;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0 24px;
-            border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-
-        .top-nav .search-wrapper {
-            display: flex;
-            align-items: center;
-            background: var(--bg-body);
-            border-radius: 10px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s;
-            flex: 1;
-            max-width: 500px;
-        }
-
-        .top-nav .search-wrapper:focus-within {
-            border-color: #0B5ED7;
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-
-        .top-nav .search-wrapper input {
-            border: none;
-            background: transparent;
-            padding: 8px 14px;
-            width: 100%;
-            font-size: 0.85rem;
-            outline: none;
-            color: var(--text-primary);
-        }
-
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-
-        .top-nav .search-wrapper .search-btn {
-            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-            color: white;
-            border: none;
-            padding: 8px 16px;
-            border-radius: 0 10px 10px 0;
-            cursor: pointer;
-            font-size: 0.85rem;
-            transition: all 0.3s;
-            white-space: nowrap;
-        }
-
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-
-        .top-nav .datetime {
-            font-size: 0.78rem;
-            color: var(--text-secondary);
-            font-weight: 500;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .top-nav .datetime i {
-            color: #3B82F6;
-        }
-
-        .top-nav .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            object-fit: cover;
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-
-        .top-nav .avatar:hover {
-            border-color: #0B5ED7;
-            transform: scale(1.05);
-        }
-
-        .top-nav .icon-btn {
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: var(--text-secondary);
-            transition: all 0.3s;
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            position: relative;
-        }
-
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: #0B5ED7;
-        }
-
-        .notif-dot {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
-        }
-
-        .notif-dot.has-notif { background: #DC2626; }
-        .notif-dot.no-notif { background: #94A3B8; animation: none; }
-
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-
-        .dark-toggle-btn {
-            background: var(--bg-body);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 6px 12px;
-            cursor: pointer;
-            font-size: 0.82rem;
-            color: var(--text-primary);
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .dark-toggle-btn:hover {
-            border-color: #0B5ED7;
-            background: var(--bg-card);
-        }
-
-        .dark-toggle-btn i { font-size: 0.9rem; }
-
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -503,14 +357,6 @@ include_once '../../components/admin_sidebar.php';
             border-radius: 12px;
             font-size: 0.7rem;
             font-weight: 500;
-        }
-
-        .date-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            color: rgba(255,255,255,0.8);
-            font-size: 0.75rem;
         }
 
         .role-badge-display {
@@ -619,6 +465,17 @@ include_once '../../components/admin_sidebar.php';
 
         .btn-success:hover {
             background: #047857;
+        }
+
+        .btn-outline-light {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+
+        .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
         }
 
         /* ================================================================
@@ -924,15 +781,11 @@ include_once '../../components/admin_sidebar.php';
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
-            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
             .grid-cols-3 { grid-template-columns: 1fr 1fr !important; }
         }
 
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
             .main-content { padding: 12px; }
             .page-header { padding: 16px 18px; }
             .page-title { font-size: 1.2rem; }
@@ -994,44 +847,6 @@ include_once '../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
-<!-- ================================================================ -->
-<nav class="top-nav">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
-            <i class="fas fa-bars text-lg"></i>
-        </button>
-        
-        <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
-            </button>
-        </div>
-    </div>
-    
-    <div class="flex items-center gap-3">
-        <span class="datetime" id="currentDateTime"></span>
-        
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
-            <i id="darkIcon" class="fas fa-moon"></i>
-            <span id="darkText">Dark</span>
-        </button>
-        
-        <button class="icon-btn">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
-        </button>
-        
-        <a href="profile.php">
-            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
-        </a>
-    </div>
-</nav>
-
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
@@ -1050,9 +865,6 @@ include_once '../../components/admin_sidebar.php';
                 <span class="branch-tag">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($employee['branch_name'] ?? 'N/A') ?>
                 </span>
-                <span class="date-badge">
-                    <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
-                </span>
                 <span class="branch-tag" style="background:rgba(255,255,255,0.15);">
                     <i class="fas fa-user"></i> <?= htmlspecialchars($user_full_name) ?>
                 </span>
@@ -1062,7 +874,7 @@ include_once '../../components/admin_sidebar.php';
             <a href="edit_employee.php?id=<?= $employee['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn btn-edit btn-sm">
                 <i class="fas fa-edit"></i> Edit
             </a>
-            <a href="employees.php?branch=<?= $selected_branch_id ?>" class="btn btn-sm" style="background:rgba(255,255,255,0.15);color:white;border:1px solid rgba(255,255,255,0.2);">
+            <a href="employees.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline-light btn-sm">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
@@ -1074,12 +886,12 @@ include_once '../../components/admin_sidebar.php';
     <div class="profile-card animate-fade-in-up">
         <div class="profile-header">
             <div class="profile-avatar">
-                <?php if (!empty($employee['profile_pic']) && file_exists($_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/' . $employee['profile_pic'])): ?>
-                    <img src="/dispensary_system/frontend/assets/uploads/profiles/<?= $employee['profile_pic'] ?>" 
+                <?php if (!empty($employee_profile_pic_url) && file_exists($_SERVER['DOCUMENT_ROOT'] . $employee_profile_pic_url)): ?>
+                    <img src="<?= $employee_profile_pic_url ?>" 
                          alt="<?= htmlspecialchars($employee['full_name']) ?>" 
                          class="profile-img">
                 <?php else: ?>
-                    <div class="profile-img-placeholder">
+                    <div class="profile-img-placeholder" style="background: <?= '#' . substr(md5($employee['full_name']), 0, 6) ?>;">
                         <?= strtoupper(substr($employee['full_name'], 0, 1)) ?>
                     </div>
                 <?php endif; ?>
@@ -1159,6 +971,10 @@ include_once '../../components/admin_sidebar.php';
                 <span class="detail-value"><?= htmlspecialchars($employee['branch_location'] ?? 'N/A') ?></span>
             </div>
             <div class="detail-item">
+                <span class="detail-label">Branch Phone</span>
+                <span class="detail-value"><?= htmlspecialchars($employee['branch_phone'] ?? 'N/A') ?></span>
+            </div>
+            <div class="detail-item">
                 <span class="detail-label">Role</span>
                 <span class="detail-value">
                     <span class="role-badge role-<?= $employee['role'] ?>" style="font-size: 0.75rem;">
@@ -1216,6 +1032,14 @@ include_once '../../components/admin_sidebar.php';
             <div class="detail-item">
                 <span class="detail-label">Prescriptions</span>
                 <span class="detail-value font-bold text-orange-600"><?= number_format($employee['total_prescriptions'] ?? 0) ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Lab Tests</span>
+                <span class="detail-value font-bold text-purple-600"><?= number_format($employee['total_lab_tests'] ?? 0) ?></span>
+            </div>
+            <div class="detail-item">
+                <span class="detail-label">Bills Created</span>
+                <span class="detail-value font-bold text-green-600"><?= number_format($employee['total_bills'] ?? 0) ?></span>
             </div>
             <div class="detail-item">
                 <span class="detail-label">Member Since</span>
@@ -1479,13 +1303,31 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput?.value?.trim() || '';
+        if (query.length > 0) {
+            window.location.href = 'employees.php?search=' + encodeURIComponent(query) + '&branch=<?= $selected_branch_id ?>';
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
+
     console.log('%c👤 Braick Dispensary - Employee Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Employee: <?= htmlspecialchars($employee['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($employee['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🎭 Role: <?= $role_display ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c📊 Activities: <?= number_format($employee['total_activities'] ?? 0) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ Login session: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Using database tables: users, branches, activity_logs, patients, visits, prescriptions, lab_tests, bills', 'font-size:13px; color:#34D399;');
     console.log('%c🔑 Role: <?= $_SESSION['role'] ?>', 'font-size:13px; color:#7C3AED;');
 </script>
 

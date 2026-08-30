@@ -1,10 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/add_employee.php
-// SUPER ADMIN - ADD EMPLOYEE (FIXED - ROLE NAME NOT ID)
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// WITH AUTO-GENERATE PASSWORD (FIXED)
-// BRAICK DISPENSARY
+// SUPER ADMIN - ADD EMPLOYEE
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
@@ -24,26 +22,25 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER HAS ADMIN ACCESS
+// CHECK IF USER IS ADMIN
 // ================================================================
 if ($_SESSION['role'] !== 'admin') {
-    // Redirect based on role
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
 }
 
 // ================================================================
-// GET USER DATA FROM SESSION
+// GET ADMIN DATA FROM SESSION
 // ================================================================
-$user_id = $_SESSION['user_id'] ?? 0;
+$user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
@@ -52,59 +49,20 @@ $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// FIXED: INCLUDE DATABASE WITH CORRECT PATH
+// INCLUDE DATABASE
 // ================================================================
-require_once __DIR__ . '/../../../backend/config/database.php';
+require_once '../../../backend/config/database.php';
+require_once '../../../backend/helpers/functions.php';
+
+$db = Database::getInstance()->getConnection();
 
 // ================================================================
-// GET DATABASE CONNECTION - FIXED: Using Database class
-// ================================================================
-try {
-    $db = Database::getInstance()->getConnection();
-} catch (Exception $e) {
-    die("Database connection error: " . $e->getMessage());
-}
-
-// ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($user_username) && !empty($user_username)) {
-        try {
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$user_username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
-
-// ================================================================
-// BRANCH SELECTION
+// BRANCH SELECTION FOR SIDEBAR
 // ================================================================
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
 // ================================================================
-// GET STATISTICS FOR SIDEBAR
+// GET STATISTICS FOR SIDEBAR BADGES
 // ================================================================
 $total_employees = 0;
 $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
@@ -138,46 +96,35 @@ try {
 // GET BRANCHES FOR SELECTOR
 // ================================================================
 $branches = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $branches[] = $row;
 }
 
 // ================================================================
-// GET ROLES & DEPARTMENTS
+// DEFINED ROLES (From users.role ENUM)
 // ================================================================
-$roles = [];
-try {
-    $stmt = $db->query("SELECT id, name, description FROM roles ORDER BY name");
-    $roles = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $roles = [];
-}
+$available_roles = [
+    ['name' => 'doctor', 'label' => 'Doctor', 'icon' => 'fa-user-md', 'color' => '#0B5ED7'],
+    ['name' => 'reception', 'label' => 'Reception', 'icon' => 'fa-user-tie', 'color' => '#059669'],
+    ['name' => 'pharmacy', 'label' => 'Pharmacy', 'icon' => 'fa-pills', 'color' => '#D97706'],
+    ['name' => 'laboratory', 'label' => 'Laboratory', 'icon' => 'fa-microscope', 'color' => '#7C3AED'],
+    ['name' => 'cashier', 'label' => 'Cashier', 'icon' => 'fa-cash-register', 'color' => '#0D9488']
+];
 
-// IF NO ROLES TABLE, CREATE DEFAULT ROLES LIST
-if (empty($roles)) {
-    $roles = [
-        ['id' => 1, 'name' => 'doctor', 'description' => 'Medical Doctor'],
-        ['id' => 2, 'name' => 'pharmacy', 'description' => 'Pharmacy Staff'],
-        ['id' => 3, 'name' => 'reception', 'description' => 'Receptionist'],
-        ['id' => 4, 'name' => 'laboratory', 'description' => 'Lab Technician'],
-        ['id' => 5, 'name' => 'cashier', 'description' => 'Cashier'],
-        ['id' => 6, 'name' => 'admin', 'description' => 'Administrator'],
-    ];
-}
-
+// ================================================================
+// GET EXISTING DEPARTMENT CATEGORIES (from service_categories)
+// ================================================================
 $departments = [];
-try {
-    $stmt = $db->query("SELECT id, name, description FROM departments ORDER BY name");
-    $departments = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $departments = [];
+$stmt = $db->query("SELECT id, category_name, description, icon, color FROM service_categories WHERE is_active = 1 ORDER BY category_name");
+while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $departments[] = $row;
 }
 
 // ================================================================
-// AUTO-GENERATE PASSWORD FUNCTION - FIXED
+// AUTO-GENERATE PASSWORD FUNCTION
 // ================================================================
-function generatePassword($full_name, $branch_id, $user_id) {
+function generatePassword($full_name, $branch_id, $user_id = null) {
     // Get first 4 letters of full name
     $clean_name = preg_replace('/[^a-zA-Z]/', '', $full_name);
     $name_part = strtoupper(substr($clean_name, 0, 4));
@@ -188,8 +135,12 @@ function generatePassword($full_name, $branch_id, $user_id) {
     // Get branch code (BR + 2-digit branch ID)
     $branch_code = 'BR' . str_pad($branch_id, 2, '0', STR_PAD_LEFT);
     
-    // Get user ID part (UID + 4-digit user ID)
-    $user_code = 'UID' . str_pad($user_id, 4, '0', STR_PAD_LEFT);
+    // Get user ID part (UID + 4-digit user ID or random)
+    if ($user_id) {
+        $user_code = 'UID' . str_pad($user_id, 4, '0', STR_PAD_LEFT);
+    } else {
+        $user_code = 'UID' . rand(1000, 9999);
+    }
     
     // Combine: NAME + BRANCH + USER_ID
     $password = $name_part . $branch_code . $user_code;
@@ -211,7 +162,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $full_name = $_POST['full_name'] ?? '';
     $branch_id = (int)($_POST['branch_id'] ?? 0);
     $user_id = (int)($_POST['user_id'] ?? 0);
-    $username = $_POST['username'] ?? '';
     
     if (empty($full_name) || $branch_id <= 0) {
         echo json_encode(['success' => false, 'password' => '', 'error' => 'Name and branch required']);
@@ -230,7 +180,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 }
 
 // ================================================================
-// HANDLE FORM SUBMISSION - FIXED
+// HANDLE FORM SUBMISSION
 // ================================================================
 $message = '';
 $message_type = '';
@@ -241,9 +191,10 @@ $form_data = [
     'email' => '',
     'phone' => '',
     'password' => '',
-    'branch_id' => $selected_branch_id,
+    'branch_id' => $selected_branch_id !== 'all' ? (int)$selected_branch_id : '',
     'selected_roles' => [],
-    'selected_departments' => []
+    'selected_departments' => [],
+    'specialty' => ''
 ];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
@@ -254,42 +205,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     $form_data['phone'] = trim($_POST['phone'] ?? '');
     $form_data['password'] = $_POST['password'] ?? '';
     $form_data['branch_id'] = (int)($_POST['branch_id'] ?? 0);
+    $form_data['specialty'] = trim($_POST['specialty'] ?? '');
     
-    // Get selected roles from checkboxes
+    // Get selected roles (checkboxes)
     $form_data['selected_roles'] = $_POST['roles'] ?? [];
     $form_data['selected_departments'] = $_POST['departments'] ?? [];
     
-    // ================================================================
-    // FIX: Get the role NAME from the first selected role ID
-    // ================================================================
-    $primary_role_name = '';
-    if (!empty($form_data['selected_roles'])) {
-        $first_role_id = $form_data['selected_roles'][0];
-        
-        // Find the role name from roles array
-        $role_found = false;
-        foreach ($roles as $role) {
-            if ($role['id'] == $first_role_id) {
-                $primary_role_name = $role['name'];
-                $role_found = true;
-                break;
-            }
-        }
-        
-        // If role name not found in roles table, use hardcoded mapping
-        if (!$role_found) {
-            $role_name_map = [
-                1 => 'doctor',
-                2 => 'pharmacy',
-                3 => 'reception',
-                4 => 'laboratory',
-                5 => 'cashier',
-                6 => 'admin'
-            ];
-            $primary_role_name = $role_name_map[$first_role_id] ?? 'doctor';
-        }
-    } else {
-        $primary_role_name = 'doctor'; // Default fallback
+    // PRIMARY ROLE (first selected role, or default to 'doctor')
+    $primary_role = !empty($form_data['selected_roles']) ? $form_data['selected_roles'][0] : 'doctor';
+    
+    // Validate role is valid
+    $valid_roles = ['admin', 'reception', 'doctor', 'laboratory', 'pharmacy', 'cashier'];
+    if (!in_array($primary_role, $valid_roles)) {
+        $primary_role = 'doctor';
     }
     
     // Validation
@@ -334,12 +262,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     if (empty($errors)) {
         $hashed_password = password_hash($form_data['password'], PASSWORD_DEFAULT);
         
-        // ================================================================
-        // FIX: Insert with the correct role NAME (not ID)
-        // ================================================================
+        // Insert into users table
         $stmt = $db->prepare("
-            INSERT INTO users (username, password, full_name, email, phone, role, branch_id, status, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, 'active', NOW())
+            INSERT INTO users 
+            (username, password, full_name, email, phone, role, branch_id, specialty, status, created_at) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())
         ");
         
         if ($stmt->execute([
@@ -348,42 +275,84 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
             $form_data['full_name'], 
             $form_data['email'], 
             $form_data['phone'], 
-            $primary_role_name,
-            $form_data['branch_id']
+            $primary_role,
+            $form_data['branch_id'],
+            $form_data['specialty']
         ])) {
             $new_user_id = $db->lastInsertId();
             
-            // Assign all selected roles
-            if (!empty($form_data['selected_roles'])) {
-                foreach ($form_data['selected_roles'] as $role_id) {
-                    try {
-                        $stmt = $db->prepare("INSERT INTO employee_roles (user_id, role_id, assigned_by) VALUES (?, ?, ?)");
-                        $stmt->execute([$new_user_id, $role_id, $_SESSION['user_id']]);
-                    } catch (Exception $e) {}
+            // ================================================================
+            // STORE MULTIPLE ROLES - Using JSON in a separate approach
+            // Since we don't have employee_roles table, we'll:
+            // 1. Store primary role in users.role (already done)
+            // 2. For additional roles, we could use a JSON field or
+            //    create a simple mapping table
+            // ================================================================
+            
+            // Try to create employee_roles table if it doesn't exist
+            try {
+                $db->exec("
+                    CREATE TABLE IF NOT EXISTS employee_roles (
+                        id INT(11) AUTO_INCREMENT PRIMARY KEY,
+                        user_id INT(11) NOT NULL,
+                        role_name VARCHAR(50) NOT NULL,
+                        assigned_by INT(11),
+                        assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                        FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL
+                    )
+                ");
+                
+                // Insert all selected roles into employee_roles
+                foreach ($form_data['selected_roles'] as $role_name) {
+                    $stmt = $db->prepare("INSERT INTO employee_roles (user_id, role_name, assigned_by) VALUES (?, ?, ?)");
+                    $stmt->execute([$new_user_id, $role_name, $_SESSION['user_id']]);
                 }
+            } catch (Exception $e) {
+                // Table creation failed or already exists - log but continue
+                error_log("Employee roles table error: " . $e->getMessage());
             }
             
-            // Assign selected departments
+            // ================================================================
+            // STORE DEPARTMENTS - Using service_categories table
+            // Since we don't have employee_departments table, we'll create it
+            // ================================================================
             if (!empty($form_data['selected_departments'])) {
-                foreach ($form_data['selected_departments'] as $dept_id) {
-                    try {
+                try {
+                    $db->exec("
+                        CREATE TABLE IF NOT EXISTS employee_departments (
+                            id INT(11) AUTO_INCREMENT PRIMARY KEY,
+                            user_id INT(11) NOT NULL,
+                            department_id INT(11) NOT NULL,
+                            assigned_by INT(11),
+                            assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                            FOREIGN KEY (department_id) REFERENCES service_categories(id) ON DELETE CASCADE,
+                            FOREIGN KEY (assigned_by) REFERENCES users(id) ON DELETE SET NULL
+                        )
+                    ");
+                    
+                    foreach ($form_data['selected_departments'] as $dept_id) {
                         $stmt = $db->prepare("INSERT INTO employee_departments (user_id, department_id, assigned_by) VALUES (?, ?, ?)");
                         $stmt->execute([$new_user_id, $dept_id, $_SESSION['user_id']]);
-                    } catch (Exception $e) {}
+                    }
+                } catch (Exception $e) {
+                    error_log("Employee departments table error: " . $e->getMessage());
                 }
             }
             
             // Log activity
             try {
+                $role_str = implode(', ', $form_data['selected_roles']);
                 $stmt = $db->prepare("INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) VALUES (?, ?, 'employee_added', ?, NOW())");
-                $stmt->execute([$_SESSION['user_id'], $form_data['branch_id'], "Employee {$form_data['full_name']} added with role: $primary_role_name"]);
+                $stmt->execute([$_SESSION['user_id'], $form_data['branch_id'], "Employee {$form_data['full_name']} added with roles: $role_str"]);
             } catch (Exception $e) {}
             
-            $message = "Employee added successfully with role: <strong>$primary_role_name</strong>! Password: <strong>{$form_data['password']}</strong>";
+            $message = "Employee added successfully!<br>Roles: <strong>" . implode('</strong>, <strong>', $form_data['selected_roles']) . "</strong><br>Password: <strong>{$form_data['password']}</strong>";
             $message_type = 'success';
             
             // Redirect to employees list
-            echo '<script>setTimeout(function(){ window.location.href = "employees.php?branch=' . $form_data['branch_id'] . '&success=1"; }, 2000);</script>';
+            echo '<script>setTimeout(function(){ window.location.href = "employees.php?branch=' . $form_data['branch_id'] . '&success=1"; }, 2500);</script>';
         } else {
             $errors[] = 'Failed to add employee. Please try again.';
         }
@@ -402,529 +371,530 @@ $profile_pic_url = !empty($profile_pic)
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// ================================================================
-// LOGO PATH
-// ================================================================
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR - FIXED PATHS
+// INCLUDE SHARED HEADER
 // ================================================================
-include_once __DIR__ . '/../../components/admin_header.php';
-include_once __DIR__ . '/../../components/admin_sidebar.php';
+include_once '../../components/admin_header.php';
 
 // ================================================================
-// PAGE TITLE
+// INCLUDE SHARED SIDEBAR
 // ================================================================
-$page_title = 'Add Employee';
+$selected_branch_id = $selected_branch_id ?? 'all';
+$total_employees = $total_employees ?? 0;
+$total_doctors = $total_doctors ?? 0;
+$total_branches = $total_branches ?? 0;
+$pending_lab_tests = $pending_lab_tests ?? 0;
+$pending_prescriptions = $pending_prescriptions ?? 0;
+include_once '../../components/admin_sidebar.php';
 ?>
 
-<!DOCTYPE html>
-<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Add New Employee - Braick Dispensary</title>
+<style>
+    /* ================================================================
+       ADDITIONAL FORM STYLES - BEAUTIFUL LIKE DASHBOARD
+       ================================================================ */
     
-    <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
+    /* Form Card */
+    .form-card {
+        background: var(--bg-card);
+        border-radius: 20px;
+        padding: 28px 32px;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+    }
     
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    .form-card:hover {
+        border-color: #0B5ED7;
+        box-shadow: 0 8px 30px rgba(11, 94, 215, 0.08);
+    }
     
-    <style>
-        /* All CSS styles remain the same... */
-        /* ================================================================
-           ADDITIONAL FORM STYLES
-           ================================================================ */
-        
-        /* Form Card */
+    /* Form Header */
+    .form-header {
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        padding-bottom: 20px;
+        margin-bottom: 24px;
+        border-bottom: 2px solid var(--border-color);
+    }
+    
+    .form-header-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.6rem;
+        flex-shrink: 0;
+        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+        color: white;
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .form-header h3 {
+        font-size: 1.2rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin: 0;
+    }
+    
+    .form-header p {
+        font-size: 0.85rem;
+        color: var(--text-secondary);
+        margin: 0;
+    }
+    
+    /* Form Labels */
+    .form-label {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin-bottom: 6px;
+        display: block;
+    }
+    
+    .form-label i {
+        width: 20px;
+        text-align: center;
+        font-size: 0.85rem;
+    }
+    
+    .form-label .required {
+        color: #EF4444;
+        margin-left: 2px;
+    }
+    
+    /* Form Controls */
+    .form-control {
+        width: 100%;
+        padding: 10px 16px;
+        border: 2px solid var(--border-color);
+        border-radius: 12px;
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+        outline: none;
+        background: var(--bg-card);
+        color: var(--text-primary);
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+    }
+    
+    .form-control:focus {
+        border-color: #0B5ED7;
+        box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
+    }
+    
+    .form-control::placeholder {
+        color: var(--text-secondary);
+        opacity: 0.5;
+    }
+    
+    .form-control:disabled {
+        background: var(--bg-body);
+        color: var(--text-secondary);
+        cursor: not-allowed;
+    }
+    
+    /* Password Input Group */
+    .password-input-group {
+        position: relative;
+        display: flex;
+        align-items: center;
+    }
+    
+    .password-input-group .form-control {
+        padding-right: 50px;
+    }
+    
+    .password-input-group .password-toggle {
+        position: absolute;
+        right: 12px;
+        background: none;
+        border: none;
+        color: var(--text-secondary);
+        cursor: pointer;
+        padding: 6px 8px;
+        font-size: 1rem;
+        transition: all 0.3s ease;
+        border-radius: 8px;
+    }
+    
+    .password-input-group .password-toggle:hover {
+        color: #0B5ED7;
+        background: var(--bg-body);
+    }
+    
+    .password-input-group .password-toggle i {
+        pointer-events: none;
+    }
+    
+    /* Generate Button */
+    .btn-generate {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 14px;
+        border-radius: 8px;
+        font-weight: 600;
+        font-size: 0.75rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        background: #0B5ED7;
+        color: white;
+        white-space: nowrap;
+        min-height: 34px;
+        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
+    }
+    
+    .btn-generate:hover {
+        background: #0A4CA8;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.35);
+    }
+    
+    .btn-generate:active {
+        transform: translateY(0px);
+    }
+    
+    .btn-generate i {
+        font-size: 0.8rem;
+    }
+    
+    /* Password Actions */
+    .password-actions {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-top: 4px;
+    }
+    
+    .password-actions .help-text {
+        margin-top: 0;
+        font-size: 0.65rem;
+    }
+    
+    /* Form Row with Icon */
+    .form-row-icon {
+        position: relative;
+    }
+    
+    .form-row-icon .form-control {
+        padding-left: 44px;
+    }
+    
+    .form-row-icon .input-icon {
+        position: absolute;
+        left: 14px;
+        top: 50%;
+        transform: translateY(-50%);
+        color: var(--text-secondary);
+        font-size: 1rem;
+        pointer-events: none;
+        transition: color 0.3s ease;
+    }
+    
+    .form-row-icon .form-control:focus + .input-icon,
+    .form-row-icon .form-control:focus ~ .input-icon {
+        color: #0B5ED7;
+    }
+    
+    /* Checkbox Group */
+    .checkbox-group {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        gap: 8px;
+        padding: 12px 14px;
+        border: 2px solid var(--border-color);
+        border-radius: 12px;
+        background: var(--bg-body);
+        min-height: 60px;
+        transition: border-color 0.3s ease;
+    }
+    
+    .checkbox-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 8px 14px;
+        border-radius: 10px;
+        background: var(--bg-card);
+        border: 2px solid var(--border-color);
+        transition: all 0.3s ease;
+        cursor: pointer;
+    }
+    
+    .checkbox-item:hover {
+        border-color: #0B5ED7;
+        background: #E8F0FE;
+        transform: translateY(-1px);
+    }
+    
+    [data-theme="dark"] .checkbox-item:hover {
+        background: #1E3A5F;
+    }
+    
+    .checkbox-item.checked {
+        border-color: #0B5ED7;
+        background: #E8F0FE;
+    }
+    
+    [data-theme="dark"] .checkbox-item.checked {
+        background: #1E3A5F;
+    }
+    
+    .checkbox-item input[type="checkbox"] {
+        width: 18px;
+        height: 18px;
+        accent-color: #0B5ED7;
+        cursor: pointer;
+        flex-shrink: 0;
+    }
+    
+    .checkbox-item label {
+        font-size: 0.85rem;
+        font-weight: 500;
+        color: var(--text-primary);
+        cursor: pointer;
+        width: 100%;
+    }
+    
+    .checkbox-item .role-desc {
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+        font-weight: 400;
+        display: block;
+        opacity: 0.7;
+    }
+    
+    /* Role Badge Colors */
+    .role-badge-doctor { border-color: #0B5ED7; }
+    .role-badge-reception { border-color: #059669; }
+    .role-badge-pharmacy { border-color: #D97706; }
+    .role-badge-laboratory { border-color: #7C3AED; }
+    .role-badge-cashier { border-color: #0D9488; }
+    
+    /* Buttons */
+    .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 10px;
+        padding: 10px 24px;
+        border-radius: 12px;
+        font-weight: 600;
+        font-size: 0.9rem;
+        transition: all 0.3s ease;
+        cursor: pointer;
+        border: none;
+        text-decoration: none;
+        min-height: 44px;
+        min-width: 120px;
+    }
+    
+    .btn-primary {
+        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+        color: white;
+        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-primary:hover {
+        background: linear-gradient(135deg, #0A4CA8, #1557B0);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4);
+    }
+    
+    .btn-primary:active {
+        transform: translateY(0px);
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-primary);
+        border: 2px solid var(--border-color);
+    }
+    
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+        transform: translateY(-2px);
+    }
+    
+    .btn-sm {
+        padding: 6px 16px;
+        font-size: 0.8rem;
+        min-height: 36px;
+        min-width: 90px;
+    }
+    
+    /* Button Group */
+    .form-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        padding-top: 24px;
+        margin-top: 24px;
+        border-top: 2px solid var(--border-color);
+    }
+    
+    /* Section Title */
+    .section-title {
+        font-size: 1rem;
+        font-weight: 600;
+        color: #0B5ED7;
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+    
+    [data-theme="dark"] .section-title {
+        color: #6EA8FE;
+    }
+    
+    .section-divider {
+        border: none;
+        border-top: 2px dashed var(--border-color);
+        margin: 12px 0 16px;
+    }
+    
+    .help-text {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        margin-top: 4px;
+    }
+    
+    .badge-count {
+        font-size: 0.7rem;
+        font-weight: 400;
+        color: var(--text-secondary);
+        margin-left: 8px;
+    }
+    
+    /* Tips Cards */
+    .tip-card {
+        background: var(--bg-card);
+        border-radius: 16px;
+        padding: 16px 20px;
+        border: 2px solid var(--border-color);
+        transition: all 0.3s ease;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+    }
+    
+    .tip-card:hover {
+        border-color: #0B5ED7;
+        transform: translateY(-3px);
+        box-shadow: 0 8px 25px rgba(0,0,0,0.06);
+    }
+    
+    .tip-card .tip-icon {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.2rem;
+        flex-shrink: 0;
+    }
+    
+    .tip-card .tip-icon.blue { 
+        background: #E8F0FE; 
+        color: #0B5ED7; 
+    }
+    .tip-card .tip-icon.green { 
+        background: #E6F7EE; 
+        color: #059669; 
+    }
+    .tip-card .tip-icon.yellow { 
+        background: #FEF3C7; 
+        color: #F59E0B; 
+    }
+    .tip-card .tip-icon.purple { 
+        background: #F3E8FF; 
+        color: #7C3AED; 
+    }
+    
+    .tip-card .tip-text h4 {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-primary);
+        margin: 0;
+    }
+    
+    .tip-card .tip-text p {
+        font-size: 0.75rem;
+        color: var(--text-secondary);
+        margin: 0;
+    }
+    
+    /* Dark Mode Support */
+    [data-theme="dark"] .tip-card .tip-icon.blue { 
+        background: #1E3A5F; 
+        color: #6EA8FE; 
+    }
+    [data-theme="dark"] .tip-card .tip-icon.green { 
+        background: #1A3A2A; 
+        color: #34D399; 
+    }
+    [data-theme="dark"] .tip-card .tip-icon.yellow { 
+        background: #3A2A1A; 
+        color: #FBBF24; 
+    }
+    [data-theme="dark"] .tip-card .tip-icon.purple { 
+        background: #2A1A3A; 
+        color: #9B4DCA; 
+    }
+    
+    /* Responsive */
+    @media (max-width: 640px) {
         .form-card {
-            background: var(--bg-card);
-            border-radius: 20px;
-            padding: 28px 32px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+            padding: 18px 16px;
         }
-        
-        .form-card:hover {
-            border-color: #0B5ED7;
-            box-shadow: 0 8px 30px rgba(11, 94, 215, 0.08);
-        }
-        
-        /* Form Header */
         .form-header {
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            padding-bottom: 20px;
-            margin-bottom: 24px;
-            border-bottom: 2px solid var(--border-color);
-        }
-        
-        .form-header-icon {
-            width: 56px;
-            height: 56px;
-            border-radius: 16px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.6rem;
-            flex-shrink: 0;
-            background: linear-gradient(135deg, #0B5ED7, #1A73E8);
-            color: white;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .form-header h3 {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            margin: 0;
-        }
-        
-        .form-header p {
-            font-size: 0.85rem;
-            color: var(--text-secondary);
-            margin: 0;
-        }
-        
-        /* Form Labels */
-        .form-label {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 6px;
-            display: block;
-        }
-        
-        .form-label i {
-            width: 20px;
+            flex-direction: column;
             text-align: center;
-            font-size: 0.85rem;
         }
-        
-        .form-label .required {
-            color: #EF4444;
-            margin-left: 2px;
-        }
-        
-        /* Form Controls */
-        .form-control {
-            width: 100%;
-            padding: 10px 16px;
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
-            font-size: 0.9rem;
-            transition: all 0.3s ease;
-            outline: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            font-family: 'Inter', 'Segoe UI', sans-serif;
-        }
-        
-        .form-control:focus {
-            border-color: #0B5ED7;
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
-        }
-        
-        .form-control::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
-        }
-        
-        .form-control:disabled {
-            background: var(--bg-body);
-            color: var(--text-secondary);
-            cursor: not-allowed;
-        }
-        
-        /* Password Input Group */
-        .password-input-group {
-            position: relative;
-            display: flex;
-            align-items: center;
-        }
-        
-        .password-input-group .form-control {
-            padding-right: 50px;
-        }
-        
-        .password-input-group .password-toggle {
-            position: absolute;
-            right: 12px;
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            cursor: pointer;
-            padding: 6px 8px;
-            font-size: 1rem;
-            transition: all 0.3s ease;
-            border-radius: 8px;
-        }
-        
-        .password-input-group .password-toggle:hover {
-            color: #0B5ED7;
-            background: var(--bg-body);
-        }
-        
-        .password-input-group .password-toggle i {
-            pointer-events: none;
-        }
-        
-        /* Generate Button - FIXED: Smaller & Blue */
-        .btn-generate {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 14px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.75rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            background: #0B5ED7;
-            color: white;
-            white-space: nowrap;
-            min-height: 34px;
-            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
-        }
-        
-        .btn-generate:hover {
-            background: #0A4CA8;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 14px rgba(11, 94, 215, 0.35);
-        }
-        
-        .btn-generate:active {
-            transform: translateY(0px);
-        }
-        
-        .btn-generate i {
-            font-size: 0.8rem;
-        }
-        
-        /* Password Actions */
-        .password-actions {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            flex-wrap: wrap;
-            margin-top: 4px;
-        }
-        
-        .password-actions .help-text {
-            margin-top: 0;
-            font-size: 0.65rem;
-        }
-        
-        /* Form Row with Icon */
-        .form-row-icon {
-            position: relative;
-        }
-        
-        .form-row-icon .form-control {
-            padding-left: 44px;
-        }
-        
-        .form-row-icon .input-icon {
-            position: absolute;
-            left: 14px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--text-secondary);
-            font-size: 1rem;
-            pointer-events: none;
-            transition: color 0.3s ease;
-        }
-        
-        .form-row-icon .form-control:focus + .input-icon,
-        .form-row-icon .form-control:focus ~ .input-icon {
-            color: #0B5ED7;
-        }
-        
-        /* Checkbox Group */
-        .checkbox-group {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 8px;
-            padding: 12px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
-            background: var(--bg-body);
-            min-height: 60px;
-            transition: border-color 0.3s ease;
-        }
-        
-        .checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 14px;
-            border-radius: 10px;
-            background: var(--bg-card);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            cursor: pointer;
-        }
-        
-        .checkbox-item:hover {
-            border-color: #0B5ED7;
-            background: #E8F0FE;
-            transform: translateY(-1px);
-        }
-        
-        [data-theme="dark"] .checkbox-item:hover {
-            background: #1E3A5F;
-        }
-        
-        .checkbox-item.checked {
-            border-color: #0B5ED7;
-            background: #E8F0FE;
-        }
-        
-        [data-theme="dark"] .checkbox-item.checked {
-            background: #1E3A5F;
-        }
-        
-        .checkbox-item input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            accent-color: #0B5ED7;
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-        
-        .checkbox-item label {
-            font-size: 0.85rem;
-            font-weight: 500;
-            color: var(--text-primary);
-            cursor: pointer;
-            width: 100%;
-        }
-        
-        .checkbox-item .role-desc {
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-            font-weight: 400;
-            display: block;
-            opacity: 0.7;
-        }
-        
-        /* Buttons */
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            padding: 10px 24px;
-            border-radius: 12px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            min-height: 44px;
-            min-width: 120px;
-        }
-        
-        .btn-primary {
-            background: linear-gradient(135deg, #0B5ED7, #1A73E8);
-            color: white;
-            box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-primary:hover {
-            background: linear-gradient(135deg, #0A4CA8, #1557B0);
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4);
-        }
-        
-        .btn-primary:active {
-            transform: translateY(0px);
-        }
-        
-        .btn-outline {
-            background: transparent;
-            color: var(--text-primary);
-            border: 2px solid var(--border-color);
-        }
-        
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: #0B5ED7;
-            color: #0B5ED7;
-            transform: translateY(-2px);
-        }
-        
-        .btn-sm {
-            padding: 6px 16px;
-            font-size: 0.8rem;
-            min-height: 36px;
-            min-width: 90px;
-        }
-        
-        /* Button Group */
-        .form-actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 12px;
-            padding-top: 24px;
-            margin-top: 24px;
-            border-top: 2px solid var(--border-color);
-        }
-        
-        /* Section Title */
-        .section-title {
-            font-size: 1rem;
-            font-weight: 600;
-            color: #0B5ED7;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        [data-theme="dark"] .section-title {
-            color: #6EA8FE;
-        }
-        
-        .section-divider {
-            border: none;
-            border-top: 2px dashed var(--border-color);
-            margin: 12px 0 16px;
-        }
-        
-        .help-text {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
-        
-        .badge-count {
-            font-size: 0.7rem;
-            font-weight: 400;
-            color: var(--text-secondary);
-            margin-left: 8px;
-        }
-        
-        /* Tips Cards */
-        .tip-card {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 16px 20px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-        }
-        
-        .tip-card:hover {
-            border-color: #0B5ED7;
-            transform: translateY(-3px);
-            box-shadow: 0 8px 25px rgba(0,0,0,0.06);
-        }
-        
-        .tip-card .tip-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+        .form-header-icon {
+            width: 48px;
+            height: 48px;
             font-size: 1.2rem;
-            flex-shrink: 0;
         }
-        
-        .tip-card .tip-icon.blue { 
-            background: #E8F0FE; 
-            color: #0B5ED7; 
+        .btn {
+            padding: 8px 16px;
+            font-size: 0.8rem;
+            min-height: 38px;
+            min-width: 100%;
         }
-        .tip-card .tip-icon.green { 
-            background: #E6F7EE; 
-            color: #059669; 
+        .form-actions {
+            flex-direction: column;
         }
-        .tip-card .tip-icon.yellow { 
-            background: #FEF3C7; 
-            color: #F59E0B; 
+        .form-actions .btn {
+            width: 100%;
+            justify-content: center;
         }
-        
-        .tip-card .tip-text h4 {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin: 0;
+        .checkbox-group {
+            grid-template-columns: 1fr;
         }
-        
-        .tip-card .tip-text p {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            margin: 0;
+        .tip-card {
+            padding: 12px 16px;
         }
-        
-        /* Dark Mode Support */
-        [data-theme="dark"] .tip-card .tip-icon.blue { 
-            background: #1E3A5F; 
-            color: #6EA8FE; 
+        .password-actions {
+            flex-direction: column;
+            align-items: stretch;
         }
-        [data-theme="dark"] .tip-card .tip-icon.green { 
-            background: #1A3A2A; 
-            color: #34D399; 
+        .btn-generate {
+            width: 100%;
+            justify-content: center;
         }
-        [data-theme="dark"] .tip-card .tip-icon.yellow { 
-            background: #3A2A1A; 
-            color: #FBBF24; 
-        }
-        
-        /* Responsive */
-        @media (max-width: 640px) {
-            .form-card {
-                padding: 18px 16px;
-            }
-            .form-header {
-                flex-direction: column;
-                text-align: center;
-            }
-            .form-header-icon {
-                width: 48px;
-                height: 48px;
-                font-size: 1.2rem;
-            }
-            .btn {
-                padding: 8px 16px;
-                font-size: 0.8rem;
-                min-height: 38px;
-                min-width: 100%;
-            }
-            .form-actions {
-                flex-direction: column;
-            }
-            .form-actions .btn {
-                width: 100%;
-                justify-content: center;
-            }
-            .checkbox-group {
-                grid-template-columns: 1fr;
-            }
-            .tip-card {
-                padding: 12px 16px;
-            }
-            .password-actions {
-                flex-direction: column;
-                align-items: stretch;
-            }
-            .btn-generate {
-                width: 100%;
-                justify-content: center;
-            }
-        }
-    </style>
-</head>
-<body>
+    }
+</style>
 
 <!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
@@ -983,14 +953,18 @@ $page_title = 'Add Employee';
     <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-user-plus mr-2" style="color: var(--blue-600);"></i> Add New Employee            </h1>
+                <i class="fas fa-user-plus mr-2" style="color: #0B5ED7;"></i> Add New Employee
+            </h1>
             <p class="page-subtitle">
-                Create a new employee account with multiple roles and departments
+                Create a new employee account with role assignments
                 <span class="ml-2 inline-flex bg-blue-100 text-blue-700 px-3 py-1 rounded-full text-xs border border-blue-200">
                     <i class="fas fa-users mr-1"></i> <?= $total_employees ?> employees
                 </span>
                 <span class="ml-2 inline-flex bg-green-100 text-green-700 px-3 py-1 rounded-full text-xs border border-green-200">
                     <i class="fas fa-user-md mr-1"></i> <?= $total_doctors ?> doctors
+                </span>
+                <span class="ml-2 inline-flex bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-xs border border-purple-200">
+                    <i class="fas fa-store mr-1"></i> <?= count($branches) ?> branches
                 </span>
             </p>
         </div>
@@ -1003,7 +977,7 @@ $page_title = 'Add Employee';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>">
+        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-red-100 text-red-700 border border-red-200' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
             <?= $message ?>
         </div>
@@ -1092,30 +1066,18 @@ $page_title = 'Add Employee';
                     </div>
                 </div>
                 
-                <!-- Password with Auto-Generate -->
+                <!-- Specialty (For Doctors) -->
                 <div>
                     <label class="form-label">
-                        <i class="fas fa-key text-yellow-600"></i> Password
-                        <span class="required">*</span>
+                        <i class="fas fa-stethoscope text-purple-600"></i> Specialty
                     </label>
-                    <div class="password-input-group">
-                        <input type="password" name="password" id="passwordField" class="form-control" 
-                               placeholder="Enter password or generate one" 
-                               value="<?= htmlspecialchars($form_data['password']) ?>" required>
-                        <button type="button" class="password-toggle" id="togglePassword" title="Show/Hide Password">
-                            <i class="fas fa-eye"></i>
-                        </button>
+                    <div class="form-row-icon">
+                        <input type="text" name="specialty" class="form-control" 
+                               placeholder="e.g. Cardiology, Pediatrics, etc." 
+                               value="<?= htmlspecialchars($form_data['specialty']) ?>">
+                        <span class="input-icon"><i class="fas fa-stethoscope"></i></span>
                     </div>
-                    <div class="password-actions">
-                        <button type="button" class="btn-generate" id="generatePasswordBtn">
-                            <i class="fas fa-sync-alt"></i> Generate
-                        </button>
-                        <span class="help-text">Format: NAME + BRCODE + UID + ID</span>
-                    </div>
-                    <p class="help-text" id="passwordStrength" style="margin-top:4px;">
-                        <i class="fas fa-info-circle"></i> 
-                        Password includes: <strong>Name + Branch ID + User ID</strong>
-                    </p>
+                    <p class="help-text">Mainly for doctors, leave empty if not applicable</p>
                 </div>
                 
                 <!-- Branch -->
@@ -1130,10 +1092,33 @@ $page_title = 'Add Employee';
                             <?php foreach ($branches as $branch): ?>
                                 <option value="<?= $branch['id'] ?>" <?= $branch['id'] == $form_data['branch_id'] ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($branch['name']) ?>
+                                    <?= !empty($branch['location']) ? '- ' . htmlspecialchars($branch['location']) : '' ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
                         <span class="input-icon"><i class="fas fa-store-alt"></i></span>
+                    </div>
+                </div>
+                
+                <!-- Password with Auto-Generate -->
+                <div class="md:col-span-2">
+                    <label class="form-label">
+                        <i class="fas fa-key text-yellow-600"></i> Password
+                        <span class="required">*</span>
+                    </label>
+                    <div class="password-input-group">
+                        <input type="password" name="password" id="passwordField" class="form-control" 
+                               placeholder="Enter password or generate one" 
+                               value="<?= htmlspecialchars($form_data['password']) ?>" required>
+                        <button type="button" class="password-toggle" id="togglePassword" title="Show/Hide Password">
+                            <i class="fas fa-eye"></i>
+                        </button>
+                    </div>
+                    <div class="password-actions">
+                        <button type="button" class="btn-generate" id="generatePasswordBtn">
+                            <i class="fas fa-sync-alt"></i> Generate Password
+                        </button>
+                        <span class="help-text">Format: Name + Branch + User ID</span>
                     </div>
                 </div>
                 
@@ -1144,30 +1129,24 @@ $page_title = 'Add Employee';
                     <h3 class="section-title">
                         <i class="fas fa-user-tag"></i> Select Roles
                         <span class="required">*</span>
-                        <span class="badge-count">(<?= count($roles) ?> available)</span>
+                        <span class="badge-count">(<?= count($available_roles) ?> available)</span>
                     </h3>
                     <p class="help-text mb-2">Click on a role to select/deselect it. At least one role is required.</p>
                     <hr class="section-divider">
                     
                     <div class="checkbox-group" id="rolesContainer">
-                        <?php if (!empty($roles)): ?>
-                            <?php foreach ($roles as $role): ?>
-                                <div class="checkbox-item" onclick="toggleCheckbox(this)">
-                                    <input type="checkbox" name="roles[]" value="<?= $role['id'] ?>" 
-                                           id="role_<?= $role['id'] ?>"
-                                           <?= in_array($role['id'], $form_data['selected_roles']) ? 'checked' : '' ?>>
-                                    <label for="role_<?= $role['id'] ?>">
-                                        <i class="fas fa-circle text-[6px] text-blue-600 mr-1"></i>
-                                        <?= htmlspecialchars($role['name']) ?>
-                                        <?php if (!empty($role['description'])): ?>
-                                            <span class="role-desc"><?= htmlspecialchars($role['description']) ?></span>
-                                        <?php endif; ?>
-                                    </label>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <p class="text-gray-400 text-sm col-span-full text-center">No roles available. Please add roles first.</p>
-                        <?php endif; ?>
+                        <?php foreach ($available_roles as $role): ?>
+                            <div class="checkbox-item role-badge-<?= $role['name'] ?>" onclick="toggleCheckbox(this)">
+                                <input type="checkbox" name="roles[]" value="<?= $role['name'] ?>" 
+                                       id="role_<?= $role['name'] ?>"
+                                       <?= in_array($role['name'], $form_data['selected_roles']) ? 'checked' : '' ?>>
+                                <label for="role_<?= $role['name'] ?>">
+                                    <i class="fas <?= $role['icon'] ?>" style="color: <?= $role['color'] ?>;"></i>
+                                    <?= ucfirst($role['label']) ?>
+                                    <span class="role-desc"><?= ucfirst($role['name']) ?></span>
+                                </label>
+                            </div>
+                        <?php endforeach; ?>
                     </div>
                     <p class="help-text mt-2" id="roleCount">Selected: <strong id="selectedRoleCount">0</strong> roles</p>
                 </div>
@@ -1191,8 +1170,8 @@ $page_title = 'Add Employee';
                                            id="dept_<?= $dept['id'] ?>"
                                            <?= in_array($dept['id'], $form_data['selected_departments']) ? 'checked' : '' ?>>
                                     <label for="dept_<?= $dept['id'] ?>">
-                                        <i class="fas fa-circle text-[6px] text-green-600 mr-1"></i>
-                                        <?= htmlspecialchars($dept['name']) ?>
+                                        <i class="fas <?= $dept['icon'] ?? 'fa-building' ?>" style="color: <?= $dept['color'] ?? '#0B5ED7' ?>;"></i>
+                                        <?= htmlspecialchars($dept['category_name']) ?>
                                         <?php if (!empty($dept['description'])): ?>
                                             <span class="role-desc"><?= htmlspecialchars($dept['description']) ?></span>
                                         <?php endif; ?>
@@ -1200,7 +1179,11 @@ $page_title = 'Add Employee';
                                 </div>
                             <?php endforeach; ?>
                         <?php else: ?>
-                            <p class="text-gray-400 text-sm col-span-full text-center">No departments available. Please add departments first.</p>
+                            <p class="text-gray-400 text-sm col-span-full text-center">
+                                <i class="fas fa-info-circle mr-1"></i> 
+                                No departments available. Please add departments first via 
+                                <a href="departments.php" class="text-blue-600 underline">Departments</a> page.
+                            </p>
                         <?php endif; ?>
                     </div>
                     <p class="help-text mt-2">Selected: <strong id="selectedDeptCount">0</strong> departments</p>
@@ -1255,7 +1238,7 @@ $page_title = 'Add Employee';
             </div>
         </div>
         <div class="tip-card">
-            <div class="tip-icon blue">
+            <div class="tip-icon purple">
                 <i class="fas fa-eye"></i>
             </div>
             <div class="tip-text">
@@ -1492,7 +1475,7 @@ $page_title = 'Add Employee';
     });
 
     // ================================================================
-    // GENERATE PASSWORD BUTTON - FIXED
+    // GENERATE PASSWORD BUTTON
     // ================================================================
     document.getElementById('generatePasswordBtn')?.addEventListener('click', function() {
         var fullName = document.getElementById('fullName').value.trim();
@@ -1514,7 +1497,7 @@ $page_title = 'Add Employee';
         // Show loading state
         var btn = this;
         var originalText = btn.innerHTML;
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
         btn.disabled = true;
         
         // AJAX request to generate password
@@ -1522,7 +1505,7 @@ $page_title = 'Add Employee';
         formData.append('action', 'generate_password');
         formData.append('full_name', fullName);
         formData.append('branch_id', branchId);
-        formData.append('user_id', 0); // Will be assigned after save
+        formData.append('user_id', 0);
         formData.append('username', username);
         
         fetch(window.location.href, {
@@ -1560,14 +1543,13 @@ $page_title = 'Add Employee';
         });
     });
 
-    console.log('%c👤 Braick - Add Employee (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Fixed database connection using Database::getInstance()->getConnection()', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Role saved as NAME not ID', 'font-size:13px; color:#059669;');
-    console.log('%c🔑 Password format: NAME + BRCODE + UID + ID', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🎨 Generate button: Blue color, smaller size', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c👁️ Password toggle show/hide added', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 Braick - Add Employee', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Table: users (role is ENUM)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Department: service_categories', 'font-size:13px; color:#7C3AED;');
+    console.log('%c🔑 Password format: NAME + BRCODE + UID + ID', 'font-size:13px; color:#D97706;');
+    console.log('%c👁️ Password toggle show/hide', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

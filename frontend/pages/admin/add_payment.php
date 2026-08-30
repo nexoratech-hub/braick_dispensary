@@ -2,8 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/admin/add_payment.php
 // ADMIN - ADD PAYMENT TO BILL (GREEN THEME - SAME AS CASHIER)
-// BRAICK DISPENSARY - GREEN THEME
-// WITH LOGIN PROTECTION
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
+// WITH SHARED HEADER & SIDEBAR
 // ================================================================
 
 // ================================================================
@@ -63,7 +63,7 @@ $bill_item_id = isset($_GET['bill_item_id']) ? (int)$_GET['bill_item_id'] : 0;
 $bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? $_GET['branch_id'] ?? 'all';
 
-if ($bill_id <= 0 || $bill_item_id <= 0) {
+if ($bill_id <= 0) {
     header('Location: bills.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_params');
     exit;
 }
@@ -74,20 +74,19 @@ if ($bill_id <= 0 || $bill_item_id <= 0) {
 try {
     $stmt = $db->prepare("
         SELECT 
-            pb.*,
+            b.*,
             p.full_name as patient_name,
             p.patient_id as patient_code,
             p.phone as patient_phone,
             p.gender,
             p.date_of_birth,
             u.full_name as created_by_name,
-            b.name as branch_name,
-            (SELECT COUNT(*) FROM bill_items WHERE bill_id = pb.id AND payment_status = 'pending') as pending_items_count
-        FROM patient_bills pb
-        LEFT JOIN patients p ON pb.patient_id = p.id
-        LEFT JOIN users u ON pb.created_by = u.id
-        LEFT JOIN branches b ON pb.branch_id = b.id
-        WHERE pb.id = ?
+            br.name as branch_name
+        FROM bills b
+        LEFT JOIN patients p ON b.patient_id = p.id
+        LEFT JOIN users u ON b.created_by = u.id
+        LEFT JOIN branches br ON b.branch_id = br.id
+        WHERE b.id = ?
     ");
     $stmt->execute([$bill_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -103,26 +102,22 @@ try {
 }
 
 // ================================================================
-// FETCH BILL ITEM DETAILS
+// FETCH BILL ITEM DETAILS (if specified)
 // ================================================================
-try {
-    $stmt = $db->prepare("
-        SELECT 
-            bi.*
-        FROM bill_items bi
-        WHERE bi.id = ? AND bi.bill_id = ?
-    ");
-    $stmt->execute([$bill_item_id, $bill_id]);
-    $bill_item = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$bill_item) {
-        header('Location: view_bill.php?id=' . $bill_id . '&branch=' . urlencode($selected_branch_id) . '&error=item_not_found');
-        exit;
+$bill_item = null;
+if ($bill_item_id > 0) {
+    try {
+        $stmt = $db->prepare("
+            SELECT 
+                bi.*
+            FROM bill_items bi
+            WHERE bi.id = ? AND bi.bill_id = ?
+        ");
+        $stmt->execute([$bill_item_id, $bill_id]);
+        $bill_item = $stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (Exception $e) {
+        $bill_item = null;
     }
-} catch (Exception $e) {
-    error_log("Error fetching bill item: " . $e->getMessage());
-    header('Location: view_bill.php?id=' . $bill_id . '&branch=' . urlencode($selected_branch_id) . '&error=database_error');
-    exit;
 }
 
 // ================================================================
@@ -152,18 +147,26 @@ $pending_total = 0;
 $pending_items_count = 0;
 
 foreach ($all_items as $item) {
-    $subtotal += ($item['total_price'] ?? 0);
-    if ($item['payment_status'] === 'paid') {
-        $total_paid += ($item['total_price'] ?? 0);
+    $item_total = $item['total_price'] ?? 0;
+    $subtotal += $item_total;
+    if ($item['status'] === 'paid' || $item['status'] === 'refunded') {
+        $total_paid += $item_total;
     } else {
-        $pending_total += ($item['total_price'] ?? 0);
+        $pending_total += $item_total;
         $pending_items_count++;
     }
 }
 
 $discount_amount = $bill['discount_amount'] ?? 0;
-$grand_total = $subtotal - $discount_amount;
-$remaining_balance = $bill['balance'] ?? $grand_total;
+$pharmacy_discount = $bill['pharmacy_discount'] ?? 0;
+$cashier_discount = $bill['cashier_discount'] ?? 0;
+$total_discount = $bill['total_discount'] ?? 0;
+$total_amount = $bill['total_amount'] ?? $subtotal;
+$paid_amount = $bill['paid_amount'] ?? 0;
+$remaining_balance = $bill['balance'] ?? ($total_amount - $paid_amount);
+
+// If balance is negative, set to 0
+if ($remaining_balance < 0) $remaining_balance = 0;
 
 // ================================================================
 // GET PAYMENT METHODS
@@ -192,17 +195,31 @@ try {
 }
 
 // ================================================================
+// GET USER'S BRANCH NAME
+// ================================================================
+$user_branch_name = '';
+if ($user_branch_id > 0) {
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
+    $stmt->execute([$user_branch_id]);
+    $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($branch) {
+        $user_branch_name = $branch['name'];
+    }
+}
+
+// ================================================================
 // STATUS BADGE CLASS
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
+        'pending' => 'warning',
+        'partial' => 'info',
+        'paid' => 'success',
+        'cancelled' => 'danger',
         'active' => 'success',
         'inactive' => 'danger',
-        'pending' => 'warning',
-        'paid' => 'success',
-        'partial' => 'warning',
-        'cancelled' => 'danger',
-        'completed' => 'success'
+        'completed' => 'success',
+        'referred' => 'info'
     ];
     return $classes[$status] ?? 'secondary';
 }
@@ -214,6 +231,7 @@ function getItemTypeLabel($type) {
         'lab_test' => 'Lab Test',
         'medication' => 'Medication',
         'procedure' => 'Procedure',
+        'equipment' => 'Equipment',
         'tool' => 'Tool/Supply',
         'other' => 'Other'
     ];
@@ -227,7 +245,8 @@ function getItemTypeColor($type) {
         'lab_test' => 'orange',
         'medication' => 'green',
         'procedure' => 'red',
-        'tool' => 'teal',
+        'equipment' => 'teal',
+        'tool' => 'gray',
         'other' => 'gray'
     ];
     return $colors[$type] ?? 'gray';
@@ -251,6 +270,18 @@ include_once '../../components/admin_header.php';
 // ================================================================
 // INCLUDE SHARED SIDEBAR
 // ================================================================
+$selected_branch_id = $selected_branch_id ?? 'all';
+$total_employees = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$total_employees = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_doctors = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+$total_doctors = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_branches = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$pending_lab_tests = 0;
+$pending_prescriptions = 0;
 include_once '../../components/admin_sidebar.php';
 
 // ================================================================
@@ -270,7 +301,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $db->beginTransaction();
         
         // Get current bill balance
-        $stmt = $db->prepare("SELECT balance, patient_id, total_amount, paid_amount FROM patient_bills WHERE id = ?");
+        $stmt = $db->prepare("SELECT balance, patient_id, total_amount, paid_amount, status FROM bills WHERE id = ?");
         $stmt->execute([$bill_id]);
         $current_bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -318,26 +349,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         // Update bill
         $stmt = $db->prepare("
-            UPDATE patient_bills 
+            UPDATE bills 
             SET paid_amount = paid_amount + ?,
                 balance = ?,
                 discount_amount = discount_amount + ?,
+                total_discount = total_discount + ?,
+                cashier_discount = cashier_discount + ?,
                 status = ?,
                 updated_at = NOW()
             WHERE id = ?
         ");
-        $stmt->execute([$amount_to_pay, $new_balance, $bill_discount, $status, $bill_id]);
+        $stmt->execute([
+            $amount_to_pay, 
+            $new_balance, 
+            $bill_discount,
+            $bill_discount,
+            $bill_discount,
+            $status, 
+            $bill_id
+        ]);
         
-        // Update bill items
+        // Update bill items status
         if ($status === 'paid') {
             $stmt = $db->prepare("
                 UPDATE bill_items 
-                SET is_paid = 1, 
-                    payment_status = 'paid', 
-                    paid_at = NOW()
-                WHERE bill_id = ? AND (is_paid = 0 OR is_paid IS NULL)
+                SET status = 'paid', 
+                    updated_at = NOW()
+                WHERE bill_id = ? AND status = 'pending'
             ");
             $stmt->execute([$bill_id]);
+        } elseif ($status === 'partial') {
+            // Mark only the specific item as paid if it's a partial payment for an item
+            if ($bill_item_id > 0) {
+                $stmt = $db->prepare("
+                    UPDATE bill_items 
+                    SET status = 'paid', 
+                        updated_at = NOW()
+                    WHERE id = ? AND bill_id = ?
+                ");
+                $stmt->execute([$bill_item_id, $bill_id]);
+            }
         }
         
         // Record payment
@@ -345,7 +396,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
             VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
         ");
-        $notes = $bill_discount > 0 ? 'Discount: ' . $currency . ' ' . number_format($bill_discount, 2) : '';
+        $notes = $bill_discount > 0 ? 'Discount: ' . $currency . ' ' . number_format($bill_discount, 0) : '';
         $notes .= $payment_type === 'partial' ? ' Partial payment' : ' Full payment';
         $stmt->execute([
             $receipt_number,
@@ -353,8 +404,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $patient_id,
             $amount_to_pay,
             $payment_method,
-            $_SESSION['user_id'],
-            $selected_branch_id,
+            $user_id,
+            $bill['branch_id'] ?? $user_branch_id,
             trim($notes)
         ]);
         
@@ -369,11 +420,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if ($otc_sale) {
             $stmt = $db->prepare("
                 UPDATE otc_sales 
-                SET payment_status = 'paid',
+                SET payment_status = ?,
                     updated_at = NOW()
                 WHERE bill_id = ?
             ");
-            $stmt->execute([$bill_id]);
+            $stmt->execute([$status === 'paid' ? 'paid' : 'partial', $bill_id]);
         }
         
         $db->commit();
@@ -395,19 +446,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         // Refresh bill data
         $stmt = $db->prepare("
             SELECT 
-                pb.*,
+                b.*,
                 p.full_name as patient_name,
                 p.patient_id as patient_code,
                 p.phone as patient_phone,
                 p.gender,
                 p.date_of_birth,
                 u.full_name as created_by_name,
-                b.name as branch_name
-            FROM patient_bills pb
-            LEFT JOIN patients p ON pb.patient_id = p.id
-            LEFT JOIN users u ON pb.created_by = u.id
-            LEFT JOIN branches b ON pb.branch_id = b.id
-            WHERE pb.id = ?
+                br.name as branch_name
+            FROM bills b
+            LEFT JOIN patients p ON b.patient_id = p.id
+            LEFT JOIN users u ON b.created_by = u.id
+            LEFT JOIN branches br ON b.branch_id = br.id
+            WHERE b.id = ?
         ");
         $stmt->execute([$bill_id]);
         $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -428,17 +479,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $pending_total = 0;
         $pending_items_count = 0;
         foreach ($all_items as $item) {
-            $subtotal += ($item['total_price'] ?? 0);
-            if ($item['payment_status'] === 'paid') {
-                $total_paid += ($item['total_price'] ?? 0);
+            $item_total = $item['total_price'] ?? 0;
+            $subtotal += $item_total;
+            if ($item['status'] === 'paid' || $item['status'] === 'refunded') {
+                $total_paid += $item_total;
             } else {
-                $pending_total += ($item['total_price'] ?? 0);
+                $pending_total += $item_total;
                 $pending_items_count++;
             }
         }
         $discount_amount = $bill['discount_amount'] ?? 0;
-        $grand_total = $subtotal - $discount_amount;
-        $remaining_balance = $bill['balance'] ?? $grand_total;
+        $total_amount = $bill['total_amount'] ?? $subtotal;
+        $paid_amount = $bill['paid_amount'] ?? 0;
+        $remaining_balance = $bill['balance'] ?? ($total_amount - $paid_amount);
+        if ($remaining_balance < 0) $remaining_balance = 0;
         
     } catch (Exception $e) {
         $db->rollBack();
@@ -705,7 +759,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         .form-card {
             background: var(--bg-card);
-            border-radius: var(--radius-lg);
+            border-radius: 16px;
             padding: 32px 36px;
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
@@ -778,7 +832,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             width: 100%;
             padding: 10px 16px;
             border: 2px solid var(--border-color);
-            border-radius: var(--radius);
+            border-radius: 10px;
             font-size: 0.85rem;
             transition: all 0.3s ease;
             outline: none;
@@ -835,7 +889,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             align-items: center;
             gap: 8px;
             padding: 10px 24px;
-            border-radius: var(--radius);
+            border-radius: 10px;
             font-weight: 600;
             font-size: 0.85rem;
             transition: all 0.3s ease;
@@ -917,7 +971,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         
         .summary-box {
             background: var(--primary-bg);
-            border-radius: var(--radius);
+            border-radius: 10px;
             padding: 16px 20px;
             border-left: 4px solid var(--primary);
             margin-bottom: 20px;
@@ -1181,11 +1235,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="view_bill_item.php?id=<?= $bill_item_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Back
-            </a>
             <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-file-invoice"></i> View Bill
+                <i class="fas fa-arrow-left"></i> Back to Bill
+            </a>
+            <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+                <i class="fas fa-list"></i> All Bills
             </a>
         </div>
     </div>
@@ -1254,7 +1308,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             </div>
             <div>
                 <h3 class="form-title">Process Payment</h3>
-                <p class="form-subtitle">Enter payment details for <?= htmlspecialchars($bill_item['item_name'] ?? 'this item') ?></p>
+                <p class="form-subtitle">Enter payment details for bill <?= htmlspecialchars($bill['bill_number'] ?? '') ?></p>
             </div>
         </div>
         
@@ -1353,7 +1407,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <button type="submit" class="btn btn-success" id="submitBtn">
                     <i class="fas fa-check-circle"></i> Process Payment
                 </button>
-                <a href="view_bill_item.php?id=<?= $bill_item_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
                     <i class="fas fa-times"></i> Cancel
                 </a>
                 <button type="reset" class="btn btn-outline">
@@ -1673,7 +1727,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         // Set initial payment type
-        var initialType = '<?= $remaining_balance > 0 && $pending_items_count > 0 ? "partial" : "full" ?>';
+        var initialType = '<?= $remaining_balance > 0 ? "partial" : "full" ?>';
         setPaymentType(initialType);
         updateTotals();
     });
@@ -1684,7 +1738,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Balance: <?= $currency ?> <?= number_format($remaining_balance, 0) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ Green theme - matching cashier process_payment page', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Green theme - matching cashier style', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

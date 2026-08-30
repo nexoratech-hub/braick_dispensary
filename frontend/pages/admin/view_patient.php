@@ -3,8 +3,10 @@
 // FILE: frontend/pages/admin/view_patient.php
 // ADMIN - VIEW PATIENT DETAILS (FULL VERSION)
 // BRAICK DISPENSARY - BLUE THEME
-// WITH LOGIN SESSION (MATCHES patient_details.php)
-// REMOVED: Quick Actions buttons (Add Visit, Schedule Appointment, Add Prescription, Edit Patient)
+// FIXED: Uses bills table instead of patient_bills
+// FIXED: Uses bills for payments
+// FIXED: All columns match database structure
+// REMOVED: Quick Actions buttons
 // ================================================================
 
 // ================================================================
@@ -15,7 +17,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -48,41 +50,6 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-
-// ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
 
 // ================================================================
 // INCLUDE DATABASE AND HELPERS
@@ -140,11 +107,11 @@ try {
             (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id AND status = 'confirmed') as confirmed_appointments,
             (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status = 'completed') as completed_visits,
             (SELECT COUNT(*) FROM prescriptions WHERE patient_id = p.id) as total_prescriptions,
-            (SELECT COUNT(*) FROM lab_tests lt INNER JOIN visits v ON lt.visit_id = v.id WHERE v.patient_id = p.id) as total_lab_tests,
-            (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status = 'paid') as paid_bills,
-            (SELECT COUNT(*) FROM patient_bills WHERE patient_id = p.id AND status = 'pending') as pending_bills,
-            (SELECT COUNT(*) FROM payments WHERE patient_id = p.id) as total_payments,
-            (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE patient_id = p.id) as total_payments_amount
+            (SELECT COUNT(*) FROM lab_tests WHERE patient_id = p.id) as total_lab_tests,
+            (SELECT COUNT(*) FROM bills WHERE patient_id = p.id AND status = 'paid') as paid_bills,
+            (SELECT COUNT(*) FROM bills WHERE patient_id = p.id AND status = 'pending') as pending_bills,
+            (SELECT COUNT(*) FROM bills WHERE patient_id = p.id AND status = 'paid') as total_payments,
+            (SELECT COALESCE(SUM(paid_amount), 0) FROM bills WHERE patient_id = p.id AND status = 'paid') as total_payments_amount
         FROM patients p
         LEFT JOIN users u ON p.created_by = u.id
         LEFT JOIN users u2 ON p.assigned_doctor_id = u2.id
@@ -210,15 +177,9 @@ try {
             v.status,
             v.visit_type,
             v.created_at,
-            v.visit_total,
+            v.consultation_fee as visit_total,
             v.payment_status,
-            u.full_name as doctor_name,
-            CASE 
-                WHEN v.status = 'pending' THEN 'warning'
-                WHEN v.status = 'completed' THEN 'success'
-                WHEN v.status = 'cancelled' THEN 'danger'
-                ELSE 'info'
-            END as status_color
+            u.full_name as doctor_name
         FROM visits v
         LEFT JOIN users u ON v.doctor_id = u.id
         WHERE v.patient_id = ?
@@ -244,14 +205,7 @@ try {
             a.visit_type,
             a.purpose,
             a.created_at,
-            u.full_name as doctor_name,
-            CASE 
-                WHEN a.status = 'scheduled' THEN 'warning'
-                WHEN a.status = 'confirmed' THEN 'info'
-                WHEN a.status = 'completed' THEN 'success'
-                WHEN a.status = 'cancelled' THEN 'danger'
-                ELSE 'secondary'
-            END as status_color
+            u.full_name as doctor_name
         FROM appointments a
         LEFT JOIN users u ON a.doctor_id = u.id
         WHERE a.patient_id = ?
@@ -290,29 +244,22 @@ try {
 }
 
 // ================================================================
-// GET RECENT BILLS
+// GET RECENT BILLS - FIXED: Uses bills table
 // ================================================================
 $recent_bills = [];
 try {
     $stmt = $db->prepare("
         SELECT 
-            pb.id,
-            pb.bill_number,
-            pb.total_amount,
-            pb.paid_amount,
-            pb.balance,
-            pb.status,
-            pb.created_at,
-            CASE 
-                WHEN pb.status = 'pending' THEN 'warning'
-                WHEN pb.status = 'paid' THEN 'success'
-                WHEN pb.status = 'partial' THEN 'info'
-                WHEN pb.status = 'cancelled' THEN 'danger'
-                ELSE 'secondary'
-            END as status_color
-        FROM patient_bills pb
-        WHERE pb.patient_id = ?
-        ORDER BY pb.created_at DESC
+            b.id,
+            b.bill_number,
+            b.total_amount,
+            b.paid_amount,
+            b.balance,
+            b.status,
+            b.created_at
+        FROM bills b
+        WHERE b.patient_id = ?
+        ORDER BY b.created_at DESC
         LIMIT 5
     ");
     $stmt->execute([$patient_id]);
@@ -348,7 +295,10 @@ function getStatusBadge($status) {
         'paid' => 'success',
         'partial' => 'warning',
         'dispensed' => 'success',
-        'with_doctor' => 'info'
+        'with_doctor' => 'info',
+        'new' => 'info',
+        'follow-up' => 'teal',
+        'emergency' => 'danger'
     ];
     return $classes[$status] ?? 'secondary';
 }
@@ -381,14 +331,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
-    <!-- html2pdf for PDF export -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - BOLDER BLUE THEME (MATCHES patient_details)
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -476,9 +421,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -647,9 +589,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-color: var(--primary);
         }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -657,9 +596,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - BOLDER BLUE THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
@@ -788,9 +724,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           PATIENT DETAILS CARD
-           ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -820,9 +753,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           STATS CARDS (MATCHES patient_details)
-           ================================================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -911,9 +841,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .stat-card .stat-icon-small.red { background: #3A1A1A; color: #F87171; }
         [data-theme="dark"] .stat-card .stat-icon-small.pink { background: #3A1A2A; color: #F472B6; }
         
-        /* ================================================================
-           VITAL SIGNS CARDS - 6 CARDS (MODERN DESIGN - MATCHES patient_details)
-           ================================================================ */
         .vital-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -973,7 +900,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             margin-left: 2px;
         }
         
-        /* Card Colors - 6 Colors */
         .vital-card.blue::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
         .vital-card.blue .vital-icon { color: #0B5ED7; }
         .vital-card.blue .vital-value { color: #0B5ED7; }
@@ -998,7 +924,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .vital-card.indigo .vital-icon { color: #4F46E5; }
         .vital-card.indigo .vital-value { color: #4F46E5; }
         
-        /* Dark mode vital cards */
         [data-theme="dark"] .vital-card {
             background: #1E293B;
             border-color: #334155;
@@ -1020,9 +945,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
         [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
         
-        /* ================================================================
-           DATA TABLE
-           ================================================================ */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1106,9 +1028,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-bottom: none;
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -1131,9 +1050,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 30px 20px;
@@ -1151,9 +1067,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             margin: 0;
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn-export {
             display: inline-flex;
             align-items: center;
@@ -1176,38 +1089,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 20px rgba(5, 150, 105, 0.35);
         }
         
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 14px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.75rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-        }
-        
-        .btn-primary {
-            background: var(--primary);
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-        }
-        
-        .btn-sm {
-            padding: 4px 10px;
-            font-size: 0.65rem;
-        }
-        
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -1222,9 +1103,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 700;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1238,19 +1116,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .page-header .page-title { font-size: 1.3rem; }
             .stats-grid { grid-template-columns: 1fr 1fr; }
             .detail-card { padding: 16px; }
-            .vital-grid { grid-template-columns: repeat(3, 1fr); }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
-            .vital-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1261,9 +1134,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1290,9 +1160,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        /* ================================================================
-           PRINT STYLES
-           ================================================================ */
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
@@ -1314,7 +1181,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1490,7 +1357,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATISTICS CARDS (7 cards like patient_details) -->
+    <!-- STATISTICS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up" style="animation-delay:0.05s;">
         <a href="visits.php?patient_id=<?= $patient_id ?>" class="stat-card">
@@ -1559,7 +1426,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- LATEST VITAL SIGNS - 6 CARDS (MATCHES patient_details) -->
+    <!-- LATEST VITAL SIGNS -->
     <!-- ================================================================ -->
     <?php if ($vital_signs): ?>
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.1s;">
@@ -1585,7 +1452,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <div class="vital-label">Temperature</div>
             </div>
             
-            <!-- 2. Blood Pressure - FIXED: Shows only systolic if diastolic is NULL -->
+            <!-- 2. Blood Pressure -->
             <div class="vital-card red">
                 <div class="vital-icon"><i class="fas fa-heart"></i></div>
                 <div class="vital-value">
@@ -1723,7 +1590,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                         <span class="text-gray-400 text-xs">—</span>
                                     <?php endif; ?>
                                 </td>
-                                <td class="text-xs"><?= date('M d, Y', strtotime($visit['visit_date'] ?? 'now')) ?></td>
+                                <td class="text-xs"><?= date('M d, Y', strtotime($visit['visit_date'] ?? $visit['created_at'] ?? 'now')) ?></td>
                                 <td>
                                     <a href="view_visit.php?id=<?= $visit['id'] ?>&branch=<?= $selected_branch_id ?>" class="text-blue-600 text-xs hover:underline">View</a>
                                 </td>
@@ -1847,7 +1714,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT BILLS -->
+    <!-- RECENT BILLS - FIXED: Uses bills table -->
     <!-- ================================================================ -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.3s;">
         <div class="card-header">
@@ -2113,18 +1980,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c👤 Braick Dispensary - View Patient (WITH LOGIN SESSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick Dispensary - View Patient (FULL VERSION)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?> (ID: <?= $patient_id ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Patient ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Age: <?= $age !== null ? $age . ' yrs' : 'N/A' ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c🏥 Branch: <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0D9488;');
     console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($patient['assigned_doctor_name'] ?? 'Not assigned') ?>', 'font-size:13px; color:#7C3AED;');
+    console.log('%c💰 Bills: <?= count($recent_bills) ?> recent bills', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Uses bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Payments from bills table', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: All columns match database structure', 'font-size:13px; color:#34D399;');
     console.log('%c❤️ Vital Signs: 6 cards (Temp, BP, Pulse, Weight, Height, BMI)', 'font-size:13px; color:#EC4899;');
-    console.log('%c🩸 BP Display: Shows only systolic if diastolic is NULL', 'font-size:13px; color:#EF4444;');
     console.log('%c📄 Export PDF button added', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#059669;');
-    console.log('%c❌ Quick Actions buttons REMOVED', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>

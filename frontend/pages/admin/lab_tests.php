@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/lab_tests.php
 // ADMIN - VIEW ALL LAB TESTS
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
@@ -51,17 +51,21 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 require_once '../../../backend/config/database.php';
 require_once '../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET FILTERS
 // ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
-$search = $_GET['search'] ?? '';
-$status_filter = $_GET['status'] ?? 'all';
-$date_from = $_GET['date_from'] ?? '';
-$date_to = $_GET['date_to'] ?? '';
-$patient_search = $_GET['patient'] ?? '';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$status_filter = isset($_GET['status']) ? trim($_GET['status']) : 'all';
+$date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
+$date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
+$patient_search = isset($_GET['patient']) ? trim($_GET['patient']) : '';
 
 // ================================================================
 // GET ERROR MESSAGE FROM URL
@@ -79,6 +83,10 @@ if ($error === 'invalid_id') {
 } elseif ($error === 'database_error') {
     $error_message = '⚠️ Database error occurred. Please try again.';
     $show_error = true;
+} elseif ($error === 'update_success') {
+    $error_message = '✅ Lab test updated successfully!';
+    $show_error = true;
+    $error_message_type = 'success';
 }
 
 // ================================================================
@@ -87,6 +95,7 @@ if ($error === 'invalid_id') {
 $sql = "
     SELECT 
         lt.*,
+        p.id as patient_id,
         p.full_name as patient_name,
         p.patient_id as patient_code,
         u.full_name as doctor_name,
@@ -97,43 +106,55 @@ $sql = "
         b.name as branch_name
     FROM lab_tests lt
     LEFT JOIN visits v ON lt.visit_id = v.id
-    LEFT JOIN patients p ON v.patient_id = p.id
+    LEFT JOIN patients p ON lt.patient_id = p.id
     LEFT JOIN users u ON lt.doctor_id = u.id
     LEFT JOIN users u2 ON lt.lab_technician_id = u2.id
     LEFT JOIN branches b ON lt.branch_id = b.id
     WHERE 1=1
 ";
 
+$params = [];
+
 // Apply filters
 if ($selected_branch_id !== 'all') {
-    $sql .= " AND lt.branch_id = " . (int)$selected_branch_id;
+    $sql .= " AND lt.branch_id = ?";
+    $params[] = (int)$selected_branch_id;
 }
 
 if ($status_filter !== 'all') {
-    $sql .= " AND lt.status = '" . $db->quote($status_filter) . "'";
+    $sql .= " AND lt.status = ?";
+    $params[] = $status_filter;
 }
 
 if (!empty($search)) {
-    $sql .= " AND (lt.test_name LIKE '%" . $db->quote($search) . "%' OR p.full_name LIKE '%" . $db->quote($search) . "%')";
+    $sql .= " AND (lt.test_name LIKE ? OR p.full_name LIKE ? OR p.patient_id LIKE ?)";
+    $search_term = "%$search%";
+    $params[] = $search_term;
+    $params[] = $search_term;
+    $params[] = $search_term;
 }
 
 if (!empty($patient_search)) {
-    $sql .= " AND p.full_name LIKE '%" . $db->quote($patient_search) . "%'";
+    $sql .= " AND p.full_name LIKE ?";
+    $params[] = "%$patient_search%";
 }
 
 if (!empty($date_from)) {
-    $sql .= " AND DATE(lt.created_at) >= '" . $db->quote($date_from) . "'";
+    $sql .= " AND DATE(lt.created_at) >= ?";
+    $params[] = $date_from;
 }
 
 if (!empty($date_to)) {
-    $sql .= " AND DATE(lt.created_at) <= '" . $db->quote($date_to) . "'";
+    $sql .= " AND DATE(lt.created_at) <= ?";
+    $params[] = $date_to;
 }
 
 $sql .= " ORDER BY lt.created_at DESC";
 
 $lab_tests = [];
 try {
-    $stmt = $db->query($sql);
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $lab_tests = [];
@@ -765,15 +786,6 @@ include_once '../../components/admin_sidebar.php';
             z-index: 1;
         }
         
-        .stat-value.blue-text,
-        .stat-value.green-text,
-        .stat-value.orange-text,
-        .stat-value.purple-text,
-        .stat-value.red-text,
-        .stat-value.teal-text {
-            color: white;
-        }
-        
         .stat-sub {
             font-size: 0.6rem;
             color: rgba(255,255,255,0.7);
@@ -1199,8 +1211,8 @@ include_once '../../components/admin_sidebar.php';
     <!-- ERROR MESSAGE -->
     <!-- ================================================================ -->
     <?php if ($show_error && !empty($error_message)): ?>
-        <div class="alert alert-danger animate-fade-in-up">
-            <i class="fas fa-exclamation-circle"></i>
+        <div class="alert <?= (isset($error_message_type) && $error_message_type === 'success') ? 'alert-success' : 'alert-danger' ?> animate-fade-in-up">
+            <i class="fas <?= (isset($error_message_type) && $error_message_type === 'success') ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <?= $error_message ?>
             <button class="alert-close" onclick="this.parentElement.style.display='none'">
                 <i class="fas fa-times"></i>
@@ -1594,6 +1606,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c⏳ In Progress: <?= $in_progress_tests ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c⏰ Pending: <?= $pending_tests ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c📊 Tables: lab_tests, visits, patients, users, branches', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

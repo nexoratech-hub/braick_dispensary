@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/get_sidebar_stats.php
 // AJAX ENDPOINT - GET SIDEBAR STATISTICS
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
@@ -94,10 +94,46 @@ function getCount($db, $table, $branch_id, $extra_conditions = '') {
 }
 
 // ================================================================
+// FUNCTION TO GET SUM SAFELY
+// ================================================================
+function getSum($db, $table, $column, $branch_id, $extra_conditions = '') {
+    try {
+        $sql = "SELECT SUM($column) as total FROM $table WHERE 1=1 ";
+        $params = [];
+        
+        // Check if table has branch_id column
+        $has_branch = false;
+        try {
+            $stmt = $db->query("SHOW COLUMNS FROM $table LIKE 'branch_id'");
+            $has_branch = $stmt->rowCount() > 0;
+        } catch (Exception $e) {
+            $has_branch = false;
+        }
+        
+        if ($has_branch && $branch_id !== 'all') {
+            $sql .= " AND branch_id = ?";
+            $params[] = (int)$branch_id;
+        }
+        
+        if (!empty($extra_conditions)) {
+            $sql .= " AND $extra_conditions";
+        }
+        
+        $stmt = $db->prepare($sql);
+        $stmt->execute($params);
+        $result = $stmt->fetch(PDO::FETCH_ASSOC);
+        return (float)($result['total'] ?? 0);
+    } catch (Exception $e) {
+        return 0;
+    }
+}
+
+// ================================================================
 // GET ALL STATISTICS
 // ================================================================
 
-// Employees (role != admin)
+// ----- EMPLOYEES -----
+// Total employees (role != admin)
 $total_employees = 0;
 try {
     $sql = "SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active'";
@@ -113,11 +149,7 @@ try {
     $total_employees = 0;
 }
 
-// Patients
-$total_patients = getCount($db, 'patients', $selected_branch_id);
-$today_patients = getCount($db, 'patients', $selected_branch_id, "DATE(created_at) = CURDATE()");
-
-// Doctors
+// Total doctors (active)
 $total_doctors = 0;
 try {
     $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'";
@@ -133,7 +165,7 @@ try {
     $total_doctors = 0;
 }
 
-// Online Doctors
+// Online doctors
 $online_doctors = 0;
 try {
     $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active' AND is_online = 1";
@@ -149,25 +181,93 @@ try {
     $online_doctors = 0;
 }
 
-// Module counts
-$pharmacy_count = getCount($db, 'users', $selected_branch_id, "role = 'pharmacy' AND status = 'active'");
-$reception_count = getCount($db, 'users', $selected_branch_id, "role = 'reception' AND status = 'active'");
-$laboratory_count = getCount($db, 'users', $selected_branch_id, "role = 'laboratory' AND status = 'active'");
-$cashier_count = getCount($db, 'users', $selected_branch_id, "role = 'cashier' AND status = 'active'");
-
-// Services (bills)
-$total_services = getCount($db, 'bill_items', $selected_branch_id, "status != 'cancelled'");
-$today_services = getCount($db, 'bill_items', $selected_branch_id, "status != 'cancelled' AND DATE(created_at) = CURDATE()");
-
-// Branches
-$total_branches = 0;
+// Pharmacy count
+$pharmacy_count = 0;
 try {
-    $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-    $total_branches = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'pharmacy' AND status = 'active'";
+    $params = [];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $pharmacy_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
 } catch (Exception $e) {
-    $total_branches = 0;
+    $pharmacy_count = 0;
 }
 
+// Reception count
+$reception_count = 0;
+try {
+    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'reception' AND status = 'active'";
+    $params = [];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $reception_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+} catch (Exception $e) {
+    $reception_count = 0;
+}
+
+// Laboratory count
+$laboratory_count = 0;
+try {
+    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'laboratory' AND status = 'active'";
+    $params = [];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $laboratory_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+} catch (Exception $e) {
+    $laboratory_count = 0;
+}
+
+// Cashier count
+$cashier_count = 0;
+try {
+    $sql = "SELECT COUNT(*) as count FROM users WHERE role = 'cashier' AND status = 'active'";
+    $params = [];
+    if ($selected_branch_id !== 'all') {
+        $sql .= " AND branch_id = ?";
+        $params[] = (int)$selected_branch_id;
+    }
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $cashier_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+} catch (Exception $e) {
+    $cashier_count = 0;
+}
+
+// ----- PATIENTS -----
+// Total patients
+$total_patients = getCount($db, 'patients', $selected_branch_id);
+
+// Today patients
+$today_patients = getCount($db, 'patients', $selected_branch_id, "DATE(created_at) = CURDATE()");
+
+// ----- VISITS -----
+// Today visits
+$today_visits = getCount($db, 'visits', $selected_branch_id, "DATE(created_at) = CURDATE()");
+
+// ----- APPOINTMENTS -----
+// Today appointments
+$today_appointments = getCount($db, 'appointments', $selected_branch_id, "DATE(appointment_date) = CURDATE() AND status NOT IN ('cancelled')");
+
+// ----- BILL ITEMS (Services) -----
+// Total services (bill items)
+$total_services = getCount($db, 'bill_items', $selected_branch_id, "status != 'cancelled'");
+
+// Today services
+$today_services = getCount($db, 'bill_items', $selected_branch_id, "status != 'cancelled' AND DATE(created_at) = CURDATE()");
+
+// ----- PRESCRIPTIONS -----
 // Pending prescriptions
 $pending_prescriptions = 0;
 try {
@@ -186,25 +286,36 @@ try {
     $pending_prescriptions = 0;
 }
 
+// ----- LAB TESTS -----
 // Pending lab tests
 $pending_lab_tests = getCount($db, 'lab_tests', $selected_branch_id, "status = 'pending'");
 
-// Total visits today
-$today_visits = getCount($db, 'visits', $selected_branch_id, "DATE(created_at) = CURDATE()");
+// ----- BILLS -----
+// Pending bills (using bills table, not patient_bills)
+$pending_bills = 0;
+try {
+    if ($selected_branch_id !== 'all') {
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM bills 
+            WHERE branch_id = ? AND status = 'pending'
+        ");
+        $stmt->execute([(int)$selected_branch_id]);
+    } else {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM bills WHERE status = 'pending'");
+    }
+    $pending_bills = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+} catch (Exception $e) {
+    $pending_bills = 0;
+}
 
-// Total appointments today
-$today_appointments = getCount($db, 'appointments', $selected_branch_id, "DATE(appointment_date) = CURDATE() AND status NOT IN ('cancelled')");
-
-// Pending bills
-$pending_bills = getCount($db, 'patient_bills', $selected_branch_id, "status = 'pending'");
-
-// Total revenue today
+// Today revenue (from bills table)
 $today_revenue = 0;
 try {
     if ($selected_branch_id !== 'all') {
         $stmt = $db->prepare("
-            SELECT SUM(total_amount) as total 
-            FROM patient_bills 
+            SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM bills 
             WHERE branch_id = ? 
             AND status = 'paid' 
             AND DATE(created_at) = CURDATE()
@@ -212,8 +323,8 @@ try {
         $stmt->execute([(int)$selected_branch_id]);
     } else {
         $stmt = $db->query("
-            SELECT SUM(total_amount) as total 
-            FROM patient_bills 
+            SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM bills 
             WHERE status = 'paid' 
             AND DATE(created_at) = CURDATE()
         ");
@@ -223,21 +334,21 @@ try {
     $today_revenue = 0;
 }
 
-// Total revenue all time
+// Total revenue all time (from bills table)
 $total_revenue = 0;
 try {
     if ($selected_branch_id !== 'all') {
         $stmt = $db->prepare("
-            SELECT SUM(total_amount) as total 
-            FROM patient_bills 
+            SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM bills 
             WHERE branch_id = ? 
             AND status = 'paid'
         ");
         $stmt->execute([(int)$selected_branch_id]);
     } else {
         $stmt = $db->query("
-            SELECT SUM(total_amount) as total 
-            FROM patient_bills 
+            SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM bills 
             WHERE status = 'paid'
         ");
     }
@@ -245,6 +356,69 @@ try {
 } catch (Exception $e) {
     $total_revenue = 0;
 }
+
+// ----- BRANCHES -----
+// Total branches
+$total_branches = 0;
+try {
+    $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+    $total_branches = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+} catch (Exception $e) {
+    $total_branches = 0;
+}
+
+// ----- OTC SALES -----
+// Today OTC revenue
+$today_otc_revenue = 0;
+try {
+    if ($selected_branch_id !== 'all') {
+        $stmt = $db->prepare("
+            SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM otc_sales 
+            WHERE branch_id = ? 
+            AND payment_status = 'paid' 
+            AND DATE(created_at) = CURDATE()
+        ");
+        $stmt->execute([(int)$selected_branch_id]);
+    } else {
+        $stmt = $db->query("
+            SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM otc_sales 
+            WHERE payment_status = 'paid' 
+            AND DATE(created_at) = CURDATE()
+        ");
+    }
+    $today_otc_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (Exception $e) {
+    $today_otc_revenue = 0;
+}
+
+// Total OTC revenue all time
+$total_otc_revenue = 0;
+try {
+    if ($selected_branch_id !== 'all') {
+        $stmt = $db->prepare("
+            SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM otc_sales 
+            WHERE branch_id = ? 
+            AND payment_status = 'paid'
+        ");
+        $stmt->execute([(int)$selected_branch_id]);
+    } else {
+        $stmt = $db->query("
+            SELECT COALESCE(SUM(total_amount), 0) as total 
+            FROM otc_sales 
+            WHERE payment_status = 'paid'
+        ");
+    }
+    $total_otc_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+} catch (Exception $e) {
+    $total_otc_revenue = 0;
+}
+
+// ----- COMBINED REVENUE -----
+$today_total_revenue = $today_revenue + $today_otc_revenue;
+$total_total_revenue = $total_revenue + $total_otc_revenue;
 
 // ================================================================
 // RETURN JSON
@@ -273,7 +447,7 @@ echo json_encode([
     // Appointment Stats
     'today_appointments' => $today_appointments,
     
-    // Service Stats
+    // Service Stats (from bill_items)
     'total_services' => $total_services,
     'today_services' => $today_services,
     
@@ -282,8 +456,18 @@ echo json_encode([
     'pending_lab_tests' => $pending_lab_tests,
     'pending_bills' => $pending_bills,
     
-    // Revenue Stats
+    // Revenue Stats (from bills table)
     'today_revenue' => number_format($today_revenue, 0),
     'total_revenue' => number_format($total_revenue, 0),
+    
+    // OTC Revenue Stats (from otc_sales table)
+    'today_otc_revenue' => number_format($today_otc_revenue, 0),
+    'total_otc_revenue' => number_format($total_otc_revenue, 0),
+    
+    // Combined Revenue
+    'today_total_revenue' => number_format($today_total_revenue, 0),
+    'total_total_revenue' => number_format($total_total_revenue, 0),
+    
+    // Branch Stats
     'total_branches' => $total_branches
 ]);

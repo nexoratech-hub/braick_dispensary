@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/reception_dashboard.php
 // RECEPTION DASHBOARD - BLUE THEME WITH AJAX AUTO UPDATE
-// BRAICK DISPENSARY - BLUE THEME
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // ================================================================
 
 // ================================================================
@@ -75,7 +75,7 @@ $branch_id = isset($_GET['id']) ? (int)$_GET['id'] : ($_SESSION['branch_id'] ?? 
 
 function branchExists($db, $branch_id) {
     try {
-        $stmt = $db->prepare("SELECT id FROM branches WHERE id = ?");
+        $stmt = $db->prepare("SELECT id FROM branches WHERE id = ? AND status = 'active'");
         $stmt->execute([$branch_id]);
         return $stmt->fetch() ? true : false;
     } catch (Exception $e) {
@@ -132,6 +132,7 @@ try {
     $stmt = $db->prepare("
         SELECT COUNT(*) FROM visits 
         WHERE branch_id = ? AND DATE(created_at) = CURDATE()
+        AND status != 'cancelled'
     ");
     $stmt->execute([$branch_id]);
     $today_visits = $stmt->fetchColumn();
@@ -145,6 +146,7 @@ try {
     $stmt = $db->prepare("
         SELECT COUNT(*) FROM appointments 
         WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()
+        AND status != 'cancelled'
     ");
     $stmt->execute([$branch_id]);
     $today_appointments = $stmt->fetchColumn();
@@ -165,12 +167,13 @@ try {
     $pending_appointments = 0;
 }
 
-// Today's Revenue
+// Today's Revenue (from bills table)
 $today_revenue = 0;
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(amount), 0) FROM payments 
-        WHERE branch_id = ? AND DATE(received_at) = CURDATE()
+        SELECT COALESCE(SUM(total_amount), 0) FROM bills 
+        WHERE branch_id = ? AND status = 'paid' 
+        AND DATE(created_at) = CURDATE()
     ");
     $stmt->execute([$branch_id]);
     $today_revenue = $stmt->fetchColumn();
@@ -194,7 +197,7 @@ try {
             p.created_at,
             p.assigned_doctor_id,
             u.full_name as assigned_doctor_name,
-            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
+            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status != 'cancelled') as total_visits,
             (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id AND status != 'cancelled') as total_appointments
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
@@ -225,7 +228,7 @@ try {
             p.assigned_doctor_id,
             u.full_name as assigned_doctor_name,
             u.specialty as doctor_specialty,
-            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
+            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status != 'cancelled') as total_visits,
             (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id AND status != 'cancelled') as total_appointments
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
@@ -253,7 +256,7 @@ try {
             p.phone,
             p.email,
             p.created_at,
-            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id) as total_visits,
+            (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status != 'cancelled') as total_visits,
             (SELECT COUNT(*) FROM appointments WHERE patient_id = p.id AND status != 'cancelled') as total_appointments
         FROM patients p
         WHERE p.branch_id = ? AND p.assigned_doctor_id IS NULL
@@ -298,6 +301,7 @@ try {
         LEFT JOIN patients p ON a.patient_id = p.id
         LEFT JOIN users u ON a.doctor_id = u.id
         WHERE a.branch_id = ? AND DATE(a.appointment_date) = CURDATE()
+        AND a.status != 'cancelled'
         ORDER BY a.appointment_date ASC
         LIMIT 20
     ");
@@ -329,7 +333,7 @@ try {
 // ================================================================
 $branch_name = 'Unknown';
 try {
-    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+    $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
     $stmt->execute([$branch_id]);
     $result = $stmt->fetch();
     if ($result) {
@@ -402,13 +406,9 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -2185,7 +2185,8 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c📊 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Assigned Patients: <?= count($assigned_patients) ?>', 'font-size:13px; color:#7C3AED;');
     console.log('%c📅 Today\'s Appointments: <?= number_format($today_appointments) ?>', 'font-size:13px; color:#F59E0B;');
-    console.log('%c💰 Today\'s Revenue: TSh <?= number_format($today_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c💰 Today\'s Revenue: TSh <?= number_format($today_revenue, 0) ?> (from bills table)', 'font-size:13px; color:#0D9488;');
+    console.log('%c📊 Tables: patients, visits, appointments, bills, users, branches', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

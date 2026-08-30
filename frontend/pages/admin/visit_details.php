@@ -3,7 +3,7 @@
 // FILE: frontend/pages/admin/visit_details.php
 // VISIT DETAILS - TABLE STYLE VIEW (MATCHES view_patient.php)
 // WITH VITAL SIGNS CARDS (6 CARDS) - ROWS ZAONGEWA UKUBWA
-// BRAICK DISPENSARY - WITH LOGIN SESSION
+// BRAICK DISPENSARY - FIXED: Uses bills table instead of patient_bills
 // ================================================================
 
 // ================================================================
@@ -47,41 +47,6 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
-
-// ================================================================
-// IF SESSION IS INCOMPLETE, TRY TO RECOVER FROM DATABASE
-// ================================================================
-if ($user_id <= 0) {
-    if (isset($username) && !empty($username)) {
-        require_once __DIR__ . '/../../../backend/config/database.php';
-        try {
-            $db = Database::getInstance()->getConnection();
-            $stmt = $db->prepare("SELECT id, full_name, role, branch_id, profile_pic FROM users WHERE username = ? AND status = 'active'");
-            $stmt->execute([$username]);
-            $user = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($user) {
-                $_SESSION['user_id'] = $user['id'];
-                $_SESSION['full_name'] = $user['full_name'];
-                $_SESSION['role'] = $user['role'];
-                $_SESSION['branch_id'] = $user['branch_id'];
-                $_SESSION['profile_pic'] = $user['profile_pic'];
-                $user_id = $user['id'];
-                $user_full_name = $user['full_name'];
-                $user_role = $user['role'];
-                $user_branch_id = $user['branch_id'];
-                $profile_pic = $user['profile_pic'];
-            }
-        } catch (Exception $e) {
-            // Fallback to session values
-        }
-    }
-}
-
-// If still no user_id, redirect to login
-if ($user_id <= 0) {
-    header('Location: ../login.php');
-    exit;
-}
 
 // ================================================================
 // INCLUDE DATABASE AND HELPERS
@@ -231,18 +196,23 @@ foreach ($visit_prescriptions as $prescription) {
 }
 
 // ================================================================
-// GET PROCEDURES AND TOOLS
+// GET PROCEDURES AND TOOLS - FIXED: Uses bills table
 // ================================================================
-$stmt = $db->prepare("
-    SELECT DISTINCT bi.*
-    FROM bill_items bi
-    INNER JOIN patient_bills pb ON bi.bill_id = pb.id
-    WHERE pb.visit_id = ? 
-    AND (bi.item_type = 'procedure' OR bi.item_type = 'tool')
-    ORDER BY bi.item_type, bi.item_name
-");
-$stmt->execute([$visit_id]);
-$procedure_tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
+$procedure_tools = [];
+try {
+    $stmt = $db->prepare("
+        SELECT DISTINCT bi.*
+        FROM bill_items bi
+        INNER JOIN bills b ON bi.bill_id = b.id
+        WHERE b.visit_id = ? 
+        AND (bi.item_type = 'procedure' OR bi.item_type = 'tool')
+        ORDER BY bi.item_type, bi.item_name
+    ");
+    $stmt->execute([$visit_id]);
+    $procedure_tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $procedure_tools = [];
+}
 
 // ================================================================
 // GET VITAL SIGNS
@@ -259,20 +229,20 @@ $stmt->execute([$visit_id]);
 $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET ALL BILLS - UNIQUE BILLS ONLY
+// GET ALL BILLS - FIXED: Uses bills table
 // ================================================================
 $stmt = $db->prepare("
-    SELECT pb.*,
+    SELECT b.*,
            CASE 
-               WHEN pb.status = 'pending' THEN 'warning'
-               WHEN pb.status = 'paid' THEN 'success'
-               WHEN pb.status = 'partial' THEN 'info'
-               WHEN pb.status = 'cancelled' THEN 'danger'
+               WHEN b.status = 'pending' THEN 'warning'
+               WHEN b.status = 'paid' THEN 'success'
+               WHEN b.status = 'partial' THEN 'info'
+               WHEN b.status = 'cancelled' THEN 'danger'
                ELSE 'secondary'
            END as status_color
-    FROM patient_bills pb
-    WHERE pb.visit_id = ?
-    ORDER BY pb.created_at ASC
+    FROM bills b
+    WHERE b.visit_id = ?
+    ORDER BY b.created_at ASC
 ");
 $stmt->execute([$visit_id]);
 $raw_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -423,7 +393,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BOLDER BLUE THEME (MATCHES view_patient)
+           ROOT VARIABLES - BOLDER BLUE THEME
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -512,9 +482,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV - SHARED HEADER
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -683,9 +650,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-color: var(--primary);
         }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -693,9 +657,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - BOLDER BLUE THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
@@ -824,9 +785,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           DETAIL CARD
-           ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -856,9 +814,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           VITAL SIGNS CARDS - 6 CARDS (MATCHES view_patient)
-           ================================================================ */
         .vital-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -918,7 +873,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             margin-left: 2px;
         }
         
-        /* Card Colors - 6 Colors */
         .vital-card.blue::before { background: linear-gradient(90deg, #0B5ED7, #1A73E8); }
         .vital-card.blue .vital-icon { color: #0B5ED7; }
         .vital-card.blue .vital-value { color: #0B5ED7; }
@@ -943,7 +897,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .vital-card.indigo .vital-icon { color: #4F46E5; }
         .vital-card.indigo .vital-value { color: #4F46E5; }
         
-        /* Dark mode vital cards */
         [data-theme="dark"] .vital-card {
             background: #1E293B;
             border-color: #334155;
@@ -965,9 +918,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
         [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
         
-        /* ================================================================
-           TABLE CONTAINER
-           ================================================================ */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1051,9 +1001,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-bottom: none;
         }
         
-        /* ================================================================
-           BADGES
-           ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -1079,9 +1026,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .badge-warning { color: #1E293B; }
         [data-theme="dark"] .badge-orange { color: #1E293B; }
         
-        /* ================================================================
-           STATUS BADGE
-           ================================================================ */
         .status-badge {
             padding: 4px 16px;
             border-radius: 20px;
@@ -1114,9 +1058,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .status-badge.pink { background: #3A1A2A; color: #F472B6; }
         [data-theme="dark"] .status-badge.teal { background: #1A3A3A; color: #2DD4BF; }
         
-        /* ================================================================
-           TECHNICIAN / DOCTOR TAGS
-           ================================================================ */
         .technician-tag {
             background: #E8F0FE;
             color: #0B5ED7;
@@ -1151,9 +1092,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: #34D399;
         }
         
-        /* ================================================================
-           EMPTY STATE
-           ================================================================ */
         .empty-state {
             text-align: center;
             padding: 40px 20px;
@@ -1171,9 +1109,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             margin: 0;
         }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1203,9 +1138,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-size: 0.68rem;
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -1220,9 +1152,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 700;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1235,19 +1164,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .detail-card { padding: 16px; }
-            .vital-grid { grid-template-columns: repeat(3, 1fr); }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
             .detail-card { padding: 12px 14px; }
-            .vital-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -1258,9 +1182,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             opacity: 0;
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1839,7 +1760,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- PROCEDURES AND TOOLS TABLE -->
+    <!-- PROCEDURES AND TOOLS TABLE - FIXED: Uses bills table -->
     <!-- ================================================================ -->
     <?php if (count($procedure_tools) > 0): ?>
     <div class="table-container animate-fade-in-up" style="animation-delay:0.3s;">
@@ -1881,7 +1802,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- BILLS TABLE -->
+    <!-- BILLS TABLE - FIXED: Uses bills table -->
     <!-- ================================================================ -->
     <?php if (count($visit_bills) > 0): ?>
     <div class="table-container animate-fade-in-up" style="animation-delay:0.35s;">
@@ -2096,6 +2017,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c🔬 Lab Tests: <?= count($visit_lab_tests) ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c💊 Prescriptions: <?= count($visit_prescriptions) ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c💰 Bills: <?= count($visit_bills) ?> | Total: TSh <?= number_format($total_bill_amount) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ FIXED: Uses bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Procedures & Tools from bills table', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
 </script>
 

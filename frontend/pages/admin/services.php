@@ -2,8 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/admin/services.php
 // ADMIN - SERVICES MANAGEMENT
-// FULL CRUD: ADD, EDIT, DELETE
-// INCLUDES: Services, Lab Tests, Tools, Procedures
+// FULL CRUD: ADD, VIEW, EDIT, DELETE
+// INCLUDES: Services, Procedures, Lab Tests, Equipment
+// WITH DUPLICATE CHECK FOR LAB TESTS
 // BRANCH SPECIFIC - WITH NULL SUPPORT
 // BLUE THEME WITH BRANCH FILTER
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
@@ -51,43 +52,23 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// VERIFY USER EXISTS IN DATABASE - FIX FOR FOREIGN KEY
+// INCLUDE DATABASE
 // ================================================================
 require_once '../../../backend/config/database.php';
-$db = Database::getInstance()->getConnection();
-
-// ================================================================
-// CHECK IF USER EXISTS, IF NOT CREATE DEFAULT
-// ================================================================
-try {
-    $check_stmt = $db->prepare("SELECT id FROM users WHERE id = ?");
-    $check_stmt->execute([$user_id]);
-    $user_exists = $check_stmt->fetch();
-    
-    if (!$user_exists) {
-        $default_password = password_hash('admin123', PASSWORD_DEFAULT);
-        $insert_stmt = $db->prepare("
-            INSERT INTO users (id, username, password, full_name, email, phone, role, branch_id, status, created_at) 
-            VALUES (?, 'admin', ?, 'System Admin', 'admin@braick.com', '+255 700 000 000', 'admin', 1, 'active', NOW())
-            ON DUPLICATE KEY UPDATE id = id
-        ");
-        $insert_stmt->execute([$user_id, $default_password]);
-    }
-} catch (Exception $e) {
-    $user_id = 1;
-}
-
-// ================================================================
-// INCLUDE FUNCTIONS
-// ================================================================
 require_once '../../../backend/helpers/functions.php';
+
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection failed: " . $e->getMessage());
+}
 
 // ================================================================
 // GET PARAMETERS
 // ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
 $active_tab = isset($_GET['tab']) ? $_GET['tab'] : 'services';
-$search = $_GET['search'] ?? '';
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -98,6 +79,19 @@ try {
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $branches = [];
+}
+
+// ================================================================
+// GET BRANCH NAME FOR DISPLAY
+// ================================================================
+$selected_branch_name = 'All Branches';
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch_id) {
+            $selected_branch_name = $b['name'];
+            break;
+        }
+    }
 }
 
 // ================================================================
@@ -130,18 +124,20 @@ $lab_categories = [
 ];
 
 // ================================================================
-// HANDLE CRUD OPERATIONS
+// HELPER FUNCTIONS
 // ================================================================
-$message = '';
-$message_type = '';
+function cleanPrice($price) {
+    $price = str_replace(',', '', $price);
+    $price = str_replace(' ', '', $price);
+    $price = preg_replace('/[^0-9.]/', '', $price);
+    return (float)$price;
+}
 
-// ================================================================
-// GENERATE PROCEDURE CODE
-// ================================================================
 function generateProcedureCode($db, $branch_id) {
     try {
         $stmt = $db->prepare("
-            SELECT COUNT(*) as count FROM procedures WHERE branch_id = ? OR branch_id IS NULL
+            SELECT COUNT(*) as count FROM procedures_catalog 
+            WHERE branch_id = ? OR branch_id IS NULL
         ");
         $stmt->execute([$branch_id]);
         $count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -152,26 +148,126 @@ function generateProcedureCode($db, $branch_id) {
     }
 }
 
-// ================================================================
-// HELPER FUNCTION: Clean price input - REMOVE COMMAS
-// ================================================================
-function cleanPrice($price) {
-    // Remove commas, spaces first
-    $price = str_replace(',', '', $price);
-    $price = str_replace(' ', '', $price);
-    // Remove any other non-numeric characters except decimal point
-    $price = preg_replace('/[^0-9.]/', '', $price);
-    return (float)$price;
+function generateEquipmentBatch($db, $equipment_name, $branch_id) {
+    try {
+        $stmt = $db->prepare("
+            SELECT batch_number FROM medical_equipment 
+            WHERE equipment_name = ? AND branch_id = ? 
+            ORDER BY id DESC LIMIT 1
+        ");
+        $stmt->execute([$equipment_name, $branch_id]);
+        $last = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        if ($last && !empty($last['batch_number'])) {
+            $parts = explode('-', $last['batch_number']);
+            if (count($parts) >= 2) {
+                $last_num = intval(end($parts));
+                $new_num = str_pad($last_num + 1, 4, '0', STR_PAD_LEFT);
+                return 'EQP-' . date('Ymd') . '-' . $new_num;
+            }
+        }
+        return 'EQP-' . date('Ymd') . '-0001';
+    } catch (Exception $e) {
+        return 'EQP-' . date('Ymd') . '-' . rand(1000, 9999);
+    }
+}
+
+function getStatusBadge($status) {
+    return $status ? 'success' : 'danger';
+}
+
+function getStatusLabel($status) {
+    return $status ? 'Active' : 'Inactive';
+}
+
+function getBranchDisplay($branch_name) {
+    return $branch_name ?? 'All Branches';
+}
+
+function getStockStatus($quantity, $reorder_level) {
+    if ($quantity <= 0) return ['class' => 'out', 'label' => 'Out of Stock'];
+    if ($quantity <= $reorder_level) return ['class' => 'low', 'label' => 'Low Stock'];
+    return ['class' => 'ok', 'label' => 'In Stock'];
+}
+
+function getExpiryStatus($expiry_date) {
+    if (empty($expiry_date) || $expiry_date === '0000-00-00') {
+        return ['class' => 'no-expiry', 'label' => '∞ No Expiry', 'days' => null];
+    }
+    $days = floor((strtotime($expiry_date) - time()) / 86400);
+    if ($days < 0) return ['class' => 'expired', 'label' => 'Expired', 'days' => $days];
+    if ($days <= 30) return ['class' => 'expiring', 'label' => 'Expiring Soon', 'days' => $days];
+    return ['class' => 'valid', 'label' => 'Valid', 'days' => $days];
+}
+
+function getBranchName($db, $branch_id) {
+    if ($branch_id === null) return 'All Branches';
+    try {
+        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+        $stmt->execute([$branch_id]);
+        $branch = $stmt->fetch(PDO::FETCH_ASSOC);
+        return $branch ? $branch['name'] : 'Unknown';
+    } catch (Exception $e) {
+        return 'Unknown';
+    }
 }
 
 // ================================================================
-// CRUD OPERATIONS
+// BUILD BRANCH FILTER
 // ================================================================
+function buildBranchFilter($selected_branch_id, $table_alias = '') {
+    $prefix = $table_alias ? $table_alias . '.' : '';
+    
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $branch_id = (int)$selected_branch_id;
+        return " AND ({$prefix}branch_id = $branch_id OR {$prefix}branch_id IS NULL)";
+    }
+    return "";
+}
+
+function buildSearchFilter($search, $fields = []) {
+    if (empty($search) || empty($fields)) return "";
+    
+    $conditions = [];
+    $search_term = "%$search%";
+    
+    foreach ($fields as $field) {
+        $conditions[] = "$field LIKE '$search_term'";
+    }
+    
+    return " AND (" . implode(" OR ", $conditions) . ")";
+}
+
+// ================================================================
+// CHECK DUPLICATE LAB TEST
+// ================================================================
+function checkLabTestDuplicate($db, $test_name, $category, $branch_id, $price, $exclude_id = 0) {
+    $exclude_condition = $exclude_id > 0 ? "AND id != $exclude_id" : "";
+    
+    $stmt = $db->prepare("
+        SELECT id, test_name, category, branch_id, price 
+        FROM lab_tests_catalog 
+        WHERE test_name = ? 
+        AND category = ? 
+        AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
+        AND price = ?
+        $exclude_condition
+        LIMIT 1
+    ");
+    $stmt->execute([$test_name, $category, $branch_id, $branch_id, $price]);
+    return $stmt->fetch(PDO::FETCH_ASSOC);
+}
+
+// ================================================================
+// HANDLE CRUD OPERATIONS
+// ================================================================
+$message = '';
+$message_type = '';
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
     $branch_id = $_POST['branch_id'] ?? null;
     
-    // If branch_id is 'all' or empty, set to NULL (All Branches)
     if ($branch_id === 'all' || $branch_id === '' || $branch_id === 'NULL') {
         $branch_id = null;
     } elseif (is_numeric($branch_id)) {
@@ -187,7 +283,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $service_name = trim($_POST['service_name'] ?? '');
         $category_id = (int)($_POST['category_id'] ?? 0);
         $description = trim($_POST['description'] ?? '');
-        // FIXED: Clean price properly - remove commas
         $price = cleanPrice($_POST['price'] ?? '0');
         $is_active = isset($_POST['is_active']) ? 1 : 0;
         
@@ -199,11 +294,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $message_type = 'error';
         } else {
             try {
-                $check_user = $db->prepare("SELECT id FROM users WHERE id = ?");
-                $check_user->execute([$user_id]);
-                $valid_user = $check_user->fetch();
-                $created_by = $valid_user ? $user_id : null;
-                
                 $stmt = $db->prepare("
                     INSERT INTO services (
                         service_name, category_id, description, branch_id, 
@@ -213,7 +303,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 ");
                 $stmt->execute([
                     $service_name, $category_id, $description, $branch_id,
-                    $price, $is_active, $created_by
+                    $price, $is_active, $user_id
                 ]);
                 $message = "✅ Service added successfully! Price: TSh " . number_format($price, 0);
                 $message_type = 'success';
@@ -232,7 +322,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $service_name = trim($_POST['service_name'] ?? '');
         $category_id = (int)($_POST['category_id'] ?? 0);
         $description = trim($_POST['description'] ?? '');
-        // FIXED: Clean price properly - remove commas
         $price = cleanPrice($_POST['price'] ?? '0');
         $is_active = isset($_POST['is_active']) ? 1 : 0;
         
@@ -267,10 +356,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $service_id = isset($_POST['delete_id']) ? (int)$_POST['delete_id'] : 0;
         
         if ($service_id <= 0) {
-            $service_id = isset($_POST['service_id']) ? (int)$_POST['service_id'] : 0;
-        }
-        
-        if ($service_id <= 0) {
             $message = "❌ Invalid service ID";
             $message_type = 'error';
         } else {
@@ -296,38 +381,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     
     // ================================================================
-    // ADD PROCEDURE - FIXED PRICE (REMOVE COMMAS)
+    // ADD PROCEDURE
     // ================================================================
     if ($action === 'add_procedure') {
         $procedure_name = trim($_POST['procedure_name'] ?? '');
-        $category = trim($_POST['category'] ?? '');
-        // CRITICAL: Remove commas before converting to float
-        $price_raw = str_replace(',', '', $_POST['price'] ?? '0');
-        $price_raw = str_replace(' ', '', $price_raw);
-        $price = (float)$price_raw;
+        $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
+        $category_name = trim($_POST['category_name'] ?? '');
+        $price = cleanPrice($_POST['price'] ?? '0');
         $description = trim($_POST['description'] ?? '');
         $is_active = isset($_POST['is_active']) ? 1 : 0;
         
-        if (empty($procedure_name) || $price <= 0) {
+        $final_category = '';
+        if ($category_id > 0) {
+            foreach ($categories as $cat) {
+                if ($cat['id'] == $category_id) {
+                    $final_category = $cat['category_name'];
+                    break;
+                }
+            }
+        } elseif (!empty($category_name)) {
+            $final_category = $category_name;
+        }
+        
+        if (empty($procedure_name) || $price < 0) {
             $message = "❌ Procedure name and valid price are required!";
             $message_type = 'error';
         } else {
             try {
                 $procedure_code = generateProcedureCode($db, $branch_id);
                 $stmt = $db->prepare("
-                    INSERT INTO procedures (
+                    INSERT INTO procedures_catalog (
                         procedure_name, procedure_code, category, branch_id, 
-                        price, description, is_active, created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+                        price, description, is_active, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([
-                    $procedure_name, 
-                    $procedure_code, 
-                    $category, 
-                    $branch_id, 
-                    $price, 
-                    $description, 
-                    $is_active, 
+                    $procedure_name,
+                    $procedure_code,
+                    $final_category,
+                    $branch_id,
+                    $price,
+                    $description,
+                    $is_active,
                     $user_id
                 ]);
                 $message = "✅ Procedure added successfully! Code: " . $procedure_code . " | Price: TSh " . number_format($price, 0);
@@ -340,36 +435,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     
     // ================================================================
-    // UPDATE PROCEDURE - FIXED PRICE (REMOVE COMMAS)
+    // UPDATE PROCEDURE
     // ================================================================
     if ($action === 'update_procedure') {
         $procedure_id = (int)($_POST['procedure_id'] ?? 0);
         $procedure_name = trim($_POST['procedure_name'] ?? '');
-        $category = trim($_POST['category'] ?? '');
-        // CRITICAL: Remove commas before converting to float
-        $price_raw = str_replace(',', '', $_POST['price'] ?? '0');
-        $price_raw = str_replace(' ', '', $price_raw);
-        $price = (float)$price_raw;
+        $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
+        $category_name = trim($_POST['category_name'] ?? '');
+        $price = cleanPrice($_POST['price'] ?? '0');
         $description = trim($_POST['description'] ?? '');
         $is_active = isset($_POST['is_active']) ? 1 : 0;
+        
+        $final_category = '';
+        if ($category_id > 0) {
+            foreach ($categories as $cat) {
+                if ($cat['id'] == $category_id) {
+                    $final_category = $cat['category_name'];
+                    break;
+                }
+            }
+        } elseif (!empty($category_name)) {
+            $final_category = $category_name;
+        }
         
         if ($procedure_id <= 0 || empty($procedure_name)) {
             $message = "❌ Invalid procedure data";
             $message_type = 'error';
-        } elseif ($price <= 0) {
-            $message = "❌ Price must be greater than 0";
+        } elseif ($price < 0) {
+            $message = "❌ Price cannot be negative";
             $message_type = 'error';
         } else {
             try {
                 $stmt = $db->prepare("
-                    UPDATE procedures 
+                    UPDATE procedures_catalog 
                     SET procedure_name = ?, category = ?, price = ?, 
                         description = ?, is_active = ?, updated_at = NOW()
                     WHERE id = ?
                 ");
                 $stmt->execute([
                     $procedure_name, 
-                    $category, 
+                    $final_category, 
                     $price, 
                     $description, 
                     $is_active, 
@@ -395,7 +500,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $message_type = 'error';
         } else {
             try {
-                $stmt = $db->prepare("DELETE FROM procedures WHERE id = ?");
+                $stmt = $db->prepare("DELETE FROM procedures_catalog WHERE id = ?");
                 $stmt->execute([$procedure_id]);
                 $message = "✅ Procedure deleted successfully!";
                 $message_type = 'success';
@@ -407,57 +512,118 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     
     // ================================================================
-    // ADD TOOL - FIXED PRICE
+    // ADD EQUIPMENT
     // ================================================================
-    if ($action === 'add_tool') {
-        $tool_name = trim($_POST['tool_name'] ?? '');
-        $procedure_name = trim($_POST['procedure_name'] ?? '');
-        // FIXED: Clean price properly - remove commas
-        $price = cleanPrice($_POST['price'] ?? '0');
+    if ($action === 'add_equipment') {
+        $equipment_name = trim($_POST['equipment_name'] ?? '');
+        $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
+        $category_name = trim($_POST['category_name'] ?? '');
+        $unit = trim($_POST['unit'] ?? 'pcs');
+        $quantity = (int)($_POST['quantity'] ?? 0);
+        $reorder_level = (int)($_POST['reorder_level'] ?? 5);
+        $selling_price = cleanPrice($_POST['selling_price'] ?? '0');
+        $supplier = trim($_POST['supplier'] ?? '');
+        $expiry_date = $_POST['expiry_date'] ?? '';
+        $batch_number = trim($_POST['batch_number'] ?? '');
+        $status = $_POST['status'] ?? 'active';
         
-        if (empty($tool_name) || $price <= 0) {
-            $message = "❌ Tool name and price are required!";
-            $message_type = 'error';
-        } else {
+        $final_category = '';
+        if ($category_id > 0) {
+            foreach ($categories as $cat) {
+                if ($cat['id'] == $category_id) {
+                    $final_category = $cat['category_name'];
+                    break;
+                }
+            }
+        } elseif (!empty($category_name)) {
+            $final_category = $category_name;
+        }
+        
+        if (empty($batch_number)) {
+            $batch_number = generateEquipmentBatch($db, $equipment_name, $branch_id);
+        }
+        
+        $errors = [];
+        if (empty($equipment_name)) { $errors[] = 'Equipment name is required'; }
+        if ($quantity < 0) { $errors[] = 'Quantity cannot be negative'; }
+        if ($selling_price < 0) { $errors[] = 'Selling price cannot be negative'; }
+        if (!empty($expiry_date) && strtotime($expiry_date) < strtotime(date('Y-m-d'))) {
+            $errors[] = 'Expiry date cannot be in the past';
+        }
+        
+        if (empty($errors)) {
             try {
                 $stmt = $db->prepare("
-                    INSERT INTO procedure_tools (
-                        procedure_name, tool_name, branch_id, price, is_active, created_at
-                    ) VALUES (?, ?, ?, ?, 1, NOW())
+                    INSERT INTO medical_equipment (
+                        equipment_name, category, unit, quantity, reorder_level,
+                        selling_price, supplier, expiry_date, batch_number,
+                        branch_id, status, created_by, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
-                $stmt->execute([$procedure_name, $tool_name, $branch_id, $price]);
-                $message = "✅ Tool added successfully! Price: TSh " . number_format($price, 0);
+                $stmt->execute([
+                    $equipment_name, $final_category, $unit, $quantity, $reorder_level,
+                    $selling_price, $supplier, $expiry_date, $batch_number,
+                    $branch_id, $status, $user_id
+                ]);
+                
+                $message = "✅ Equipment added successfully! Batch: <strong>$batch_number</strong>";
                 $message_type = 'success';
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
             }
+        } else {
+            $message = implode('<br>', $errors);
+            $message_type = 'error';
         }
     }
     
     // ================================================================
-    // UPDATE TOOL - FIXED PRICE
+    // UPDATE EQUIPMENT
     // ================================================================
-    if ($action === 'update_tool') {
-        $tool_id = (int)($_POST['tool_id'] ?? 0);
-        $tool_name = trim($_POST['tool_name'] ?? '');
-        $procedure_name = trim($_POST['procedure_name'] ?? '');
-        // FIXED: Clean price properly - remove commas
-        $price = cleanPrice($_POST['price'] ?? '0');
-        $is_active = isset($_POST['is_active']) ? 1 : 0;
+    if ($action === 'update_equipment') {
+        $equipment_id = (int)($_POST['equipment_id'] ?? 0);
+        $equipment_name = trim($_POST['equipment_name'] ?? '');
+        $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
+        $category_name = trim($_POST['category_name'] ?? '');
+        $unit = trim($_POST['unit'] ?? 'pcs');
+        $quantity = (int)($_POST['quantity'] ?? 0);
+        $reorder_level = (int)($_POST['reorder_level'] ?? 5);
+        $selling_price = cleanPrice($_POST['selling_price'] ?? '0');
+        $supplier = trim($_POST['supplier'] ?? '');
+        $expiry_date = $_POST['expiry_date'] ?? '';
+        $status = $_POST['status'] ?? 'active';
         
-        if ($tool_id <= 0 || empty($tool_name)) {
-            $message = "❌ Invalid tool data";
+        $final_category = '';
+        if ($category_id > 0) {
+            foreach ($categories as $cat) {
+                if ($cat['id'] == $category_id) {
+                    $final_category = $cat['category_name'];
+                    break;
+                }
+            }
+        } elseif (!empty($category_name)) {
+            $final_category = $category_name;
+        }
+        
+        if ($equipment_id <= 0 || empty($equipment_name)) {
+            $message = "❌ Invalid equipment data";
             $message_type = 'error';
         } else {
             try {
                 $stmt = $db->prepare("
-                    UPDATE procedure_tools 
-                    SET tool_name = ?, procedure_name = ?, price = ?, is_active = ?, updated_at = NOW()
+                    UPDATE medical_equipment 
+                    SET equipment_name = ?, category = ?, unit = ?, quantity = ?, 
+                        reorder_level = ?, selling_price = ?, supplier = ?, 
+                        expiry_date = ?, status = ?, updated_at = NOW()
                     WHERE id = ?
                 ");
-                $stmt->execute([$tool_name, $procedure_name, $price, $is_active, $tool_id]);
-                $message = "✅ Tool updated successfully! Price: TSh " . number_format($price, 0);
+                $stmt->execute([
+                    $equipment_name, $final_category, $unit, $quantity,
+                    $reorder_level, $selling_price, $supplier,
+                    $expiry_date, $status, $equipment_id
+                ]);
+                $message = "✅ Equipment updated successfully!";
                 $message_type = 'success';
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
@@ -467,19 +633,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     
     // ================================================================
-    // DELETE TOOL
+    // DELETE EQUIPMENT
     // ================================================================
-    if ($action === 'delete_tool') {
-        $tool_id = isset($_POST['delete_id']) ? (int)$_POST['delete_id'] : 0;
+    if ($action === 'delete_equipment') {
+        $equipment_id = isset($_POST['delete_id']) ? (int)$_POST['delete_id'] : 0;
         
-        if ($tool_id <= 0) {
-            $message = "❌ Invalid tool ID";
+        if ($equipment_id <= 0) {
+            $message = "❌ Invalid equipment ID";
             $message_type = 'error';
         } else {
             try {
-                $stmt = $db->prepare("DELETE FROM procedure_tools WHERE id = ?");
-                $stmt->execute([$tool_id]);
-                $message = "✅ Tool deleted successfully!";
+                $stmt = $db->prepare("DELETE FROM medical_equipment WHERE id = ?");
+                $stmt->execute([$equipment_id]);
+                $message = "✅ Equipment deleted successfully!";
                 $message_type = 'success';
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
@@ -489,28 +655,94 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     
     // ================================================================
-    // ADD LAB TEST - FIXED PRICE
+    // ADD LAB TEST - WITH DUPLICATE CHECK
     // ================================================================
     if ($action === 'add_lab_test') {
-        $test_name = trim($_POST['test_name'] ?? '');
-        $category = trim($_POST['category'] ?? '');
-        // FIXED: Clean price properly - remove commas
-        $price = cleanPrice($_POST['price'] ?? '0');
+        $test_name = isset($_POST['test_name']) ? trim($_POST['test_name']) : '';
+        $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
+        $category_name = isset($_POST['category_name']) ? trim($_POST['category_name']) : '';
+        $price = isset($_POST['price']) ? cleanPrice($_POST['price']) : 0;
+        $description = isset($_POST['description']) ? trim($_POST['description']) : '';
+        $is_active = isset($_POST['is_active']) ? 1 : 0;
+        $equipment_ids = isset($_POST['equipment_ids']) && is_array($_POST['equipment_ids']) ? $_POST['equipment_ids'] : [];
         
-        if (empty($test_name) || $price <= 0) {
-            $message = "❌ Test name and price are required!";
+        $final_category = '';
+        if ($category_id > 0) {
+            foreach ($categories as $cat) {
+                if ($cat['id'] == $category_id) {
+                    $final_category = $cat['category_name'];
+                    break;
+                }
+            }
+        } elseif (!empty($category_name)) {
+            $final_category = $category_name;
+        }
+        
+        if (empty($test_name)) {
+            $message = "❌ Test name is required!";
+            $message_type = 'error';
+        } elseif ($price < 0) {
+            $message = "❌ Price cannot be negative";
             $message_type = 'error';
         } else {
             try {
-                $stmt = $db->prepare("
-                    INSERT INTO lab_tests_catalog (
-                        test_name, category, branch_id, price, is_active, created_at
-                    ) VALUES (?, ?, ?, ?, 1, NOW())
-                ");
-                $stmt->execute([$test_name, $category, $branch_id, $price]);
-                $message = "✅ Lab test added successfully! Price: TSh " . number_format($price, 0);
-                $message_type = 'success';
+                // Check for duplicate
+                $duplicate = checkLabTestDuplicate($db, $test_name, $final_category, $branch_id, $price);
+                
+                if ($duplicate) {
+                    $message = "❌ Duplicate test found!<br>";
+                    $message .= "Test '<strong>" . htmlspecialchars($duplicate['test_name']) . "</strong>' already exists with:<br>";
+                    $message .= "• Category: " . htmlspecialchars($duplicate['category']) . "<br>";
+                    $message .= "• Price: TSh " . number_format($duplicate['price'], 0) . "<br>";
+                    $message .= "• Branch: " . getBranchName($db, $duplicate['branch_id']);
+                    $message_type = 'error';
+                } else {
+                    $db->beginTransaction();
+                    
+                    $stmt = $db->prepare("
+                        INSERT INTO lab_tests_catalog (
+                            test_name, category, branch_id, price, description,
+                            is_active, created_by, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $test_name, 
+                        $final_category, 
+                        $branch_id, 
+                        $price, 
+                        $description,
+                        $is_active,
+                        $user_id
+                    ]);
+                    $test_id = $db->lastInsertId();
+                    
+                    if (!empty($equipment_ids)) {
+                        $equipment_ids = array_map('intval', $equipment_ids);
+                        foreach ($equipment_ids as $equip_id) {
+                            $stmt = $db->prepare("SELECT id FROM medical_equipment WHERE id = ?");
+                            $stmt->execute([$equip_id]);
+                            if ($stmt->fetch()) {
+                                $stmt = $db->prepare("
+                                    INSERT INTO lab_test_equipment (lab_test_id, equipment_id, branch_id, created_at)
+                                    VALUES (?, ?, ?, NOW())
+                                ");
+                                $stmt->execute([$test_id, $equip_id, $branch_id]);
+                            }
+                        }
+                    }
+                    
+                    $db->commit();
+                    
+                    $equipment_text = '';
+                    if (!empty($equipment_ids)) {
+                        $equipment_text = ' with ' . count($equipment_ids) . ' equipment(s) linked (FREE)';
+                    }
+                    
+                    $message = "✅ Lab test added successfully!$equipment_text";
+                    $message_type = 'success';
+                }
             } catch (Exception $e) {
+                if (isset($db)) $db->rollBack();
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
             }
@@ -518,32 +750,121 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     
     // ================================================================
-    // UPDATE LAB TEST - FIXED PRICE
+    // UPDATE LAB TEST - FIXED: Better error handling
     // ================================================================
     if ($action === 'update_lab_test') {
-        $test_id = (int)($_POST['test_id'] ?? 0);
-        $test_name = trim($_POST['test_name'] ?? '');
-        $category = trim($_POST['category'] ?? '');
-        // FIXED: Clean price properly - remove commas
-        $price = cleanPrice($_POST['price'] ?? '0');
-        $is_active = isset($_POST['is_active']) ? 1 : 0;
+        // Debug: log received data
+        error_log("Update lab test - POST data: " . print_r($_POST, true));
         
-        if ($test_id <= 0 || empty($test_name)) {
-            $message = "❌ Invalid test data";
+        $test_id = isset($_POST['test_id']) ? (int)$_POST['test_id'] : 0;
+        $test_name = isset($_POST['test_name']) ? trim($_POST['test_name']) : '';
+        $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
+        $category_name = isset($_POST['category_name']) ? trim($_POST['category_name']) : '';
+        $price = isset($_POST['price']) ? cleanPrice($_POST['price']) : 0;
+        $description = isset($_POST['description']) ? trim($_POST['description']) : '';
+        $is_active = isset($_POST['is_active']) ? 1 : 0;
+        $equipment_ids = isset($_POST['equipment_ids']) && is_array($_POST['equipment_ids']) ? $_POST['equipment_ids'] : [];
+        
+        $final_category = '';
+        if ($category_id > 0) {
+            foreach ($categories as $cat) {
+                if ($cat['id'] == $category_id) {
+                    $final_category = $cat['category_name'];
+                    break;
+                }
+            }
+        } elseif (!empty($category_name)) {
+            $final_category = $category_name;
+        }
+        
+        // Check if we have valid data
+        if ($test_id <= 0) {
+            $message = "❌ Invalid test ID - Please select a valid test to edit";
+            $message_type = 'error';
+            error_log("Update lab test failed: test_id = $test_id");
+        } elseif (empty($test_name)) {
+            $message = "❌ Test name is required";
+            $message_type = 'error';
+        } elseif ($price < 0) {
+            $message = "❌ Price cannot be negative";
             $message_type = 'error';
         } else {
             try {
-                $stmt = $db->prepare("
-                    UPDATE lab_tests_catalog 
-                    SET test_name = ?, category = ?, price = ?, is_active = ?, updated_at = NOW()
-                    WHERE id = ?
-                ");
-                $stmt->execute([$test_name, $category, $price, $is_active, $test_id]);
-                $message = "✅ Lab test updated successfully! Price: TSh " . number_format($price, 0);
-                $message_type = 'success';
+                // Check if test exists
+                $check_stmt = $db->prepare("SELECT id FROM lab_tests_catalog WHERE id = ?");
+                $check_stmt->execute([$test_id]);
+                if (!$check_stmt->fetch()) {
+                    $message = "❌ Test not found with ID: $test_id";
+                    $message_type = 'error';
+                } else {
+                    // Check for duplicate excluding current test
+                    $duplicate = checkLabTestDuplicate($db, $test_name, $final_category, $branch_id, $price, $test_id);
+                    
+                    if ($duplicate) {
+                        $message = "❌ Duplicate test found!<br>";
+                        $message .= "Test '<strong>" . htmlspecialchars($duplicate['test_name']) . "</strong>' already exists with:<br>";
+                        $message .= "• Category: " . htmlspecialchars($duplicate['category']) . "<br>";
+                        $message .= "• Price: TSh " . number_format($duplicate['price'], 0) . "<br>";
+                        $message .= "• Branch: " . getBranchName($db, $duplicate['branch_id']);
+                        $message_type = 'error';
+                    } else {
+                        $db->beginTransaction();
+                        
+                        // Update lab test details
+                        $stmt = $db->prepare("
+                            UPDATE lab_tests_catalog 
+                            SET test_name = ?, category = ?, price = ?, 
+                                description = ?, is_active = ?, updated_at = NOW()
+                            WHERE id = ?
+                        ");
+                        $stmt->execute([
+                            $test_name, $final_category, $price, 
+                            $description, $is_active, $test_id
+                        ]);
+                        
+                        // Remove existing equipment links
+                        $stmt = $db->prepare("DELETE FROM lab_test_equipment WHERE lab_test_id = ?");
+                        $stmt->execute([$test_id]);
+                        
+                        // Add new equipment links
+                        if (!empty($equipment_ids)) {
+                            $equipment_ids = array_map('intval', $equipment_ids);
+                            foreach ($equipment_ids as $equip_id) {
+                                $stmt = $db->prepare("SELECT id FROM medical_equipment WHERE id = ?");
+                                $stmt->execute([$equip_id]);
+                                if ($stmt->fetch()) {
+                                    $stmt = $db->prepare("
+                                        INSERT INTO lab_test_equipment (lab_test_id, equipment_id, branch_id, created_at)
+                                        VALUES (?, ?, ?, NOW())
+                                    ");
+                                    $stmt->execute([$test_id, $equip_id, $branch_id]);
+                                }
+                            }
+                        }
+                        
+                        $db->commit();
+                        
+                        $equipment_text = '';
+                        if (!empty($equipment_ids)) {
+                            $equipment_text = ' with ' . count($equipment_ids) . ' equipment(s) linked (FREE)';
+                        }
+                        
+                        $message = "✅ Lab test updated successfully! Price: TSh " . number_format($price, 0) . $equipment_text;
+                        $message_type = 'success';
+                        
+                        // Redirect to clear edit params after 2 seconds
+                        echo '<script>
+                            setTimeout(function() {
+                                window.location.href = "services.php?branch=' . urlencode($selected_branch_id) . '&tab=lab_tests&success=1";
+                            }, 2000);
+                        </script>';
+                    }
+                }
             } catch (Exception $e) {
+                if (isset($db)) $db->rollBack();
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
+                error_log("Update lab test error: " . $e->getMessage());
             }
         }
     }
@@ -559,6 +880,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
             $message_type = 'error';
         } else {
             try {
+                // Delete equipment links first
+                $stmt = $db->prepare("DELETE FROM lab_test_equipment WHERE lab_test_id = ?");
+                $stmt->execute([$test_id]);
+                
+                // Delete lab test
                 $stmt = $db->prepare("DELETE FROM lab_tests_catalog WHERE id = ?");
                 $stmt->execute([$test_id]);
                 $message = "✅ Lab test deleted successfully!";
@@ -572,172 +898,184 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 }
 
 // ================================================================
-// PROFILE PICTURE URL
-// ================================================================
-$profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-
-// ================================================================
-// FETCH DATA WITH BRANCH FILTER
+// FETCH DATA
 // ================================================================
 
-// Build branch filter - SHOW ALL SERVICES FOR SELECTED BRANCH
-$branch_filter = "";
-$params = [];
-
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $branch_id = (int)$selected_branch_id;
-    $branch_filter = " AND (s.branch_id = ? OR s.branch_id IS NULL)";
-    $params[] = $branch_id;
-} else {
-    $branch_filter = "";
-}
-
-// Search filter
-$search_filter = "";
-if (!empty($search)) {
-    $search_filter = " AND (s.service_name LIKE ? OR s.description LIKE ?)";
-    $search_term = "%$search%";
-    $params[] = $search_term;
-    $params[] = $search_term;
-}
-
-// ================================================================
 // 1. SERVICES
-// ================================================================
 $services = [];
 try {
+    $branch_filter = buildBranchFilter($selected_branch_id, 's');
+    $search_filter = buildSearchFilter($search, ['s.service_name', 's.description']);
+    
     $query = "
-        SELECT s.*, 
-               c.category_name,
-               b.name as branch_name,
-               u.full_name as created_by_name
+        SELECT 
+            s.*, 
+            c.category_name,
+            b.name as branch_name,
+            u.full_name as created_by_name
         FROM services s
         LEFT JOIN service_categories c ON s.category_id = c.id
         LEFT JOIN branches b ON s.branch_id = b.id
         LEFT JOIN users u ON s.created_by = u.id
         WHERE 1=1 $branch_filter $search_filter
-        ORDER BY s.service_name ASC
+        ORDER BY s.created_at DESC, s.service_name ASC
     ";
+    
     $stmt = $db->prepare($query);
-    $stmt->execute($params);
+    $stmt->execute();
     $services = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    error_log("Error fetching services: " . $e->getMessage());
     $services = [];
 }
 
-// ================================================================
 // 2. PROCEDURES
-// ================================================================
 $procedures = [];
 try {
+    $branch_filter = buildBranchFilter($selected_branch_id, 'p');
+    $search_filter = buildSearchFilter($search, ['p.procedure_name', 'p.category', 'p.description']);
+    
     $query = "
-        SELECT p.*, b.name as branch_name
-        FROM procedures p
+        SELECT 
+            p.*, 
+            b.name as branch_name, 
+            u.full_name as created_by_name
+        FROM procedures_catalog p
         LEFT JOIN branches b ON p.branch_id = b.id
-        WHERE 1=1
+        LEFT JOIN users u ON p.created_by = u.id
+        WHERE 1=1 $branch_filter $search_filter
+        ORDER BY p.procedure_name ASC
     ";
     
-    $proc_params = [];
-    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $query .= " AND (p.branch_id = ? OR p.branch_id IS NULL)";
-        $proc_params[] = (int)$selected_branch_id;
-    }
-    
-    if (!empty($search)) {
-        $query .= " AND (p.procedure_name LIKE ? OR p.category LIKE ? OR p.description LIKE ?)";
-        $search_term = "%$search%";
-        $proc_params[] = $search_term;
-        $proc_params[] = $search_term;
-        $proc_params[] = $search_term;
-    }
-    
-    $query .= " ORDER BY p.procedure_name ASC";
-    
     $stmt = $db->prepare($query);
-    $stmt->execute($proc_params);
+    $stmt->execute();
     $procedures = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $procedures = [];
 }
 
-// ================================================================
-// 3. TOOLS
-// ================================================================
-$tools = [];
+// 3. MEDICAL EQUIPMENT - GROUPED BY EQUIPMENT NAME
+$equipment = [];
 try {
+    $branch_filter = buildBranchFilter($selected_branch_id, 'e');
+    $search_filter = buildSearchFilter($search, ['e.equipment_name', 'e.category']);
+    
     $query = "
-        SELECT t.*, b.name as branch_name
-        FROM procedure_tools t
-        LEFT JOIN branches b ON t.branch_id = b.id
-        WHERE 1=1
+        SELECT 
+            MIN(e.id) as equipment_id,
+            e.equipment_name,
+            e.category,
+            e.unit,
+            e.branch_id,
+            SUM(e.quantity) as total_quantity,
+            MIN(e.reorder_level) as reorder_level,
+            MIN(e.selling_price) as selling_price,
+            MIN(e.supplier) as supplier,
+            MIN(e.expiry_date) as expiry_date,
+            GROUP_CONCAT(e.id) as batch_ids,
+            GROUP_CONCAT(e.batch_number SEPARATOR '|') as batch_numbers,
+            GROUP_CONCAT(e.quantity SEPARATOR '|') as batch_quantities,
+            GROUP_CONCAT(e.expiry_date SEPARATOR '|') as batch_expiries,
+            GROUP_CONCAT(e.status SEPARATOR '|') as batch_statuses,
+            MIN(DATEDIFF(e.expiry_date, CURDATE())) as days_remaining,
+            MIN(e.created_by) as created_by,
+            u.full_name as created_by_name,
+            b.name as branch_name,
+            CASE 
+                WHEN SUM(e.quantity) <= 0 THEN 'inactive'
+                WHEN MIN(e.expiry_date) IS NULL OR MIN(e.expiry_date) = '0000-00-00' THEN 'active'
+                WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE()) THEN 1 ELSE 0 END) > 0 THEN 'active'
+                ELSE 'inactive'
+            END as computed_status
+        FROM medical_equipment e
+        LEFT JOIN users u ON e.created_by = u.id
+        LEFT JOIN branches b ON e.branch_id = b.id
+        WHERE 1=1 $branch_filter $search_filter
+        GROUP BY e.equipment_name, e.category, e.unit, e.branch_id
+        ORDER BY e.equipment_name
     ";
     
-    $tool_params = [];
-    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $query .= " AND (t.branch_id = ? OR t.branch_id IS NULL)";
-        $tool_params[] = (int)$selected_branch_id;
-    }
-    
-    if (!empty($search)) {
-        $query .= " AND (t.tool_name LIKE ? OR t.procedure_name LIKE ?)";
-        $search_term = "%$search%";
-        $tool_params[] = $search_term;
-        $tool_params[] = $search_term;
-    }
-    
-    $query .= " ORDER BY t.tool_name ASC";
-    
     $stmt = $db->prepare($query);
-    $stmt->execute($tool_params);
-    $tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt->execute();
+    $equipment = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $tools = [];
+    $equipment = [];
 }
 
-// ================================================================
-// 4. LAB TESTS
-// ================================================================
+// 4. LAB TESTS - WITH DUPLICATE WARNING
 $lab_tests = [];
+$duplicate_warning = [];
 try {
+    $branch_filter = buildBranchFilter($selected_branch_id, 'l');
+    $search_filter = buildSearchFilter($search, ['l.test_name', 'l.category']);
+    
     $query = "
-        SELECT l.*, b.name as branch_name
+        SELECT 
+            l.*, 
+            u.full_name as created_by_name, 
+            b.name as branch_name,
+            GROUP_CONCAT(DISTINCT e.equipment_name SEPARATOR ', ') as equipment_names,
+            GROUP_CONCAT(DISTINCT e.id SEPARATOR ',') as equipment_ids
         FROM lab_tests_catalog l
+        LEFT JOIN users u ON l.created_by = u.id
         LEFT JOIN branches b ON l.branch_id = b.id
-        WHERE 1=1
+        LEFT JOIN lab_test_equipment le ON l.id = le.lab_test_id
+        LEFT JOIN medical_equipment e ON le.equipment_id = e.id
+        WHERE 1=1 $branch_filter $search_filter
+        GROUP BY l.id
+        ORDER BY l.test_name ASC, l.price ASC
     ";
     
-    $lab_params = [];
-    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-        $query .= " AND (l.branch_id = ? OR l.branch_id IS NULL)";
-        $lab_params[] = (int)$selected_branch_id;
-    }
-    
-    if (!empty($search)) {
-        $query .= " AND (l.test_name LIKE ? OR l.category LIKE ?)";
-        $search_term = "%$search%";
-        $lab_params[] = $search_term;
-        $lab_params[] = $search_term;
-    }
-    
-    $query .= " ORDER BY l.test_name ASC";
-    
     $stmt = $db->prepare($query);
-    $stmt->execute($lab_params);
+    $stmt->execute();
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Check for potential duplicates (same name, different price or branch)
+    $stmt = $db->prepare("
+        SELECT test_name, COUNT(*) as count, 
+               GROUP_CONCAT(DISTINCT price ORDER BY price SEPARATOR '|') as prices,
+               GROUP_CONCAT(DISTINCT branch_id ORDER BY branch_id SEPARATOR '|') as branches
+        FROM lab_tests_catalog l
+        GROUP BY test_name
+        HAVING COUNT(*) > 1
+    ");
+    $stmt->execute();
+    $duplicate_warning = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
     $lab_tests = [];
+    $duplicate_warning = [];
 }
 
 // ================================================================
-// GET SINGLE ITEM FOR EDIT/VIEW
+// GET EQUIPMENT FOR LAB TEST (GROUPED)
+// ================================================================
+$equipment_for_lab = [];
+try {
+    $branch_id = ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) ? (int)$selected_branch_id : $user_branch_id;
+    
+    $stmt = $db->prepare("
+        SELECT 
+            MIN(e.id) as equipment_id,
+            e.equipment_name,
+            e.category,
+            SUM(e.quantity) as total_quantity,
+            GROUP_CONCAT(e.batch_number SEPARATOR '|') as batch_numbers
+        FROM medical_equipment e
+        WHERE e.branch_id = ? OR e.branch_id IS NULL
+        GROUP BY e.equipment_name, e.category
+        ORDER BY e.equipment_name
+    ");
+    $stmt->execute([$branch_id]);
+    $equipment_for_lab = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $equipment_for_lab = [];
+}
+
+// ================================================================
+// GET SINGLE ITEM FOR EDIT
 // ================================================================
 $edit_item = null;
 $edit_type = null;
+$current_equipment_ids = [];
 
 if (isset($_GET['edit']) && is_numeric($_GET['edit']) && isset($_GET['type'])) {
     $edit_id = (int)$_GET['edit'];
@@ -756,39 +1094,55 @@ if (isset($_GET['edit']) && is_numeric($_GET['edit']) && isset($_GET['type'])) {
         } catch (Exception $e) {}
     } elseif ($edit_type === 'procedure') {
         try {
-            $stmt = $db->prepare("SELECT * FROM procedures WHERE id = ?");
+            $stmt = $db->prepare("SELECT * FROM procedures_catalog WHERE id = ?");
             $stmt->execute([$edit_id]);
             $edit_item = $stmt->fetch(PDO::FETCH_ASSOC);
         } catch (Exception $e) {}
-    } elseif ($edit_type === 'tool') {
+    } elseif ($edit_type === 'equipment') {
         try {
-            $stmt = $db->prepare("SELECT * FROM procedure_tools WHERE id = ?");
+            $stmt = $db->prepare("SELECT * FROM medical_equipment WHERE id = ?");
             $stmt->execute([$edit_id]);
             $edit_item = $stmt->fetch(PDO::FETCH_ASSOC);
         } catch (Exception $e) {}
     } elseif ($edit_type === 'lab_test') {
         try {
-            $stmt = $db->prepare("SELECT * FROM lab_tests_catalog WHERE id = ?");
+            // Get lab test with current equipment IDs
+            $stmt = $db->prepare("
+                SELECT l.*, 
+                       GROUP_CONCAT(DISTINCT le.equipment_id SEPARATOR ',') as current_equipment_ids
+                FROM lab_tests_catalog l
+                LEFT JOIN lab_test_equipment le ON l.id = le.lab_test_id
+                WHERE l.id = ?
+                GROUP BY l.id
+            ");
             $stmt->execute([$edit_id]);
             $edit_item = $stmt->fetch(PDO::FETCH_ASSOC);
-        } catch (Exception $e) {}
+            
+            if ($edit_item && isset($edit_item['current_equipment_ids'])) {
+                $current_equipment_ids = !empty($edit_item['current_equipment_ids']) 
+                    ? explode(',', $edit_item['current_equipment_ids']) 
+                    : [];
+            }
+            
+            // If no equipment found, set as empty array
+            if (!isset($current_equipment_ids) || !is_array($current_equipment_ids)) {
+                $current_equipment_ids = [];
+            }
+        } catch (Exception $e) {
+            $edit_item = null;
+            $current_equipment_ids = [];
+        }
     }
 }
 
 // ================================================================
-// HELPER FUNCTIONS
+// PROFILE PICTURE URL
 // ================================================================
-function getStatusBadge($status) {
-    return $status ? 'success' : 'danger';
-}
+$profile_pic_url = !empty($profile_pic) 
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-function getStatusLabel($status) {
-    return $status ? 'Active' : 'Inactive';
-}
-
-function getBranchDisplay($branch_name) {
-    return $branch_name ?? 'All Branches';
-}
+$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
 // INCLUDE HEADER & SIDEBAR
@@ -810,6 +1164,9 @@ include_once '../../components/admin_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* ================================================================
+           ALL CSS STYLES
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -822,6 +1179,10 @@ include_once '../../components/admin_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
+            --teal: #0D9488;
+            --teal-bg: #CCFBF1;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -842,6 +1203,7 @@ include_once '../../components/admin_sidebar.php';
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
+            --transition: all 0.3s ease;
         }
         
         [data-theme="dark"] {
@@ -1174,7 +1536,7 @@ include_once '../../components/admin_sidebar.php';
             color: var(--gray-500);
             flex: 1;
             text-align: center;
-            min-width: 100px;
+            min-width: 120px;
         }
         
         .tab-btn:hover {
@@ -1247,7 +1609,7 @@ include_once '../../components/admin_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.85rem;
-            min-width: 600px;
+            min-width: 650px;
         }
         
         .table-container thead {
@@ -1392,6 +1754,11 @@ include_once '../../components/admin_sidebar.php';
         .form-row-2 {
             display: grid;
             grid-template-columns: 1fr 1fr;
+            gap: 14px;
+        }
+        .form-row-3 {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 14px;
         }
         
@@ -1561,8 +1928,8 @@ include_once '../../components/admin_sidebar.php';
         .modal-content {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            max-width: 600px;
-            width: 90%;
+            max-width: 700px;
+            width: 95%;
             max-height: 90vh;
             overflow-y: auto;
             padding: 30px 35px;
@@ -1651,20 +2018,6 @@ include_once '../../components/admin_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
         
-        .footer {
-            padding: 14px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand {
-            color: var(--primary);
-            font-weight: 600;
-        }
-        
         .branch-tag {
             display: inline-block;
             background: var(--primary-bg);
@@ -1700,10 +2053,220 @@ include_once '../../components/admin_sidebar.php';
         
         [data-theme="dark"] .empty-state i { color: var(--gray-600); }
         
+        .badge {
+            display: inline-block;
+            padding: 2px 12px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+        }
+        .badge-success { background: var(--success-bg); color: var(--success); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); }
+        .badge-info { background: var(--primary-bg); color: var(--primary); }
+        .badge-purple { background: var(--purple-bg); color: var(--purple); }
+        .badge-teal { background: var(--teal-bg); color: var(--teal); }
+        
+        .code-badge {
+            display: inline-block;
+            background: var(--gray-100);
+            color: var(--gray-600);
+            padding: 1px 10px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-family: monospace;
+            border: 1px solid var(--gray-300);
+        }
+        [data-theme="dark"] .code-badge {
+            background: var(--gray-700);
+            color: var(--gray-400);
+            border-color: var(--gray-600);
+        }
+        
+        .batch-number {
+            font-family: monospace;
+            font-size: 0.65rem;
+            font-weight: 600;
+            padding: 1px 8px;
+            border-radius: 4px;
+            background: var(--primary-bg);
+            color: var(--primary);
+        }
+        [data-theme="dark"] .batch-number {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+        
+        .stock-badge {
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .stock-badge.ok { background: var(--success-bg); color: var(--success); }
+        .stock-badge.low { background: var(--warning-bg); color: var(--warning); animation: pulse 1.5s infinite; }
+        .stock-badge.out { background: var(--danger-bg); color: var(--danger); animation: pulse 1s infinite; }
+        
+        .expiry-badge {
+            padding: 2px 8px;
+            border-radius: 8px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .expiry-badge.valid { background: var(--success-bg); color: var(--success); }
+        .expiry-badge.expiring { background: var(--warning-bg); color: var(--warning); animation: pulse 1.5s infinite; }
+        .expiry-badge.expired { background: var(--danger-bg); color: var(--danger); animation: pulse 1s infinite; }
+        .expiry-badge.no-expiry { background: var(--gray-200); color: var(--gray-500); }
+        
+        .days-remaining {
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 1px 6px;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        .days-remaining.good { background: var(--success-bg); color: var(--success); }
+        .days-remaining.warning { background: var(--warning-bg); color: var(--warning); animation: pulse 1.5s infinite; }
+        .days-remaining.danger { background: var(--danger-bg); color: var(--danger); animation: pulse 1s infinite; }
+        .days-remaining.forever { background: var(--gray-200); color: var(--gray-500); }
+        
+        .equipment-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px;
+            margin-top: 4px;
+        }
+        .equipment-tag {
+            font-size: 0.6rem;
+            background: var(--teal-bg);
+            color: var(--teal);
+            padding: 1px 8px;
+            border-radius: 10px;
+            border: 1px solid var(--teal);
+        }
+        
+        .equipment-checkbox-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 6px;
+            max-height: 150px;
+            overflow-y: auto;
+            padding: 8px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--gray-50);
+        }
+        [data-theme="dark"] .equipment-checkbox-group {
+            border-color: var(--gray-600);
+            background: var(--gray-700);
+        }
+        .equipment-checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            cursor: pointer;
+        }
+        .equipment-checkbox-item:hover {
+            background: var(--primary-bg);
+        }
+        .equipment-checkbox-item input[type="checkbox"] {
+            accent-color: var(--primary);
+            width: 14px;
+            height: 14px;
+            cursor: pointer;
+        }
+        .equipment-checkbox-item .equip-qty {
+            font-size: 0.6rem;
+            color: var(--gray-400);
+            margin-left: auto;
+        }
+        .equipment-checkbox-item .equip-free {
+            font-size: 0.55rem;
+            color: var(--success);
+            font-weight: 600;
+        }
+        
+        /* Current equipment tags in edit modal */
+        .current-equipment-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            margin: 8px 0 12px;
+            padding: 8px 12px;
+            background: var(--teal-bg);
+            border-radius: 8px;
+            border: 1px solid var(--teal);
+        }
+        .current-equipment-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.7rem;
+            background: var(--bg-card);
+            padding: 2px 10px;
+            border-radius: 12px;
+            border: 1px solid var(--border-color);
+        }
+        .current-equipment-tag i {
+            color: var(--teal);
+        }
+        
+        /* Duplicate warning - will disappear after 5 seconds */
+        .duplicate-warning {
+            background: var(--warning-bg);
+            color: var(--warning);
+            padding: 8px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--warning);
+            font-size: 0.8rem;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: opacity 0.8s ease;
+        }
+        .duplicate-warning i {
+            font-size: 1rem;
+        }
+        .duplicate-warning.hidden {
+            opacity: 0;
+            display: none;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
+        .footer {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
+        [data-theme="dark"] .footer { border-color: var(--gray-700); }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .form-row-2 { grid-template-columns: 1fr; }
+            .form-row-2, .form-row-3 { grid-template-columns: 1fr; }
+            .tabs { flex-direction: column; }
+            .tab-btn { flex: none; }
         }
         
         @media (max-width: 768px) {
@@ -1712,17 +2275,16 @@ include_once '../../components/admin_sidebar.php';
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .stats-row { grid-template-columns: 1fr 1fr; }
-            .tabs { flex-direction: column; }
-            .tab-btn { flex: none; }
+            .modal-content { padding: 20px; }
             .table-container table { font-size: 0.75rem; }
             .table-container thead th, .table-container tbody td { padding: 8px 10px; }
-            .modal-content { padding: 20px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .stats-row { grid-template-columns: 1fr; }
             .modal-content { padding: 15px; }
+            .equipment-checkbox-group { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -1789,15 +2351,17 @@ include_once '../../components/admin_sidebar.php';
                 <i class="fas fa-concierge-bell"></i>
                 Services Management
                 <span class="role-badge-display">ADMIN</span>
+                <?php if ($selected_branch_id !== 'all'): ?>
+                    <span class="role-badge-display" style="background:rgba(52,211,153,0.3);color:#34D399;">
+                        <i class="fas fa-store-alt"></i> <?= htmlspecialchars($selected_branch_name) ?>
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-list"></i>
-                Manage <strong>Services</strong>, <strong>Procedures</strong>, <strong>Tools</strong> & <strong>Lab Tests</strong>
+                Manage <strong>Services</strong>, <strong>Procedures</strong>, <strong>Equipment</strong> & <strong>Lab Tests</strong>
                 <span class="header-badge">
-                    <i class="fas fa-tag"></i> Total: <?= count($services) + count($procedures) + count($tools) + count($lab_tests) ?> items
-                </span>
-                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
-                    <i class="fas fa-concierge-bell"></i> Services: <?= count($services) ?>
+                    <i class="fas fa-tag"></i> Total: <?= count($services) + count($procedures) + count($equipment) + count($lab_tests) ?> items
                 </span>
             </p>
         </div>
@@ -1808,8 +2372,8 @@ include_once '../../components/admin_sidebar.php';
             <button onclick="openAddModal('procedure')" class="btn-outline-light">
                 <i class="fas fa-syringe"></i> Add Procedure
             </button>
-            <button onclick="openAddModal('tool')" class="btn-outline-light">
-                <i class="fas fa-tools"></i> Add Tool
+            <button onclick="openAddModal('equipment')" class="btn-outline-light">
+                <i class="fas fa-tools"></i> Add Equipment
             </button>
             <button onclick="openAddModal('lab_test')" class="btn-outline-light">
                 <i class="fas fa-microscope"></i> Add Lab Test
@@ -1827,10 +2391,10 @@ include_once '../../components/admin_sidebar.php';
         <span class="text-sm font-semibold text-gray-500"><i class="fas fa-filter"></i> Filter:</span>
         <form method="GET" action="" class="flex flex-wrap gap-2 items-center">
             <select name="branch" onchange="this.form.submit()" class="min-w-[150px]">
-                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>All Branches</option>
+                <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
                 <?php foreach ($branches as $b): ?>
                     <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                        <?= htmlspecialchars($b['name']) ?>
+                        🏥 <?= htmlspecialchars($b['name']) ?>
                     </option>
                 <?php endforeach; ?>
             </select>
@@ -1857,8 +2421,8 @@ include_once '../../components/admin_sidebar.php';
             <div class="stat-label">Procedures</div>
         </div>
         <div class="stat-item">
-            <div class="stat-number" style="color:#D97706;"><?= count($tools) ?></div>
-            <div class="stat-label">Tools</div>
+            <div class="stat-number" style="color:#D97706;"><?= count($equipment) ?></div>
+            <div class="stat-label">Equipment</div>
         </div>
         <div class="stat-item">
             <div class="stat-number" style="color:#0D9488;"><?= count($lab_tests) ?></div>
@@ -1875,6 +2439,25 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
+    <!-- DUPLICATE WARNING - DISAPPEARS AFTER 5 SECONDS -->
+    <!-- ================================================================ -->
+    <?php if (!empty($duplicate_warning)): ?>
+        <div class="duplicate-warning" id="duplicateWarning">
+            <i class="fas fa-exclamation-triangle"></i>
+            <strong>Duplicate Tests Detected:</strong>
+            <?php foreach ($duplicate_warning as $dup): ?>
+                <span style="margin-left:8px;">
+                    "<?= htmlspecialchars($dup['test_name']) ?>" 
+                    (<strong><?= $dup['count'] ?></strong> entries)
+                </span>
+            <?php endforeach; ?>
+            <span style="margin-left:8px;font-size:0.7rem;">
+                <i class="fas fa-info-circle"></i> Same name with different price or branch is allowed.
+            </span>
+        </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
     <!-- TABS -->
     <!-- ================================================================ -->
     <div class="tabs">
@@ -1884,8 +2467,8 @@ include_once '../../components/admin_sidebar.php';
         <button class="tab-btn <?= $active_tab === 'procedures' ? 'active' : '' ?>" data-tab="procedures">
             <i class="fas fa-syringe"></i> Procedures (<?= count($procedures) ?>)
         </button>
-        <button class="tab-btn <?= $active_tab === 'tools' ? 'active' : '' ?>" data-tab="tools">
-            <i class="fas fa-tools"></i> Tools (<?= count($tools) ?>)
+        <button class="tab-btn <?= $active_tab === 'equipment' ? 'active' : '' ?>" data-tab="equipment">
+            <i class="fas fa-tools"></i> Equipment (<?= count($equipment) ?>)
         </button>
         <button class="tab-btn <?= $active_tab === 'lab_tests' ? 'active' : '' ?>" data-tab="lab_tests">
             <i class="fas fa-microscope"></i> Lab Tests (<?= count($lab_tests) ?>)
@@ -1898,7 +2481,7 @@ include_once '../../components/admin_sidebar.php';
     <div class="tab-content <?= $active_tab === 'services' ? 'active' : '' ?>" id="tab-services">
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-list"></i> All Services <?php if ($selected_branch_id !== 'all'): ?>for <?= htmlspecialchars($branches[array_search($selected_branch_id, array_column($branches, 'id'))]['name'] ?? 'Branch') ?><?php endif; ?></h3>
+                <h3 class="card-title"><i class="fas fa-list"></i> All Services</h3>
                 <button onclick="openAddModal('service')" class="btn btn-primary btn-sm">
                     <i class="fas fa-plus"></i> Add Service
                 </button>
@@ -1928,7 +2511,7 @@ include_once '../../components/admin_sidebar.php';
                                         <?php endif; ?>
                                     </td>
                                     <td>
-                                        <span class="badge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:12px;font-size:0.65rem;">
+                                        <span class="badge badge-info">
                                             <?= htmlspecialchars($s['category_name'] ?? 'Uncategorized') ?>
                                         </span>
                                     </td>
@@ -1965,7 +2548,7 @@ include_once '../../components/admin_sidebar.php';
                 <?php else: ?>
                     <div class="empty-state">
                         <i class="fas fa-concierge-bell"></i>
-                        <p>No services found for this branch. Click "Add Service" to create one.</p>
+                        <p>No services found.</p>
                     </div>
                 <?php endif; ?>
             </div>
@@ -2046,58 +2629,91 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- TAB 3: TOOLS -->
+    <!-- TAB 3: EQUIPMENT (GROUPED) -->
     <!-- ================================================================ -->
-    <div class="tab-content <?= $active_tab === 'tools' ? 'active' : '' ?>" id="tab-tools">
+    <div class="tab-content <?= $active_tab === 'equipment' ? 'active' : '' ?>" id="tab-equipment">
         <div class="card">
             <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-tools"></i> All Tools</h3>
-                <button onclick="openAddModal('tool')" class="btn btn-primary btn-sm">
-                    <i class="fas fa-plus"></i> Add Tool
+                <h3 class="card-title"><i class="fas fa-tools"></i> Medical Equipment</h3>
+                <button onclick="openAddModal('equipment')" class="btn btn-primary btn-sm">
+                    <i class="fas fa-plus"></i> Add Equipment
                 </button>
             </div>
             <div class="table-container">
-                <?php if (count($tools) > 0): ?>
+                <?php if (count($equipment) > 0): ?>
                     <table>
                         <thead>
                             <tr>
                                 <th>#</th>
-                                <th>Tool Name</th>
-                                <th>Procedure Name</th>
+                                <th>Equipment Name</th>
+                                <th>Category</th>
                                 <th>Branch</th>
+                                <th>Total Qty</th>
+                                <th>Stock</th>
                                 <th>Price</th>
+                                <th>Expiry</th>
+                                <th>Batches</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php $i = 1; foreach ($tools as $t): ?>
-                                <tr data-id="<?= $t['id'] ?>">
+                            <?php $i = 1; foreach ($equipment as $item): 
+                                $stock = getStockStatus($item['total_quantity'] ?? 0, $item['reorder_level'] ?? 5);
+                                $expiry = getExpiryStatus($item['expiry_date'] ?? '');
+                                $batch_count = $item['batch_numbers'] ? count(explode('|', $item['batch_numbers'])) : 0;
+                                $first_batch = $item['batch_numbers'] ? explode('|', $item['batch_numbers'])[0] : '';
+                            ?>
+                                <tr data-id="<?= $item['equipment_id'] ?>">
                                     <td><?= $i++ ?></td>
-                                    <td><strong><?= htmlspecialchars($t['tool_name']) ?></strong></td>
-                                    <td><?= htmlspecialchars($t['procedure_name'] ?? '-') ?></td>
+                                    <td><strong><?= htmlspecialchars($item['equipment_name']) ?></strong></td>
+                                    <td><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
                                     <td>
-                                        <?php if ($t['branch_id'] === null): ?>
+                                        <?php if ($item['branch_id'] === null): ?>
                                             <span class="branch-tag all-branches">🌐 All Branches</span>
                                         <?php else: ?>
-                                            <span class="branch-tag"><?= htmlspecialchars($t['branch_name'] ?? 'N/A') ?></span>
+                                            <span class="branch-tag"><?= htmlspecialchars($item['branch_name'] ?? 'N/A') ?></span>
                                         <?php endif; ?>
                                     </td>
-                                    <td class="price-display">TSh <?= number_format($t['price'] ?? 0, 0) ?></td>
+                                    <td style="text-align:center;"><strong><?= number_format($item['total_quantity'] ?? 0) ?></strong></td>
                                     <td>
-                                        <span class="status-badge <?= $t['is_active'] ? 'active' : 'inactive' ?>">
-                                            <?= $t['is_active'] ? 'Active' : 'Inactive' ?>
+                                        <span class="stock-badge <?= $stock['class'] ?>">
+                                            <i class="fas <?= $stock['class'] === 'ok' ? 'fa-check-circle' : ($stock['class'] === 'low' ? 'fa-exclamation-triangle' : 'fa-times-circle') ?>"></i>
+                                            <?= $stock['label'] ?>
+                                        </span>
+                                    </td>
+                                    <td class="price-display">
+                                        <?= ($item['selling_price'] ?? 0) > 0 ? 'TSh ' . number_format($item['selling_price'], 0) : 'FREE' ?>
+                                    </td>
+                                    <td>
+                                        <span class="expiry-badge <?= $expiry['class'] ?>">
+                                            <?= $expiry['label'] ?>
+                                        </span>
+                                    </td>
+                                    <td>
+                                        <?php if (!empty($first_batch)): ?>
+                                            <span class="batch-number"><?= htmlspecialchars($first_batch) ?></span>
+                                            <?php if ($batch_count > 1): ?>
+                                                <span style="font-size:0.6rem;color:var(--gray-400);">+<?= $batch_count - 1; ?></span>
+                                            <?php endif; ?>
+                                        <?php else: ?>
+                                            <span class="text-muted">N/A</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td>
+                                        <span class="status-badge <?= ($item['computed_status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?>">
+                                            <?= ucfirst($item['computed_status'] ?? 'active') ?>
                                         </span>
                                     </td>
                                     <td>
                                         <div class="action-btns">
-                                            <button class="btn-icon view" onclick="viewItem('tool', <?= $t['id'] ?>)">
+                                            <button class="btn-icon view" onclick="viewItem('equipment', <?= $item['equipment_id'] ?>)">
                                                 <i class="fas fa-eye"></i>
                                             </button>
-                                            <a href="?edit=<?= $t['id'] ?>&type=tool&branch=<?= urlencode($selected_branch_id) ?>" class="btn-icon edit">
+                                            <a href="?edit=<?= $item['equipment_id'] ?>&type=equipment&branch=<?= urlencode($selected_branch_id) ?>" class="btn-icon edit">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <button class="btn-icon delete" onclick="deleteItem('tool', <?= $t['id'] ?>, '<?= addslashes($t['tool_name']) ?>')">
+                                            <button class="btn-icon delete" onclick="deleteItem('equipment', <?= $item['equipment_id'] ?>, '<?= addslashes($item['equipment_name']) ?>')">
                                                 <i class="fas fa-trash"></i>
                                             </button>
                                         </div>
@@ -2109,7 +2725,7 @@ include_once '../../components/admin_sidebar.php';
                 <?php else: ?>
                     <div class="empty-state">
                         <i class="fas fa-tools"></i>
-                        <p>No tools found.</p>
+                        <p>No equipment found.</p>
                     </div>
                 <?php endif; ?>
             </div>
@@ -2137,22 +2753,24 @@ include_once '../../components/admin_sidebar.php';
                                 <th>Category</th>
                                 <th>Branch</th>
                                 <th>Price</th>
+                                <th>Equipment (FREE)</th>
                                 <th>Status</th>
                                 <th>Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <?php $i = 1; foreach ($lab_tests as $l): ?>
+                            <?php $i = 1; foreach ($lab_tests as $l): 
+                                $eq_names = $l['equipment_names'] ?? '';
+                                $eq_arr = !empty($eq_names) ? explode(', ', $eq_names) : [];
+                            ?>
                                 <tr data-id="<?= $l['id'] ?>">
                                     <td><?= $i++ ?></td>
                                     <td><strong><?= htmlspecialchars($l['test_name']) ?></strong></td>
                                     <td>
                                         <?php if (!empty($l['category'])): ?>
-                                            <span class="badge" style="background:#EDE9FE;color:#7C3AED;padding:2px 12px;border-radius:12px;font-size:0.65rem;">
-                                                <?= htmlspecialchars($l['category']) ?>
-                                            </span>
+                                            <span class="badge badge-purple"><?= htmlspecialchars($l['category']) ?></span>
                                         <?php else: ?>
-                                            <span class="badge" style="background:var(--gray-100);color:var(--gray-500);padding:2px 12px;border-radius:12px;font-size:0.65rem;">Uncategorized</span>
+                                            <span class="badge badge-info">Uncategorized</span>
                                         <?php endif; ?>
                                     </td>
                                     <td>
@@ -2163,6 +2781,17 @@ include_once '../../components/admin_sidebar.php';
                                         <?php endif; ?>
                                     </td>
                                     <td class="price-display">TSh <?= number_format($l['price'] ?? 0, 0) ?></td>
+                                    <td>
+                                        <?php if (!empty($eq_arr)): ?>
+                                            <div class="equipment-tags">
+                                                <?php foreach ($eq_arr as $eq): ?>
+                                                    <span class="equipment-tag"><i class="fas fa-tools"></i> <?= htmlspecialchars($eq) ?></span>
+                                                <?php endforeach; ?>
+                                            </div>
+                                        <?php else: ?>
+                                            <span class="text-muted" style="font-size:0.7rem;">No equipment</span>
+                                        <?php endif; ?>
+                                    </td>
                                     <td>
                                         <span class="status-badge <?= $l['is_active'] ? 'active' : 'inactive' ?>">
                                             <?= $l['is_active'] ? 'Active' : 'Inactive' ?>
@@ -2239,11 +2868,11 @@ include_once '../../components/admin_sidebar.php';
         <div class="modal-content">
             <div class="modal-header">
                 <h2><i class="fas fa-edit"></i> Edit <?= ucfirst($edit_type) ?></h2>
-                <a href="?branch=<?= urlencode($selected_branch_id) ?>" class="modal-close">
+                <a href="?branch=<?= urlencode($selected_branch_id) ?>&tab=<?= $active_tab ?>" class="modal-close">
                     <i class="fas fa-times"></i>
                 </a>
             </div>
-            <form method="POST">
+            <form method="POST" id="editForm">
                 <input type="hidden" name="action" value="update_<?= $edit_type ?>">
                 <input type="hidden" name="<?= $edit_type ?>_id" value="<?= $edit_item['id'] ?>">
                 
@@ -2284,10 +2913,6 @@ include_once '../../components/admin_sidebar.php';
                         <div class="form-group">
                             <label class="form-label">Price (TSh) <span class="required">*</span></label>
                             <input type="text" name="price" class="form-control price-input" value="<?= number_format($edit_item['price'] ?? 0, 0) ?>" required oninput="formatPriceInput(this)">
-                            <div class="price-preview">
-                                <span>Formatted:</span>
-                                <span class="formatted-price">TSh <?= number_format($edit_item['price'] ?? 0, 0) ?></span>
-                            </div>
                         </div>
                         <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
                             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -2303,7 +2928,16 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     <div class="form-group">
                         <label class="form-label">Category</label>
-                        <input type="text" name="category" class="form-control" value="<?= htmlspecialchars($edit_item['category'] ?? '') ?>">
+                        <select name="category_id" class="form-control">
+                            <option value="">-- Select Category --</option>
+                            <?php foreach ($categories as $cat): ?>
+                                <option value="<?= $cat['id'] ?>" <?= $edit_item['category'] == $cat['category_name'] ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($cat['category_name']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                            <option value="0">-- Other (Type manually) --</option>
+                        </select>
+                        <input type="text" name="category_name" class="form-control" style="margin-top:4px;display:none;" placeholder="Enter custom category..." value="<?= htmlspecialchars($edit_item['category'] ?? '') ?>">
                     </div>
                     <div class="form-group">
                         <label class="form-label">Description</label>
@@ -2313,10 +2947,6 @@ include_once '../../components/admin_sidebar.php';
                         <div class="form-group">
                             <label class="form-label">Price (TSh) <span class="required">*</span></label>
                             <input type="text" name="price" class="form-control price-input" value="<?= number_format($edit_item['price'] ?? 0, 0) ?>" required oninput="formatPriceInput(this)">
-                            <div class="price-preview">
-                                <span>Formatted:</span>
-                                <span class="formatted-price">TSh <?= number_format($edit_item['price'] ?? 0, 0) ?></span>
-                            </div>
                         </div>
                         <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
                             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -2325,56 +2955,94 @@ include_once '../../components/admin_sidebar.php';
                             </label>
                         </div>
                     </div>
-                <?php elseif ($edit_type === 'tool'): ?>
+                <?php elseif ($edit_type === 'equipment'): ?>
                     <div class="form-group">
-                        <label class="form-label">Tool Name <span class="required">*</span></label>
-                        <input type="text" name="tool_name" class="form-control" value="<?= htmlspecialchars($edit_item['tool_name']) ?>" required>
+                        <label class="form-label">Equipment Name <span class="required">*</span></label>
+                        <input type="text" name="equipment_name" class="form-control" value="<?= htmlspecialchars($edit_item['equipment_name']) ?>" required>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Procedure Name</label>
-                        <input type="text" name="procedure_name" class="form-control" value="<?= htmlspecialchars($edit_item['procedure_name'] ?? '') ?>">
+                        <label class="form-label">Category</label>
+                        <select name="category_id" class="form-control">
+                            <option value="">-- Select Category --</option>
+                            <?php foreach ($categories as $cat): ?>
+                                <option value="<?= $cat['id'] ?>" <?= $edit_item['category'] == $cat['category_name'] ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($cat['category_name']) ?>
+                                </option>
+                            <?php endforeach; ?>
+                            <option value="0">-- Other (Type manually) --</option>
+                        </select>
+                        <input type="text" name="category_name" class="form-control" style="margin-top:4px;display:none;" placeholder="Enter custom category..." value="<?= htmlspecialchars($edit_item['category'] ?? '') ?>">
+                    </div>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label class="form-label">Unit</label>
+                            <select name="unit" class="form-control">
+                                <option value="pcs" <?= $edit_item['unit'] === 'pcs' ? 'selected' : '' ?>>Pieces (pcs)</option>
+                                <option value="box" <?= $edit_item['unit'] === 'box' ? 'selected' : '' ?>>Box</option>
+                                <option value="pack" <?= $edit_item['unit'] === 'pack' ? 'selected' : '' ?>>Pack</option>
+                                <option value="set" <?= $edit_item['unit'] === 'set' ? 'selected' : '' ?>>Set</option>
+                                <option value="each" <?= $edit_item['unit'] === 'each' ? 'selected' : '' ?>>Each</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Quantity <span class="required">*</span></label>
+                            <input type="number" name="quantity" class="form-control" required min="0" value="<?= $edit_item['quantity'] ?? 0 ?>">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Reorder Level <span class="required">*</span></label>
+                            <input type="number" name="reorder_level" class="form-control" required min="0" value="<?= $edit_item['reorder_level'] ?? 5 ?>">
+                        </div>
                     </div>
                     <div class="form-row-2">
                         <div class="form-group">
-                            <label class="form-label">Price (TSh) <span class="required">*</span></label>
-                            <input type="text" name="price" class="form-control price-input" value="<?= number_format($edit_item['price'] ?? 0, 0) ?>" required oninput="formatPriceInput(this)">
-                            <div class="price-preview">
-                                <span>Formatted:</span>
-                                <span class="formatted-price">TSh <?= number_format($edit_item['price'] ?? 0, 0) ?></span>
-                            </div>
+                            <label class="form-label">Selling Price (TSh)</label>
+                            <input type="text" name="selling_price" class="form-control price-input" value="<?= number_format($edit_item['selling_price'] ?? 0, 0) ?>" oninput="formatPriceInput(this)">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Supplier</label>
+                            <input type="text" name="supplier" class="form-control" value="<?= htmlspecialchars($edit_item['supplier'] ?? '') ?>">
+                        </div>
+                    </div>
+                    <div class="form-row-2">
+                        <div class="form-group">
+                            <label class="form-label">Expiry Date</label>
+                            <input type="date" name="expiry_date" class="form-control" value="<?= $edit_item['expiry_date'] ?? '' ?>">
                         </div>
                         <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
                             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                                <input type="checkbox" name="is_active" value="1" <?= $edit_item['is_active'] ? 'checked' : '' ?>>
+                                <input type="checkbox" name="is_active" value="1" <?= ($edit_item['status'] ?? 'active') === 'active' ? 'checked' : '' ?>>
                                 <span>Active</span>
                             </label>
+                            <input type="hidden" name="status" value="<?= ($edit_item['status'] ?? 'active') === 'active' ? 'active' : 'inactive' ?>">
                         </div>
                     </div>
                 <?php elseif ($edit_type === 'lab_test'): ?>
+                    <!-- Lab Test Edit -->
                     <div class="form-group">
                         <label class="form-label">Test Name <span class="required">*</span></label>
                         <input type="text" name="test_name" class="form-control" value="<?= htmlspecialchars($edit_item['test_name']) ?>" required>
                     </div>
                     <div class="form-group">
                         <label class="form-label">Category</label>
-                        <select name="category" class="form-control">
+                        <select name="category_id" class="form-control">
                             <option value="">-- Select Category --</option>
-                            <?php foreach ($lab_categories as $cat): ?>
-                                <option value="<?= $cat ?>" <?= $edit_item['category'] == $cat ? 'selected' : '' ?>>
-                                    <?= $cat ?>
+                            <?php foreach ($categories as $cat): ?>
+                                <option value="<?= $cat['id'] ?>" <?= $edit_item['category'] == $cat['category_name'] ? 'selected' : '' ?>>
+                                    <?= htmlspecialchars($cat['category_name']) ?>
                                 </option>
                             <?php endforeach; ?>
-                            <option value="other" <?= !in_array($edit_item['category'] ?? '', $lab_categories) && !empty($edit_item['category']) ? 'selected' : '' ?>>Other</option>
+                            <option value="0">-- Other (Type manually) --</option>
                         </select>
+                        <input type="text" name="category_name" class="form-control" style="margin-top:4px;display:none;" placeholder="Enter custom category..." value="<?= htmlspecialchars($edit_item['category'] ?? '') ?>">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Description</label>
+                        <textarea name="description" class="form-control" rows="2"><?= htmlspecialchars($edit_item['description'] ?? '') ?></textarea>
                     </div>
                     <div class="form-row-2">
                         <div class="form-group">
                             <label class="form-label">Price (TSh) <span class="required">*</span></label>
                             <input type="text" name="price" class="form-control price-input" value="<?= number_format($edit_item['price'] ?? 0, 0) ?>" required oninput="formatPriceInput(this)">
-                            <div class="price-preview">
-                                <span>Formatted:</span>
-                                <span class="formatted-price">TSh <?= number_format($edit_item['price'] ?? 0, 0) ?></span>
-                            </div>
                         </div>
                         <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
                             <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -2383,10 +3051,68 @@ include_once '../../components/admin_sidebar.php';
                             </label>
                         </div>
                     </div>
+                    
+                    <!-- Equipment Selection -->
+                    <div class="form-group">
+                        <label class="form-label">
+                            <i class="fas fa-tools"></i> Select Equipment (FREE)
+                            <span style="font-size:0.6rem;font-weight:400;color:var(--gray-400);">Equipment price is NOT added to test price</span>
+                        </label>
+                        
+                        <?php if (!empty($current_equipment_ids)): ?>
+                            <div class="current-equipment-tags">
+                                <span style="font-weight:600;font-size:0.7rem;color:var(--teal);">
+                                    <i class="fas fa-link"></i> Currently Linked Equipment:
+                                </span>
+                                <?php 
+                                    $current_names = [];
+                                    foreach ($equipment_for_lab as $eq) {
+                                        if (in_array($eq['equipment_id'], $current_equipment_ids)) {
+                                            $current_names[] = $eq['equipment_name'];
+                                        }
+                                    }
+                                    if (!empty($current_names)) {
+                                        foreach ($current_names as $name) {
+                                            echo '<span class="current-equipment-tag"><i class="fas fa-check-circle"></i> ' . htmlspecialchars($name) . '</span>';
+                                        }
+                                    } else {
+                                        echo '<span class="text-muted" style="font-size:0.7rem;">No equipment currently linked</span>';
+                                    }
+                                ?>
+                            </div>
+                        <?php endif; ?>
+                        
+                        <?php if (count($equipment_for_lab) > 0): ?>
+                            <div class="equipment-checkbox-group">
+                                <?php foreach ($equipment_for_lab as $eq): 
+                                    $checked = in_array($eq['equipment_id'], $current_equipment_ids) ? 'checked' : '';
+                                ?>
+                                    <label class="equipment-checkbox-item">
+                                        <input type="checkbox" name="equipment_ids[]" value="<?= $eq['equipment_id'] ?>" <?= $checked ?>>
+                                        <?= htmlspecialchars($eq['equipment_name']) ?>
+                                        <span class="equip-qty">(<?= $eq['total_quantity'] ?? 0 ?> in stock)</span>
+                                        <span class="equip-free"><?= $checked ? '✅ Selected' : 'FREE' ?></span>
+                                    </label>
+                                <?php endforeach; ?>
+                            </div>
+                            <div style="font-size:0.6rem;color:var(--gray-400);margin-top:4px;">
+                                <i class="fas fa-info-circle"></i> 
+                                <?php if (!empty($current_equipment_ids)): ?>
+                                    Uncheck to remove equipment, check to add new equipment.
+                                <?php else: ?>
+                                    Check equipment to link to this test.
+                                <?php endif; ?>
+                            </div>
+                        <?php else: ?>
+                            <div style="padding:10px;background:var(--warning-bg);border-radius:8px;color:var(--warning);font-size:0.8rem;">
+                                <i class="fas fa-exclamation-triangle"></i> No equipment available. Please add equipment first.
+                            </div>
+                        <?php endif; ?>
+                    </div>
                 <?php endif; ?>
                 
                 <div class="modal-actions">
-                    <a href="?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">Cancel</a>
+                    <a href="?branch=<?= urlencode($selected_branch_id) ?>&tab=<?= $active_tab ?>" class="btn btn-outline">Cancel</a>
                     <button type="submit" class="btn btn-success"><i class="fas fa-save"></i> Update</button>
                 </div>
             </form>
@@ -2468,38 +3194,31 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // FORMAT PRICE INPUT - FIXED
+    // FORMAT PRICE INPUT
     // ================================================================
     function formatPriceInput(input) {
-        // Remove all non-numeric characters except numbers
         var raw = input.value.replace(/[^0-9]/g, '');
         if (raw === '') {
             input.value = '';
-            var preview = input.closest('.form-group').querySelector('.formatted-price');
-            if (preview) preview.textContent = 'TSh 0';
             return;
         }
         var formatted = parseInt(raw).toLocaleString('en-US');
         input.value = formatted;
-        var preview = input.closest('.form-group').querySelector('.formatted-price');
-        if (preview) preview.textContent = 'TSh ' + formatted;
     }
 
     // ================================================================
-    // CLEAN PRICE BEFORE FORM SUBMIT - FIXED
+    // DUPLICATE WARNING - DISAPPEAR AFTER 5 SECONDS
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
-        var addForm = document.getElementById('addForm');
-        if (addForm) {
-            addForm.addEventListener('submit', function(e) {
-                var priceInput = this.querySelector('[name="price"]');
-                if (priceInput) {
-                    // Remove commas before submitting
-                    var cleanValue = priceInput.value.replace(/,/g, '');
-                    priceInput.value = cleanValue;
-                    console.log('Price cleaned: ' + cleanValue);
-                }
-            });
+        var duplicateWarning = document.getElementById('duplicateWarning');
+        if (duplicateWarning) {
+            setTimeout(function() {
+                duplicateWarning.style.transition = 'opacity 0.8s ease';
+                duplicateWarning.style.opacity = '0';
+                setTimeout(function() {
+                    duplicateWarning.style.display = 'none';
+                }, 800);
+            }, 5000);
         }
     });
 
@@ -2632,7 +3351,7 @@ include_once '../../components/admin_sidebar.php';
         var typeLabels = {
             'service': 'Service',
             'procedure': 'Procedure',
-            'tool': 'Tool',
+            'equipment': 'Equipment',
             'lab_test': 'Lab Test'
         };
         
@@ -2664,10 +3383,6 @@ include_once '../../components/admin_sidebar.php';
                     <div class="form-group">
                         <label class="form-label">Price (TSh) <span class="required">*</span></label>
                         <input type="text" name="price" class="form-control price-input" placeholder="e.g. 10000" required oninput="formatPriceInput(this)">
-                        <div class="price-preview">
-                            <span>Formatted:</span>
-                            <span class="formatted-price">TSh 0</span>
-                        </div>
                     </div>
                     <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -2684,8 +3399,15 @@ include_once '../../components/admin_sidebar.php';
                     <input type="text" name="procedure_name" class="form-control" required placeholder="e.g. Wound Dressing">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Category</label>
-                    <input type="text" name="category" class="form-control" placeholder="e.g. Surgery, Wound Care">
+                    <label class="form-label">Category <span class="required">*</span></label>
+                    <select name="category_id" class="form-control" required>
+                        <option value="">-- Select Category --</option>
+                        <?php foreach ($categories as $cat): ?>
+                            <option value="<?= $cat['id'] ?>"><?= htmlspecialchars($cat['category_name']) ?></option>
+                        <?php endforeach; ?>
+                        <option value="0">-- Other (Type manually) --</option>
+                    </select>
+                    <input type="text" name="category_name" class="form-control" style="margin-top:4px;display:none;" placeholder="Enter custom category...">
                 </div>
                 <div class="form-group">
                     <label class="form-label">Description</label>
@@ -2695,13 +3417,6 @@ include_once '../../components/admin_sidebar.php';
                     <div class="form-group">
                         <label class="form-label">Price (TSh) <span class="required">*</span></label>
                         <input type="text" name="price" class="form-control price-input" placeholder="e.g. 150000" required oninput="formatPriceInput(this)">
-                        <div class="price-preview">
-                            <span>Formatted:</span>
-                            <span class="formatted-price">TSh 0</span>
-                        </div>
-                        <small style="color: var(--text-secondary); font-size: 0.65rem; display: block; margin-top: 4px;">
-                            <i class="fas fa-info-circle"></i> Enter numbers without commas (e.g., 150000 for 150,000)
-                        </small>
                     </div>
                     <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -2711,35 +3426,68 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 </div>
                 <div class="form-group" style="background:var(--gray-50);padding:10px 14px;border-radius:8px;font-size:0.75rem;color:var(--gray-500);">
-                    <i class="fas fa-info-circle"></i> 
-                    Procedure code will be generated automatically
+                    <i class="fas fa-info-circle"></i> Procedure code will be generated automatically
                 </div>
             `;
-        } else if (type === 'tool') {
+        } else if (type === 'equipment') {
             html = `
                 <div class="form-group">
-                    <label class="form-label">Tool Name <span class="required">*</span></label>
-                    <input type="text" name="tool_name" class="form-control" required placeholder="e.g. Syringe, Scalpel">
+                    <label class="form-label">Equipment Name <span class="required">*</span></label>
+                    <input type="text" name="equipment_name" class="form-control" required placeholder="e.g. Sindano (Syringe)">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Procedure Name</label>
-                    <input type="text" name="procedure_name" class="form-control" placeholder="e.g. Injection, Wound Dressing">
+                    <label class="form-label">Category <span class="required">*</span></label>
+                    <select name="category_id" class="form-control" required>
+                        <option value="">-- Select Category --</option>
+                        <?php foreach ($categories as $cat): ?>
+                            <option value="<?= $cat['id'] ?>"><?= htmlspecialchars($cat['category_name']) ?></option>
+                        <?php endforeach; ?>
+                        <option value="0">-- Other (Type manually) --</option>
+                    </select>
+                    <input type="text" name="category_name" class="form-control" style="margin-top:4px;display:none;" placeholder="Enter custom category...">
+                </div>
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label class="form-label">Unit</label>
+                        <select name="unit" class="form-control">
+                            <option value="pcs">Pieces (pcs)</option>
+                            <option value="box">Box</option>
+                            <option value="pack">Pack</option>
+                            <option value="set">Set</option>
+                            <option value="each">Each</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Quantity <span class="required">*</span></label>
+                        <input type="number" name="quantity" class="form-control" required min="0" placeholder="0">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Reorder Level <span class="required">*</span></label>
+                        <input type="number" name="reorder_level" class="form-control" required min="0" value="5">
+                    </div>
                 </div>
                 <div class="form-row-2">
                     <div class="form-group">
-                        <label class="form-label">Price (TSh) <span class="required">*</span></label>
-                        <input type="text" name="price" class="form-control price-input" placeholder="e.g. 500" required oninput="formatPriceInput(this)">
-                        <div class="price-preview">
-                            <span>Formatted:</span>
-                            <span class="formatted-price">TSh 0</span>
-                        </div>
+                        <label class="form-label">Selling Price (TSh)</label>
+                        <input type="text" name="selling_price" class="form-control price-input" placeholder="0 = FREE" value="0" oninput="formatPriceInput(this)">
                     </div>
-                    <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
-                        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
-                            <input type="checkbox" name="is_active" value="1" checked>
-                            <span>Active</span>
-                        </label>
+                    <div class="form-group">
+                        <label class="form-label">Supplier</label>
+                        <input type="text" name="supplier" class="form-control" placeholder="Supplier name">
                     </div>
+                </div>
+                <div class="form-row-2">
+                    <div class="form-group">
+                        <label class="form-label">Expiry Date</label>
+                        <input type="date" name="expiry_date" class="form-control">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Batch Number</label>
+                        <input type="text" name="batch_number" class="form-control" placeholder="Auto-generated if left empty">
+                    </div>
+                </div>
+                <div class="form-group" style="background:var(--gray-50);padding:10px 14px;border-radius:8px;font-size:0.75rem;color:var(--gray-500);">
+                    <i class="fas fa-info-circle"></i> Status will be <strong>Active</strong> by default. Leave expiry empty for no expiry (Active Forever).
                 </div>
             `;
         } else if (type === 'lab_test') {
@@ -2749,23 +3497,24 @@ include_once '../../components/admin_sidebar.php';
                     <input type="text" name="test_name" class="form-control" required placeholder="e.g. Complete Blood Count">
                 </div>
                 <div class="form-group">
-                    <label class="form-label">Category</label>
-                    <select name="category" class="form-control">
+                    <label class="form-label">Category <span class="required">*</span></label>
+                    <select name="category_id" class="form-control" required>
                         <option value="">-- Select Category --</option>
-                        <?php foreach ($lab_categories as $cat): ?>
-                            <option value="<?= $cat ?>"><?= $cat ?></option>
+                        <?php foreach ($categories as $cat): ?>
+                            <option value="<?= $cat['id'] ?>"><?= htmlspecialchars($cat['category_name']) ?></option>
                         <?php endforeach; ?>
-                        <option value="other">Other</option>
+                        <option value="0">-- Other (Type manually) --</option>
                     </select>
+                    <input type="text" name="category_name" class="form-control" style="margin-top:4px;display:none;" placeholder="Enter custom category...">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Description</label>
+                    <textarea name="description" class="form-control" rows="2" placeholder="Test description..."></textarea>
                 </div>
                 <div class="form-row-2">
                     <div class="form-group">
                         <label class="form-label">Price (TSh) <span class="required">*</span></label>
                         <input type="text" name="price" class="form-control price-input" placeholder="e.g. 5000" required oninput="formatPriceInput(this)">
-                        <div class="price-preview">
-                            <span>Formatted:</span>
-                            <span class="formatted-price">TSh 0</span>
-                        </div>
                     </div>
                     <div class="form-group" style="display:flex;align-items:center;gap:12px;padding-top:20px;">
                         <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
@@ -2773,6 +3522,29 @@ include_once '../../components/admin_sidebar.php';
                             <span>Active</span>
                         </label>
                     </div>
+                </div>
+                <!-- Equipment Selection -->
+                <div class="form-group">
+                    <label class="form-label">
+                        <i class="fas fa-tools"></i> Select Equipment (FREE)
+                        <span style="font-size:0.6rem;font-weight:400;color:var(--gray-400);">Equipment price is NOT added to test price</span>
+                    </label>
+                    <?php if (count($equipment_for_lab) > 0): ?>
+                        <div class="equipment-checkbox-group">
+                            <?php foreach ($equipment_for_lab as $eq): ?>
+                                <label class="equipment-checkbox-item">
+                                    <input type="checkbox" name="equipment_ids[]" value="<?= $eq['equipment_id'] ?>">
+                                    <?= htmlspecialchars($eq['equipment_name']) ?>
+                                    <span class="equip-qty">(<?= $eq['total_quantity'] ?? 0 ?> in stock)</span>
+                                    <span class="equip-free">FREE</span>
+                                </label>
+                            <?php endforeach; ?>
+                        </div>
+                    <?php else: ?>
+                        <div style="padding:10px;background:var(--warning-bg);border-radius:8px;color:var(--warning);font-size:0.8rem;">
+                            <i class="fas fa-exclamation-triangle"></i> No equipment available. Please add equipment first.
+                        </div>
+                    <?php endif; ?>
                 </div>
             `;
         }
@@ -2791,13 +3563,18 @@ include_once '../../components/admin_sidebar.php';
         var typeLabels = {
             'service': 'Service',
             'procedure': 'Procedure',
-            'tool': 'Tool',
+            'equipment': 'Equipment',
             'lab_test': 'Lab Test'
         };
         
         title.innerHTML = '<i class="fas fa-eye"></i> ' + typeLabels[type] + ' Details';
         
-        var tabId = 'tab-' + type + 's';
+        var tabId = 'tab-' + type + (type === 'procedure' ? 's' : (type === 'equipment' ? '' : (type === 'lab_test' ? 's' : 's')));
+        if (type === 'equipment') tabId = 'tab-equipment';
+        else if (type === 'lab_test') tabId = 'tab-lab_tests';
+        else if (type === 'procedure') tabId = 'tab-procedures';
+        else if (type === 'service') tabId = 'tab-services';
+        
         var tableBody = document.querySelector('#' + tabId + ' tbody');
         
         if (!tableBody) {
@@ -2824,7 +3601,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         var cells = row.querySelectorAll('td');
-        var labels = ['ID', 'Name', 'Category', 'Branch', 'Price', 'Status'];
+        var labels = ['ID', 'Name', 'Category', 'Branch', 'Price/Quantity', 'Stock', 'Expiry', 'Status'];
         var html = '<div class="space-y-2">';
         
         var dataIndex = 0;
@@ -2832,21 +3609,26 @@ include_once '../../components/admin_sidebar.php';
             var label = labels[dataIndex] || 'Field';
             var value = cells[i]?.textContent?.trim() || 'N/A';
             
-            if (value.includes('TSh')) {
-                value = value.trim();
-            }
-            
             if (label === 'Status' && (value.includes('Active') || value.includes('Inactive'))) {
                 var isActive = value.includes('Active');
                 value = '<span class="status-badge ' + (isActive ? 'active' : 'inactive') + '">' + value.trim() + '</span>';
             }
             
-            if (label === 'Branch') {
-                if (value.includes('All Branches')) {
-                    value = '<span class="branch-tag all-branches">🌐 ' + value + '</span>';
-                } else {
-                    value = '<span class="branch-tag">🏥 ' + value + '</span>';
-                }
+            if (label === 'Branch' && value.includes('All Branches')) {
+                value = '<span class="branch-tag all-branches">🌐 ' + value + '</span>';
+            } else if (label === 'Branch' && !value.includes('All Branches') && value !== 'N/A') {
+                value = '<span class="branch-tag">🏥 ' + value + '</span>';
+            }
+            
+            if (label === 'Stock' && (value.includes('In Stock') || value.includes('Low Stock') || value.includes('Out of Stock'))) {
+                var stockClass = value.includes('In Stock') ? 'ok' : (value.includes('Low Stock') ? 'low' : 'out');
+                var icon = value.includes('In Stock') ? 'fa-check-circle' : (value.includes('Low Stock') ? 'fa-exclamation-triangle' : 'fa-times-circle');
+                value = '<span class="stock-badge ' + stockClass + '"><i class="fas ' + icon + '"></i> ' + value + '</span>';
+            }
+            
+            if (label === 'Expiry' && (value.includes('Valid') || value.includes('Expiring') || value.includes('Expired') || value.includes('No Expiry'))) {
+                var expiryClass = value.includes('Valid') ? 'valid' : (value.includes('Expiring') ? 'expiring' : (value.includes('Expired') ? 'expired' : 'no-expiry'));
+                value = '<span class="expiry-badge ' + expiryClass + '">' + value + '</span>';
             }
             
             html += `
@@ -2872,6 +3654,28 @@ include_once '../../components/admin_sidebar.php';
         document.getElementById('deleteMessage').textContent = 'Are you sure you want to delete "' + name + '"? This action cannot be undone.';
         openModal('deleteModal');
     }
+
+    // ================================================================
+    // CATEGORY - Toggle manual input
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        document.querySelectorAll('select[name="category_id"]').forEach(function(select) {
+            select.addEventListener('change', function() {
+                var manualInput = this.closest('.form-group').querySelector('input[name="category_name"]');
+                if (manualInput) {
+                    if (this.value === '0') {
+                        manualInput.style.display = 'block';
+                        manualInput.required = true;
+                        manualInput.focus();
+                    } else {
+                        manualInput.style.display = 'none';
+                        manualInput.required = false;
+                        manualInput.value = '';
+                    }
+                }
+            });
+        });
+    });
 
     // ================================================================
     // TOAST
@@ -2918,11 +3722,14 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    console.log('%c🛠️ Services Management - FIXED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🛠️ Services Management - FULL ADMIN', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Price fixed: Commas removed before saving to database', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Delete fixed: Uses delete_id from form', 'font-size:13px; color:#34D399;');
-    console.log('%c🏢 Branch: <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($selected_branch_id) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= $selected_branch_name ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Full CRUD: Add, View, Edit, Delete', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Duplicate Check for Lab Tests', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Duplicate Warning disappears after 5 seconds', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Lab Test Edit: Can add/remove equipment', 'font-size:13px; color:#34D399;');
+    console.log('%c🔧 Equipment: <?= count($equipment) ?> | Lab Tests: <?= count($lab_tests) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
 

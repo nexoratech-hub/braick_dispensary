@@ -4,7 +4,7 @@
 // SUPER ADMIN - PROFILE PAGE
 // VIEW AND EDIT ADMIN PROFILE
 // WITH PROFILE PICTURE UPLOAD & USERNAME CHANGE
-// BRAICK DISPENSARY
+// BRAICK DISPENSARY - USING EXISTING DB TABLES
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
@@ -170,6 +170,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $user['email'] = $email;
                 $user['phone'] = $phone;
                 
+                // Log activity
+                try {
+                    $stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                        VALUES (?, ?, 'profile_updated', ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $user_id,
+                        $user_branch_id,
+                        "Profile updated by: $full_name"
+                    ]);
+                } catch (Exception $e) {}
+                
                 $message = 'Profile updated successfully!';
                 $message_type = 'success';
             } catch (Exception $e) {
@@ -215,6 +228,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $db->prepare("UPDATE users SET password = ? WHERE id = ?");
                 $stmt->execute([$hashed_password, $user_id]);
                 
+                // Log activity
+                try {
+                    $stmt = $db->prepare("
+                        INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                        VALUES (?, ?, 'password_changed', ?, NOW())
+                    ");
+                    $stmt->execute([
+                        $user_id,
+                        $user_branch_id,
+                        "Password changed for user: {$user['username']}"
+                    ]);
+                } catch (Exception $e) {}
+                
                 $message = 'Password changed successfully!';
                 $message_type = 'success';
             } else {
@@ -237,7 +263,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $file_name = $file['name'];
             $file_tmp = $file['tmp_name'];
             $file_size = $file['size'];
-            $file_error = $file['error'];
             
             // Validate file type
             $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
@@ -353,13 +378,9 @@ $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'acti
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
@@ -1404,6 +1425,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🏢 Branch: <?= htmlspecialchars($user['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📸 Profile Pic: <?= !empty($profile_pic) ? '✅ Uploaded' : '❌ Not set' ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Username can be changed', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 Tables: users, branches', 'font-size:13px; color:#64748B;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
 

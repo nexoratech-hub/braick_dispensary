@@ -3,13 +3,12 @@
 // FILE: frontend/pages/admin/lab_test_details.php
 // SUPER ADMIN - LAB TEST DETAILS
 // VIEW COMPLETE LAB TEST INFORMATION
-// BLUE THEME
+// BLUE THEME - FIXED FOR EXISTING DATABASE
 // BRAICK DISPENSARY
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
 // ================================================================
-// SESSION START
+// START SESSION
 // ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -49,11 +48,17 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// Include database
-require_once '../../../backend/config/database.php';
-require_once '../../../backend/helpers/functions.php';
+// ================================================================
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../../backend/config/database.php';
+require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
-$db = Database::getInstance()->getConnection();
+try {
+    $db = Database::getInstance()->getConnection();
+} catch (Exception $e) {
+    die("Database connection error: " . $e->getMessage());
+}
 
 // ================================================================
 // GET LAB TEST ID
@@ -67,7 +72,7 @@ if ($test_id <= 0) {
 }
 
 // ================================================================
-// FETCH LAB TEST DETAILS
+// FETCH LAB TEST DETAILS - FIXED for database
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -85,12 +90,10 @@ $stmt = $db->prepare("
         v.visit_type,
         b.name as branch_name,
         b.location as branch_location,
-        (SELECT COUNT(*) FROM lab_tests lt2 
-         INNER JOIN visits v2 ON lt2.visit_id = v2.id 
-         WHERE v2.patient_id = p.id) as total_lab_requests
+        (SELECT COUNT(*) FROM lab_tests lt2 WHERE lt2.patient_id = p.id) as total_lab_requests
     FROM lab_tests lt
     LEFT JOIN visits v ON lt.visit_id = v.id
-    LEFT JOIN patients p ON v.patient_id = p.id
+    LEFT JOIN patients p ON lt.patient_id = p.id
     LEFT JOIN users d ON lt.doctor_id = d.id
     LEFT JOIN users l ON lt.lab_technician_id = l.id
     LEFT JOIN branches b ON lt.branch_id = b.id
@@ -105,7 +108,7 @@ if (!$test) {
 }
 
 // ================================================================
-// GET STATUS COLOR
+// GET STATUS FUNCTIONS
 // ================================================================
 function getStatusColor($status) {
     $colors = [
@@ -144,18 +147,13 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE HEADERS
 // ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
 
 <style>
-    /* ================================================================
-       BLUE THEME STYLES
-       ================================================================ */
-    
-    /* Profile Header - Blue Theme */
     .profile-header-custom {
         background: linear-gradient(135deg, #0B5ED7, #1A73E8);
         border-radius: 16px;
@@ -204,7 +202,6 @@ include_once '../../components/admin_sidebar.php';
         border: 1px solid rgba(255,255,255,0.1);
     }
     
-    /* Stat Cards - Blue Theme */
     .stat-card-custom {
         background: var(--bg-card);
         border-radius: 12px;
@@ -226,13 +223,8 @@ include_once '../../components/admin_sidebar.php';
         color: #0B5ED7;
     }
     
-    .stat-card-custom .stat-number.green {
-        color: #059669;
-    }
-    
-    .stat-card-custom .stat-number.orange {
-        color: #F59E0B;
-    }
+    .stat-card-custom .stat-number.green { color: #059669; }
+    .stat-card-custom .stat-number.orange { color: #F59E0B; }
     
     .stat-card-custom .stat-label {
         font-size: 0.7rem;
@@ -242,10 +234,7 @@ include_once '../../components/admin_sidebar.php';
         letter-spacing: 0.03em;
     }
     
-    .stat-card-custom .stat-icon {
-        font-size: 1.5rem;
-        margin-bottom: 4px;
-    }
+    .stat-card-custom .stat-icon { font-size: 1.5rem; margin-bottom: 4px; }
     
     [data-theme="dark"] .stat-card-custom {
         background: #1E293B;
@@ -256,7 +245,6 @@ include_once '../../components/admin_sidebar.php';
         color: #6EA8FE;
     }
     
-    /* Info rows - Blue Theme */
     .info-row {
         display: flex;
         padding: 8px 0;
@@ -264,9 +252,7 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
     }
     
-    .info-row:last-child {
-        border-bottom: none;
-    }
+    .info-row:last-child { border-bottom: none; }
     
     .info-row .info-label {
         width: 150px;
@@ -289,22 +275,11 @@ include_once '../../components/admin_sidebar.php';
         font-weight: 400;
     }
     
-    .info-row .info-value .badge-value {
-        display: inline-block;
-        padding: 2px 12px;
-        border-radius: 12px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        background: #E8F0FE;
-        color: #0B5ED7;
-    }
-    
     .info-row .info-value .price-value {
         color: #059669;
         font-weight: 700;
     }
     
-    /* Card Custom - Blue Theme */
     .card-custom {
         background: var(--bg-card);
         border-radius: 16px;
@@ -338,7 +313,6 @@ include_once '../../components/admin_sidebar.php';
         margin-right: 8px;
     }
     
-    /* Status Badge - Blue Theme */
     .status-badge-large {
         display: inline-flex;
         align-items: center;
@@ -399,7 +373,6 @@ include_once '../../components/admin_sidebar.php';
         border-color: #F87171;
     }
     
-    /* Badge styles - Blue Theme */
     .badge-custom {
         padding: 3px 12px !important;
         border-radius: 20px !important;
@@ -411,57 +384,18 @@ include_once '../../components/admin_sidebar.php';
         border: none !important;
     }
     
-    .badge-success {
-        background: #D1FAE5 !important;
-        color: #059669 !important;
-    }
+    .badge-success { background: #D1FAE5 !important; color: #059669 !important; }
+    .badge-warning { background: #FEF3C7 !important; color: #D97706 !important; }
+    .badge-danger { background: #FEE2E2 !important; color: #EF4444 !important; }
+    .badge-info { background: #E8F0FE !important; color: #0B5ED7 !important; }
+    .badge-secondary { background: #E2E8F0 !important; color: #64748B !important; }
     
-    .badge-warning {
-        background: #FEF3C7 !important;
-        color: #D97706 !important;
-    }
+    [data-theme="dark"] .badge-success { background: #1A3A2A !important; color: #34D399 !important; }
+    [data-theme="dark"] .badge-warning { background: #3D2E0A !important; color: #FBBF24 !important; }
+    [data-theme="dark"] .badge-danger { background: #3A1A1A !important; color: #F87171 !important; }
+    [data-theme="dark"] .badge-info { background: #1E3A5F !important; color: #6EA8FE !important; }
+    [data-theme="dark"] .badge-secondary { background: #2D3748 !important; color: #94A3B8 !important; }
     
-    .badge-danger {
-        background: #FEE2E2 !important;
-        color: #EF4444 !important;
-    }
-    
-    .badge-info {
-        background: #E8F0FE !important;
-        color: #0B5ED7 !important;
-    }
-    
-    .badge-secondary {
-        background: #E2E8F0 !important;
-        color: #64748B !important;
-    }
-    
-    [data-theme="dark"] .badge-success {
-        background: #1A3A2A !important;
-        color: #34D399 !important;
-    }
-    
-    [data-theme="dark"] .badge-warning {
-        background: #3D2E0A !important;
-        color: #FBBF24 !important;
-    }
-    
-    [data-theme="dark"] .badge-danger {
-        background: #3A1A1A !important;
-        color: #F87171 !important;
-    }
-    
-    [data-theme="dark"] .badge-info {
-        background: #1E3A5F !important;
-        color: #6EA8FE !important;
-    }
-    
-    [data-theme="dark"] .badge-secondary {
-        background: #2D3748 !important;
-        color: #94A3B8 !important;
-    }
-    
-    /* Results Section */
     .results-box {
         background: #F8FAFC;
         border-radius: 10px;
@@ -480,59 +414,6 @@ include_once '../../components/admin_sidebar.php';
         color: #F1F5F9;
     }
     
-    /* Buttons - Blue Theme */
-    .btn-blue {
-        background: #0B5ED7;
-        color: white;
-    }
-    .btn-blue:hover {
-        background: #0A4CA8;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-green {
-        background: #059669;
-        color: white;
-    }
-    .btn-green:hover {
-        background: #047857;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
-    
-    .btn-edit {
-        background: #F59E0B;
-        color: white;
-    }
-    .btn-edit:hover {
-        background: #D97706;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3);
-    }
-    
-    .btn-print {
-        background: #64748B;
-        color: white;
-    }
-    .btn-print:hover {
-        background: #475569;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(100, 116, 139, 0.3);
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-secondary);
-        border: 2px solid var(--border-color);
-    }
-    .btn-outline:hover {
-        background: var(--bg-body);
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-        transform: translateY(-2px);
-    }
-    
     .btn-sm {
         padding: 4px 12px;
         font-size: 0.7rem;
@@ -547,39 +428,120 @@ include_once '../../components/admin_sidebar.php';
         font-weight: 600;
     }
     
-    /* Responsive */
+    .btn-blue { background: #0B5ED7; color: white; }
+    .btn-blue:hover { background: #0A4CA8; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
+    
+    .btn-green { background: #059669; color: white; }
+    .btn-green:hover { background: #047857; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3); }
+    
+    .btn-edit { background: #F59E0B; color: white; }
+    .btn-edit:hover { background: #D97706; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(245, 158, 11, 0.3); }
+    
+    .btn-print { background: #64748B; color: white; }
+    .btn-print:hover { background: #475569; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(100, 116, 139, 0.3); }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+    }
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+        transform: translateY(-2px);
+    }
+    
+    .grid { display: grid; }
+    .grid-cols-1 { grid-template-columns: 1fr; }
+    .md\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+    .sm\:grid-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
+    .gap-1 { gap: 4px; }
+    .gap-2 { gap: 8px; }
+    .gap-4 { gap: 16px; }
+    .mb-5 { margin-bottom: 20px; }
+    .mt-1 { margin-top: 4px; }
+    .mt-3 { margin-top: 12px; }
+    .p-3 { padding: 12px; }
+    .py-3 { padding-top: 12px; padding-bottom: 12px; }
+    .flex { display: flex; }
+    .flex-wrap { flex-wrap: wrap; }
+    .items-center { align-items: center; }
+    .flex-1 { flex: 1; }
+    .text-center { text-align: center; }
+    .text-sm { font-size: 0.75rem; }
+    .text-2xl { font-size: 1.5rem; }
+    .font-semibold { font-weight: 600; }
+    .font-mono { font-family: monospace; }
+    .text-gray-400 { color: var(--text-secondary); }
+    .bg-blue-50 { background: #EFF6FF; }
+    .bg-yellow-50 { background: #FFFBEB; }
+    
+    [data-theme="dark"] .bg-blue-50 { background: #1E3A5F; }
+    [data-theme="dark"] .bg-yellow-50 { background: #3D2E0A; }
+    
+    .border-blue-200 { border-color: #93C5FD; }
+    .border-yellow-200 { border-color: #FCD34D; }
+    
+    [data-theme="dark"] .border-blue-200 { border-color: #1E3A5F; }
+    [data-theme="dark"] .border-yellow-200 { border-color: #3D2E0A; }
+    
+    .rounded-lg { border-radius: 8px; }
+    .block { display: block; }
+    
+    .footer {
+        padding: 14px 0;
+        border-top: 2px solid var(--border-color);
+        margin-top: 20px;
+        text-align: center;
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+    }
+    
+    .footer .footer-brand {
+        color: #0B5ED7;
+        font-weight: 600;
+    }
+    
+    .toast-custom {
+        position: fixed;
+        bottom: 24px;
+        right: 24px;
+        padding: 14px 20px;
+        border-radius: var(--radius);
+        z-index: 999;
+        max-width: 400px;
+        transform: translateY(100px);
+        opacity: 0;
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        color: white;
+        box-shadow: var(--shadow-lg);
+    }
+    .toast-custom.show { transform: translateY(0); opacity: 1; }
+    .toast-custom.success { background: #059669; }
+    .toast-custom.error { background: #DC2626; }
+    .toast-custom.info { background: #0B5ED7; }
+    .toast-custom.warning { background: #D97706; }
+    
     @media (max-width: 640px) {
-        .profile-header-custom {
-            padding: 16px 18px;
-        }
-        .profile-header-custom .profile-icon {
-            width: 50px;
-            height: 50px;
-            font-size: 1.5rem;
-        }
-        .profile-header-custom .profile-name {
-            font-size: 1.1rem;
-        }
-        .info-row {
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 2px;
-            padding: 6px 0;
-        }
-        .info-row .info-label {
-            width: 100%;
-            font-size: 0.7rem;
-        }
-        .info-row .info-value {
-            font-size: 0.8rem;
-        }
-        .stat-card-custom .stat-number {
-            font-size: 1.3rem;
-        }
-        .results-box {
-            font-size: 0.75rem;
-            padding: 12px 14px;
-        }
+        .profile-header-custom { padding: 16px 18px; }
+        .profile-header-custom .profile-icon { width: 50px; height: 50px; font-size: 1.5rem; }
+        .profile-header-custom .profile-name { font-size: 1.1rem; }
+        .info-row { flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 0; }
+        .info-row .info-label { width: 100%; font-size: 0.7rem; }
+        .info-row .info-value { font-size: 0.8rem; }
+        .stat-card-custom .stat-number { font-size: 1.3rem; }
+        .results-box { font-size: 0.75rem; padding: 12px 14px; }
+        .sm\:grid-cols-3 { grid-template-columns: 1fr 1fr; }
+    }
+    
+    @media (max-width: 480px) {
+        .sm\:grid-cols-3 { grid-template-columns: 1fr; }
+        .md\:grid-cols-2 { grid-template-columns: 1fr; }
+        .profile-header-custom .profile-badge { font-size: 0.6rem; padding: 2px 10px; }
     }
 </style>
 
@@ -640,9 +602,7 @@ include_once '../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PROFILE HEADER - BLUE -->
-    <!-- ================================================================ -->
+    <!-- Profile Header -->
     <div class="profile-header-custom mb-5">
         <div class="flex items-center gap-4 flex-wrap" style="position:relative;z-index:1;">
             <div class="profile-icon">
@@ -690,11 +650,8 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
-    <!-- ================================================================ -->
+    <!-- Statistics Cards -->
     <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
-        
         <div class="stat-card-custom">
             <div class="stat-icon">🔬</div>
             <p class="stat-number">#<?= $test['id'] ?></p>
@@ -710,14 +667,11 @@ include_once '../../components/admin_sidebar.php';
         <div class="stat-card-custom">
             <div class="stat-icon">📋</div>
             <p class="stat-number orange"><?= $test['total_lab_requests'] ?? 0 ?></p>
-            <p class="stat-label">Total Lab Requests</p>
+            <p class="stat-label">Total Lab Tests</p>
         </div>
-        
     </div>
 
-    <!-- ================================================================ -->
-    <!-- TEST INFORMATION -->
-    <!-- ================================================================ -->
+    <!-- Test Information -->
     <div class="card-custom mb-5">
         <div class="card-header-custom">
             <h3 class="card-title-custom">
@@ -804,9 +758,7 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- PATIENT & VISIT INFORMATION -->
-    <!-- ================================================================ -->
+    <!-- Patient & Visit Information -->
     <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-5">
         
         <!-- Patient Information -->
@@ -815,7 +767,7 @@ include_once '../../components/admin_sidebar.php';
                 <h3 class="card-title-custom">
                     <i class="fas fa-user title-icon"></i> Patient Information
                 </h3>
-                <?php if (!empty($test['patient_id']) && !empty($test['patient_id_number'])): ?>
+                <?php if (!empty($test['patient_id'])): ?>
                     <a href="patient_details.php?id=<?= $test['patient_id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-blue btn-sm">
                         View Patient <i class="fas fa-arrow-right"></i>
                     </a>
@@ -891,13 +843,12 @@ include_once '../../components/admin_sidebar.php';
         
     </div>
 
-    <!-- ================================================================ -->
-    <!-- TEST RESULTS -->
-    <!-- ================================================================ -->
+    <!-- Test Results -->
     <div class="card-custom mb-5">
         <div class="card-header-custom">
             <h3 class="card-title-custom">
-                <i class="fas fa-flask title-icon"></i> Test Results                <span class="badge-custom <?= $test['status'] === 'completed' ? 'badge-success' : 'badge-warning' ?>">
+                <i class="fas fa-flask title-icon"></i> Test Results
+                <span class="badge-custom <?= $test['status'] === 'completed' ? 'badge-success' : 'badge-warning' ?>">
                     <?= $test['status'] === 'completed' ? '✅ Completed' : '⏳ Pending' ?>
                 </span>
             </h3>
@@ -924,9 +875,7 @@ include_once '../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- NOTES -->
-    <!-- ================================================================ -->
+    <!-- Notes -->
     <?php if (!empty($test['notes'])): ?>
         <div class="card-custom mb-5">
             <div class="card-header-custom">
@@ -940,9 +889,7 @@ include_once '../../components/admin_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- QUICK ACTIONS -->
-    <!-- ================================================================ -->
+    <!-- Quick Actions -->
     <div class="card-custom">
         <div class="card-header-custom">
             <h3 class="card-title-custom">
@@ -976,9 +923,7 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1006,9 +951,6 @@ include_once '../../components/admin_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1038,15 +980,9 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
 
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1059,18 +995,12 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1089,9 +1019,6 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1113,6 +1040,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🧪 Test: <?= htmlspecialchars($test['test_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Status: <?= ucfirst($test['status']) ?>', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c✅ Using tables: lab_tests, patients, visits, users, branches', 'font-size:13px; color:#34D399;');
     console.log('%c💙 Blue Theme Applied', 'font-size:13px; color:#0B5ED7;');
 </script>
 
