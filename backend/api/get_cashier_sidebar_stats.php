@@ -3,6 +3,7 @@
 // FILE: backend/api/get_cashier_sidebar_stats.php
 // CASHIER SIDEBAR STATS API - REAL-TIME UPDATES
 // BRAICK DISPENSARY
+// FIXED: Proper change detection and real-time updates
 // ================================================================
 
 // ================================================================
@@ -81,79 +82,60 @@ try {
 }
 
 // ================================================================
-// FETCH CASHIER STATS
+// FETCH CASHIER STATS - FIXED: Better hash generation
 // ================================================================
 function getCashierStats($db, $branch_id) {
     $stats = [
-        // ================================================================
-        // BILL STATS
-        // ================================================================
+        // Bill Stats
         'pending_bills' => 0,
         'partial_payments' => 0,
         'paid_bills' => 0,
         'cancelled_bills' => 0,
         'total_bills' => 0,
         
-        // ================================================================
-        // TODAY'S STATS
-        // ================================================================
+        // Today's Stats
         'today_paid' => 0,
         'today_partial' => 0,
         'today_pending' => 0,
         'today_total_amount' => 0,
         'today_paid_amount' => 0,
         
-        // ================================================================
-        // WEEK STATS
-        // ================================================================
+        // Week Stats
         'week_paid' => 0,
         'week_pending' => 0,
         'week_total_amount' => 0,
         'week_paid_amount' => 0,
         
-        // ================================================================
-        // MONTH STATS
-        // ================================================================
+        // Month Stats
         'month_paid' => 0,
         'month_total_amount' => 0,
         'month_paid_amount' => 0,
         
-        // ================================================================
-        // PATIENT STATS
-        // ================================================================
+        // Patient Stats
         'patients_waiting' => 0,
         'patients_today' => 0,
         'total_patients' => 0,
         
-        // ================================================================
-        // EXPENSE STATS
-        // ================================================================
+        // Expense Stats
         'total_expenses' => 0,
         'today_expenses' => 0,
         'week_expenses' => 0,
         'month_expenses' => 0,
         
-        // ================================================================
-        // BRANCH INFO
-        // ================================================================
+        // Branch Info
         'branch_name' => '',
         'branch_id' => $branch_id,
         
-        // ================================================================
-        // USER INFO
-        // ================================================================
+        // User Info
         'user_name' => '',
         'user_role' => '',
         
-        // ================================================================
-        // TIMESTAMPS
-        // ================================================================
+        // Timestamps
         'last_updated' => date('Y-m-d H:i:s'),
         
-        // ================================================================
-        // HASH FOR CHANGE DETECTION
-        // ================================================================
-        '_hash' => ''
+        // FIXED: Better hash with all numeric values
+        '_hash' => '',
+        '_hash_components' => []
     ];
     
     try {
@@ -221,7 +203,8 @@ function getCashierStats($db, $branch_id) {
         $stats['cancelled_bills'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // Total Bills
-        $stats['total_bills'] = $stats['pending_bills'] + $stats['partial_payments'] + $stats['paid_bills'] + $stats['cancelled_bills'];
+        $stats['total_bills'] = $stats['pending_bills'] + $stats['partial_payments'] + 
+                               $stats['paid_bills'] + $stats['cancelled_bills'];
         
         // ================================================================
         // 4. TODAY'S STATS
@@ -387,20 +370,28 @@ function getCashierStats($db, $branch_id) {
         }
         
         // ================================================================
-        // 9. GENERATE HASH FOR CHANGE DETECTION
+        // 9. FIXED: GENERATE HASH - Include ALL numeric values
         // ================================================================
-        $hash_data = [
+        $hash_components = [
             'pending_bills' => $stats['pending_bills'],
             'partial_payments' => $stats['partial_payments'],
             'paid_bills' => $stats['paid_bills'],
             'cancelled_bills' => $stats['cancelled_bills'],
             'today_paid' => $stats['today_paid'],
-            'today_paid_amount' => $stats['today_paid_amount'],
-            'total_expenses' => $stats['total_expenses'],
-            'patients_waiting' => $stats['patients_waiting']
+            'today_paid_amount' => round($stats['today_paid_amount'], 2),
+            'patients_waiting' => $stats['patients_waiting'],
+            'total_expenses' => round($stats['total_expenses'], 2),
+            'today_expenses' => round($stats['today_expenses'], 2),
+            'week_paid' => $stats['week_paid'],
+            'month_paid' => $stats['month_paid']
         ];
         
-        $stats['_hash'] = md5(json_encode($hash_data));
+        $stats['_hash_components'] = $hash_components;
+        $stats['_hash'] = md5(json_encode($hash_components));
+        
+        // Also log the hash for debugging
+        error_log("Cashier Sidebar Hash: " . $stats['_hash']);
+        error_log("Hash Components: " . json_encode($hash_components));
         
     } catch (Exception $e) {
         error_log("Cashier stats error: " . $e->getMessage());
@@ -416,20 +407,33 @@ try {
     // Get stats
     $stats = getCashierStats($db, $branch_id);
     
-    // Check if data has changed
+    // Check if data has changed - FIXED: Always check with force_update
     $has_changed = false;
     $data_to_send = null;
+    
+    // Log the request
+    error_log("=== Cashier API Request ===");
+    error_log("Client Hash: " . ($client_hash ?: 'empty'));
+    error_log("Server Hash: " . $stats['_hash']);
+    error_log("Force Update: " . ($force_update ? 'YES' : 'NO'));
     
     if ($force_update) {
         $has_changed = true;
         $data_to_send = $stats;
+        error_log("Force update - sending full data");
     } else if (!empty($client_hash) && $client_hash !== $stats['_hash']) {
         $has_changed = true;
         $data_to_send = $stats;
+        error_log("Hash mismatch - sending full data");
+        error_log("  Client: " . $client_hash);
+        error_log("  Server: " . $stats['_hash']);
     } else if (empty($client_hash)) {
         // First request - send all data
         $has_changed = true;
         $data_to_send = $stats;
+        error_log("First request - sending full data");
+    } else {
+        error_log("No changes detected - sending empty data");
     }
     
     $response = [
@@ -462,7 +466,8 @@ try {
             'cancelled_bills' => $data_to_send['cancelled_bills'],
             'today_paid' => $data_to_send['today_paid'],
             'total_expenses' => $data_to_send['total_expenses'],
-            'patients_waiting' => $data_to_send['patients_waiting']
+            'patients_waiting' => $data_to_send['patients_waiting'],
+            'today_paid_amount' => $data_to_send['today_paid_amount']
         ];
     }
     

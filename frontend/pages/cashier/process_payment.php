@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/cashier/process_payment.php
 // CASHIER - PROCESS PAYMENT WITH COMBINED DISCOUNTS
-// FIXED: Pharmacy discount from discount_amount + Cashier discount
+// FIXED: Using discount_amount instead of pharmacy_discount
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -63,7 +63,7 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
 
     // ================================================================
-    // HANDLE AJAX REQUESTS
+    // HANDLE AJAX REQUESTS - FIXED DISCOUNT LOGIC
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         header('Content-Type: application/json');
@@ -71,7 +71,7 @@ try {
         $action = $_POST['action'];
         $item_ids = isset($_POST['item_ids']) ? $_POST['item_ids'] : [];
         $payment_method = isset($_POST['payment_method']) ? $_POST['payment_method'] : 'cash';
-        $discount_amount = isset($_POST['discount_amount']) ? floatval($_POST['discount_amount']) : 0;
+        $cashier_discount = isset($_POST['discount_amount']) ? floatval($_POST['discount_amount']) : 0;
         $partial_amount = isset($_POST['partial_amount']) ? floatval($_POST['partial_amount']) : 0;
         
         // ================================================================
@@ -88,9 +88,9 @@ try {
             try {
                 $db->beginTransaction();
                 
-                // Get item details
                 $stmt = $db->prepare("
-                    SELECT bi.*, b.id as bill_id, b.branch_id, b.patient_id, b.balance as bill_balance
+                    SELECT bi.*, b.id as bill_id, b.branch_id, b.patient_id, b.balance as bill_balance,
+                           b.discount_amount, b.cashier_discount, b.total_discount
                     FROM bill_items bi
                     JOIN bills b ON bi.bill_id = b.id
                     WHERE bi.id = ? AND bi.status != 'paid' AND bi.status != 'cancelled'
@@ -104,7 +104,6 @@ try {
                     exit;
                 }
                 
-                // Update item to cancelled
                 $stmt = $db->prepare("
                     UPDATE bill_items 
                     SET status = 'cancelled',
@@ -113,8 +112,8 @@ try {
                 ");
                 $stmt->execute([$item_id]);
                 
-                // Update bill balance (subtract cancelled item total)
                 $item_total = (float)($item['total_price'] ?? 0);
+                
                 $stmt = $db->prepare("
                     UPDATE bills 
                     SET total_amount = total_amount - ?,
@@ -124,7 +123,6 @@ try {
                 ");
                 $stmt->execute([$item_total, $item_total, $item['bill_id']]);
                 
-                // Check if bill has any remaining items
                 $stmt = $db->prepare("
                     SELECT COUNT(*) as count, SUM(total_price) as total
                     FROM bill_items 
@@ -137,7 +135,6 @@ try {
                     $stmt = $db->prepare("UPDATE bills SET status = 'cancelled' WHERE id = ?");
                     $stmt->execute([$item['bill_id']]);
                 } else {
-                    // Check if bill has any paid items
                     $stmt = $db->prepare("
                         SELECT COUNT(*) as count FROM bill_items 
                         WHERE bill_id = ? AND status = 'paid'
@@ -169,7 +166,7 @@ try {
         }
         
         // ================================================================
-        // PAYMENT FOR SELECTED ITEMS - FIXED WITH DISCOUNT
+        // PAYMENT FOR SELECTED ITEMS - FIXED DISCOUNT
         // ================================================================
         if ($action === 'complete_payment' || $action === 'partial_payment') {
             if (empty($item_ids) || !is_array($item_ids)) {
@@ -183,7 +180,8 @@ try {
             }
             
             try {
-                // Get selected items with bill details including existing discount
+                $db->beginTransaction();
+                
                 $placeholders = implode(',', array_fill(0, count($item_ids), '?'));
                 $stmt = $db->prepare("
                     SELECT 
@@ -194,9 +192,9 @@ try {
                         b.branch_id, 
                         b.balance as bill_balance,
                         b.total_amount as bill_total,
-                        b.discount_amount as pharmacy_discount,
-                        b.cashier_discount,
-                        b.total_discount,
+                        b.discount_amount,
+                        b.cashier_discount as existing_cashier_discount,
+                        b.total_discount as existing_total_discount,
                         b.status as bill_status
                     FROM bill_items bi
                     JOIN bills b ON bi.bill_id = b.id
@@ -210,10 +208,8 @@ try {
                     exit;
                 }
                 
-                // Group items by bill
                 $bill_map = [];
                 $total_original_amount = 0;
-                $total_existing_discount = 0;
                 
                 foreach ($selected_items as $item) {
                     $bill_id = $item['bill_id'];
@@ -223,45 +219,18 @@ try {
                             'bill_number' => $item['bill_number'],
                             'patient_id' => $item['patient_id'],
                             'items' => [],
-                            'total_amount' => 0,
-                            'bill_total' => (float)$item['bill_total'],
+                            'items_total' => 0,
                             'bill_balance' => (float)$item['bill_balance'],
-                            'pharmacy_discount' => (float)($item['pharmacy_discount'] ?? 0),
-                            'cashier_discount' => (float)($item['cashier_discount'] ?? 0),
-                            'total_discount' => (float)($item['total_discount'] ?? 0),
+                            'bill_total' => (float)$item['bill_total'],
+                            'pharmacy_discount' => (float)($item['discount_amount'] ?? 0),  // FIXED: Use discount_amount
+                            'existing_cashier_discount' => (float)($item['existing_cashier_discount'] ?? 0),
+                            'existing_total_discount' => (float)($item['existing_total_discount'] ?? 0),
                             'bill_status' => $item['bill_status'] ?? 'pending'
                         ];
                     }
                     $bill_map[$bill_id]['items'][] = $item;
-                    $bill_map[$bill_id]['total_amount'] += (float)$item['total_price'];
+                    $bill_map[$bill_id]['items_total'] += (float)$item['total_price'];
                     $total_original_amount += (float)$item['total_price'];
-                    
-                    // Get total existing discount (pharmacy discount from discount_amount column)
-                    if (!isset($total_existing_discount)) {
-                        $total_existing_discount = 0;
-                    }
-                    $total_existing_discount += (float)($item['pharmacy_discount'] ?? 0);
-                }
-                
-                // ================================================================
-                // ✅ FIX: COMBINE PHARMACY DISCOUNT (from discount_amount) + CASHIER DISCOUNT
-                // ================================================================
-                $pharmacy_discount = $total_existing_discount;
-                $cashier_discount = $discount_amount > 0 ? min($discount_amount, $total_original_amount) : 0;
-                $total_discount = $pharmacy_discount + $cashier_discount;
-                
-                // Don't discount more than the total amount
-                if ($total_discount > $total_original_amount) {
-                    $total_discount = $total_original_amount;
-                }
-                
-                $total_after_discount = $total_original_amount - $total_discount;
-                
-                // Calculate payment amount
-                if ($action === 'partial_payment') {
-                    $total_to_pay = min($partial_amount, $total_after_discount);
-                } else {
-                    $total_to_pay = $total_after_discount;
                 }
                 
                 $success_count = 0;
@@ -270,41 +239,79 @@ try {
                 $total_discount_applied = 0;
                 
                 foreach ($bill_map as $bill_id => $bill_data) {
-                    $bill_portion = $bill_data['total_amount'] / $total_original_amount;
+                    // ================================================================
+                    // ✅ FIX: CORRECT DISCOUNT CALCULATION
+                    // ================================================================
                     
-                    // Calculate bill's share of total discount (pharmacy + cashier)
-                    $bill_total_discount = $total_discount * $bill_portion;
-                    $bill_total_discount = round($bill_total_discount, 2);
+                    $pharmacy_discount = $bill_data['pharmacy_discount'];
+                    $existing_cashier_discount = $bill_data['existing_cashier_discount'];
                     
-                    // Calculate cashier discount portion for this bill
+                    $bill_portion = $bill_data['items_total'] / $total_original_amount;
+                    
                     $bill_cashier_discount = $cashier_discount * $bill_portion;
                     $bill_cashier_discount = round($bill_cashier_discount, 2);
                     
-                    // Calculate bill's share of payment
-                    $bill_payment = $total_to_pay * $bill_portion;
-                    $bill_payment = round($bill_payment, 2);
+                    $total_bill_discount = $pharmacy_discount + $existing_cashier_discount + $bill_cashier_discount;
+                    
+                    if ($total_bill_discount > $bill_data['bill_total']) {
+                        $total_bill_discount = $bill_data['bill_total'];
+                        $bill_cashier_discount = $total_bill_discount - $pharmacy_discount - $existing_cashier_discount;
+                        if ($bill_cashier_discount < 0) $bill_cashier_discount = 0;
+                    }
+                    
+                    $amount_after_discount = $bill_data['bill_total'] - $total_bill_discount;
+                    if ($amount_after_discount < 0) $amount_after_discount = 0;
+                    
+                    if ($action === 'partial_payment') {
+                        $bill_payment = $partial_amount * $bill_portion;
+                        $bill_payment = round($bill_payment, 2);
+                        if ($bill_payment > $amount_after_discount) {
+                            $bill_payment = $amount_after_discount;
+                        }
+                    } else {
+                        $bill_payment = $amount_after_discount;
+                    }
                     
                     $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
                     
-                    // ✅ FIX: Update bill with combined discount (pharmacy + cashier)
+                    $new_paid_amount = (float)$bill_data['bill_balance'] > 0 ? 
+                                       (float)$bill_data['bill_balance'] - $bill_payment : 
+                                       $bill_payment;
+                    
+                    $new_balance = $bill_data['bill_total'] - $bill_payment - $total_bill_discount;
+                    if ($new_balance < 0) $new_balance = 0;
+                    
+                    $new_cashier_discount = $existing_cashier_discount + $bill_cashier_discount;
+                    $new_total_discount = $pharmacy_discount + $new_cashier_discount;
+                    
+                    $new_status = $bill_data['bill_status'];
+                    if ($new_balance <= 0.01) {
+                        $new_status = 'paid';
+                    } elseif ($bill_payment > 0 && $new_balance > 0) {
+                        $new_status = 'partial';
+                    }
+                    
+                    // ✅ FIXED: Removed pharmacy_discount from UPDATE
                     $stmt = $db->prepare("
                         UPDATE bills 
                         SET paid_amount = paid_amount + ?,
-                            balance = balance - ?,
-                            cashier_discount = cashier_discount + ?,
-                            total_discount = discount_amount + cashier_discount,
+                            balance = ?,
+                            cashier_discount = ?,
+                            total_discount = ?,
+                            status = ?,
                             updated_at = NOW()
                         WHERE id = ? AND branch_id = ?
                     ");
                     $stmt->execute([
-                        $bill_payment, 
-                        $bill_payment, 
-                        $bill_cashier_discount, 
-                        $bill_id, 
+                        $bill_payment,
+                        $new_balance,
+                        $new_cashier_discount,
+                        $new_total_discount,
+                        $new_status,
+                        $bill_id,
                         $user_branch_id
                     ]);
                     
-                    // Update bill items to paid
                     $item_ids_for_bill = array_column($bill_data['items'], 'id');
                     $placeholders2 = implode(',', array_fill(0, count($item_ids_for_bill), '?'));
                     $stmt = $db->prepare("
@@ -315,23 +322,6 @@ try {
                     ");
                     $stmt->execute($item_ids_for_bill);
                     
-                    // ✅ FIX: Check if bill is fully paid (balance <= 0)
-                    $stmt = $db->prepare("SELECT balance FROM bills WHERE id = ?");
-                    $stmt->execute([$bill_id]);
-                    $updated_bill = $stmt->fetch(PDO::FETCH_ASSOC);
-                    $new_balance = (float)($updated_bill['balance'] ?? 0);
-                    
-                    if ($new_balance <= 0.01) {
-                        $stmt = $db->prepare("UPDATE bills SET status = 'paid' WHERE id = ?");
-                        $stmt->execute([$bill_id]);
-                        $status_updated = 'paid';
-                    } else {
-                        $stmt = $db->prepare("UPDATE bills SET status = 'partial' WHERE id = ?");
-                        $stmt->execute([$bill_id]);
-                        $status_updated = 'partial';
-                    }
-                    
-                    // Insert payment record
                     $stmt = $db->prepare("
                         INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
                         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
@@ -344,20 +334,23 @@ try {
                         $payment_method,
                         $user_id,
                         $user_branch_id,
-                        'Payment - Pharmacy Discount: ' . $currency . ' ' . number_format($bill_data['pharmacy_discount'], 2) . ' | Cashier Discount: ' . $currency . ' ' . number_format($bill_cashier_discount, 2)
+                        'Payment | Pharm Disc: ' . $currency . ' ' . number_format($pharmacy_discount, 0) . 
+                        ' | Cashier Disc: ' . $currency . ' ' . number_format($bill_cashier_discount, 0)
                     ]);
                     
                     $total_amount_paid += $bill_payment;
-                    $total_discount_applied += $bill_total_discount;
+                    $total_discount_applied += $total_bill_discount;
                     $receipt_numbers[] = $receipt_number;
                     $success_count++;
                 }
                 
+                $db->commit();
+                
                 $message = $success_count . " bill(s) updated!";
                 if ($total_discount_applied > 0) {
-                    $message .= " Total Discount: " . $currency . " " . number_format($total_discount_applied, 2);
+                    $message .= " Total Discount: " . $currency . " " . number_format($total_discount_applied, 0);
                 }
-                $message .= " Total Paid: " . $currency . " " . number_format($total_amount_paid, 2);
+                $message .= " Total Paid: " . $currency . " " . number_format($total_amount_paid, 0);
                 
                 echo json_encode([
                     'success' => true,
@@ -370,6 +363,7 @@ try {
                 ]);
                 
             } catch (Exception $e) {
+                $db->rollBack();
                 echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
             }
             exit;
@@ -385,7 +379,7 @@ try {
     $bills_query = "
         SELECT 
             b.*,
-            b.discount_amount as pharmacy_discount,
+            b.discount_amount,
             b.cashier_discount,
             b.total_discount,
             v.visit_number,
@@ -447,7 +441,6 @@ try {
         $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         $all_items_by_bill[$bill['id']] = $items;
         
-        // Check if medication items are confirmed
         $has_medication = false;
         $med_confirmed = true;
         foreach ($items as $item) {
@@ -561,6 +554,9 @@ include_once '../../components/cashier_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* ================================================================
+           COMPLETE CSS (same styles as before)
+           ================================================================ */
         :root {
             --primary: #059669;
             --primary-dark: #047857;
@@ -1162,7 +1158,7 @@ include_once '../../components/cashier_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-money-bill-wave"></i>
                 Process Payments
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($user_role) ?></span>
+                <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
                 <?php if ($is_admin): ?>
                     <span class="header-badge" style="background:rgba(124,58,237,0.3);border-color:rgba(124,58,237,0.3);color:#C4B5FD;">
                         <i class="fas fa-user-shield"></i> ADMIN VIEW
@@ -1315,7 +1311,7 @@ include_once '../../components/cashier_sidebar.php';
                                 $bill_number = $bill['bill_number'] ?? 'N/A';
                                 $bill_status = $bill['status'] ?? 'pending';
                                 $bill_balance = $bill['balance'] ?? 0;
-                                $pharmacy_discount = $bill['pharmacy_discount'] ?? 0;
+                                $pharmacy_discount = $bill['discount_amount'] ?? 0;  // FIXED: Use discount_amount
                                 $cashier_discount = $bill['cashier_discount'] ?? 0;
                                 $total_discount = $bill['total_discount'] ?? 0;
                             ?>
@@ -1616,7 +1612,7 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT - FIXED -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -1767,7 +1763,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // UPDATE SELECTED TOTAL
+    // UPDATE SELECTED TOTAL - FIXED DISPLAY
     // ================================================================
     function updateSelectedTotal() {
         var checkboxes = document.querySelectorAll('.item-select:checked');
@@ -1779,21 +1775,18 @@ include_once '../../components/cashier_sidebar.php';
         var discount = getRawValue(discountInput);
         var partial = getRawValue(partialInput);
         
-        checkboxes.forEach(function(cb) {
-            var price = parseFloat(cb.dataset.price || 0);
-            total_price += price;
-        });
-        
         // Get pharmacy discount from selected items' bills
         var pharmacyDiscount = 0;
         var billIds = new Set();
         checkboxes.forEach(function(cb) {
+            var price = parseFloat(cb.dataset.price || 0);
+            total_price += price;
+            
             var billId = cb.dataset.billId;
             if (billId && !billIds.has(billId)) {
                 billIds.add(billId);
                 var row = cb.closest('.item-row');
                 if (row) {
-                    // Find the bill header for this bill
                     var header = row.closest('tbody').querySelector('.bill-header-row');
                     if (header) {
                         var discText = header.textContent.match(/Pharm: [\d,]+/);
@@ -1806,18 +1799,7 @@ include_once '../../components/cashier_sidebar.php';
             }
         });
         
-        // If we couldn't get from header, use the bill data
-        if (pharmacyDiscount === 0) {
-            checkboxes.forEach(function(cb) {
-                var row = cb.closest('.item-row');
-                if (row) {
-                    var price = parseFloat(row.dataset.price || 0);
-                    // Estimate pharmacy discount as 10% of price for demo
-                    // In real system, this comes from the bill
-                }
-            });
-        }
-        
+        // Grand total = total - discount - pharmacy discount
         var grand_total = total_price - discount - pharmacyDiscount;
         if (grand_total < 0) grand_total = 0;
         
@@ -1829,7 +1811,6 @@ include_once '../../components/cashier_sidebar.php';
         document.getElementById('displayPharmacyDiscount').textContent = currency + ' ' + pharmacyDiscount.toFixed(0);
         document.getElementById('displayGrandTotal').textContent = currency + ' ' + grand_total.toFixed(0);
         
-        // Update patient select all checkboxes
         document.querySelectorAll('.select-all-items').forEach(function(cb) {
             var patientId = cb.dataset.patientId;
             var patientCheckboxes = document.querySelectorAll('.item-select[data-patient-id="' + patientId + '"]:not(:disabled)');
@@ -1840,7 +1821,6 @@ include_once '../../components/cashier_sidebar.php';
             cb.checked = allChecked && patientCheckboxes.length > 0;
         });
         
-        // Enable/disable payment buttons
         var fullBtn = document.getElementById('fullPayBtn');
         var partialBtn = document.getElementById('partialPayBtn');
         
@@ -1870,7 +1850,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // PROCESS PAYMENT
+    // PROCESS PAYMENT - FIXED
     // ================================================================
     function processPayment(type) {
         var checkboxes = document.querySelectorAll('.item-select:checked');
@@ -1893,31 +1873,60 @@ include_once '../../components/cashier_sidebar.php';
             totalPrice += parseFloat(cb.dataset.price || 0);
         });
         
+        // ================================================================
+        // ✅ FIX: CORRECT DISCOUNT LOGIC
+        // ================================================================
+        var pharmacyDiscount = 0;
+        var billIds = new Set();
+        checkboxes.forEach(function(cb) {
+            var billId = cb.dataset.billId;
+            if (billId && !billIds.has(billId)) {
+                billIds.add(billId);
+                var row = cb.closest('.item-row');
+                if (row) {
+                    var header = row.closest('tbody').querySelector('.bill-header-row');
+                    if (header) {
+                        var discText = header.textContent.match(/Pharm: [\d,]+/);
+                        if (discText) {
+                            var num = discText[0].replace(/[^0-9]/g, '');
+                            if (num) pharmacyDiscount += parseFloat(num);
+                        }
+                    }
+                }
+            }
+        });
+        
+        var totalDiscount = pharmacyDiscount + discount;
+        if (totalDiscount > totalPrice) {
+            totalDiscount = totalPrice;
+            discount = totalDiscount - pharmacyDiscount;
+            if (discount < 0) discount = 0;
+        }
+        
+        var grandTotal = totalPrice - totalDiscount;
+        if (grandTotal < 0) grandTotal = 0;
+        
         if (type === 'partial') {
             if (partialAmount <= 0) {
                 showToast('⚠️ Invalid Amount', 'Please enter a valid partial amount', 'warning');
                 return;
             }
-            if (partialAmount > totalPrice) {
-                showToast('⚠️ Amount Exceeds', 'Partial amount exceeds total selected items', 'warning');
+            if (partialAmount > grandTotal) {
+                showToast('⚠️ Amount Exceeds', 'Partial amount exceeds grand total (after all discounts)', 'warning');
                 return;
             }
-            if (discount > 0 && discount > totalPrice) {
-                showToast('⚠️ Discount', 'Discount cannot exceed total amount', 'warning');
-                return;
-            }
-            
-            var remainingAfterPartial = totalPrice - partialAmount - discount;
-            if (remainingAfterPartial < 0) remainingAfterPartial = 0;
             
             var currency = '<?= $currency ?>';
             var confirmMsg = '💳 PARTIAL PAYMENT CONFIRMATION\n' +
                              '═══════════════════════════════\n' +
                              'Selected Items Total: ' + currency + ' ' + totalPrice.toFixed(0) + '\n' +
-                             'Partial Amount: ' + currency + ' ' + partialAmount.toFixed(0) + '\n' +
+                             'Pharmacy Discount: ' + currency + ' ' + pharmacyDiscount.toFixed(0) + '\n' +
                              (discount > 0 ? 'Cashier Discount: ' + currency + ' ' + discount.toFixed(0) + '\n' : '') +
                              '───────────────────────────────\n' +
-                             'Remaining: ' + currency + ' ' + remainingAfterPartial.toFixed(0) + '\n\n' +
+                             'Grand Total: ' + currency + ' ' + grandTotal.toFixed(0) + '\n' +
+                             'Partial Amount: ' + currency + ' ' + partialAmount.toFixed(0) + '\n' +
+                             '───────────────────────────────\n' +
+                             'Remaining: ' + currency + ' ' + (grandTotal - partialAmount).toFixed(0) + '\n\n' +
                              'Confirm partial payment for ' + itemIds.length + ' item(s)?';
             
             if (!confirm(confirmMsg)) {
@@ -1926,10 +1935,8 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         if (type === 'full') {
-            var grandTotal = totalPrice - discount;
-            if (grandTotal < 0) grandTotal = 0;
-            if (discount > 0 && discount > totalPrice) {
-                showToast('⚠️ Discount', 'Discount cannot exceed total amount', 'warning');
+            if (grandTotal <= 0) {
+                showToast('⚠️ No Amount', 'Grand total is zero or less', 'warning');
                 return;
             }
             
@@ -1937,6 +1944,7 @@ include_once '../../components/cashier_sidebar.php';
             var confirmMsg = '💰 FULL PAYMENT CONFIRMATION\n' +
                              '═══════════════════════════════\n' +
                              'Selected Items Total: ' + currency + ' ' + totalPrice.toFixed(0) + '\n' +
+                             'Pharmacy Discount: ' + currency + ' ' + pharmacyDiscount.toFixed(0) + '\n' +
                              (discount > 0 ? 'Cashier Discount: ' + currency + ' ' + discount.toFixed(0) + '\n' : '') +
                              '───────────────────────────────\n' +
                              'Amount to Pay: ' + currency + ' ' + grandTotal.toFixed(0) + '\n\n' +
@@ -1976,7 +1984,7 @@ include_once '../../components/cashier_sidebar.php';
         .then(function(data) {
             if (data.success) {
                 showToast('✅ Success', data.message, 'success');
-                setTimeout(function() { window.location.reload(); }, 2500);
+                setTimeout(function() { window.location.reload(); }, 2000);
             } else {
                 showToast('❌ Error', data.message, 'error');
             }
@@ -2071,11 +2079,12 @@ include_once '../../components/cashier_sidebar.php';
         updateSelectedTotal();
     });
 
-    console.log('%c💰 Braick - Process Payments (Combined Discounts)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Braick - Process Payments (FIXED DISCOUNT)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c✅ Pharmacy Discount + Cashier Discount = Total Discount', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Shows pharmacy discount from discount_amount column', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Cashier discount added separately', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Pharmacy discount from discount_amount column', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Cashier discount from user input', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Grand Total = Total - Pharmacy - Cashier', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

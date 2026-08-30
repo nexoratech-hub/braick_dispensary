@@ -3,11 +3,7 @@
 // FILE: frontend/pages/doctor/consultation.php
 // COMPLETE CONSULTATION - WITH DIAGNOSIS AUTO-SAVE
 // BRAICK DISPENSARY
-// FIXED: Auto-complete only for 'waiting' status and ALL bills PAID
-// FIXED: Disease code shown in select
-// FIXED: Manual diagnosis has code field
-// FIXED: Save sets status to 'waiting'
-// FIXED: Auto-complete works when bills are paid
+// FIXED: Auto-complete only after SAVE and ALL bills are PAID
 // ================================================================
 
 // Start session
@@ -71,9 +67,9 @@ try {
 }
 
 // ================================================================
-// COMMON COMPLAINTS LIST (formerly Symptoms)
+// COMMON SYMPTOMS LIST
 // ================================================================
-$common_complaints = [
+$common_symptoms = [
     'Fever', 'Headache', 'Cough', 'Sore Throat', 'Runny Nose',
     'Shortness of Breath', 'Chest Pain', 'Abdominal Pain', 'Nausea',
     'Vomiting', 'Diarrhea', 'Constipation', 'Fatigue', 'Dizziness',
@@ -206,7 +202,6 @@ if ($visit_id > 0) {
 }
 
 $is_completed = ($visit['status'] === 'completed');
-$is_waiting = ($visit['status'] === 'waiting');
 
 // ================================================================
 // GET OR CREATE BILL
@@ -249,7 +244,6 @@ try {
 // UPDATE BILL TOTAL FUNCTION - FIXED
 // ================================================================
 function updateBillTotal($db, $bill_id) {
-    // Get total from bill_items (all items)
     $stmt = $db->prepare("
         SELECT SUM(total_price) as total 
         FROM bill_items 
@@ -258,7 +252,6 @@ function updateBillTotal($db, $bill_id) {
     $stmt->execute([$bill_id]);
     $total_amount = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
-    // Get paid total from bill_items (only paid items)
     $stmt = $db->prepare("
         SELECT SUM(total_price) as paid_total 
         FROM bill_items 
@@ -267,7 +260,6 @@ function updateBillTotal($db, $bill_id) {
     $stmt->execute([$bill_id]);
     $paid_total = (float)($stmt->fetch(PDO::FETCH_ASSOC)['paid_total'] ?? 0);
     
-    // Get payment total from payments table (for compatibility)
     $stmt = $db->prepare("
         SELECT SUM(amount) as payment_total 
         FROM payments 
@@ -276,7 +268,6 @@ function updateBillTotal($db, $bill_id) {
     $stmt->execute([$bill_id]);
     $payment_total = (float)($stmt->fetch(PDO::FETCH_ASSOC)['payment_total'] ?? 0);
     
-    // Use the larger of the two paid amounts (to handle both scenarios)
     $total_paid = max($paid_total, $payment_total);
     $balance = $total_amount - $total_paid;
     
@@ -324,17 +315,12 @@ function canAutoCompleteVisit($db, $visit_id, $bill_id) {
         return false;
     }
     
-    // IMPORTANT: Only auto-complete if status is 'waiting'
-    if ($visit['status'] !== 'waiting') {
-        return false;
-    }
-    
-    // Check if doctor has saved diagnosis
+    // Check if doctor has saved diagnosis - check if diagnosis field is not empty
     $stmt = $db->prepare("SELECT diagnosis FROM visits WHERE id = ?");
     $stmt->execute([$visit_id]);
     $visit_data = $stmt->fetch(PDO::FETCH_ASSOC);
     if (empty($visit_data['diagnosis'])) {
-        return false;
+        return false; // Doctor hasn't saved diagnosis
     }
     
     // Check if bill is fully paid (balance = 0)
@@ -342,7 +328,7 @@ function canAutoCompleteVisit($db, $visit_id, $bill_id) {
     $stmt->execute([$bill_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
     if (!$bill || $bill['balance'] > 0) {
-        return false;
+        return false; // Bill not fully paid
     }
     
     return true;
@@ -359,12 +345,12 @@ function autoCompleteVisit($db, $visit_id) {
                 is_completed = 1,
                 completed_at = NOW(),
                 updated_at = NOW()
-            WHERE id = ? AND status = 'waiting'
+            WHERE id = ? AND status != 'completed'
         ");
         $stmt->execute([$visit_id]);
         
         if ($stmt->rowCount() > 0) {
-            error_log("✅ AUTO-COMPLETE: Visit #$visit_id completed automatically (was waiting, bill paid)");
+            error_log("✅ AUTO-COMPLETE: Visit #$visit_id completed automatically");
             return true;
         }
         return false;
@@ -375,40 +361,10 @@ function autoCompleteVisit($db, $visit_id) {
 }
 
 // ================================================================
-// SAVE MANUAL DISEASE TO DATABASE
-// ================================================================
-function saveManualDisease($db, $disease_name, $disease_code, $branch_id) {
-    // Check if disease already exists
-    $stmt = $db->prepare("SELECT id FROM diseases WHERE disease_name = ? AND (branch_id IS NULL OR branch_id = ?)");
-    $stmt->execute([$disease_name, $branch_id]);
-    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if ($existing) {
-        return $existing['id'];
-    }
-    
-    // Generate disease code if not provided
-    if (empty($disease_code)) {
-        $disease_code = 'D-' . strtoupper(substr(preg_replace('/[^a-zA-Z]/', '', $disease_name), 0, 4)) . '-' . rand(100, 999);
-    }
-    
-    // Insert new disease
-    $stmt = $db->prepare("
-        INSERT INTO diseases (
-            disease_name, disease_code, category, description, treatment, 
-            is_active, branch_id, created_at
-        ) VALUES (?, ?, 'Manual Entry', NULL, NULL, 1, ?, NOW())
-    ");
-    $stmt->execute([$disease_name, $disease_code, $branch_id]);
-    
-    return $db->lastInsertId();
-}
-
-// ================================================================
 // GET DATA - ALL NECESSARY DATA
 // ================================================================
 
-// 1. Diseases - FIXED: Show disease code with name
+// 1. Diseases
 $diseases_list = [];
 try {
     $stmt = $db->prepare("
@@ -710,7 +666,6 @@ function getStatusBadgeClass($status) {
         'lab_test' => 'badge-warning',
         'in_progress' => 'badge-info',
         'prescribed' => 'badge-purple',
-        'waiting' => 'badge-warning',
         'completed' => 'badge-success',
         'cancelled' => 'badge-danger'
     ];
@@ -1919,9 +1874,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         }
         
         // SAVE CONSULTATION DATA FIRST
-        $complaint = trim($_POST['complaint'] ?? '');
+        $symptoms = trim($_POST['symptoms'] ?? '');
         $hpi = trim($_POST['hpi'] ?? '');
         $physical_exam = trim($_POST['physical_exam'] ?? '');
+        $complaint = trim($_POST['complaint'] ?? '');
         $notes = trim($_POST['notes'] ?? '');
         
         $stmt = $db->prepare("
@@ -1936,7 +1892,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             WHERE id = ? AND doctor_id = ?
         ");
         $stmt->execute([
-            $complaint,
+            $symptoms,
             $hpi,
             $physical_exam,
             $complaint,
@@ -2134,7 +2090,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $msg = "";
         if ($lab_tests_sent > 0) {
             $msg .= "✅ " . $lab_tests_sent . " lab request(s) sent to Laboratory!";
-            $msg .= "<br>📝 Consultation data (Complaint, HPI, Physical Exam) saved!";
+            $msg .= "<br>📝 Consultation data (Symptoms, HPI, Physical Exam, Complaint) saved!";
             if (!empty($equipment_deductions)) {
                 $msg .= "<br><br>📦 <strong>Equipment Stock Updated:</strong>";
                 foreach ($equipment_deductions as $deduct) {
@@ -2162,95 +2118,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         header('Location: consultation.php?visit_id=' . $visit_id);
         exit;
     }
-    
-    // ================================================================
-    // 2. SAVE CONSULTATION (Manual Save - Sets status to 'waiting')
-    // ================================================================
-    if (isset($_POST['save_consultation']) || ($_POST['action'] ?? '') === 'save_consultation_manual') {
-        // Get data
-        $diagnosis_id = isset($_POST['diagnosis_id']) ? (int)$_POST['diagnosis_id'] : 0;
-        $diagnosis_manual = trim($_POST['diagnosis_manual'] ?? '');
-        $disease_code_manual = trim($_POST['disease_code_manual'] ?? '');
-        $treatment = trim($_POST['treatment'] ?? '');
-        $complaint = trim($_POST['complaint'] ?? '');
-        $hpi = trim($_POST['hpi'] ?? '');
-        $physical_exam = trim($_POST['physical_exam'] ?? '');
-        $notes = trim($_POST['notes'] ?? '');
-        $manual_save = isset($_POST['manual_save']) ? (int)$_POST['manual_save'] : 1;
-        
-        // Determine diagnosis
-        $final_diagnosis = '';
-        $final_disease_id = null;
-        $final_disease_code = '';
-        
-        if ($diagnosis_id > 0) {
-            // Get disease info
-            $stmt = $db->prepare("SELECT disease_name, disease_code FROM diseases WHERE id = ?");
-            $stmt->execute([$diagnosis_id]);
-            $disease = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($disease) {
-                $final_diagnosis = $disease['disease_name'];
-                $final_disease_id = $diagnosis_id;
-                $final_disease_code = $disease['disease_code'] ?? '';
-            }
-        } elseif (!empty($diagnosis_manual)) {
-            // Manual diagnosis - save to diseases table
-            $final_diagnosis = $diagnosis_manual;
-            $final_disease_id = saveManualDisease($db, $diagnosis_manual, $disease_code_manual, $doctor_branch_id);
-            $final_disease_code = $disease_code_manual;
-        }
-        
-        if (empty($final_diagnosis)) {
-            $_SESSION['flash_message'] = "❌ Please select or enter a diagnosis.";
-            $_SESSION['flash_type'] = 'error';
-            header('Location: consultation.php?visit_id=' . $visit_id);
-            exit;
-        }
-        
-        try {
-            // Update visit - set status to 'waiting'
-            $stmt = $db->prepare("
-                UPDATE visits 
-                SET 
-                    diagnosis = ?,
-                    disease_id = ?,
-                    disease_code = ?,
-                    treatment = ?,
-                    symptoms = ?,
-                    hpi = ?,
-                    physical_exam = ?,
-                    complaint = ?,
-                    notes = ?,
-                    status = 'waiting',
-                    updated_at = NOW()
-                WHERE id = ? AND doctor_id = ?
-            ");
-            $stmt->execute([
-                $final_diagnosis,
-                $final_disease_id,
-                $final_disease_code,
-                $treatment,
-                $complaint,
-                $hpi,
-                $physical_exam,
-                $complaint,
-                $notes,
-                $visit_id,
-                $doctor_id
-            ]);
-            
-            $_SESSION['flash_message'] = "✅ Consultation saved successfully! Status changed to 'Waiting'.";
-            $_SESSION['flash_type'] = 'success';
-            
-        } catch (Exception $e) {
-            $_SESSION['flash_message'] = "❌ Error saving consultation: " . $e->getMessage();
-            $_SESSION['flash_type'] = 'error';
-            error_log("Save consultation error: " . $e->getMessage());
-        }
-        
-        header('Location: consultation.php?visit_id=' . $visit_id);
-        exit;
-    }
 }
 
 // Initialize lab cart
@@ -2267,7 +2134,6 @@ $lab_cart_count = count($lab_cart);
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2277,9 +2143,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <link rel="icon" href="/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
-        /* ================================================================ */
-        /* ALL STYLES - Same as original */
-        /* ================================================================ */
+        /* ================================================================
+           ALL STYLES - SAME AS ORIGINAL
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -2476,14 +2342,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             gap: 4px;
         }
         .separator { color: rgba(255,255,255,0.4) !important; }
-        .status-badge.waiting-badge { 
-            background: #D97706 !important; 
-            color: #ffffff !important; 
-            padding: 4px 16px; 
-            border-radius: 20px; 
-            font-size: 0.7rem; 
-            font-weight: 600; 
-        }
         
         .consultation-card {
             background: var(--bg-card);
@@ -2640,7 +2498,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .badge-success { background: var(--success); color: #ffffff !important; }
         .badge-danger { background: var(--danger); color: #ffffff !important; }
         .badge-purple { background: var(--purple); color: #ffffff !important; }
-        .badge-waiting { background: #D97706; color: #ffffff !important; }
         
         .lab-cart-items { max-height: 200px; overflow-y: auto; }
         .lab-cart-item {
@@ -2943,16 +2800,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             background: var(--gray-50);
             border-radius: var(--radius);
             border: 1px dashed var(--border-color);
-        }
-        
-        .disease-code-display {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            font-family: monospace;
-            background: var(--gray-100);
-            padding: 2px 10px;
-            border-radius: 4px;
-            display: inline-block;
         }
         
         .btn {
@@ -3318,16 +3165,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <h1 class="page-title">
                 <?php if ($is_completed): ?>
                     <i class="fas fa-check-circle"></i> Consultation Completed
-                <?php elseif ($is_waiting): ?>
-                    <i class="fas fa-hourglass-half"></i> Waiting - Awaiting Payment
                 <?php else: ?>
                     <i class="fas fa-stethoscope"></i> Consultation
                 <?php endif; ?>
                 <span class="page-badge"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span>
                 <?php if ($is_completed): ?>
                     <span class="view-mode-badge">✅ Completed</span>
-                <?php elseif ($is_waiting): ?>
-                    <span class="status-badge waiting-badge">⏳ Waiting</span>
                 <?php endif; ?>
                 <?php if ($sections_frozen && !$is_completed): ?>
                     <span class="frozen-badge" id="frozenBadgeHeader">🔒 Lab Pending</span>
@@ -3496,11 +3339,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
 
         <!-- ================================================================ -->
-        <!-- COMPLAINT & HISTORY (formerly Symptoms) -->
+        <!-- SYMPTOMS & HISTORY -->
         <!-- ================================================================ -->
         <div class="consultation-card mb-6">
             <h3 class="card-title">
-                <i class="fas fa-list-ul title-blue"></i> Complaint & History
+                <i class="fas fa-list-ul title-blue"></i> Symptoms & History
                 <?php if ($sections_frozen): ?>
                     <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
                 <?php elseif ($lab_results_available): ?>
@@ -3509,20 +3352,28 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </h3>
             
             <div class="form-group">
-                <label class="form-label">Complaint (Chief Complaint) <span class="required">*</span></label>
-                <select class="form-control" id="complaintSelect" onchange="addComplaintOnSelect()">
-                    <option value="">-- Select Common Complaint --</option>
-                    <?php foreach ($common_complaints as $complaint): ?>
-                        <option value="<?= htmlspecialchars($complaint) ?>"><?= htmlspecialchars($complaint) ?></option>
+                <label class="form-label">Symptoms <span class="required">*</span></label>
+                <select class="form-control" id="symptomsSelect" onchange="addSymptomOnSelect()">
+                    <option value="">-- Select Common Symptom --</option>
+                    <?php foreach ($common_symptoms as $symptom): ?>
+                        <option value="<?= htmlspecialchars($symptom) ?>"><?= htmlspecialchars($symptom) ?></option>
                     <?php endforeach; ?>
                 </select>
                 <div class="mt-2">
-                    <textarea name="complaint" class="form-control" rows="3" 
-                              placeholder="Complaints will appear here when you select from dropdown. Or type manually..."
-                              id="complaintTextarea"
+                    <textarea name="symptoms" class="form-control" rows="3" 
+                              placeholder="Symptoms will appear here when you select from dropdown. Or type manually..."
+                              id="symptomsTextarea"
                               <?= $sections_frozen ? 'disabled' : '' ?>
-                              oninput="updateComplaints()"><?= htmlspecialchars($visit['symptoms'] ?? '') ?></textarea>
+                              oninput="updateSymptoms()"><?= htmlspecialchars($visit['symptoms'] ?? '') ?></textarea>
                 </div>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Complaint <span class="text-xs text-gray-400">(Chief Complaint)</span></label>
+                <textarea name="complaint" class="form-control" rows="2" 
+                          placeholder="Enter chief complaint..."
+                          <?= $sections_frozen ? 'disabled' : '' ?>
+                          id="complaintTextarea"><?= htmlspecialchars($visit['complaint'] ?? '') ?></textarea>
             </div>
             
             <div class="form-group">
@@ -3711,7 +3562,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <div id="frozenSectionsContainer" class="<?= $sections_frozen ? 'frozen-overlay-active' : ($lab_results_available ? 'results-available' : '') ?>">
 
             <!-- ============================================================ -->
-            <!-- DIAGNOSIS - FIXED: Shows disease code with name -->
+            <!-- DIAGNOSIS -->
             <!-- ============================================================ -->
             <div class="consultation-card mb-6" id="diagnosisCard">
                 <h3 class="card-title">
@@ -3724,9 +3575,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <span id="diagnosisStatus" style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);">
                         <?php if (!empty($visit['diagnosis'])): ?>
                             ✅ Saved: <?= htmlspecialchars($visit['diagnosis']) ?>
-                            <?php if (!empty($visit['disease_code'])): ?>
-                                <span class="disease-code-display"><?= htmlspecialchars($visit['disease_code']) ?></span>
-                            <?php endif; ?>
                         <?php endif; ?>
                     </span>
                 </h3>
@@ -3745,9 +3593,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                     <?= ($disease['id'] == ($visit['disease_id'] ?? 0)) ? 'selected' : '' ?>>
                                 <?= htmlspecialchars($disease['disease_name']) ?>
                                 <?php if (!empty($disease['disease_code'])): ?>
-                                    <span class="disease-code-display" style="font-size:0.6rem;background:var(--primary-bg);color:var(--primary);padding:1px 8px;border-radius:4px;margin-left:4px;">
-                                        <?= htmlspecialchars($disease['disease_code']) ?>
-                                    </span>
+                                    (<?= htmlspecialchars($disease['disease_code']) ?>)
                                 <?php endif; ?>
                             </option>
                         <?php endforeach; ?>
@@ -3763,20 +3609,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                value="<?= htmlspecialchars($visit['diagnosis'] ?? '') ?>"
                                <?= $sections_frozen ? 'disabled' : '' ?>
                                id="diagnosisManualInput"
-                               oninput="autoSaveDiagnosis()">
+                               onchange="autoSaveDiagnosis()">
                     </div>
-                    <!-- FIXED: Manual disease code field - optional -->
                     <div class="form-group">
                         <label class="form-label">Disease Code <span class="text-xs text-gray-400">(Optional - Auto-generated if left blank)</span></label>
                         <input type="text" name="disease_code_manual" class="form-control" 
                                placeholder="e.g. D-ABC-001" 
                                value="<?= htmlspecialchars($visit['disease_code'] ?? '') ?>"
                                <?= $sections_frozen ? 'disabled' : '' ?>
-                               id="diseaseCodeManual"
-                               oninput="autoSaveDiagnosis()">
-                    </div>
-                    <div class="text-xs text-gray-400 mt-1">
-                        <i class="fas fa-info-circle"></i> If code is left blank, system will auto-generate one
+                               id="diseaseCodeManual">
                     </div>
                 </div>
                 
@@ -3785,8 +3626,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <textarea name="treatment" class="form-control" rows="3" 
                               placeholder="Describe treatment plan..."
                               <?= $sections_frozen ? 'disabled' : '' ?>
-                              id="treatmentTextarea"
-                              oninput="autoSaveDiagnosis()"><?= htmlspecialchars($visit['treatment'] ?? '') ?></textarea>
+                              id="treatmentTextarea"><?= htmlspecialchars($visit['treatment'] ?? '') ?></textarea>
                 </div>
                 
                 <div class="form-group">
@@ -3794,8 +3634,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <textarea name="notes" class="form-control" rows="2" 
                               placeholder="Additional notes..."
                               <?= $sections_frozen ? 'disabled' : '' ?>
-                              id="notesTextarea"
-                              oninput="autoSaveDiagnosis()"><?= htmlspecialchars($visit['notes'] ?? '') ?></textarea>
+                              id="notesTextarea"><?= htmlspecialchars($visit['notes'] ?? '') ?></textarea>
                 </div>
                 
                 <!-- Diagnosis Auto-Save Status -->
@@ -4133,8 +3972,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <!-- ================================================================ -->
         <div class="consultation-card">
             <div class="form-actions">
-                <button type="submit" name="save_consultation" class="btn btn-success" id="saveConsultationBtn" 
-                        <?= $sections_frozen ? 'disabled' : '' ?>>
+                <button type="button" name="save_consultation" class="btn btn-success" id="saveConsultationBtn" 
+                        <?= $sections_frozen ? 'disabled' : '' ?>
+                        onclick="saveConsultationWithAPI()">
                     <i class="fas fa-save"></i> Save Consultation
                 </button>
                 <?php if ($sections_frozen): ?>
@@ -4181,7 +4021,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
 <script>
 // ================================================================
-// JAVASCRIPT - CONSULTATION WITH AUTO-COMPLETE (FIXED)
+// JAVASCRIPT - CONSULTATION WITH AUTO-COMPLETE
 // ================================================================
 
 var AUTO_UPDATE_INTERVAL = 3000;
@@ -4191,13 +4031,12 @@ var fullUpdateInterval = null;
 var isUpdating = false;
 var visitId = <?= $visit_id ?>;
 var isCompleted = <?= $is_completed ? 'true' : 'false' ?>;
-var isWaiting = <?= $is_waiting ? 'true' : 'false' ?>;
 var doctorBranchId = <?= $doctor_branch_id ?>;
 var autoRefreshNeeded = <?= $auto_refresh_needed ? 'true' : 'false' ?>;
 
 var selectedProcedures = [];
 var selectedEquipment = [];
-var complaintsList = [];
+var symptomsList = [];
 var diagnosisSaving = false;
 
 // ================================================================
@@ -4250,7 +4089,7 @@ function initDarkMode() {
 }
 
 // ================================================================
-// COMPLAINT FUNCTIONS (formerly Symptoms)
+// SYMPTOMS FUNCTIONS
 // ================================================================
 function addInstruction(text) {
     var textarea = document.getElementById('medInstructions');
@@ -4273,40 +4112,40 @@ function toggleSection(id) {
     }
 }
 
-function initComplaints() {
-    var textarea = document.getElementById('complaintTextarea');
+function initSymptoms() {
+    var textarea = document.getElementById('symptomsTextarea');
     if (textarea && textarea.value) {
-        complaintsList = textarea.value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
-        updateComplaintsDisplay();
+        symptomsList = textarea.value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        updateSymptomsDisplay();
     }
 }
 
-function addComplaintOnSelect() {
-    var select = document.getElementById('complaintSelect');
-    var textarea = document.getElementById('complaintTextarea');
+function addSymptomOnSelect() {
+    var select = document.getElementById('symptomsSelect');
+    var textarea = document.getElementById('symptomsTextarea');
     var value = select.value;
     if (!value) { select.value = ''; return; }
-    if (value && !complaintsList.includes(value)) {
-        complaintsList.push(value);
-        updateComplaintsDisplay();
+    if (value && !symptomsList.includes(value)) {
+        symptomsList.push(value);
+        updateSymptomsDisplay();
         select.value = '';
     }
 }
 
-function updateComplaintsDisplay() {
-    var textarea = document.getElementById('complaintTextarea');
-    if (textarea) textarea.value = complaintsList.join(', ');
+function updateSymptomsDisplay() {
+    var textarea = document.getElementById('symptomsTextarea');
+    if (textarea) textarea.value = symptomsList.join(', ');
 }
 
-function updateComplaints() {
-    var textarea = document.getElementById('complaintTextarea');
+function updateSymptoms() {
+    var textarea = document.getElementById('symptomsTextarea');
     if (textarea) {
-        complaintsList = textarea.value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+        symptomsList = textarea.value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
     }
 }
 
 // ================================================================
-// AUTO-SAVE DIAGNOSIS - FIXED: Includes disease code
+// AUTO-SAVE DIAGNOSIS
 // ================================================================
 function autoSaveDiagnosis() {
     if (isCompleted || diagnosisSaving) return;
@@ -4316,8 +4155,6 @@ function autoSaveDiagnosis() {
     var manualInput = document.getElementById('diagnosisManualInput');
     var manualValue = manualInput ? manualInput.value.trim() : '';
     var manualBox = document.getElementById('manualDiagnosisBox');
-    var codeManual = document.getElementById('diseaseCodeManual');
-    var codeManualValue = codeManual ? codeManual.value.trim() : '';
     
     if (diagnosisId === '__manual__') {
         manualBox.style.display = 'block';
@@ -4341,10 +4178,11 @@ function autoSaveDiagnosis() {
         diagnosis_id: diagnosisId,
         diagnosis_manual: manualValue,
         treatment: document.getElementById('treatmentTextarea')?.value || '',
-        disease_code_manual: codeManualValue,
-        complaint: document.getElementById('complaintTextarea')?.value || '',
+        disease_code_manual: document.getElementById('diseaseCodeManual')?.value || '',
+        symptoms: document.getElementById('symptomsTextarea')?.value || '',
         hpi: document.getElementById('hpiTextarea')?.value || '',
         physical_exam: document.getElementById('physicalExamTextarea')?.value || '',
+        complaint: document.getElementById('complaintTextarea')?.value || '',
         notes: document.getElementById('notesTextarea')?.value || ''
     };
     
@@ -4368,17 +4206,14 @@ function autoSaveDiagnosis() {
             
             var statusEl = document.getElementById('diagnosisStatus');
             if (statusEl && result.data && result.data.diagnosis) {
-                var codeDisplay = result.data.disease_code ? ' <span class="disease-code-display">' + result.data.disease_code + '</span>' : '';
-                statusEl.innerHTML = '✅ Saved: ' + result.data.diagnosis + codeDisplay;
+                statusEl.innerHTML = '✅ Saved: ' + result.data.diagnosis;
                 statusEl.style.color = 'var(--success)';
             }
             
             console.log('✅ Diagnosis auto-saved:', result.data);
             
-            // Check if visit can be auto-completed (only if waiting)
-            if (isWaiting) {
-                checkAndAutoComplete();
-            }
+            // After diagnosis is saved, check if visit can be auto-completed
+            checkAndAutoComplete();
         } else {
             console.error('❌ Auto-save failed:', result.message);
         }
@@ -4396,6 +4231,7 @@ function autoSaveDiagnosis() {
 function checkAndAutoComplete() {
     if (isCompleted) return;
     
+    // Get current bill data to check if fully paid
     var formData = new FormData();
     formData.append('action', 'get_full_state');
     
@@ -4404,21 +4240,22 @@ function checkAndAutoComplete() {
     .then(data => {
         if (data.success && data.bill) {
             var bill = data.bill;
-            var statusBadge = document.getElementById('visitStatusBadge');
-            var currentStatus = statusBadge ? statusBadge.textContent.trim().toLowerCase() : '';
-            
-            if (currentStatus === 'waiting' && bill.status === 'paid' && bill.balance === 0) {
+            // Check if bill is fully paid AND visit has diagnosis
+            if (bill.status === 'paid' && bill.balance === 0) {
+                // Check if diagnosis is saved
                 var diagnosisEl = document.getElementById('diagnosisStatus');
                 var hasDiagnosis = diagnosisEl && diagnosisEl.textContent.includes('✅ Saved');
                 
+                // Also check if visit status is already completed
                 if (hasDiagnosis) {
-                    console.log('✅ Status: waiting | Bill paid | Diagnosis saved. Auto-completing...');
+                    console.log('✅ Bill fully paid and diagnosis saved. Attempting auto-complete...');
+                    // Call auto-complete API
                     autoCompleteVisit();
                 } else {
-                    console.log('⏳ Status: waiting | Bill paid but diagnosis not saved.');
+                    console.log('⏳ Bill fully paid but diagnosis not yet saved. Waiting for doctor to save.');
                 }
             } else {
-                console.log('⏳ Auto-complete not triggered. Status: ' + currentStatus + ' | Balance: ' + bill.balance);
+                console.log('⏳ Bill not fully paid. Current balance: ' + bill.balance);
             }
         }
     })
@@ -4450,6 +4287,107 @@ function autoCompleteVisit() {
     })
     .catch(function(err) {
         console.error('❌ Auto-complete error:', err);
+    });
+}
+
+// ================================================================
+// SAVE CONSULTATION WITH API
+// ================================================================
+function saveConsultationWithAPI() {
+    var select = document.getElementById('diagnosisSelect');
+    var diagnosisId = select ? select.value : '';
+    var manualInput = document.getElementById('diagnosisManualInput');
+    var manualValue = manualInput ? manualInput.value.trim() : '';
+    var treatmentTextarea = document.getElementById('treatmentTextarea');
+    var treatment = treatmentTextarea ? treatmentTextarea.value : '';
+    var codeManual = document.getElementById('diseaseCodeManual');
+    var codeManualValue = codeManual ? codeManual.value.trim() : '';
+    
+    var symptoms = document.getElementById('symptomsTextarea')?.value || '';
+    var hpi = document.getElementById('hpiTextarea')?.value || '';
+    var physicalExam = document.getElementById('physicalExamTextarea')?.value || '';
+    var complaint = document.getElementById('complaintTextarea')?.value || '';
+    var notes = document.getElementById('notesTextarea')?.value || '';
+    
+    if (!diagnosisId && !manualValue) {
+        showToast('⚠️ Warning', 'Please select or enter a diagnosis before saving.', 'warning');
+        return;
+    }
+    
+    var data = {
+        visit_id: visitId,
+        diagnosis_id: diagnosisId,
+        diagnosis_manual: manualValue,
+        treatment: treatment,
+        disease_code_manual: codeManualValue,
+        symptoms: symptoms,
+        hpi: hpi,
+        physical_exam: physicalExam,
+        complaint: complaint,
+        notes: notes
+    };
+    
+    console.log('🔍 Saving consultation with API:', data);
+    
+    var btn = document.getElementById('saveConsultationBtn');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+    }
+    
+    fetch('api_save_diagnosis.php', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+    })
+    .then(response => response.json())
+    .then(result => {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-save"></i> Save Consultation';
+        }
+        
+        if (result.success) {
+            var msg = '✅ Consultation saved successfully!';
+            if (result.data && result.data.diagnosis) {
+                msg += '<br>🩺 <strong>Diagnosis:</strong> ' + result.data.diagnosis;
+                if (result.data.disease_code) {
+                    msg += ' <span style="font-family:monospace;">(' + result.data.disease_code + ')</span>';
+                }
+            }
+            if (result.data && result.data.treatment) {
+                msg += '<br>💊 <strong>Treatment:</strong> ' + result.data.treatment;
+            }
+            
+            var statusEl = document.getElementById('diagnosisStatus');
+            if (statusEl && result.data && result.data.diagnosis) {
+                statusEl.innerHTML = '✅ Saved: ' + result.data.diagnosis;
+                statusEl.style.color = 'var(--success)';
+            }
+            
+            showToast('✅ Success', msg, 'success');
+            console.log('✅ Consultation saved:', result.data);
+            
+            // After saving, check if auto-complete can happen
+            setTimeout(function() {
+                checkAndAutoComplete();
+            }, 500);
+            
+            // Reload after 2 seconds if not auto-completed
+            setTimeout(function() {
+                window.location.reload();
+            }, 3000);
+        } else {
+            showToast('❌ Error', result.message || 'Failed to save consultation', 'error');
+        }
+    })
+    .catch(function(error) {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-save"></i> Save Consultation';
+        }
+        showToast('❌ Error', 'Network error: ' + error.message, 'error');
+        console.error('API Error:', error);
     });
 }
 
@@ -4504,15 +4442,13 @@ function updateBillTotals(billData) {
         }
     }
     
-    // If status is waiting, bill paid, and diagnosis saved -> auto-complete
-    var statusBadge = document.getElementById('visitStatusBadge');
-    var currentStatus = statusBadge ? statusBadge.textContent.trim().toLowerCase() : '';
-    if (currentStatus === 'waiting' && billData.status === 'paid' && billData.balance === 0) {
+    // If bill is fully paid AND diagnosis is saved, trigger auto-complete check
+    if (billData.status === 'paid' && billData.balance === 0) {
         var diagnosisEl = document.getElementById('diagnosisStatus');
         if (diagnosisEl && diagnosisEl.textContent.includes('✅ Saved')) {
-            console.log('✅ Waiting | Bill paid | Diagnosis saved. Auto-completing...');
+            console.log('✅ Bill fully paid and diagnosis saved. Checking auto-complete...');
             setTimeout(function() {
-                autoCompleteVisit();
+                checkAndAutoComplete();
             }, 1000);
         }
     }
@@ -4563,8 +4499,9 @@ function fetchFullState() {
     .then(data => {
         if (data.success) {
             updateFullUI(data);
+            // Check for auto-complete from response
             if (data.bill && data.bill.visit_completed) {
-                showToast('✅ Auto-Completed!', 'Consultation completed automatically! All bills are paid.', 'success');
+                showToast('✅ Auto-Completed!', 'Consultation completed automatically! All bills are paid and diagnosis is saved.', 'success');
                 setTimeout(function() { window.location.reload(); }, 2000);
             }
         }
@@ -5285,17 +5222,23 @@ function stopAutoUpdate() {
 }
 
 // ================================================================
+// AUTO-COMPLETE HANDLER - SERVER SIDE
+// ================================================================
+// Add this to the PHP POST handler for auto_complete_visit action
+// This is handled in the PHP section at the top of the file
+
+// ================================================================
 // DOM READY
 // ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     initDarkMode();
     if (!isCompleted) {
         setTimeout(startAutoUpdate, 1000);
-        initComplaints();
+        initSymptoms();
         var diagSelect = document.getElementById('diagnosisSelect');
         if (diagSelect) {
             diagSelect.addEventListener('change', function() {
-                autoSaveDiagnosis();
+                loadDiseaseDetails(this.value);
             });
         }
         
@@ -5305,12 +5248,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }, 500);
         
-        // Check for auto-complete on page load if status is waiting
-        if (isWaiting) {
-            setTimeout(function() {
-                checkAndAutoComplete();
-            }, 2000);
-        }
+        // Check for auto-complete on page load
+        setTimeout(function() {
+            checkAndAutoComplete();
+        }, 2000);
         
         if (autoRefreshNeeded) {
             showToast('✅ Lab Results Updated', 'New lab results are available! Sections are now unlocked.', 'success');
@@ -5320,17 +5261,13 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 500);
         }
         
-        console.log('👨‍⚕️ BRAICK DISPENSARY - CONSULTATION WITH AUTO-COMPLETE (FIXED)');
+        console.log('👨‍⚕️ BRAICK DISPENSARY - CONSULTATION WITH AUTO-COMPLETE');
         console.log('✅ Diagnosis auto-saves immediately when selected');
-        console.log('✅ Disease code shown with diagnosis name');
-        console.log('✅ Manual diagnosis has code field (optional)');
-        console.log('✅ Save Consultation button sets status to "waiting"');
         console.log('✅ Auto-complete triggers when:');
-        console.log('   1. Status is "waiting"');
-        console.log('   2. Doctor has saved diagnosis');
-        console.log('   3. All bills are fully PAID (balance = 0)');
-        console.log('✅ Manual diseases are saved to diseases table');
-        console.log('✅ Symptoms renamed to Complaint (Chief Complaint)');
+        console.log('   1. Doctor has saved diagnosis');
+        console.log('   2. All bills are fully PAID (balance = 0)');
+        console.log('✅ Works with all items: lab tests, medications, procedures, equipment');
+        console.log('✅ Consultation stays in waiting until both conditions are met');
     }
 });
 

@@ -5,6 +5,7 @@
 // FIXED: Uses bills table (not patient_bills)
 // WITH PDF GENERATION - Official Stamp & Admin Numbers
 // FIXED: Single table for bill items (removed separate payments table)
+// ADDED: Discount card showing all discounts from bills table
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -143,7 +144,20 @@ try {
         $subtotal += (float)$item['total_price'];
     }
     
-    $discount_amount = (float)($bill['discount_amount'] ?? 0);
+    // ================================================================
+    // GET DISCOUNTS FROM BILLS TABLE - FIXED
+    // ================================================================
+    $discount_amount = (float)($bill['discount_amount'] ?? 0);        // Prescription discount
+    $pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0);    // Pharmacy discount
+    $cashier_discount = (float)($bill['cashier_discount'] ?? 0);      // Cashier discount
+    $total_discount = (float)($bill['total_discount'] ?? 0);          // Total discount (sum of all)
+    $discount_percent = (float)($bill['discount_percent'] ?? 0);
+    
+    // If total_discount is not set, calculate it
+    if ($total_discount == 0 && ($discount_amount > 0 || $pharmacy_discount > 0 || $cashier_discount > 0)) {
+        $total_discount = $discount_amount + $pharmacy_discount + $cashier_discount;
+    }
+    
     $total_amount = (float)$bill['total_amount'];
     $paid_amount = (float)$bill['paid_amount'];
     $balance = (float)$bill['balance'];
@@ -166,6 +180,10 @@ try {
     $total_items = 0;
     $subtotal = 0;
     $discount_amount = 0;
+    $pharmacy_discount = 0;
+    $cashier_discount = 0;
+    $total_discount = 0;
+    $discount_percent = 0;
     $total_amount = 0;
     $paid_amount = 0;
     $balance = 0;
@@ -401,6 +419,97 @@ include_once '../../components/cashier_sidebar.php';
         .page-header .btn-outline-light:hover {
             background: rgba(255,255,255,0.2);
             transform: translateY(-1px);
+        }
+        
+        /* ================================================================
+           DISCOUNT CARD
+           ================================================================ */
+        .discount-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 16px 22px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            margin-bottom: 18px;
+        }
+        
+        .discount-card:hover {
+            border-color: var(--warning);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .discount-card .discount-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .discount-card .discount-title i {
+            color: var(--warning);
+        }
+        
+        .discount-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 8px 16px;
+            margin-top: 8px;
+        }
+        
+        .discount-grid .discount-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 6px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        
+        .discount-grid .discount-item .discount-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .discount-grid .discount-item .discount-value {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--warning);
+        }
+        
+        .discount-grid .discount-item .discount-value.green {
+            color: var(--success);
+        }
+        
+        .discount-grid .discount-item .discount-value.red {
+            color: var(--danger);
+        }
+        
+        .discount-grid .discount-item.total-discount {
+            border-bottom: none;
+            background: var(--warning-bg);
+            padding: 6px 10px;
+            border-radius: var(--radius);
+            margin-top: 4px;
+        }
+        
+        .discount-grid .discount-item.total-discount .discount-label {
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+        
+        .discount-grid .discount-item.total-discount .discount-value {
+            font-size: 1rem;
+            font-weight: 700;
+            color: var(--danger);
+        }
+        
+        .no-discount {
+            color: var(--text-secondary);
+            font-size: 0.8rem;
+            padding: 6px 0;
+            text-align: center;
         }
         
         /* ================================================================
@@ -1189,6 +1298,9 @@ include_once '../../components/cashier_sidebar.php';
             .summary-section { grid-template-columns: repeat(3, 1fr); }
             .data-table { font-size: 0.7rem; }
             .data-table thead th, .data-table td { padding: 6px 10px; }
+            .discount-grid {
+                grid-template-columns: repeat(2, 1fr);
+            }
         }
         
         @media (max-width: 480px) {
@@ -1203,6 +1315,9 @@ include_once '../../components/cashier_sidebar.php';
             }
             .summary-section { grid-template-columns: 1fr 1fr; }
             .patient-info-card .patient-details { flex-direction: column; gap: 4px; }
+            .discount-grid {
+                grid-template-columns: 1fr;
+            }
         }
     </style>
 </head>
@@ -1271,8 +1386,80 @@ include_once '../../components/cashier_sidebar.php';
 
     <?php if ($bill): ?>
         
+    <!-- ================================================================ -->
+    <!-- DISCOUNT CARD - NEW -->
+    <!-- ================================================================ -->
+    <div class="discount-card animate-fade-in-up">
+        <div class="discount-title">
+            <i class="fas fa-tags"></i>
+            Discount Breakdown
+            <?php if ($total_discount > 0): ?>
+                <span style="font-size:0.6rem;background:var(--danger-bg);color:var(--danger);padding:2px 10px;border-radius:12px;font-weight:600;">
+                    Total: <?= $currency ?> <?= number_format($total_discount, 0) ?>
+                </span>
+            <?php else: ?>
+                <span style="font-size:0.6rem;background:var(--success-bg);color:var(--success);padding:2px 10px;border-radius:12px;font-weight:600;">
+                    No Discounts Applied
+                </span>
+            <?php endif; ?>
+        </div>
+        
+        <?php if ($total_discount > 0 || $discount_percent > 0): ?>
+            <div class="discount-grid">
+                <?php if ($discount_percent > 0): ?>
+                <div class="discount-item">
+                    <span class="discount-label"><i class="fas fa-percent"></i> Discount Percent</span>
+                    <span class="discount-value"><?= number_format($discount_percent, 0) ?>%</span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($discount_amount > 0): ?>
+                <div class="discount-item">
+                    <span class="discount-label"><i class="fas fa-prescription"></i> Prescription Discount</span>
+                    <span class="discount-value"><?= $currency ?> <?= number_format($discount_amount, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($pharmacy_discount > 0): ?>
+                <div class="discount-item">
+                    <span class="discount-label"><i class="fas fa-pharmacy"></i> Pharmacy Discount</span>
+                    <span class="discount-value"><?= $currency ?> <?= number_format($pharmacy_discount, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <?php if ($cashier_discount > 0): ?>
+                <div class="discount-item">
+                    <span class="discount-label"><i class="fas fa-cash-register"></i> Cashier Discount</span>
+                    <span class="discount-value"><?= $currency ?> <?= number_format($cashier_discount, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                
+                <div class="discount-item total-discount" style="grid-column:1 / -1;">
+                    <span class="discount-label"><i class="fas fa-calculator"></i> <strong>Total Discount</strong></span>
+                    <span class="discount-value" style="color:var(--danger);">
+                        -<?= $currency ?> <?= number_format($total_discount, 0) ?>
+                    </span>
+                </div>
+            </div>
+        <?php else: ?>
+            <div class="no-discount">
+                <i class="fas fa-check-circle" style="color:var(--success);"></i>
+                No discounts have been applied to this bill.
+            </div>
+        <?php endif; ?>
+        
+        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border-color);font-size:0.7rem;color:var(--text-secondary);display:flex;flex-wrap:wrap;gap:12px;align-items:center;">
+            <span><i class="fas fa-info-circle"></i> Discounts are applied from: Prescription, Pharmacy, and Cashier</span>
+            <?php if ($discount_percent > 0): ?>
+                <span style="background:var(--warning-bg);padding:1px 10px;border-radius:10px;color:var(--warning);font-weight:500;">
+                    <?= $discount_percent ?>% discount applied
+                </span>
+            <?php endif; ?>
+        </div>
+    </div>
+        
     <!-- BILL SUMMARY -->
-    <div class="bill-summary-card animate-fade-in-up">
+    <div class="bill-summary-card animate-fade-in-up" style="animation-delay:0.05s;">
         <div class="flex flex-wrap justify-between items-center gap-3">
             <div>
                 <div class="bill-number-large">#<?= htmlspecialchars($bill['bill_number']) ?></div>
@@ -1329,7 +1516,7 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- PATIENT INFO -->
-    <div class="patient-info-card animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="patient-info-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="flex items-center gap-4 flex-wrap">
             <div class="patient-avatar">
                 <?= strtoupper(substr($bill['patient_name'] ?? 'U', 0, 1)) ?>
@@ -1357,10 +1544,10 @@ include_once '../../components/cashier_sidebar.php';
             <p class="number green"><?= $currency ?> <?= number_format($subtotal, 0) ?></p>
             <p class="label">💰 Subtotal</p>
         </div>
-        <?php if ($discount_amount > 0): ?>
-        <div class="summary-box">
-            <p class="number orange">-<?= $currency ?> <?= number_format($discount_amount, 0) ?></p>
-            <p class="label">🏷️ Discount</p>
+        <?php if ($total_discount > 0): ?>
+        <div class="summary-box" style="border-color:var(--danger);">
+            <p class="number red">-<?= $currency ?> <?= number_format($total_discount, 0) ?></p>
+            <p class="label">🏷️ Total Discount</p>
         </div>
         <?php endif; ?>
         <div class="summary-box">
@@ -1378,7 +1565,7 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- BILL ITEMS TABLE - SINGLE TABLE -->
-    <div class="table-wrapper animate-fade-in-up" style="animation-delay:0.1s;">
+    <div class="table-wrapper animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="table-header">
             <div class="table-title">
                 <i class="fas fa-list-ul"></i>
@@ -1425,7 +1612,7 @@ include_once '../../components/cashier_sidebar.php';
                             </tr>
                         <?php endforeach; ?>
                         <tr style="background:var(--table-stripe);font-weight:700;">
-                            <td colspan="5" style="text-align:right;font-size:0.85rem;">TOTAL</td>
+                            <td colspan="5" style="text-align:right;font-size:0.85rem;">SUBTOTAL</td>
                             <td style="text-align:right;font-size:0.85rem;color:var(--success);">
                                 <?= $currency ?> <?= number_format($subtotal, 0) ?>
                             </td>
@@ -1442,10 +1629,15 @@ include_once '../../components/cashier_sidebar.php';
             </table>
         </div>
         
-        <?php if ($discount_amount > 0): ?>
+        <?php if ($total_discount > 0): ?>
         <div style="padding:8px 18px;border-top:2px solid var(--border-color);display:flex;justify-content:flex-end;gap:18px;flex-wrap:wrap;background:var(--gray-50);">
             <span style="font-size:0.8rem;color:var(--text-secondary);">
-                Discount: <strong style="color:var(--warning);">-<?= $currency ?> <?= number_format($discount_amount, 0) ?></strong>
+                Total Discount: <strong style="color:var(--danger);">-<?= $currency ?> <?= number_format($total_discount, 0) ?></strong>
+                <?php if ($discount_percent > 0): ?>
+                    <span style="background:var(--warning-bg);padding:1px 8px;border-radius:10px;color:var(--warning);font-size:0.65rem;margin-left:4px;">
+                        <?= $discount_percent ?>%
+                    </span>
+                <?php endif; ?>
             </span>
             <span style="font-size:0.8rem;font-weight:700;color:var(--text-primary);">
                 Grand Total: <strong style="color:var(--success);"><?= $currency ?> <?= number_format($total_amount, 0) ?></strong>
@@ -1668,7 +1860,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // PDF GENERATION - SINGLE TABLE
+    // PDF GENERATION - WITH DISCOUNTS
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -1690,7 +1882,11 @@ include_once '../../components/cashier_sidebar.php';
         var branchName = '<?= htmlspecialchars($bill['branch_name'] ?? $user_branch_name) ?>';
         var createdAt = '<?= date('F d, Y h:i A', strtotime($bill['created_at'] ?? 'now')) ?>';
         var subtotal = <?= $subtotal ?>;
-        var discount = <?= $discount_amount ?>;
+        var discountAmount = <?= $discount_amount ?>;
+        var pharmacyDiscount = <?= $pharmacy_discount ?>;
+        var cashierDiscount = <?= $cashier_discount ?>;
+        var totalDiscount = <?= $total_discount ?>;
+        var discountPercent = <?= $discount_percent ?>;
         var total = <?= $total_amount ?>;
         var paid = <?= $paid_amount ?>;
         var balance = <?= $balance ?>;
@@ -1712,6 +1908,30 @@ include_once '../../components/cashier_sidebar.php';
             `;
             counter++;
         <?php endforeach; ?>
+        
+        // Discount rows
+        var discountRows = '';
+        if (discountAmount > 0 || pharmacyDiscount > 0 || cashierDiscount > 0) {
+            discountRows = `
+                <tr style="background:#FEF3C7;">
+                    <td colspan="5" style="text-align:right;font-size:13px;padding:4px 10px;font-weight:600;color:#D97706;">TOTAL DISCOUNT</td>
+                    <td style="text-align:right;font-size:13px;font-weight:700;color:#DC2626;padding:4px 10px;">-${currency} ${totalDiscount.toLocaleString()}</td>
+                    <td></td>
+                </tr>
+            `;
+            if (discountPercent > 0) {
+                discountRows += `
+                    <tr style="background:#FEF3C7;">
+                        <td colspan="7" style="text-align:right;font-size:12px;color:#D97706;padding:2px 10px;font-style:italic;">
+                            Discount Percent: ${discountPercent}% applied
+                            ${discountAmount > 0 ? ' | Prescription: ${currency} ${discountAmount.toLocaleString()}' : ''}
+                            ${pharmacyDiscount > 0 ? ' | Pharmacy: ${currency} ${pharmacyDiscount.toLocaleString()}' : ''}
+                            ${cashierDiscount > 0 ? ' | Cashier: ${currency} ${cashierDiscount.toLocaleString()}' : ''}
+                        </td>
+                    </tr>
+                `;
+            }
+        }
         
         var html = `
             <!-- PDF HEADER -->
@@ -1758,16 +1978,24 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- FINANCIAL SUMMARY -->
+            <!-- FINANCIAL SUMMARY WITH DISCOUNTS -->
             <div style="margin-bottom:8px;">
                 <div class="pdf-section-title"><i class="fas fa-money-bill-wave"></i> Financial Summary</div>
-                <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;margin:4px 0;">
+                <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin:4px 0;">
                     <div style="background:#E8F0FE;padding:4px 6px;border-radius:6px;text-align:center;border:1px solid #6EA8FE;"><div style="font-size:16px;font-weight:700;color:#0B5ED7;">${currency} ${subtotal.toLocaleString()}</div><div style="font-size:9px;color:#64748B;text-transform:uppercase;">💰 Subtotal</div></div>
-                    <div style="background:#FEF3C7;padding:4px 6px;border-radius:6px;text-align:center;border:1px solid #D97706;"><div style="font-size:16px;font-weight:700;color:#D97706;">-${currency} ${discount.toLocaleString()}</div><div style="font-size:9px;color:#64748B;text-transform:uppercase;">🏷️ Discount</div></div>
+                    <div style="background:#FEF3C7;padding:4px 6px;border-radius:6px;text-align:center;border:1px solid #D97706;"><div style="font-size:16px;font-weight:700;color:#D97706;">-${currency} ${totalDiscount.toLocaleString()}</div><div style="font-size:9px;color:#64748B;text-transform:uppercase;">🏷️ Discount</div></div>
                     <div style="background:#D1FAE5;padding:4px 6px;border-radius:6px;text-align:center;border:1px solid #059669;"><div style="font-size:16px;font-weight:700;color:#059669;">${currency} ${total.toLocaleString()}</div><div style="font-size:9px;color:#64748B;text-transform:uppercase;">📋 Total</div></div>
                     <div style="background:#D1FAE5;padding:4px 6px;border-radius:6px;text-align:center;border:1px solid #059669;"><div style="font-size:16px;font-weight:700;color:#059669;">${currency} ${paid.toLocaleString()}</div><div style="font-size:9px;color:#64748B;text-transform:uppercase;">✅ Paid</div></div>
                     <div style="background:${balance > 0 ? '#FEE2E2' : '#D1FAE5'};padding:4px 6px;border-radius:6px;text-align:center;border:1px solid ${balance > 0 ? '#DC2626' : '#059669'};"><div style="font-size:16px;font-weight:700;color:${balance > 0 ? '#DC2626' : '#059669'};">${currency} ${balance.toLocaleString()}</div><div style="font-size:9px;color:#64748B;text-transform:uppercase;">⚖️ Balance</div></div>
+                    <div style="background:${discountPercent > 0 ? '#FEF3C7' : '#F8FAFC'};padding:4px 6px;border-radius:6px;text-align:center;border:1px solid ${discountPercent > 0 ? '#D97706' : '#E2E8F0'};"><div style="font-size:16px;font-weight:700;color:${discountPercent > 0 ? '#D97706' : '#94A3B8'};">${discountPercent > 0 ? discountPercent + '%' : '0%'}</div><div style="font-size:9px;color:#64748B;text-transform:uppercase;">📊 Discount %</div></div>
                 </div>
+                ${(discountAmount > 0 || pharmacyDiscount > 0 || cashierDiscount > 0) ? `
+                <div style="display:flex;flex-wrap:wrap;gap:8px;padding:4px 8px;background:#F8FAFC;border-radius:4px;border:1px solid #E2E8F0;margin-top:2px;font-size:11px;color:#64748B;">
+                    ${discountAmount > 0 ? `<span>💊 Prescription: <strong style="color:#D97706;">-${currency} ${discountAmount.toLocaleString()}</strong></span>` : ''}
+                    ${pharmacyDiscount > 0 ? `<span>🏪 Pharmacy: <strong style="color:#D97706;">-${currency} ${pharmacyDiscount.toLocaleString()}</strong></span>` : ''}
+                    ${cashierDiscount > 0 ? `<span>🏦 Cashier: <strong style="color:#D97706;">-${currency} ${cashierDiscount.toLocaleString()}</strong></span>` : ''}
+                </div>
+                ` : ''}
             </div>
             
             <!-- BILL ITEMS - SINGLE TABLE -->
@@ -1780,20 +2008,20 @@ include_once '../../components/cashier_sidebar.php';
                         </thead>
                         <tbody>
                             ${itemsHtml}
-                            <tr style="background:#D1FAE5;font-weight:700;">
-                                <td colspan="5" style="text-align:right;font-size:14px;padding:5px 10px;">TOTAL</td>
-                                <td style="text-align:right;font-size:14px;color:#059669;padding:5px 10px;">${currency} ${subtotal.toLocaleString()}</td>
+                            <tr style="background:#E8F0FE;font-weight:700;">
+                                <td colspan="5" style="text-align:right;font-size:14px;padding:5px 10px;">SUBTOTAL</td>
+                                <td style="text-align:right;font-size:14px;color:#0B5ED7;padding:5px 10px;">${currency} ${subtotal.toLocaleString()}</td>
+                                <td></td>
+                            </tr>
+                            ${discountRows}
+                            <tr style="background:#D1FAE5;font-weight:700;border-top:2px solid #059669;">
+                                <td colspan="5" style="text-align:right;font-size:15px;padding:6px 10px;color:#059669;">GRAND TOTAL</td>
+                                <td style="text-align:right;font-size:15px;color:#059669;padding:6px 10px;">${currency} ${total.toLocaleString()}</td>
                                 <td></td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
-                ${discount > 0 ? `
-                <div style="display:flex;justify-content:flex-end;gap:18px;flex-wrap:wrap;padding:4px 10px;background:#F8FAFC;border-radius:0 0 4px 4px;border:1px solid #E2E8F0;border-top:none;">
-                    <span style="font-size:14px;color:#64748B;">Discount: <strong style="color:#D97706;">-${currency} ${discount.toLocaleString()}</strong></span>
-                    <span style="font-size:14px;font-weight:700;">Grand Total: <strong style="color:#059669;">${currency} ${total.toLocaleString()}</strong></span>
-                </div>
-                ` : ''}
             </div>
             
             <!-- PDF FOOTER WITH OFFICIAL STAMP -->
@@ -1802,6 +2030,10 @@ include_once '../../components/cashier_sidebar.php';
                     <div class="footer-left">
                         <span>Generated by: <?= htmlspecialchars($user_full_name) ?></span>
                         <span style="margin-left:14px;">Date: <?= date('F d, Y') ?></span>
+                        <div style="margin-top:4px;font-size:13px;color:#059669;">
+                            <strong>Total Discount: ${currency} ${totalDiscount.toLocaleString()}</strong>
+                            ${discountPercent > 0 ? `(${discountPercent}%)` : ''}
+                        </div>
                     </div>
                     <div class="stamp-box">
                         <div class="stamp-title">Official Stamp</div>
@@ -1870,12 +2102,13 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c🟢 Braick - View Bill (Single Table)', 'font-size:16px; font-weight:bold; color:#059669;');
+    console.log('%c🟢 Braick - View Bill (With Discount Card)', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c✅ Single table for bill items (no separate payments table)', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Single table for bill items', 'font-size:12px; color:#34D399;');
     console.log('%c📋 Bill #: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:12px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:12px; color:#64748B;');
     console.log('%c💰 Total: <?= $currency ?> <?= number_format($total_amount, 0) ?> | Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?>', 'font-size:12px; color:#059669;');
+    console.log('%c🏷️ Total Discount: <?= $currency ?> <?= number_format($total_discount, 0) ?>', 'font-size:12px; color:#D97706;');
     console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:12px; color:#D97706;');
 </script>
 

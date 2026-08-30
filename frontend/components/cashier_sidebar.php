@@ -4,6 +4,7 @@
 // CASHIER - SHARED SIDEBAR (USING API FOR REAL-TIME UPDATES)
 // GREEN THEME - WITH API INTEGRATION
 // BRAICK DISPENSARY
+// FIXED: Real-time auto-update when data changes
 // ================================================================
 
 // ================================================================
@@ -100,16 +101,17 @@ if ($db !== null && isset($_SESSION['user_id'])) {
 }
 
 // ================================================================
-// GENERATE INITIAL HASH
+// GENERATE INITIAL HASH - FIXED: More comprehensive
 // ================================================================
-$initial_hash = md5(json_encode([
+$hash_data = [
     'pending_bills' => $pending_bills,
     'partial_payments' => $partial_payments,
-    'total_paid' => $total_paid,
+    'paid_bills' => $total_paid,
     'cancelled_bills' => $cancelled_bills,
-    'total_expenses' => $total_expenses,
+    'total_expenses' => round($total_expenses, 2),
     'patients_waiting' => $patients_waiting
-]));
+];
+$initial_hash = md5(json_encode($hash_data));
 
 // ================================================================
 // DETECT CURRENT PAGE
@@ -795,7 +797,7 @@ $initial_data = [
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH API INTEGRATION -->
+<!-- JAVASCRIPT - WITH API INTEGRATION - FIXED -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
@@ -803,11 +805,13 @@ $initial_data = [
     // ================================================================
     var SIDEBAR_CONFIG = {
         API_URL: '/dispensary_system/backend/api/get_cashier_sidebar_stats.php',
-        CHECK_INTERVAL: 2000,
-        FORCE_INTERVAL: 10000,
+        CHECK_INTERVAL: 2000,      // Check every 2 seconds
+        FORCE_INTERVAL: 5000,      // Force refresh every 5 seconds
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
+    
+    console.log('🔧 Cashier Sidebar Config:', SIDEBAR_CONFIG);
     
     // ================================================================
     // STATE
@@ -819,7 +823,8 @@ $initial_data = [
         updateInterval: null,
         forceInterval: null,
         lastUpdate: null,
-        changeCount: 0
+        changeCount: 0,
+        lastData: null
     };
     
     // ================================================================
@@ -912,7 +917,7 @@ $initial_data = [
     })();
 
     // ================================================================
-    // UPDATE SIDEBAR BADGES
+    // UPDATE SIDEBAR BADGES - FIXED: Better update logic
     // ================================================================
     function updateSidebarBadges(data) {
         if (!data) return false;
@@ -923,14 +928,15 @@ $initial_data = [
         var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge && data.pending_bills !== undefined) {
             var oldVal = pendingBadge.textContent;
-            var newVal = data.pending_bills;
-            if (oldVal !== String(newVal)) {
+            var newVal = String(data.pending_bills);
+            if (oldVal !== newVal) {
                 hasChanges = true;
                 pendingBadge.textContent = newVal;
                 pendingBadge.className = parseInt(newVal) > 0 ? 'badge orange' : 'badge';
                 pendingBadge.classList.remove('badge-update');
                 void pendingBadge.offsetWidth;
                 pendingBadge.classList.add('badge-update');
+                console.log('🔄 Pending Bills: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -938,14 +944,15 @@ $initial_data = [
         var paidBadge = document.getElementById('sidebarPaidBadge');
         if (paidBadge && data.paid_bills !== undefined) {
             var oldVal = paidBadge.textContent;
-            var newVal = data.paid_bills;
-            if (oldVal !== String(newVal)) {
+            var newVal = String(data.paid_bills);
+            if (oldVal !== newVal) {
                 hasChanges = true;
                 paidBadge.textContent = newVal;
                 paidBadge.className = parseInt(newVal) > 0 ? 'badge green' : 'badge';
                 paidBadge.classList.remove('badge-update');
                 void paidBadge.offsetWidth;
                 paidBadge.classList.add('badge-update');
+                console.log('🔄 Paid Bills: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -953,14 +960,15 @@ $initial_data = [
         var partialBadge = document.getElementById('sidebarPartialBadge');
         if (partialBadge && data.partial_payments !== undefined) {
             var oldVal = partialBadge.textContent;
-            var newVal = data.partial_payments;
-            if (oldVal !== String(newVal)) {
+            var newVal = String(data.partial_payments);
+            if (oldVal !== newVal) {
                 hasChanges = true;
                 partialBadge.textContent = newVal;
                 partialBadge.className = parseInt(newVal) > 0 ? 'badge blue' : 'badge';
                 partialBadge.classList.remove('badge-update');
                 void partialBadge.offsetWidth;
                 partialBadge.classList.add('badge-update');
+                console.log('🔄 Partial Payments: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -968,29 +976,32 @@ $initial_data = [
         var cancelledBadge = document.getElementById('sidebarCancelledBadge');
         if (cancelledBadge && data.cancelled_bills !== undefined) {
             var oldVal = cancelledBadge.textContent;
-            var newVal = data.cancelled_bills;
-            if (oldVal !== String(newVal)) {
+            var newVal = String(data.cancelled_bills);
+            if (oldVal !== newVal) {
                 hasChanges = true;
                 cancelledBadge.textContent = newVal;
                 cancelledBadge.className = parseInt(newVal) > 0 ? 'badge red' : 'badge';
                 cancelledBadge.classList.remove('badge-update');
                 void cancelledBadge.offsetWidth;
                 cancelledBadge.classList.add('badge-update');
+                console.log('🔄 Cancelled Bills: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 5. Expenses
+        // 5. Expenses - FIXED: Format with TSh
         var expensesBadge = document.getElementById('sidebarExpensesBadge');
         if (expensesBadge && data.total_expenses !== undefined) {
             var oldVal = expensesBadge.textContent;
-            var newVal = data.total_expenses > 0 ? 'TSh ' + Number(data.total_expenses).toLocaleString() : '0';
-            if (oldVal !== String(newVal)) {
+            var numericVal = Number(data.total_expenses);
+            var newVal = numericVal > 0 ? 'TSh ' + numericVal.toLocaleString() : '0';
+            if (oldVal !== newVal) {
                 hasChanges = true;
                 expensesBadge.textContent = newVal;
-                expensesBadge.className = data.total_expenses > 0 ? 'badge yellow' : 'badge';
+                expensesBadge.className = numericVal > 0 ? 'badge yellow' : 'badge';
                 expensesBadge.classList.remove('badge-update');
                 void expensesBadge.offsetWidth;
                 expensesBadge.classList.add('badge-update');
+                console.log('🔄 Expenses: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -1019,11 +1030,14 @@ $initial_data = [
             console.log('📊 Sidebar updated: ' + sidebarState.changeCount + ' changes detected');
         }
         
+        // Store last data
+        sidebarState.lastData = data;
+        
         return hasChanges;
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA FROM API
+    // FETCH SIDEBAR DATA FROM API - FIXED: Always check for changes
     // ================================================================
     function fetchSidebarData(forceUpdate) {
         if (sidebarState.isUpdating && !forceUpdate) return;
@@ -1037,6 +1051,8 @@ $initial_data = [
         if (forceUpdate) {
             formData.append('force_update', '1');
         }
+        
+        console.log('📡 Fetching sidebar data... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
         
         fetch(SIDEBAR_CONFIG.API_URL, {
             method: 'POST',
@@ -1053,11 +1069,18 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
+                console.log('📥 API Response: has_changed=' + data.has_changed + ', hash=' + data.hash);
+                
                 if (data.has_changed && data.data) {
-                    updateSidebarBadges(data.data);
-                    sidebarState.dataHash = data.hash;
+                    // Data has changed - update badges
+                    var hasUpdates = updateSidebarBadges(data.data);
+                    if (hasUpdates) {
+                        sidebarState.dataHash = data.hash;
+                        console.log('✅ Sidebar updated with new data');
+                    }
                     sidebarState.hasInitialData = true;
                     
+                    // Dispatch event for other components
                     var event = new CustomEvent('sidebarDataUpdated', {
                         detail: {
                             data: data.data,
@@ -1068,6 +1091,7 @@ $initial_data = [
                     document.dispatchEvent(event);
                     
                 } else if (data.has_changed === false) {
+                    // No changes - just update timestamp
                     var timeEl = document.getElementById('sidebarUpdateTime');
                     if (timeEl) {
                         var now = new Date();
@@ -1085,18 +1109,19 @@ $initial_data = [
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
+                console.warn('⚠️ API Error:', data.message);
             }
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
             if (forceUpdate) {
-                console.warn('Sidebar API error:', error.message);
+                console.warn('❌ Sidebar API error:', error.message);
             }
         });
     }
 
     // ================================================================
-    // START AUTO-UPDATE
+    // START AUTO-UPDATE - FIXED: More aggressive checking
     // ================================================================
     function startSidebarAutoUpdate() {
         if (sidebarState.updateInterval) {
@@ -1106,18 +1131,23 @@ $initial_data = [
             clearInterval(sidebarState.forceInterval);
         }
         
+        // Initial fetch immediately
         setTimeout(function() {
+            console.log('🔄 Initial sidebar data fetch...');
             fetchSidebarData(true);
-        }, 500);
+        }, 300);
         
+        // Check every 2 seconds for changes
         sidebarState.updateInterval = setInterval(function() {
             if (!sidebarState.isUpdating) {
                 fetchSidebarData(false);
             }
         }, SIDEBAR_CONFIG.CHECK_INTERVAL);
         
+        // Force refresh every 5 seconds as safety net
         sidebarState.forceInterval = setInterval(function() {
             if (!sidebarState.isUpdating && sidebarState.hasInitialData) {
+                console.log('🔄 Force refresh sidebar data...');
                 fetchSidebarData(true);
             }
         }, SIDEBAR_CONFIG.FORCE_INTERVAL);
@@ -1140,9 +1170,10 @@ $initial_data = [
     }
 
     // ================================================================
-    // MANUAL REFRESH
+    // MANUAL REFRESH - Exposed for debugging
     // ================================================================
     function refreshSidebarData() {
+        console.log('🔄 Manual refresh triggered');
         fetchSidebarData(true);
         return true;
     }
@@ -1158,32 +1189,34 @@ $initial_data = [
     window.getSidebarHash = function() { return sidebarState.dataHash; };
 
     // ================================================================
-    // VISIBILITY CHANGE
+    // VISIBILITY CHANGE - Restart when tab becomes visible
     // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
         } else {
+            console.log('📱 Tab visible - restarting sidebar auto-update');
             startSidebarAutoUpdate();
             setTimeout(function() {
                 fetchSidebarData(true);
-            }, 500);
+            }, 300);
         }
     });
 
     // ================================================================
-    // DOM READY
+    // DOM READY - Start the auto-update
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
+        console.log('📄 DOM ready - starting sidebar...');
         setTimeout(function() {
             startSidebarAutoUpdate();
-        }, 1500);
+        }, 500);
     });
 
     // ================================================================
     // CONSOLE LOG
     // ================================================================
-    console.log('%c💰 Braick Dispensary - Cashier Sidebar (API Integrated)', 
+    console.log('%c💰 Braick Dispensary - Cashier Sidebar (FIXED)', 
         'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
         'font-size:13px; color:#34D399;');
@@ -1193,16 +1226,11 @@ $initial_data = [
     console.log('   Pending: <?= $pending_bills ?>, Partial: <?= $partial_payments ?>');
     console.log('   Paid: <?= $total_paid ?>, Cancelled: <?= $cancelled_bills ?>');
     console.log('   Expenses: TSh <?= number_format($total_expenses) ?>');
-    console.log('%c⚡ Smart Auto-Update: Every 2s (only if data changed)', 
-        'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 10s (safety net)', 
-        'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 API Endpoint: ' + SIDEBAR_CONFIG.API_URL, 
-        'font-size:12px; color:#94A3B8;');
-    console.log('%c💡 Call window.refreshSidebarData() to manually update', 
-        'font-size:12px; color:#6EA8FE;');
-    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 
-        'font-size:12px; color:#34D399;');
-    console.log('%c✅ Data updates automatically when database changes!', 
-        'font-size:13px; font-weight:bold; color:#34D399;');
+    console.log('   Patients Waiting: <?= $patients_waiting ?>');
+    console.log('%c🔑 Initial Hash: <?= $initial_hash ?>', 'font-size:12px; color:#94A3B8;');
+    console.log('%c⚡ Auto-Update: Every 2s (checks for changes)', 'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Force refresh: Every 5s (safety net)', 'font-size:13px; color:#F59E0B;');
+    console.log('%c📡 API: ' + SIDEBAR_CONFIG.API_URL, 'font-size:12px; color:#94A3B8;');
+    console.log('%c💡 Call window.refreshSidebarData() for manual update', 'font-size:12px; color:#6EA8FE;');
+    console.log('%c✅ Data updates AUTOMATICALLY when database changes!', 'font-size:13px; font-weight:bold; color:#34D399;');
 </script>

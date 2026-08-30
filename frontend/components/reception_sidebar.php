@@ -9,8 +9,6 @@
 // ✅ MENU MPANGILIO MPYA
 // FULLY RESPONSIVE - ALL DEVICES
 // BRAICK DISPENSARY
-// FIXED: Assign Doctor badge shows correct count
-// FIXED: Debug logging added
 // ================================================================
 
 // ================================================================
@@ -116,7 +114,7 @@ if (!empty($site_logo)) {
 }
 
 // ================================================================
-// GET REAL DATA FOR BADGES - FIXED SQL QUERIES
+// GET REAL DATA FOR BADGES
 // ================================================================
 $patient_count = 0;
 $appointment_count = 0;
@@ -124,93 +122,38 @@ $pending_appointments = 0;
 $today_visits = 0;
 $pending_patients = 0;
 $services_count = 0;
-$assigned_count = 0;
-$lab_only_count = 0;
-$total_active_patients = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
-        error_log("=== RECEPTION SIDEBAR - FETCHING STATS ===");
-        error_log("Branch ID: " . $user_branch_id);
-        
         // 1. Total Patients
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
         $stmt->execute([$user_branch_id]);
         $patient_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        error_log("Total Patients: " . $patient_count);
         
         // 2. Today's Appointments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        error_log("Today's Appointments: " . $appointment_count);
         
         // 3. Pending Appointments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
         $stmt->execute([$user_branch_id]);
         $pending_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        error_log("Pending Appointments: " . $pending_appointments);
         
         // 4. Today's Visits
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE() AND deleted_at IS NULL");
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        error_log("Today's Visits: " . $today_visits);
         
-        // 5. FIXED: Assigned Patients (with doctor) - ONLY ACTIVE VISITS
-        //     Checks ALL statuses that indicate assigned: 'assigned', 'with_doctor'
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM visits 
-            WHERE branch_id = ? 
-            AND status IN ('assigned', 'with_doctor') 
-            AND deleted_at IS NULL
-        ");
-        $stmt->execute([$user_branch_id]);
-        $assigned_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        error_log("Assigned Patients (status=assigned/with_doctor): " . $assigned_count);
-        
-        // 6. FIXED: Lab Only Patients - with pending lab tests
-        $stmt = $db->prepare("
-            SELECT COUNT(DISTINCT v.patient_id) as count 
-            FROM visits v
-            WHERE v.branch_id = ? 
-            AND v.status = 'lab_test' 
-            AND v.deleted_at IS NULL
-            AND (
-                SELECT COUNT(*) 
-                FROM lab_tests lt 
-                WHERE lt.visit_id = v.id 
-                AND lt.status NOT IN ('completed', 'cancelled')
-            ) > 0
-        ");
-        $stmt->execute([$user_branch_id]);
-        $lab_only_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        error_log("Lab Only Patients (pending tests): " . $lab_only_count);
-        
-        // 7. Total Active = Assigned + Lab Only
-        $total_active_patients = $assigned_count + $lab_only_count;
-        error_log("TOTAL ACTIVE PATIENTS: " . $total_active_patients);
-        
-        // 8. Pending Patients (new/pending - need doctor)
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM visits 
-            WHERE branch_id = ? 
-            AND status IN ('pending', 'new') 
-            AND deleted_at IS NULL
-        ");
+        // 5. Pending Patients (needs doctor assignment)
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
         $stmt->execute([$user_branch_id]);
         $pending_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        error_log("Pending Patients (status=pending/new): " . $pending_patients);
         
-        // 9. Services Count
+        // 6. Services Count
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
         $stmt->execute([$user_branch_id]);
         $services_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        error_log("Services Count: " . $services_count);
-        
-        error_log("=== SIDEBAR STATS COMPLETE ===");
         
     } catch (Exception $e) {
         error_log("Reception sidebar stats error: " . $e->getMessage());
@@ -246,7 +189,7 @@ function isActive($page, $exact = false) {
 }
 
 // ================================================================
-// HANDLE AJAX REQUEST FOR SIDEBAR DATA - FIXED
+// HANDLE AJAX REQUEST FOR SIDEBAR DATA
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_reception_sidebar_data') {
     header('Content-Type: application/json');
@@ -266,93 +209,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         'today_visits' => 0,
         'pending_patients' => 0,
         'services_count' => 0,
-        'assigned_count' => 0,
-        'lab_only_count' => 0,
-        'total_active_patients' => 0,
-        'debug' => [],
         'hash' => ''
     ];
     
     if ($db !== null) {
         try {
-            error_log("=== AJAX: FETCHING SIDEBAR DATA ===");
-            error_log("Branch ID: " . $branch_id);
-            
-            // Total Patients
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
             $stmt->execute([$branch_id]);
             $response['patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            $response['debug']['patients'] = $response['patients'];
             
-            // Today's Appointments
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
             $stmt->execute([$branch_id]);
             $response['appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            $response['debug']['appointments'] = $response['appointments'];
             
-            // Pending Appointments
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
             $stmt->execute([$branch_id]);
             $response['pending_appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            $response['debug']['pending_appointments'] = $response['pending_appointments'];
             
-            // Today's Visits
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE() AND deleted_at IS NULL");
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
             $stmt->execute([$branch_id]);
             $response['today_visits'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            $response['debug']['today_visits'] = $response['today_visits'];
             
-            // FIXED: Assigned Patients (with doctor) - ALL STATUSES
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM visits 
-                WHERE branch_id = ? 
-                AND status IN ('assigned', 'with_doctor') 
-                AND deleted_at IS NULL
-            ");
-            $stmt->execute([$branch_id]);
-            $response['assigned_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            $response['debug']['assigned_count'] = $response['assigned_count'];
-            
-            // FIXED: Lab Only Patients - with pending lab tests
-            $stmt = $db->prepare("
-                SELECT COUNT(DISTINCT v.patient_id) as count 
-                FROM visits v
-                WHERE v.branch_id = ? 
-                AND v.status = 'lab_test' 
-                AND v.deleted_at IS NULL
-                AND (
-                    SELECT COUNT(*) 
-                    FROM lab_tests lt 
-                    WHERE lt.visit_id = v.id 
-                    AND lt.status NOT IN ('completed', 'cancelled')
-                ) > 0
-            ");
-            $stmt->execute([$branch_id]);
-            $response['lab_only_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            $response['debug']['lab_only_count'] = $response['lab_only_count'];
-            
-            // Total Active = Assigned + Lab Only
-            $response['total_active_patients'] = $response['assigned_count'] + $response['lab_only_count'];
-            $response['debug']['total_active_patients'] = $response['total_active_patients'];
-            
-            // Pending Patients (new/pending)
-            $stmt = $db->prepare("
-                SELECT COUNT(*) as count 
-                FROM visits 
-                WHERE branch_id = ? 
-                AND status IN ('pending', 'new') 
-                AND deleted_at IS NULL
-            ");
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
             $stmt->execute([$branch_id]);
             $response['pending_patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            $response['debug']['pending_patients'] = $response['pending_patients'];
             
-            // Services Count
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
             $stmt->execute([$branch_id]);
             $response['services_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            $response['debug']['services_count'] = $response['services_count'];
             
             $response['success'] = true;
             $response['hash'] = md5(
@@ -361,21 +245,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $response['pending_appointments'] . 
                 $response['today_visits'] . 
                 $response['pending_patients'] .
-                $response['services_count'] .
-                $response['assigned_count'] .
-                $response['lab_only_count'] .
-                $response['total_active_patients']
+                $response['services_count']
             );
-            
-            error_log("=== AJAX RESPONSE ===");
-            error_log("Assigned: " . $response['assigned_count']);
-            error_log("Lab Only: " . $response['lab_only_count']);
-            error_log("Total Active: " . $response['total_active_patients']);
             
         } catch (Exception $e) {
             $response['success'] = false;
             $response['error'] = $e->getMessage();
-            error_log("AJAX Error: " . $e->getMessage());
         }
     }
     
@@ -383,6 +258,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 ?>
+
 <style>
     /* ================================================================
        SIDEBAR STYLES - FULLY FIXED FOR MOBILE
@@ -618,10 +494,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     .sidebar-link .badge.blue {
         background: #0B5ED7;
-    }
-    
-    .sidebar-link .badge.info {
-        background: #0EA5E9;
     }
     
     .sidebar-link:hover .badge {
@@ -948,13 +820,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             <span class="badge" id="receptionPatientCount"><?= $patient_count ?></span>
         </a>
         
-        <!-- 4. Assign Doctor - TOTAL = ASSIGNED + LAB ONLY -->
+        <!-- 4. Assign Doctor -->
         <a href="/dispensary_system/frontend/pages/reception/assign_doctor.php" class="sidebar-link <?= isActive('assign_doctor.php') ?>">
             <i class="fas fa-user-md"></i> Assign Doctor
-            <?php if ($total_active_patients > 0): ?>
-                <span class="badge danger" id="receptionTotalActivePatients"><?= $total_active_patients ?></span>
+            <?php if ($pending_patients > 0): ?>
+                <span class="badge danger" id="receptionPendingPatients"><?= $pending_patients ?></span>
             <?php else: ?>
-                <span class="badge" id="receptionTotalActivePatients">0</span>
+                <span class="badge" id="receptionPendingPatients">0</span>
             <?php endif; ?>
         </a>
         
@@ -1146,51 +1018,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // ================================================================
     // UPDATE SIDEBAR BADGES
     // ================================================================
-    function updateSidebarBadges(data) {
+    function updateSidebarBadges(patientCount, appointmentCount, pendingAppointments, todayVisits, pendingPatients, servicesCount) {
         var el = document.getElementById('receptionPatientCount');
-        if (el && data.patients !== undefined) {
-            el.textContent = data.patients;
+        if (el && patientCount !== undefined) {
+            el.textContent = patientCount;
             el.classList.remove('badge-update');
             void el.offsetWidth;
             el.classList.add('badge-update');
         }
         
         el = document.getElementById('receptionAppointmentCount');
-        if (el && data.appointments !== undefined) {
-            el.textContent = data.appointments;
-            el.className = data.pending_appointments > 0 ? 'badge danger' : 'badge';
+        if (el && appointmentCount !== undefined) {
+            el.textContent = appointmentCount;
+            el.className = pendingAppointments > 0 ? 'badge danger' : 'badge';
             el.classList.remove('badge-update');
             void el.offsetWidth;
             el.classList.add('badge-update');
         }
         
         el = document.getElementById('receptionTodayVisits');
-        if (el && data.today_visits !== undefined) {
-            el.textContent = data.today_visits;
-            el.className = data.today_visits > 0 ? 'badge green' : 'badge';
+        if (el && todayVisits !== undefined) {
+            el.textContent = todayVisits;
+            el.className = todayVisits > 0 ? 'badge green' : 'badge';
             el.classList.remove('badge-update');
             void el.offsetWidth;
             el.classList.add('badge-update');
         }
         
-        // Assign Doctor badge - shows TOTAL ACTIVE (Assigned + Lab Only)
-        el = document.getElementById('receptionTotalActivePatients');
-        if (el && data.total_active_patients !== undefined) {
-            el.textContent = data.total_active_patients;
-            el.className = data.total_active_patients > 0 ? 'badge danger' : 'badge';
+        el = document.getElementById('receptionPendingPatients');
+        if (el && pendingPatients !== undefined) {
+            el.textContent = pendingPatients;
+            el.className = pendingPatients > 0 ? 'badge danger' : 'badge';
             el.classList.remove('badge-update');
             void el.offsetWidth;
             el.classList.add('badge-update');
-            
-            // Log change for debugging
-            console.log('🔄 Assign Doctor badge updated: ' + data.total_active_patients + 
-                       ' (Assigned: ' + data.assigned_count + ' + Lab Only: ' + data.lab_only_count + ')');
         }
         
         el = document.getElementById('receptionServicesCount');
-        if (el && data.services_count !== undefined) {
-            el.textContent = data.services_count;
-            el.className = data.services_count > 0 ? 'badge purple' : 'badge';
+        if (el && servicesCount !== undefined) {
+            el.textContent = servicesCount;
+            el.className = servicesCount > 0 ? 'badge purple' : 'badge';
             el.classList.remove('badge-update');
             void el.offsetWidth;
             el.classList.add('badge-update');
@@ -1207,7 +1074,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA - AUTO UPDATE EVERY 3 SECONDS
+    // FETCH SIDEBAR DATA
     // ================================================================
     var sidebarUpdateInterval = null;
     var sidebarIsUpdating = false;
@@ -1236,17 +1103,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             if (data.success) {
                 if (lastDataHash !== data.hash) {
                     lastDataHash = data.hash;
-                    console.log('🔄 Sidebar data changed! Updating badges...');
-                    console.log('📊 Debug data:', data.debug);
-                    updateSidebarBadges(data);
+                    updateSidebarBadges(
+                        data.patients || 0,
+                        data.appointments || 0,
+                        data.pending_appointments || 0,
+                        data.today_visits || 0,
+                        data.pending_patients || 0,
+                        data.services_count || 0
+                    );
                 }
-            } else {
-                console.warn('⚠️ Sidebar data fetch failed:', data.error);
             }
             sidebarIsUpdating = false;
         })
         .catch(function(error) {
-            console.error('❌ Sidebar fetch error:', error);
             sidebarIsUpdating = false;
         });
     }
@@ -1255,11 +1124,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         if (sidebarUpdateInterval) {
             clearInterval(sidebarUpdateInterval);
         }
-        // First fetch after 1 second
         setTimeout(function() {
             fetchSidebarData();
         }, 1000);
-        // Then every 3 seconds
         sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
         console.log('%c🔄 Reception Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
     }
@@ -1290,13 +1157,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
     window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
 
-    console.log('%c🏥 Reception Sidebar (UPDATED - FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c🏥 Reception Sidebar (UPDATED - system_settings)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c✅ Jina na logo kutoka system_settings table', 'font-size:12px; color:#34D399;');
-    console.log('%c📋 MENU: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 'font-size:12px; color:#34D399;');
+    console.log('%c📋 MENU MPYA: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 'font-size:12px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
     console.log('%c📋 Patients: <?= $patient_count ?> | Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#9EC5FE;');
-    console.log('%c👨‍⚕️ Assign Doctor: <?= $total_active_patients ?> (Assigned: <?= $assigned_count ?> + Lab Only: <?= $lab_only_count ?>)', 'font-size:12px; color:#F59E0B;');
-    console.log('%c🔄 Auto-update active - badge updates automatically every 3 seconds', 'font-size:12px; color:#34D399;');
-    console.log('%c💡 Check server error_log for detailed debug info', 'font-size:12px; color:#EF4444;');
 </script>

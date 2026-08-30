@@ -2,9 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_pharmacy.php
 // SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS
-// FIXED: 
-// - Prescription revenue from bill_items (item_type = 'medication') with bill.status = 'paid'
-// - OTC revenue from otc_sales.total_amount (after discount) with payment_status = 'paid'
+// FIXED: Header inaonekana vizuri na ina support ya profile pic
 // ================================================================
 
 // ================================================================
@@ -83,7 +81,7 @@ if ($pharmacy_id <= 0) {
 }
 
 // ================================================================
-// FETCH PHARMACY DETAILS - WITH FIXED QUERIES
+// FETCH PHARMACY DETAILS
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -98,7 +96,6 @@ $stmt = $db->prepare("
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'confirmed') as confirmed_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'cancelled') as cancelled_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
-        -- FIXED: Prescription revenue from bill_items (medication items) with bill.status = 'paid'
         (SELECT COALESCE(SUM(bi.final_price), 0) 
          FROM bill_items bi
          INNER JOIN bills bl ON bi.bill_id = bl.id
@@ -106,7 +103,6 @@ $stmt = $db->prepare("
          AND bl.branch_id = b.id 
          AND bl.status = 'paid') as prescription_revenue,
         (SELECT COUNT(*) FROM otc_sales WHERE branch_id = b.id) as total_otc_sales,
-        -- FIXED: OTC revenue from otc_sales.total_amount (after discount) with payment_status = 'paid'
         (SELECT COALESCE(SUM(total_amount), 0) 
          FROM otc_sales 
          WHERE branch_id = b.id 
@@ -125,7 +121,6 @@ if (!$pharmacy) {
     exit;
 }
 
-// Calculate total revenue
 $total_revenue = ($pharmacy['prescription_revenue'] ?? 0) + ($pharmacy['otc_revenue'] ?? 0);
 
 // ================================================================
@@ -169,7 +164,7 @@ try {
 }
 
 // ================================================================
-// GET RECENT PRESCRIPTIONS WITH AMOUNT FROM bill_items
+// GET RECENT PRESCRIPTIONS
 // ================================================================
 $recent_prescriptions = [];
 try {
@@ -199,7 +194,6 @@ try {
     $stmt->execute([$pharmacy_id]);
     $recent_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    error_log("Error fetching recent prescriptions: " . $e->getMessage());
     $recent_prescriptions = [];
 }
 
@@ -275,21 +269,6 @@ function getStatusBadge($status) {
     return $classes[$status] ?? 'secondary';
 }
 
-function getStatusIcon($status) {
-    $icons = [
-        'active' => 'fa-check-circle',
-        'inactive' => 'fa-times-circle',
-        'pending' => 'fa-clock',
-        'dispensed' => 'fa-check-circle',
-        'confirmed' => 'fa-check-double',
-        'cancelled' => 'fa-times-circle',
-        'paid' => 'fa-check-circle',
-        'partial' => 'fa-clock',
-        'unpaid' => 'fa-times-circle'
-    ];
-    return $icons[$status] ?? 'fa-circle';
-}
-
 function format_currency($amount) {
     if ($amount == 0) {
         return 'TSh 0';
@@ -298,12 +277,10 @@ function format_currency($amount) {
 }
 
 // ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
+// INCLUDE SIDEBAR ONLY (header itakuwa moja kwa moja hapa)
 // ================================================================
-include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -318,6 +295,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
+        /* ================================================================
+           CSS VARIABLES
+           ================================================================ */
         :root {
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
@@ -327,15 +307,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --border-color: #E2E8F0;
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
-            --primary-light: #3B82F6;
-            --primary-bg: #EFF6FF;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
-            
-            --card-blue: #0B5ED7;
-            --card-red: #DC2626;
-            --card-green: #059669;
-            --card-orange: #D97706;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow: 0 1px 3px rgba(0,0,0,0.08);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+            --table-hover: #F8FAFC;
         }
         [data-theme="dark"] {
             --bg-body: #0F172A;
@@ -346,12 +324,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --border-color: #334155;
             --primary: #3B82F6;
             --primary-dark: #2563EB;
-            --primary-light: #60A5FA;
-            --primary-bg: #1E3A5F;
-            --card-blue: #2563EB;
-            --card-red: #DC2626;
-            --card-green: #059669;
-            --card-orange: #D97706;
+            --table-hover: #1E293B;
+            --shadow: 0 1px 3px rgba(0,0,0,0.3);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -360,7 +336,168 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
             transition: background 0.3s ease, color 0.3s ease;
         }
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: var(--bg-body); }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+
+        /* ================================================================
+           TOP NAV - HEADER (FIXED)
+           ================================================================ */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            transition: background 0.3s ease, border-color 0.3s ease;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+        }
         
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
+        }
+        .top-nav .search-wrapper:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        .top-nav .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+        .top-nav .search-wrapper .search-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        .top-nav .search-wrapper .search-btn:hover {
+            background: var(--primary-dark);
+        }
+        
+        .top-nav .branch-selector {
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            background: var(--bg-card);
+            font-size: 0.82rem;
+            font-weight: 500;
+            cursor: pointer;
+            outline: none;
+            min-width: 160px;
+            color: var(--text-primary);
+            transition: all 0.3s;
+        }
+        .top-nav .branch-selector:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
+        
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .top-nav .avatar:hover {
+            border-color: var(--primary);
+            transform: scale(1.05);
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: var(--primary);
+        }
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        .notif-dot.has-notif { background: #EF4444; }
+        .notif-dot.no-notif { background: #94A3B8; animation: none; }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .dark-toggle-btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-card);
+        }
+        .dark-toggle-btn i { font-size: 0.9rem; }
+        
+        /* ================================================================
+           MAIN CONTENT
+           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -368,7 +505,138 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
             transition: background 0.3s ease;
         }
-        
+
+        /* ================================================================
+           PAGE HEADER
+           ================================================================ */
+        .page-header {
+            background: var(--primary-gradient);
+            border-radius: 16px;
+            padding: 24px 32px;
+            margin-bottom: 28px;
+            position: relative;
+            overflow: visible;
+            z-index: 10;
+            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.25);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+        }
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -10%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .page-header::after {
+            content: '';
+            position: absolute;
+            bottom: -30%;
+            left: -5%;
+            width: 200px;
+            height: 200px;
+            background: rgba(255,255,255,0.03);
+            border-radius: 50%;
+            pointer-events: none;
+            z-index: 0;
+        }
+        .page-header .page-title {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        .page-header .page-title i {
+            font-size: 2rem;
+            opacity: 0.9;
+        }
+        .page-header .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+            margin-top: 4px;
+        }
+        .page-header .page-subtitle strong {
+            color: white;
+            font-weight: 600;
+        }
+        .page-header .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            backdrop-filter: blur(4px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .page-header .header-badge {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        .page-header .btn-outline-light {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 18px;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
+            cursor: pointer;
+        }
+        .page-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        .page-header .header-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+
+        /* ================================================================
+           STATS GRID
+           ================================================================ */
         .stats-grid-8 {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -391,7 +659,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             cursor: pointer;
             text-decoration: none;
         }
-        
         .stat-card-8::before {
             content: '';
             position: absolute;
@@ -504,134 +771,32 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transform: translateX(6px);
             color: rgba(255,255,255,0.4);
         }
-        .stat-card-8 .flex-row {
-            display: flex;
-            align-items: baseline;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
         
         .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .card-blue:hover { box-shadow: 0 10px 32px rgba(11, 94, 215, 0.4); }
         .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .card-red:hover { box-shadow: 0 10px 32px rgba(220, 38, 38, 0.4); }
         .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        .card-green:hover { box-shadow: 0 10px 32px rgba(5, 150, 105, 0.4); }
         .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        .card-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
         
         [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
         [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
         [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
-        
-        .page-header-box {
-            background: var(--primary-gradient);
-            border-radius: 16px;
-            padding: 20px 28px;
-            margin-bottom: 24px;
-            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.2);
-            position: relative;
-            overflow: hidden;
-        }
-        .page-header-box::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 350px;
-            height: 350px;
-            background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        .page-header-box .page-title {
-            color: white;
-            font-size: 1.6rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        .page-header-box .page-title .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        .page-header-box .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.85rem;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-            margin-top: 4px;
-        }
-        .page-header-box .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
-        .page-header-box .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        .page-header-box .header-badge i { opacity: 0.8; }
-        
-        .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
-            border-radius: 12px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
+
+        /* ================================================================
+           DETAIL CARD
+           ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: 16px;
             padding: 20px 24px;
             border: 2px solid var(--border-color);
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            box-shadow: var(--shadow-sm);
             transition: all 0.3s ease;
             margin-bottom: 24px;
         }
         .detail-card:hover {
             border-color: var(--primary);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            box-shadow: var(--shadow-md);
         }
         .detail-label {
             font-size: 0.7rem;
@@ -645,13 +810,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 600;
             color: var(--text-primary);
         }
-        
+
+        /* ================================================================
+           CARDS
+           ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: 16px;
             border: 2px solid var(--border-color);
             overflow: hidden;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            box-shadow: var(--shadow-sm);
             margin-bottom: 24px;
         }
         .card:hover {
@@ -680,7 +848,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         .card-header .card-action:hover { color: white; }
         .card-body { padding: 0; overflow-x: auto; }
-        
+
+        /* ================================================================
+           TABLES
+           ================================================================ */
         .data-table {
             width: 100%;
             border-collapse: collapse;
@@ -707,13 +878,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             vertical-align: middle;
         }
         .data-table tr:hover td {
-            background: #F8FAFC;
-        }
-        [data-theme="dark"] .data-table tr:hover td {
-            background: #1E293B;
+            background: var(--table-hover);
         }
         .data-table tr:last-child td { border-bottom: none; }
-        
+
+        /* ================================================================
+           BADGES
+           ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -750,18 +921,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .status-badge.warning { background: #3D2E0A; color: #FBBF24; }
         [data-theme="dark"] .status-badge.info { background: #1E3A5F; color: #3B82F6; }
         [data-theme="dark"] .status-badge.secondary { background: #2D3748; color: #94A3B8; }
-        
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: var(--text-secondary);
-        }
-        .empty-state i {
-            font-size: 2.5rem;
-            color: var(--border-color);
-            margin-bottom: 8px;
-        }
-        
+
+        /* ================================================================
+           BUTTONS
+           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -814,9 +977,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .btn-view:hover i {
             transform: translateX(3px);
         }
-        .btn-view:active {
-            transform: scale(0.95);
-        }
         .btn-view-outline {
             background: transparent;
             color: var(--primary);
@@ -845,13 +1005,26 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
             background: linear-gradient(135deg, #047857, #065F46);
         }
-        
         [data-theme="dark"] .btn-view-outline {
             color: #60A5FA;
             border-color: #60A5FA;
         }
         [data-theme="dark"] .btn-view-outline:hover {
             color: white;
+        }
+
+        /* ================================================================
+           EMPTY STATE & FOOTER
+           ================================================================ */
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--text-secondary);
+        }
+        .empty-state i {
+            font-size: 2.5rem;
+            color: var(--border-color);
+            margin-bottom: 8px;
         }
         
         .footer {
@@ -864,29 +1037,46 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transition: border-color 0.3s ease, color 0.3s ease;
         }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
+
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
+            .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
+            .top-nav .search-wrapper { max-width: 300px; }
+            .page-header { padding: 20px 24px; }
+            .page-header .page-title { font-size: 1.5rem; }
         }
         @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .branch-selector { min-width: 120px; font-size: 0.7rem; }
+            .top-nav .datetime { display: none; }
             .stats-grid-8 { grid-template-columns: 1fr 1fr; }
-            .page-header-box .page-title { font-size: 1.3rem; }
-            .page-header-box { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .page-header { padding: 16px 18px; flex-direction: column; align-items: flex-start; }
+            .page-header .header-actions { width: 100%; }
+            .page-header .btn-outline-light { flex: 1; justify-content: center; }
             .stat-card-8 { padding: 14px 16px; min-height: 90px; }
             .stat-card-8 .stat-number-small { font-size: 1.8rem; }
             .stat-card-8 .stat-amount-large { font-size: 1.4rem; }
             .stat-card-8 .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
         }
         @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+            .top-nav .search-wrapper { max-width: 120px; }
+            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
             .stats-grid-8 { grid-template-columns: 1fr; }
             .stat-card-8 { padding: 12px 14px; min-height: 80px; }
             .stat-card-8 .stat-number-small { font-size: 1.6rem; }
             .stat-card-8 .stat-amount-large { font-size: 1.2rem; }
             .stat-card-8 .stat-icon { width: 34px; height: 34px; font-size: 0.85rem; }
-            .page-header-box .page-title { font-size: 1rem; flex-direction: column; align-items: flex-start; }
-            .page-header-box .page-subtitle { font-size: 0.75rem; flex-direction: column; align-items: flex-start; gap: 4px; }
+            .page-header .page-title { font-size: 1.1rem; flex-direction: column; align-items: flex-start; }
+            .page-header .page-subtitle { font-size: 0.75rem; flex-direction: column; align-items: flex-start; gap: 4px; }
+            .page-header { padding: 12px 14px; }
         }
+        
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -914,19 +1104,67 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </head>
 <body>
 
+<!-- ================================================================ -->
+<!-- SIDEBAR OVERLAY -->
+<!-- ================================================================ -->
 <div id="sidebarOverlay"></div>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR - Loaded from admin_sidebar.php -->
+<!-- TOP NAV - HEADER (FIXED - INAONEKANA VIZURI) -->
 <!-- ================================================================ -->
+<nav class="top-nav no-print">
+    <div class="flex items-center gap-4 flex-1">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex items-center gap-3 no-print">
+        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+            <?php foreach ($branches as $b): ?>
+                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
+                    🏥 <?= htmlspecialchars($b['name']) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        
+        <span class="datetime" id="currentDateTime"></span>
+        
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
+        
+        <button class="icon-btn">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+        </button>
+        
+        <a href="profile.php">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+        </a>
+    </div>
+</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
+    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <div class="page-header-box animate-fade-in-up" style="animation-delay:0.05s;">
+    <!-- ================================================================ -->
+    <div class="page-header animate-fade-in-up" style="animation-delay:0.05s;">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-prescription-bottle"></i>
@@ -947,7 +1185,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </span>
             </p>
         </div>
-        <div style="position:relative;z-index:1;display:flex;gap:8px;flex-wrap:wrap;">
+        <div class="header-actions">
             <a href="edit_pharmacy.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-edit"></i> Edit
             </a>
@@ -957,7 +1195,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- PHARMACY INFO -->
+    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
@@ -983,7 +1223,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- 8 CARDS -->
+    <!-- ================================================================ -->
+    <!-- 8 STATS CARDS -->
+    <!-- ================================================================ -->
     <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.15s;">
         <a href="pharmacy_inventory.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="stat-card-8 card-blue">
             <div class="stat-icon"><i class="fas fa-pills"></i></div>
@@ -1073,7 +1315,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PRESCRIPTIONS - FIXED: Using bill_items.final_price (after discount) -->
+    <!-- RECENT PRESCRIPTIONS -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
@@ -1125,7 +1367,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- RECENT INVENTORY -->
+    <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="card-header">
             <h3 class="card-title"><i class="fas fa-boxes"></i> Recent Inventory Updates</h3>
@@ -1189,7 +1433,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- RECENT OTC SALES - FIXED: Shows total_amount after discount -->
+    <!-- ================================================================ -->
+    <!-- RECENT OTC SALES -->
+    <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.3s;">
         <div class="card-header">
             <h3 class="card-title"><i class="fas fa-shopping-cart"></i> Recent OTC Sales</h3>
@@ -1246,7 +1492,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- PHARMACISTS -->
+    <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.35s;">
         <div class="card-header">
             <h3 class="card-title"><i class="fas fa-user-md"></i> Pharmacists (<?= count($pharmacists) ?>)</h3>
@@ -1293,7 +1541,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- Footer -->
+    <!-- ================================================================ -->
+    <!-- FOOTER -->
+    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1308,7 +1558,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 </main>
 
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
+    // ================================================================
+    // DARK MODE
+    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1338,6 +1594,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     var overlay = document.getElementById('sidebarOverlay');
@@ -1375,6 +1634,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
+    // ================================================================
+    // BRANCH SWITCHER
+    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
@@ -1382,6 +1644,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         window.location.href = url.toString();
     }
 
+    // ================================================================
+    // SEARCH
+    // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
@@ -1399,6 +1664,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1415,14 +1683,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c💊 Braick Dispensary - View Pharmacy', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // CONSOLE LOG
+    // ================================================================
+    console.log('%c💊 Braick Dispensary - View Pharmacy (HEADER FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: <?= format_currency($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ FIXED: Header inaonekana vizuri na profile pic inasupport', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FIXED: Prescription amount from bill_items.final_price (after discount)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FIXED: OTC revenue from otc_sales.total_amount (after discount)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Only bills with status = "paid" are counted', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Only OTC sales with payment_status = "paid" are counted', 'font-size:13px; color:#34D399;');
-    console.log('%c📊 Using tables: branches, users, medications_inventory, prescriptions, bills, bill_items, otc_sales', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

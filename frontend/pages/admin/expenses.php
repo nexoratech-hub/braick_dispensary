@@ -6,6 +6,7 @@
 // 4 CARDS DESIGN: All, Pending, Paid, Cancelled
 // WITH VIEW, EDIT, DELETE BUTTONS
 // WITH PDF EXPORT
+// WITH SHARED HEADER (SAA, TAREHE, DARK MODE)
 // BRAICK DISPENSARY - GREEN THEME
 // ================================================================
 
@@ -439,9 +440,10 @@ if (!empty($date_condition)) {
 $where_clause = implode(" AND ", $conditions);
 
 $sql = "
-    SELECT e.*, u.full_name as created_by_name
+    SELECT e.*, u.full_name as created_by_name, b.name as branch_name
     FROM expenses e
     LEFT JOIN users u ON e.created_by = u.id
+    LEFT JOIN branches b ON e.branch_id = b.id
     WHERE $where_clause
     ORDER BY e.payment_date DESC, e.created_at DESC
 ";
@@ -527,9 +529,10 @@ try {
 $view_data = null;
 if ($view_id > 0) {
     $stmt = $db->prepare("
-        SELECT e.*, u.full_name as created_by_name
+        SELECT e.*, u.full_name as created_by_name, b.name as branch_name
         FROM expenses e
         LEFT JOIN users u ON e.created_by = u.id
+        LEFT JOIN branches b ON e.branch_id = b.id
         WHERE e.id = ? AND e.branch_id = ?
     ");
     $stmt->execute([$view_id, $selected_branch_id]);
@@ -591,12 +594,34 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
 // INCLUDE HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
+
+// Sidebar stats
+$total_employees_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_doctors_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+$total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_branches_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 include_once '../../components/admin_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -612,6 +637,9 @@ include_once '../../components/admin_sidebar.php';
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     
     <style>
+        /* ================================================================
+           ROOT VARIABLES - DARK MODE SUPPORT
+           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -628,6 +656,8 @@ include_once '../../components/admin_sidebar.php';
             --warning: #D97706;
             --warning-dark: #B45309;
             --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-bg: #EDE9FE;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -675,7 +705,7 @@ include_once '../../components/admin_sidebar.php';
             --gray-200: #334155;
             --table-hover: #1E3A5F;
         }
-        
+
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -688,7 +718,192 @@ include_once '../../components/admin_sidebar.php';
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
+
+        /* ================================================================
+           TOP NAV - SHARED HEADER STYLES
+           ================================================================ */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: var(--shadow-sm);
+        }
         
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s;
+            flex: 1;
+            max-width: 500px;
+        }
+        
+        .top-nav .search-wrapper:focus-within {
+            border-color: #0B5ED7;
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
+        
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .top-nav .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
+        
+        .top-nav .search-wrapper .search-btn {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.3s;
+            white-space: nowrap;
+        }
+        
+        .top-nav .search-wrapper .search-btn:hover {
+            transform: scale(1.02);
+        }
+        
+        .top-nav .branch-selector {
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            background: var(--bg-card);
+            font-size: 0.82rem;
+            font-weight: 500;
+            cursor: pointer;
+            outline: none;
+            min-width: 160px;
+            color: var(--text-primary);
+            transition: all 0.3s;
+        }
+        
+        .top-nav .branch-selector:focus {
+            border-color: #0B5ED7;
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
+        }
+        
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .top-nav .datetime i {
+            color: var(--primary-light);
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .top-nav .avatar:hover {
+            border-color: #0B5ED7;
+            transform: scale(1.05);
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            transition: all 0.3s;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: #0B5ED7;
+        }
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .notif-dot.has-notif {
+            background: #EF4444;
+        }
+        
+        .notif-dot.no-notif {
+            background: #94A3B8;
+            animation: none;
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .dark-toggle-btn:hover {
+            border-color: #0B5ED7;
+            background: var(--bg-card);
+        }
+        
+        .dark-toggle-btn i {
+            font-size: 0.9rem;
+        }
+
+        /* ================================================================
+           MAIN CONTENT
+           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -697,6 +912,11 @@ include_once '../../components/admin_sidebar.php';
             transition: var(--transition);
         }
         
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+        }
+
         /* ================================================================
            4 STATS CARDS
            ================================================================ */
@@ -1657,6 +1877,8 @@ include_once '../../components/admin_sidebar.php';
         }
         
         @media (max-width: 768px) {
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
             .page-header { padding: 20px; }
             .page-header .page-title { font-size: 1.3rem; }
             .filter-section { padding: 12px 16px; }
@@ -1682,9 +1904,67 @@ include_once '../../components/admin_sidebar.php';
             .stat-card .stat-label { font-size: 0.55rem; }
             .stat-card .stat-icon { font-size: 1.2rem; }
         }
+        
+        @media print {
+            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
+            .search-wrapper, .filter-section, .btn-outline-light,
+            .footer, #sidebarToggle { display: none !important; }
+            .main-content { margin: 0; padding: 20px; }
+            .stat-card { border: 1px solid #ddd !important; }
+        }
     </style>
 </head>
 <body>
+
+<!-- ================================================================ -->
+<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- ================================================================ -->
+<nav class="top-nav">
+    <div class="flex items-center gap-4 flex-1">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search expenses...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex items-center gap-3">
+        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
+            <option value="all" <?= $selected_branch_id === 0 ? 'selected' : '' ?>>🌐 All Branches</option>
+            <?php foreach ($branches as $b): ?>
+                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
+                    🏥 <?= htmlspecialchars($b['name']) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        
+        <span class="datetime" id="currentDateTime">
+            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
+            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
+        </span>
+        
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
+        
+        <button class="icon-btn">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+        </button>
+        
+        <a href="profile.php">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+        </a>
+    </div>
+</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -2401,26 +2681,92 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // DARK MODE - Sync with header
+    // DARK MODE TOGGLE - FIXED
     // ================================================================
     (function() {
+        var darkModeToggle = document.getElementById('darkModeToggle');
+        var darkIcon = document.getElementById('darkIcon');
+        var darkText = document.getElementById('darkText');
         var htmlElement = document.documentElement;
-        function applyDarkMode(isDark) {
-            if (isDark) {
-                htmlElement.setAttribute('data-theme', 'dark');
-            } else {
-                htmlElement.removeAttribute('data-theme');
-            }
-        }
-        var saved = localStorage.getItem('darkMode');
-        applyDarkMode(saved === 'true');
         
-        window.addEventListener('storage', function(e) {
-            if (e.key === 'darkMode') {
-                applyDarkMode(e.newValue === 'true');
-            }
+        // Check saved dark mode
+        var savedDarkMode = localStorage.getItem('darkMode');
+        var cookieDarkMode = document.cookie.split('; ').find(function(row) {
+            return row.startsWith('dark_mode=');
         });
+        
+        // Determine initial dark mode
+        var isDark = false;
+        if (savedDarkMode === 'true') {
+            isDark = true;
+        } else if (cookieDarkMode) {
+            isDark = cookieDarkMode.split('=')[1] === 'true';
+        }
+        
+        // Apply dark mode
+        if (isDark) {
+            htmlElement.setAttribute('data-theme', 'dark');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
+        } else {
+            htmlElement.removeAttribute('data-theme');
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
+        }
+        
+        // Toggle dark mode
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('click', function(e) {
+                e.preventDefault();
+                var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
+                
+                if (isDarkNow) {
+                    htmlElement.removeAttribute('data-theme');
+                    if (darkIcon) darkIcon.className = 'fas fa-moon';
+                    if (darkText) darkText.textContent = 'Dark';
+                    localStorage.setItem('darkMode', 'false');
+                    document.cookie = "dark_mode=false; path=/";
+                } else {
+                    htmlElement.setAttribute('data-theme', 'dark');
+                    if (darkIcon) darkIcon.className = 'fas fa-sun';
+                    if (darkText) darkText.textContent = 'Light';
+                    localStorage.setItem('darkMode', 'true');
+                    document.cookie = "dark_mode=true; path=/";
+                }
+            });
+        }
     })();
+
+    // ================================================================
+    // BRANCH SWITCHER
+    // ================================================================
+    function switchBranch(branchId) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('branch', branchId);
+        if (url.searchParams.has('view')) {
+            url.searchParams.delete('view');
+        }
+        window.location.href = url.toString();
+    }
+
+    // ================================================================
+    // CLOCK - UPDATE EVERY SECOND
+    // ================================================================
+    function updateClock() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var el = document.getElementById('clockDisplay');
+        if (el) {
+            el.textContent = dateStr + ' • ' + timeStr;
+        }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -2880,6 +3226,8 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c✅ View, Edit, Delete, Pay buttons', 'font-size:13px; color:#34D399;');
     console.log('%c✅ PDF Export available', 'font-size:13px; color:#DC2626;');
     console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark Mode Toggle: WORKING', 'font-size:13px; color:#3B82F6;');
+    console.log('%c🕐 Clock: WORKING', 'font-size:13px; color:#3B82F6;');
 </script>
 
 </body>

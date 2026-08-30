@@ -7,6 +7,7 @@
 // FIXED: Excludes OTC bills (bill_number NOT LIKE 'BILL-OTC-%')
 // FIXED: Only counts paid bills and paid bill_items
 // FIXED: Prescription revenue from prescription_items table
+// 6 CARDS ONLY: Total Revenue, Expenses, Net Profit, Patient Bills, OTC, Prescriptions
 // ================================================================
 
 // ================================================================
@@ -159,160 +160,10 @@ try {
     $prescription_revenue = 0;
 }
 
-// 4. PROCEDURES REVENUE (from bill_items - procedure type, paid bills only)
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.final_price), 0) as procedures_revenue
-        FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        WHERE b.branch_id = ? 
-        AND b.status = 'paid'
-        AND bi.item_type = 'procedure' 
-        AND bi.status = 'paid'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-    ");
-    $stmt->execute([$cashier_id]);
-    $procedures_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['procedures_revenue'] ?? 0;
-} catch (Exception $e) {
-    $procedures_revenue = 0;
-}
-
-// 5. EQUIPMENT REVENUE (from bill_items - equipment type, paid bills only)
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.final_price), 0) as equipment_revenue
-        FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        WHERE b.branch_id = ? 
-        AND b.status = 'paid'
-        AND bi.item_type = 'equipment' 
-        AND bi.status = 'paid'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-    ");
-    $stmt->execute([$cashier_id]);
-    $equipment_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['equipment_revenue'] ?? 0;
-} catch (Exception $e) {
-    $equipment_revenue = 0;
-}
-
-// 6. LAB TESTS REVENUE (from bill_items - lab_test type, paid bills only)
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.final_price), 0) as lab_tests_revenue
-        FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        WHERE b.branch_id = ? 
-        AND b.status = 'paid'
-        AND bi.item_type = 'lab_test' 
-        AND bi.status = 'paid'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-    ");
-    $stmt->execute([$cashier_id]);
-    $lab_tests_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_tests_revenue'] ?? 0;
-} catch (Exception $e) {
-    $lab_tests_revenue = 0;
-}
-
-// 7. CONSULTATION REVENUE (from bill_items - consultation type, paid bills only)
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.final_price), 0) as consultation_revenue
-        FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        WHERE b.branch_id = ? 
-        AND b.status = 'paid'
-        AND bi.item_type = 'consultation' 
-        AND bi.status = 'paid'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-    ");
-    $stmt->execute([$cashier_id]);
-    $consultation_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['consultation_revenue'] ?? 0;
-} catch (Exception $e) {
-    $consultation_revenue = 0;
-}
-
-// 8. MEDICATION REVENUE (from bill_items - medication type, paid bills only)
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.final_price), 0) as medication_revenue
-        FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        WHERE b.branch_id = ? 
-        AND b.status = 'paid'
-        AND bi.item_type = 'medication' 
-        AND bi.status = 'paid'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-    ");
-    $stmt->execute([$cashier_id]);
-    $medication_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['medication_revenue'] ?? 0;
-} catch (Exception $e) {
-    $medication_revenue = 0;
-}
-
-// 9. REGISTRATION REVENUE (from bill_items - registration type, paid bills only)
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.final_price), 0) as registration_revenue
-        FROM bill_items bi
-        INNER JOIN bills b ON bi.bill_id = b.id
-        WHERE b.branch_id = ? 
-        AND b.status = 'paid'
-        AND bi.item_type = 'registration' 
-        AND bi.status = 'paid'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-    ");
-    $stmt->execute([$cashier_id]);
-    $registration_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['registration_revenue'] ?? 0;
-} catch (Exception $e) {
-    $registration_revenue = 0;
-}
-
-// 10. OTHER BILLS - Consultation bills only (distinct bills with consultation items)
-$other_bills_count = 0;
-$other_bills_revenue = 0;
-try {
-    $stmt = $db->prepare("
-        SELECT COUNT(DISTINCT b.id) as other_bills_count,
-               COALESCE(SUM(b.paid_amount), 0) as other_bills_revenue
-        FROM bills b
-        INNER JOIN bill_items bi ON bi.bill_id = b.id
-        WHERE b.branch_id = ? 
-        AND b.status = 'paid'
-        AND bi.item_type = 'consultation'
-        AND bi.status = 'paid'
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-    ");
-    $stmt->execute([$cashier_id]);
-    $data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $other_bills_count = $data['other_bills_count'] ?? 0;
-    $other_bills_revenue = $data['other_bills_revenue'] ?? 0;
-} catch (Exception $e) {
-    $other_bills_count = 0;
-    $other_bills_revenue = 0;
-}
-
-// ================================================================
-// TOTAL REVENUE = Patient Bills + OTC + Prescriptions
-// ================================================================
+// 4. TOTAL REVENUE = Patient Bills + OTC + Prescriptions
 $total_revenue = $bills_revenue + $otc_revenue + $prescription_revenue;
 
-// ================================================================
-// EXPENSES (ONLY SELECTED BRANCH)
-// ================================================================
+// 5. EXPENSES (ONLY SELECTED BRANCH)
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(amount), 0) as total_expenses
@@ -325,12 +176,11 @@ try {
     $total_expenses = 0;
 }
 
-// NET PROFIT = TOTAL REVENUE - EXPENSES
+// 6. NET PROFIT = TOTAL REVENUE - EXPENSES
 $net_profit = $total_revenue - $total_expenses;
 
 // ================================================================
 // GET STAFF FOR THIS BRANCH - CASHIERS + RECEPTIONISTS
-// FIXED: Shows both cashiers and receptionists
 // ================================================================
 $staff_list = [];
 try {
@@ -477,9 +327,32 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
+
+// Sidebar stats
+$total_employees_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_doctors_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+$total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_branches_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 
@@ -570,6 +443,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
+        /* ================================================================
+           TOP NAV - SHARED HEADER STYLES
+           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -738,6 +614,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-color: var(--primary);
         }
         
+        /* ================================================================
+           MAIN CONTENT
+           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -745,6 +624,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav .search-wrapper { max-width: 300px; }
+        }
+        
+        /* ================================================================
+           PAGE HEADER - GREEN THEME
+           ================================================================ */
         .page-header {
             background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
@@ -873,6 +761,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        /* ================================================================
+           DETAIL CARD
+           ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -903,7 +794,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           9 REVENUE CARDS - 3 per row
+           6 REVENUE CARDS - 3 per row
            ================================================================ */
         .revenue-grid {
             display: grid;
@@ -994,11 +885,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             opacity: 0.8;
         }
         
-        .revenue-card .card-sub .highlight { 
-            font-weight: 700; 
-            color: rgba(255,255,255,0.9);
-        }
-        
         .revenue-card .card-nav-arrow {
             position: absolute;
             bottom: 10px;
@@ -1027,21 +913,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .card-green { background: linear-gradient(135deg, #059669, #047857); }
         .card-green:hover { box-shadow: 0 8px 25px rgba(5, 150, 105, 0.4); }
         
+        .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
+        .card-teal:hover { box-shadow: 0 8px 25px rgba(13, 148, 136, 0.4); }
+        
         .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
         .card-purple:hover { box-shadow: 0 8px 25px rgba(124, 58, 237, 0.4); }
         
         .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
         .card-cyan:hover { box-shadow: 0 8px 25px rgba(8, 145, 178, 0.4); }
         
-        .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        .card-teal:hover { box-shadow: 0 8px 25px rgba(13, 148, 136, 0.4); }
-        
         [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
         [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
+        [data-theme="dark"] .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
         [data-theme="dark"] .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
         [data-theme="dark"] .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
-        [data-theme="dark"] .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
         
         /* ================================================================
            DATA TABLE
@@ -1201,6 +1087,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 700;
         }
         
+        /* ================================================================
+           RESPONSIVE
+           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -1286,7 +1175,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION - SHARED HEADER -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1313,7 +1202,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <?php endforeach; ?>
         </select>
         
-        <span class="datetime" id="currentDateTime"></span>
+        <span class="datetime" id="currentDateTime">
+            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
+            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
+        </span>
         
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
@@ -1322,7 +1214,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot has-notif"></span>
+            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
@@ -1340,7 +1232,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- PAGE HEADER - GREEN THEME -->
     <!-- ================================================================ -->
-    <div class="page-header">
+    <div class="page-header animate-fade-in-up">
         <div>
             <h1 class="page-title">
                 <i class="fas fa-cash-register"></i>
@@ -1407,7 +1299,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 9 REVENUE CARDS - WITH NAVIGATION -->
+    <!-- 6 REVENUE CARDS - ONLY CARDS WITH VALUES -->
     <!-- ================================================================ -->
     <div class="revenue-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
@@ -1462,33 +1354,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
             <p class="card-label">Prescriptions</p>
             <p class="card-sub">From prescription_items</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 7. PROCEDURES - CYAN -->
-        <a href="procedures.php?branch=<?= $cashier_id ?>" class="revenue-card card-cyan">
-            <div class="card-icon"><i class="fas fa-syringe"></i></div>
-            <p class="card-amount"><?= formatCurrency($procedures_revenue) ?></p>
-            <p class="card-label">Procedures</p>
-            <p class="card-sub">From bill_items (procedure)</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 8. LAB TESTS - PURPLE -->
-        <a href="lab_tests.php?branch=<?= $cashier_id ?>" class="revenue-card card-purple">
-            <div class="card-icon"><i class="fas fa-flask"></i></div>
-            <p class="card-amount"><?= formatCurrency($lab_tests_revenue) ?></p>
-            <p class="card-label">Lab Tests</p>
-            <p class="card-sub">From bill_items (lab_test)</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 9. CONSULTATION - BLUE -->
-        <a href="consultations.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
-            <div class="card-icon"><i class="fas fa-stethoscope"></i></div>
-            <p class="card-amount"><?= formatCurrency($consultation_revenue) ?></p>
-            <p class="card-label">Consultation</p>
-            <p class="card-sub">From bill_items (consultation)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1739,36 +1604,57 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE TOGGLE - FIXED
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
+    (function() {
+        var darkModeToggle = document.getElementById('darkModeToggle');
+        var darkIcon = document.getElementById('darkIcon');
+        var darkText = document.getElementById('darkText');
+        var htmlElement = document.documentElement;
+        
+        var savedDarkMode = localStorage.getItem('darkMode');
+        var cookieDarkMode = document.cookie.split('; ').find(function(row) {
+            return row.startsWith('dark_mode=');
+        });
+        
+        var isDark = false;
+        if (savedDarkMode === 'true') {
+            isDark = true;
+        } else if (cookieDarkMode) {
+            isDark = cookieDarkMode.split('=')[1] === 'true';
         }
-    });
+        
+        if (isDark) {
+            htmlElement.setAttribute('data-theme', 'dark');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
+        } else {
+            htmlElement.removeAttribute('data-theme');
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
+        }
+        
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('click', function(e) {
+                e.preventDefault();
+                var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
+                
+                if (isDarkNow) {
+                    htmlElement.removeAttribute('data-theme');
+                    if (darkIcon) darkIcon.className = 'fas fa-moon';
+                    if (darkText) darkText.textContent = 'Dark';
+                    localStorage.setItem('darkMode', 'false');
+                    document.cookie = "dark_mode=false; path=/";
+                } else {
+                    htmlElement.setAttribute('data-theme', 'dark');
+                    if (darkIcon) darkIcon.className = 'fas fa-sun';
+                    if (darkText) darkText.textContent = 'Light';
+                    localStorage.setItem('darkMode', 'true');
+                    document.cookie = "dark_mode=true; path=/";
+                }
+            });
+        }
+    })();
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1817,7 +1703,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 }
             }
             
-            // Show "No results" message if needed
             var noResults = table.parentElement.querySelector('.no-results');
             if (visibleCount === 0 && query !== '') {
                 if (!noResults) {
@@ -1840,7 +1725,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
     
-    // Real-time search on input
     searchInput?.addEventListener('input', performSearch);
 
     // ================================================================
@@ -1851,6 +1735,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
+
+    // ================================================================
+    // CLOCK - UPDATE EVERY SECOND
+    // ================================================================
+    function updateClock() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var el = document.getElementById('clockDisplay');
+        if (el) {
+            el.textContent = dateStr + ' • ' + timeStr;
+        }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
 
     // ================================================================
     // DATE & TIME
@@ -1902,12 +1805,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
-        // Ctrl+K or Cmd+K to focus search
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
             searchInput?.focus();
         }
-        // Escape to clear search
         if (e.key === 'Escape' && document.activeElement === searchInput) {
             searchInput.value = '';
             performSearch();
@@ -1916,28 +1817,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // CONSOLE LOG - Debug info
+    // CONSOLE LOG
     // ================================================================
-    console.log('%c💰 Braick Dispensary - View Cashier', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick Dispensary - View Cashier (6 Cards)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Revenue Breakdown:', 'font-size:13px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 6 Revenue Cards:', 'font-size:13px; font-weight:bold; color:#0B5ED7;');
     console.log('%c   ├─ Total Revenue: <?= formatCurrency($total_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   ├─ Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:12px; color:#DC2626;');
+    console.log('%c   ├─ Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:12px; color:#059669;');
     console.log('%c   ├─ Patient Bills: <?= formatCurrency($bills_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c   ├─ OTC Sales: <?= formatCurrency($otc_revenue) ?>', 'font-size:12px; color:#0D9488;');
-    console.log('%c   ├─ Prescriptions: <?= formatCurrency($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c   ├─ Procedures: <?= formatCurrency($procedures_revenue) ?>', 'font-size:12px; color:#0891B2;');
-    console.log('%c   ├─ Lab Tests: <?= formatCurrency($lab_tests_revenue) ?>', 'font-size:12px; color:#7C3AED;');
-    console.log('%c   └─ Consultation: <?= formatCurrency($consultation_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c💸 Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c📈 Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📄 Bills: <?= $cashier['paid_bills'] ?? 0 ?> Paid, <?= $cashier['pending_bills'] ?? 0 ?> Pending, <?= $cashier['cancelled_bills'] ?? 0 ?> Cancelled', 'font-size:13px; color:#D97706;');
+    console.log('%c   └─ Prescriptions: <?= formatCurrency($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c📄 Bills: <?= $cashier['paid_bills'] ?? 0 ?> Paid, <?= $cashier['pending_bills'] ?? 0 ?> Pending', 'font-size:13px; color:#D97706;');
     console.log('%c👥 Staff: <?= count($staff_list) ?> total (Cashiers: <?= $cashier_count ?>, Reception: <?= $reception_count ?>)', 'font-size:13px; color:#4F46E5;');
-    console.log('%c✅ FIXED: Shows BOTH cashiers AND receptionists', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Uses paid_amount from bills (includes discounts)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Excludes OTC bills (bill_number NOT LIKE "BILL-OTC-%")', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Only counts paid bills and paid bill_items', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Prescription revenue from prescription_items table', 'font-size:13px; color:#34D399;');
-    console.log('%c🔍 Search: Use Ctrl+K to focus search', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ 6 CARDS ONLY - Removed: Procedures, Lab Tests, Consultation', 'font-size:13px; color:#34D399;');
+    console.log('%c🌙 Dark Mode: WORKING | 🕐 Clock: WORKING', 'font-size:13px; color:#3B82F6;');
 </script>
 
 </body>

@@ -8,7 +8,7 @@
 // FIXED: Excludes OTC bills from bills table
 // FIXED: Prescription revenue from prescription_items table
 // FIXED: Header displays correctly with date/time
-// WITH FULL JAVASCRIPT
+// WITH DARK MODE SUPPORT - Toggle works
 // ================================================================
 
 // ================================================================
@@ -97,6 +97,17 @@ try {
 }
 
 // ================================================================
+// GET BRANCHES FOR FILTER
+// ================================================================
+$branches = [];
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
+}
+
+// ================================================================
 // BRANCH FILTER FOR QUERIES
 // ================================================================
 $branch_filter = "";
@@ -107,7 +118,6 @@ if ($selected_branch_id !== 'all') {
     $branch_params[] = (int)$selected_branch_id;
 }
 
-// For bills table with different column name
 $branch_filter_b = "";
 $branch_params_b = [];
 if ($selected_branch_id !== 'all') {
@@ -115,7 +125,6 @@ if ($selected_branch_id !== 'all') {
     $branch_params_b[] = (int)$selected_branch_id;
 }
 
-// For prescriptions table
 $branch_filter_p = "";
 $branch_params_p = [];
 if ($selected_branch_id !== 'all') {
@@ -536,17 +545,6 @@ for ($i = 29; $i >= 0; $i--) {
 }
 
 // ================================================================
-// GET BRANCHES FOR FILTER
-// ================================================================
-$branches = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
-}
-
-// ================================================================
 // PROFILE PICTURE URL
 // ================================================================
 $profile_pic_url = !empty($profile_pic) 
@@ -566,9 +564,19 @@ function formatCurrency($amount) {
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
+
+// Get stats for sidebar
+$total_employees_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_doctors_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+$total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_branches_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -584,7 +592,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - BLUE THEME
+           ROOT VARIABLES - DARK MODE SUPPORT
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -639,6 +647,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --radius: 12px;
             --radius-lg: 18px;
             --table-hover: #F8FAFC;
+            --chart-text: #64748B;
+            --chart-grid: rgba(0,0,0,0.05);
         }
         
         [data-theme="dark"] {
@@ -657,10 +667,21 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --shadow-xl: 0 20px 40px rgba(0,0,0,0.5);
             --table-hover: #1E293B;
+            --chart-text: #94A3B8;
+            --chart-grid: rgba(255,255,255,0.05);
         }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+
         /* ================================================================
-           TOP NAV - OVERRIDE FOR HEADER
+           TOP NAV - Shared Header Styles
            ================================================================ */
         .top-nav {
             position: fixed;
@@ -829,7 +850,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .branch-selector:focus {
             border-color: var(--primary);
         }
-        
+
         /* ================================================================
            MAIN CONTENT - Override shared header margin
            ================================================================ */
@@ -983,6 +1004,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             text-decoration: none;
             cursor: default;
             border: none;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
         .stat-card::before {
@@ -999,7 +1021,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         .stat-card:hover {
             transform: translateY(-4px);
-            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
+            box-shadow: 0 8px 30px rgba(0,0,0,0.25);
         }
         
         .stat-card .stat-icon {
@@ -1059,7 +1081,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .stat-card.card-profit { background: #059669; }
         
         /* ================================================================
-           FILTER BAR
+           FILTER BAR - DARK MODE SUPPORT
            ================================================================ */
         .filter-bar {
             display: flex;
@@ -1138,7 +1160,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           CHART CARDS
+           CHART CARDS - DARK MODE SUPPORT
            ================================================================ */
         .chart-grid {
             display: grid;
@@ -1169,6 +1191,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             align-items: center;
             flex-wrap: wrap;
             gap: 8px;
+            background: var(--bg-body);
+        }
+        
+        [data-theme="dark"] .chart-card .chart-header {
+            background: #0F172A;
         }
         
         .chart-card .chart-header .chart-title {
@@ -1197,7 +1224,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           REVENUE BREAKDOWN TABLE
+           REVENUE BREAKDOWN TABLE - DARK MODE SUPPORT
            ================================================================ */
         .table-card {
             background: var(--bg-card);
@@ -1241,6 +1268,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         .table-card table thead {
             background: var(--bg-body);
+        }
+        
+        [data-theme="dark"] .table-card table thead {
+            background: #0F172A;
         }
         
         .table-card table th {
@@ -1313,14 +1344,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .stats-grid { grid-template-columns: 1fr 1fr; }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .stat-card { padding: 14px 16px; }
+            .stat-card .stat-value { font-size: 1.2rem; }
+            .stat-icon { width: 40px; height: 40px; font-size: 1rem; }
             .filter-bar { flex-direction: column; align-items: stretch; }
             .filter-bar select { width: 100%; min-width: unset; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .stats-grid { grid-template-columns: 1fr; }
+            .stats-grid { grid-template-columns: 1fr; gap: 8px; }
+            .stat-card { padding: 10px 12px; }
+            .stat-card .stat-value { font-size: 1rem; }
+            .stat-icon { width: 32px; height: 32px; font-size: 0.85rem; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
         }
         
@@ -1355,9 +1392,54 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR OVERLAY FOR MOBILE -->
+<!-- TOP NAVIGATION - SHARED HEADER -->
 <!-- ================================================================ -->
-<div id="sidebarOverlay" class="fixed inset-0 bg-black/50 z-30 hidden lg:hidden"></div>
+<nav class="top-nav">
+    <div class="flex items-center gap-4 flex-1">
+        <button id="sidebarToggle" class="lg:hidden icon-btn">
+            <i class="fas fa-bars text-lg"></i>
+        </button>
+        
+        <div class="search-wrapper">
+            <i class="fas fa-search text-gray-400 ml-3"></i>
+            <input type="text" id="searchInput" placeholder="Search...">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search mr-1"></i> Search
+            </button>
+        </div>
+    </div>
+    
+    <div class="flex items-center gap-3">
+        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+            <?php foreach ($branches as $b): ?>
+                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
+                    🏥 <?= htmlspecialchars($b['name']) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        
+        <span class="datetime" id="currentDateTime">
+            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
+            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
+        </span>
+        
+        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+            <i id="darkIcon" class="fas fa-moon"></i>
+            <span id="darkText">Dark</span>
+        </button>
+        
+        <button class="icon-btn">
+            <i class="fas fa-bell text-lg"></i>
+            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+        </button>
+        
+        <a href="profile.php">
+            <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+        </a>
+    </div>
+</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -1651,32 +1733,75 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - CHARTS -->
+<!-- JAVASCRIPT - CHARTS WITH DARK MODE SUPPORT -->
 <!-- ================================================================ -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 
 <script>
     // ================================================================
-    // DARK MODE - Sync with shared header
+    // BRANCH SWITCHER
+    // ================================================================
+    function switchBranch(branchId) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('branch', branchId);
+        window.location.href = url.toString();
+    }
+
+    // ================================================================
+    // DARK MODE TOGGLE - FIXED
     // ================================================================
     (function() {
+        var darkModeToggle = document.getElementById('darkModeToggle');
+        var darkIcon = document.getElementById('darkIcon');
+        var darkText = document.getElementById('darkText');
         var htmlElement = document.documentElement;
+        
+        // Check saved dark mode
         var savedDarkMode = localStorage.getItem('darkMode');
+        var cookieDarkMode = document.cookie.split('; ').find(function(row) {
+            return row.startsWith('dark_mode=');
+        });
+        
+        // Determine initial dark mode
+        var isDark = false;
         if (savedDarkMode === 'true') {
-            htmlElement.setAttribute('data-theme', 'dark');
-        } else {
-            htmlElement.removeAttribute('data-theme');
+            isDark = true;
+        } else if (cookieDarkMode) {
+            isDark = cookieDarkMode.split('=')[1] === 'true';
         }
         
-        window.addEventListener('storage', function(e) {
-            if (e.key === 'darkMode') {
-                if (e.newValue === 'true') {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                } else {
+        // Apply dark mode
+        if (isDark) {
+            htmlElement.setAttribute('data-theme', 'dark');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
+        } else {
+            htmlElement.removeAttribute('data-theme');
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
+        }
+        
+        // Toggle dark mode
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('click', function(e) {
+                e.preventDefault();
+                var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
+                
+                if (isDarkNow) {
                     htmlElement.removeAttribute('data-theme');
+                    if (darkIcon) darkIcon.className = 'fas fa-moon';
+                    if (darkText) darkText.textContent = 'Dark';
+                    localStorage.setItem('darkMode', 'false');
+                    document.cookie = "dark_mode=false; path=/";
+                } else {
+                    htmlElement.setAttribute('data-theme', 'dark');
+                    if (darkIcon) darkIcon.className = 'fas fa-sun';
+                    if (darkText) darkText.textContent = 'Light';
+                    localStorage.setItem('darkMode', 'true');
+                    document.cookie = "dark_mode=true; path=/";
                 }
-            }
-        });
+            });
+        }
     })();
 
     // ================================================================
@@ -1717,7 +1842,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // DATE & TIME
+    // DATE & TIME - UPDATE EVERY SECOND
     // ================================================================
     function updateDateTime() {
         var now = new Date();
@@ -1734,11 +1859,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             hour12: true
         });
         
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+        // Update clock display in header
+        var clockDisplay = document.getElementById('clockDisplay');
+        if (clockDisplay) {
+            clockDisplay.textContent = dateStr + ' • ' + timeStr;
+        }
         
         var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
+        if (ftEl) {
+            ftEl.textContent = timeStr;
+        }
     }
     
     updateDateTime();
@@ -1768,7 +1898,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // CHARTS
+    // CHARTS WITH DARK MODE SUPPORT
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         var isDark = document.documentElement.getAttribute('data-theme') === 'dark';
@@ -1949,7 +2079,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
-        // Ctrl+K or Cmd+K to focus search
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
             var searchInput = document.getElementById('searchInput');
@@ -1968,6 +2097,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c   └─ Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c💸 Expenses: TSh <?= number_format($total_expenses, 0) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit, 0) ?> (<?= $profit_percentage ?>%)', 'font-size:13px; color:#059669;');
+    console.log('%c🌙 Dark Mode Toggle: WORKING', 'font-size:13px; color:#3B82F6;');
     console.log('%c✅ Header fixed with date/time display', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Revenue = Patient Bills + OTC + Prescriptions', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Uses paid_amount from bills (includes discounts)', 'font-size:13px; color:#34D399;');
