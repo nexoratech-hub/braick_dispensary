@@ -18,6 +18,9 @@
 // 13. FIXED: service_id stored in visits table
 // 14. FIXED: visit_type inajaza vizuri (service_name)
 // 15. FIXED: Debug logging added
+// 16. REMOVED: Complaint / Reason card - reception only fills symptoms
+// 17. AUTO-REMOVE: Patients with completed consultation or lab results are automatically removed from lists
+// 18. REMOVED: All Auto-Remove text badges and labels - only one notification that disappears after 5 seconds
 // ================================================================
 
 // ================================================================
@@ -187,7 +190,8 @@ try {
     $lab_tests_catalog = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET ALL PATIENTS
+    // GET ALL PATIENTS - ONLY ACTIVE VISITS
+    // AUTO-REMOVE: Patients with completed visits or completed lab tests are NOT shown
     // ================================================================
     $query = "
         SELECT 
@@ -218,9 +222,21 @@ try {
             v.discount_percent,
             v.created_at as visit_created_at,
             v.doctor_id as visit_doctor_id,
-            DATEDIFF(NOW(), p.created_at) as patient_days
+            DATEDIFF(NOW(), p.created_at) as patient_days,
+            CASE 
+                WHEN v.status IN ('completed', 'cancelled') THEN 1 
+                ELSE 0 
+            END as visit_is_completed,
+            (
+                SELECT COUNT(*) 
+                FROM lab_tests lt 
+                WHERE lt.patient_id = p.id 
+                AND lt.status NOT IN ('completed', 'cancelled')
+                AND lt.visit_id = v.id
+            ) as pending_lab_tests_count
         FROM patients p
-        LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
+        LEFT JOIN visits v ON p.id = v.patient_id 
+            AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'completed')
         LEFT JOIN users u ON v.doctor_id = u.id
         WHERE p.branch_id = ?
     ";
@@ -237,7 +253,28 @@ try {
     
     $stmt = $db->prepare($query);
     $stmt->execute($params);
-    $all_patients = $stmt->fetchAll();
+    $all_patients_raw = $stmt->fetchAll();
+    
+    // ================================================================
+    // FILTER: AUTO-REMOVE patients with completed visits OR completed lab tests
+    // ================================================================
+    $all_patients = [];
+    foreach ($all_patients_raw as $patient) {
+        // Skip if visit is completed or cancelled
+        if (!empty($patient['visit_id']) && ($patient['visit_status'] === 'completed' || $patient['visit_status'] === 'cancelled')) {
+            continue;
+        }
+        
+        // Skip if patient has no pending lab tests and visit is lab_test status
+        if (!empty($patient['visit_id']) && $patient['visit_status'] === 'lab_test') {
+            $pending_labs = (int)($patient['pending_lab_tests_count'] ?? 0);
+            if ($pending_labs == 0) {
+                continue;
+            }
+        }
+        
+        $all_patients[] = $patient;
+    }
     
     // ================================================================
     // GET SELECTED PATIENT DATA
@@ -252,7 +289,7 @@ try {
     }
     
     // ================================================================
-    // SEPARATE PATIENTS
+    // SEPARATE PATIENTS - ONLY ACTIVE ONES
     // ================================================================
     $pending_patients = [];
     $assigned_patients = [];
@@ -466,7 +503,7 @@ try {
         $action = $_POST['action'] ?? '';
         
         // ================================================================
-        // AJAX: GET LIVE DATA
+        // AJAX: GET LIVE DATA - FILTERED FOR ACTIVE ONLY
         // ================================================================
         if ($action === 'get_live_data') {
             header('Content-Type: application/json');
@@ -497,16 +534,43 @@ try {
                         v.discount_percent,
                         v.doctor_id as visit_doctor_id,
                         v.created_at as visit_created_at,
-                        DATEDIFF(NOW(), p.created_at) as patient_days
+                        DATEDIFF(NOW(), p.created_at) as patient_days,
+                        CASE 
+                            WHEN v.status IN ('completed', 'cancelled') THEN 1 
+                            ELSE 0 
+                        END as visit_is_completed,
+                        (
+                            SELECT COUNT(*) 
+                            FROM lab_tests lt 
+                            WHERE lt.patient_id = p.id 
+                            AND lt.status NOT IN ('completed', 'cancelled')
+                            AND lt.visit_id = v.id
+                        ) as pending_lab_tests_count
                     FROM patients p
-                    LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
+                    LEFT JOIN visits v ON p.id = v.patient_id 
+                        AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'completed')
                     LEFT JOIN users u ON v.doctor_id = u.id
                     WHERE p.branch_id = ?
                     GROUP BY p.id
                     ORDER BY p.created_at DESC, p.id DESC
                 ");
                 $stmt->execute([$selected_branch_id]);
-                $updated_patients = $stmt->fetchAll();
+                $updated_patients_raw = $stmt->fetchAll();
+                
+                // FILTER: Remove completed visits and completed lab tests
+                $updated_patients = [];
+                foreach ($updated_patients_raw as $patient) {
+                    if (!empty($patient['visit_id']) && ($patient['visit_status'] === 'completed' || $patient['visit_status'] === 'cancelled')) {
+                        continue;
+                    }
+                    if (!empty($patient['visit_id']) && $patient['visit_status'] === 'lab_test') {
+                        $pending_labs = (int)($patient['pending_lab_tests_count'] ?? 0);
+                        if ($pending_labs == 0) {
+                            continue;
+                        }
+                    }
+                    $updated_patients[] = $patient;
+                }
                 
                 $stmt = $db->prepare("
                     SELECT id, full_name, specialty, is_online 
@@ -847,7 +911,8 @@ try {
                     'lab_tests_html' => $lab_tests_html,
                     'online_doctors_list' => $online_options,
                     'offline_doctors_list' => $offline_options,
-                    'timestamp' => date('H:i:s')
+                    'timestamp' => date('H:i:s'),
+                    'auto_removed_note' => 'Patients with completed consultation or lab results are automatically removed from lists.'
                 ]);
                 exit;
             } catch (Exception $e) {
@@ -890,7 +955,8 @@ try {
                             DATEDIFF(NOW(), p.created_at) as patient_days,
                             DATEDIFF(NOW(), v.created_at) as visit_days
                         FROM patients p
-                        LEFT JOIN visits v ON p.id = v.patient_id AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test')
+                        LEFT JOIN visits v ON p.id = v.patient_id 
+                            AND v.status IN ('new', 'pending', 'assigned', 'with_doctor', 'lab_test', 'completed')
                         LEFT JOIN users u ON v.doctor_id = u.id
                         WHERE p.id = ? AND p.branch_id = ?
                     ");
@@ -903,7 +969,7 @@ try {
                         echo json_encode([
                             'success' => true,
                             'patient' => $patient,
-                            'has_active_visit' => !empty($patient['visit_id']),
+                            'has_active_visit' => !empty($patient['visit_id']) && !in_array($patient['visit_status'], ['completed', 'cancelled']),
                             'visit_status' => $patient['visit_status'] ?? 'none',
                             'assigned_doctor' => $patient['assigned_doctor_name'] ?? 'None',
                             'assigned_doctor_id' => $patient['assigned_doctor_id'] ?? null,
@@ -917,7 +983,8 @@ try {
                             'pharmacy_fees_total' => $patient['pharmacy_fees_total'] ?? 0,
                             'other_fees_total' => $patient['other_fees_total'] ?? 0,
                             'visit_total' => $patient['visit_total'] ?? 0,
-                            'payment_status' => $patient['payment_status'] ?? 'pending'
+                            'payment_status' => $patient['payment_status'] ?? 'pending',
+                            'is_completed' => in_array($patient['visit_status'], ['completed', 'cancelled'])
                         ]);
                     } else {
                         echo json_encode(['success' => false, 'message' => 'Patient not found']);
@@ -941,7 +1008,6 @@ try {
             $doctor_id = (int)($_POST['doctor_id'] ?? 0);
             $service_id = (int)($_POST['service_id'] ?? 0);
             $symptoms = trim($_POST['symptoms'] ?? '');
-            $complaint = trim($_POST['complaint'] ?? '');
             $notes = trim($_POST['notes'] ?? '');
             $lab_test_ids = isset($_POST['lab_test_ids']) ? $_POST['lab_test_ids'] : [];
             $assignment_type = $_POST['assignment_type'] ?? 'doctor';
@@ -970,12 +1036,11 @@ try {
                 $db->beginTransaction();
                 
                 // ================================================================
-                // STEP 1: GET SERVICE DETAILS - HAKIKISHA service_name inapatikana
+                // STEP 1: GET SERVICE DETAILS
                 // ================================================================
-                $service_name = 'General Consultation'; // DEFAULT
+                $service_name = 'General Consultation';
                 $consultation_fee = 0;
                 
-                // Enable error logging for debugging
                 error_log("=== CHANGE DOCTOR DEBUG ===");
                 error_log("Service ID received: " . $service_id);
                 error_log("Patient ID: " . $patient_id);
@@ -993,7 +1058,6 @@ try {
                         error_log("Service FOUND: " . $service_name . " - Price: " . $consultation_fee . " - ID: " . $service['id']);
                     } else {
                         error_log("Service NOT FOUND for ID: " . $service_id);
-                        // Try to get any active consultation service as fallback
                         $stmt = $db->prepare("SELECT id, service_name, price FROM services WHERE category_id = 2 AND is_active = 1 AND (branch_id = ? OR branch_id IS NULL) LIMIT 1");
                         $stmt->execute([$selected_branch_id]);
                         $fallback_service = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -1030,7 +1094,7 @@ try {
                     }
                 }
                 
-                // CHECK IF VISIT EXISTS
+                // CHECK IF VISIT EXISTS - only active visits
                 $stmt = $db->prepare("
                     SELECT id, status, doctor_id, visit_number, visit_type, service_id
                     FROM visits 
@@ -1071,7 +1135,6 @@ try {
                             visit_type = ?,
                             service_id = ?,
                             symptoms = ?,
-                            complaint = ?,
                             notes = ?,
                             consultation_fee = ?,
                             updated_at = NOW()
@@ -1081,10 +1144,9 @@ try {
                     $stmt->execute([
                         $doctor_id_to_store,
                         $visit_status,
-                        $visit_type_to_store,      // <-- service_name
-                        $service_id_to_store,      // <-- service_id
+                        $visit_type_to_store,
+                        $service_id_to_store,
                         $symptoms,
-                        $complaint,
                         $notes,
                         $consultation_fee,
                         $visit_id
@@ -1103,20 +1165,19 @@ try {
                     $stmt = $db->prepare("
                         INSERT INTO visits (
                             visit_number, patient_id, doctor_id, branch_id, 
-                            visit_type, service_id, status, symptoms, complaint, notes, 
+                            visit_type, service_id, status, symptoms, notes, 
                             created_at, updated_at, consultation_fee, receptionist_id
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?)
                     ");
                     $stmt->execute([
                         $visit_number, 
                         $patient_id, 
                         $doctor_id_to_store, 
                         $selected_branch_id, 
-                        $visit_type_to_store,      // <-- service_name
-                        $service_id_to_store,      // <-- service_id
+                        $visit_type_to_store,
+                        $service_id_to_store,
                         $visit_status, 
                         $symptoms, 
-                        $complaint, 
                         $notes, 
                         $consultation_fee, 
                         $user_id
@@ -2244,6 +2305,34 @@ include_once '../../components/reception_sidebar.php';
             display: none !important;
         }
         
+        /* Auto-remove notification - appears then disappears */
+        .auto-remove-notification {
+            max-width: 1100px;
+            margin: 0 auto 16px;
+            padding: 10px 18px;
+            border-radius: var(--radius);
+            background: var(--success-bg);
+            border: 2px solid var(--success);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            transition: all 0.5s ease;
+            opacity: 1;
+            max-height: 200px;
+            overflow: hidden;
+        }
+        
+        .auto-remove-notification.hide {
+            opacity: 0;
+            max-height: 0;
+            padding: 0 18px;
+            margin: 0 auto;
+            border-width: 0;
+            overflow: hidden;
+            transition: all 0.5s ease;
+        }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
@@ -2378,6 +2467,19 @@ include_once '../../components/reception_sidebar.php';
             <div><?= $message ?></div>
         </div>
     <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- AUTO-REMOVE NOTIFICATION - DISAPPEARS AFTER 5 SECONDS -->
+    <!-- ================================================================ -->
+    <div class="auto-remove-notification" id="autoRemoveNotification">
+        <i class="fas fa-check-circle" style="color:var(--success);font-size:1.1rem;"></i>
+        <span style="font-weight:500;color:var(--text-primary);font-size:0.85rem;">
+            ✅ Patients with completed consultations or completed lab results are <strong>automatically removed</strong> from these lists.
+        </span>
+        <span style="font-size:0.7rem;color:var(--text-secondary);margin-left:auto;">
+            <i class="fas fa-info-circle"></i> Only active patients shown
+        </span>
+    </div>
 
     <!-- ================================================================ -->
     <!-- ASSIGNED PATIENTS LIST -->
@@ -2830,44 +2932,34 @@ include_once '../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- ROW 3: SYMPTOMS -->
-            <div class="grid-2-modern">
-                <div class="form-row-modern">
-                    <label class="form-label">
-                        <i class="fas fa-notes-medical label-icon"></i> Common Symptoms
-                    </label>
-                    <select name="symptoms_select" class="form-control-modern" id="symptomsSelect">
-                        <option value="">-- Select Common Symptom --</option>
-                        <?php foreach ($common_symptoms as $symptom): ?>
-                            <option value="<?= htmlspecialchars($symptom) ?>"><?= htmlspecialchars($symptom) ?></option>
-                        <?php endforeach; ?>
-                        <option value="other">✏️ Other (Type below)</option>
-                    </select>
-                </div>
+            <!-- ROW 3: SYMPTOMS (Reception only fills symptoms) -->
+            <div class="form-row-modern">
+                <label class="form-label">
+                    <i class="fas fa-notes-medical label-icon"></i> Symptoms <span class="text-xs text-gray-400">(Reception fills this)</span>
+                </label>
                 
-                <div class="form-row-modern">
-                    <label class="form-label">
-                        <i class="fas fa-file-medical label-icon"></i> Symptoms Details
-                    </label>
-                    <textarea name="symptoms" class="form-control-modern" placeholder="Describe patient symptoms in detail..." id="symptomsTextarea" rows="3"></textarea>
+                <div class="grid-2-modern">
+                    <div>
+                        <select name="symptoms_select" class="form-control-modern" id="symptomsSelect">
+                            <option value="">-- Select Common Symptom --</option>
+                            <?php foreach ($common_symptoms as $symptom): ?>
+                                <option value="<?= htmlspecialchars($symptom) ?>"><?= htmlspecialchars($symptom) ?></option>
+                            <?php endforeach; ?>
+                            <option value="other">✏️ Other (Type below)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <textarea name="symptoms" class="form-control-modern" placeholder="Describe patient symptoms in detail..." id="symptomsTextarea" rows="2"></textarea>
+                    </div>
                 </div>
             </div>
             
-            <!-- ROW 4: COMPLAINT & NOTES -->
-            <div class="grid-2-modern">
-                <div class="form-row-modern">
-                    <label class="form-label">
-                        <i class="fas fa-comment-medical label-icon"></i> Complaint / Reason
-                    </label>
-                    <textarea name="complaint" class="form-control-modern" placeholder="Patient's main complaint or reason for visit..." id="complaintInput" rows="3"></textarea>
-                </div>
-                
-                <div class="form-row-modern">
-                    <label class="form-label">
-                        <i class="fas fa-sticky-note label-icon"></i> Additional Notes
-                    </label>
-                    <textarea name="notes" class="form-control-modern" placeholder="Any additional notes..." id="notesInput" rows="3"></textarea>
-                </div>
+            <!-- ROW 4: Additional Notes (Reception can add notes) -->
+            <div class="form-row-modern">
+                <label class="form-label">
+                    <i class="fas fa-sticky-note label-icon"></i> Additional Notes <span class="text-xs text-gray-400">(Optional)</span>
+                </label>
+                <textarea name="notes" class="form-control-modern" placeholder="Any additional notes..." id="notesInput" rows="2"></textarea>
             </div>
             
             <!-- ================================================================ -->
@@ -3197,6 +3289,18 @@ include_once '../../components/reception_sidebar.php';
             setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 3500);
     }
+
+    // ================================================================
+    // AUTO-REMOVE NOTIFICATION - DISAPPEAR AFTER 5 SECONDS
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        var notification = document.getElementById('autoRemoveNotification');
+        if (notification) {
+            setTimeout(function() {
+                notification.classList.add('hide');
+            }, 5000);
+        }
+    });
 
     // ================================================================
     // SYMPTOMS SELECT
@@ -3593,7 +3697,7 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // LIVE DATA UPDATE
+    // LIVE DATA UPDATE - FILTERED WITH AUTO-REMOVE
     // ================================================================
     var updateInterval = null;
     var isUpdating = false;
@@ -3775,7 +3879,6 @@ include_once '../../components/reception_sidebar.php';
         var formData = new FormData(this);
         formData.append('action', 'change_doctor');
         
-        // Get service_id from visit type select
         var visitTypeSelect = document.getElementById('visitTypeSelect');
         if (visitTypeSelect) {
             var serviceId = visitTypeSelect.value;
@@ -3910,7 +4013,9 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c✅ visit_type = service_name from services table', 'font-size:13px; color:#34D399;');
     console.log('%c✅ service_id stored in visits table', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Consultation fee from services.price', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Debug logging enabled - check error logs', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Complaint/Reason card REMOVED - Reception only fills symptoms', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ AUTO-REMOVE: Completed consultations & lab results auto-removed from lists', 'font-size:13px; color:#7C3AED;');
+    console.log('%c✅ Notification disappears after 5 seconds', 'font-size:13px; color:#F59E0B;');
 </script>
 
 </body>

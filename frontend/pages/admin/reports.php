@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/reports.php
-// ADMIN - REPORTS DASHBOARD - FINAL VERSION
+// ADMIN - REPORTS DASHBOARD - FIXED VERSION
 // PDF: Logo starts at top, proper page breaks
 // BRAICK DISPENSARY
 // ================================================================
@@ -136,21 +136,28 @@ function getStatusBadgeClass($status) {
 
 // ================================================================
 // ================================================================
-// 1. PATIENT REPORT
+// 1. PATIENT REPORT - FIXED
 // ================================================================
 // ================================================================
 
 $patient_data = null;
 $patient_visits = [];
 $patient_bills_summary = [
+    'total_bills' => 0,
+    'total_amount' => 0,
     'total_paid' => 0,
+    'total_balance' => 0,
+    'total_discount' => 0,
+    'total_pharmacy_discount' => 0,
+    'total_cashier_discount' => 0,
+    'paid_count' => 0,
+    'pending_count' => 0,
     'total_prescription' => 0,
     'total_lab' => 0,
     'total_procedures_tools' => 0,
-    'total_consultation' => 0,
-    'total_bills' => 0,
-    'total_discount' => 0
+    'total_consultation' => 0
 ];
+$all_patient_bills = [];
 
 if ($report_type === 'patient') {
     $branch_filter_patients = "";
@@ -188,6 +195,39 @@ if ($report_type === 'patient') {
         $stmt->execute([$patient_id]);
         $patient_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+        // ============================================================
+        // FIXED: Get ALL bills directly from bills table using patient_id
+        // ============================================================
+        $stmt = $db->prepare("
+            SELECT * FROM bills 
+            WHERE patient_id = ? 
+            ORDER BY created_at DESC
+        ");
+        $stmt->execute([$patient_id]);
+        $all_patient_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+        // ============================================================
+        // FIXED: Calculate summary from ALL bills
+        // ============================================================
+        foreach ($all_patient_bills as $bill) {
+            $patient_bills_summary['total_bills']++;
+            $patient_bills_summary['total_amount'] += (float)($bill['total_amount'] ?? 0);
+            $patient_bills_summary['total_paid'] += (float)($bill['paid_amount'] ?? 0);
+            $patient_bills_summary['total_balance'] += (float)($bill['balance'] ?? 0);
+            $patient_bills_summary['total_discount'] += (float)($bill['total_discount'] ?? 0);
+            $patient_bills_summary['total_pharmacy_discount'] += (float)($bill['pharmacy_discount'] ?? 0);
+            $patient_bills_summary['total_cashier_discount'] += (float)($bill['cashier_discount'] ?? 0);
+            
+            if ($bill['status'] === 'paid') {
+                $patient_bills_summary['paid_count']++;
+            } else {
+                $patient_bills_summary['pending_count']++;
+            }
+        }
+
+        // ============================================================
+        // FIXED: Process visits with their data
+        // ============================================================
         foreach ($patient_visits as &$visit) {
             $visit_id = $visit['id'];
             
@@ -224,22 +264,18 @@ if ($report_type === 'patient') {
             $stmt->execute([$visit_id]);
             $visit['procedures_tools'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            // 5. Bills
-            $stmt = $db->prepare("
-                SELECT * FROM bills 
-                WHERE visit_id = ? 
-                ORDER BY created_at DESC
-            ");
-            $stmt->execute([$visit_id]);
-            $visit['bills'] = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            // 5. Bills - FIXED: Use patient_id to get all bills, then filter by visit_id
+            $visit['bills'] = array_filter($all_patient_bills, function($bill) use ($visit_id) {
+                return ($bill['visit_id'] ?? 0) == $visit_id;
+            });
             
-            // Determine bill type
+            // Determine bill type for each bill
             foreach ($visit['bills'] as &$bill) {
                 $bill['bill_type'] = 'Other';
                 $bill['bill_type_icon'] = 'fa-file-invoice';
                 $bill['bill_type_color'] = '#64748B';
                 
-                if (strpos($bill['bill_number'], 'BILL-PRES-') !== false) {
+                if (strpos($bill['bill_number'] ?? '', 'BILL-PRES-') !== false) {
                     $bill['bill_type'] = 'Prescription';
                     $bill['bill_type_icon'] = 'fa-prescription-bottle';
                     $bill['bill_type_color'] = '#7C3AED';
@@ -272,33 +308,8 @@ if ($report_type === 'patient') {
                 }
             }
             unset($bill);
-            
-            foreach ($visit['bills'] as $bill) {
-                $patient_bills_summary['total_bills']++;
-                $patient_bills_summary['total_discount'] += $bill['total_discount'] ?? 0;
-                
-                if ($bill['status'] === 'paid') {
-                    $patient_bills_summary['total_paid'] += $bill['total_amount'];
-                    
-                    if (strpos($bill['bill_number'], 'BILL-PRES-') !== false) {
-                        $patient_bills_summary['total_prescription'] += $bill['total_amount'];
-                    } else {
-                        $stmt = $db->prepare("SELECT item_type, total_price FROM bill_items WHERE bill_id = ?");
-                        $stmt->execute([$bill['id']]);
-                        $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
-                        foreach ($items as $item) {
-                            if ($item['item_type'] === 'lab_test') {
-                                $patient_bills_summary['total_lab'] += $item['total_price'];
-                            } elseif ($item['item_type'] === 'procedure' || $item['item_type'] === 'tool') {
-                                $patient_bills_summary['total_procedures_tools'] += $item['total_price'];
-                            } elseif ($item['item_type'] === 'consultation') {
-                                $patient_bills_summary['total_consultation'] += $item['total_price'];
-                            }
-                        }
-                    }
-                }
-            }
         }
+        unset($visit);
     }
 } else {
     $patients = [];
@@ -1891,48 +1902,47 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- PATIENT REPORT -->
+    <!-- PATIENT REPORT - FIXED -->
     <!-- ================================================================ -->
     <?php if ($report_type === 'patient'): ?>
     
-        <?php if ($patient_data && !empty($patient_visits)): ?>
+        <?php if ($patient_data && !empty($all_patient_bills)): ?>
         
         <div class="summary-grid animate-fade-in-up" style="animation-delay:0.1s;">
             <div class="summary-card">
                 <span class="card-icon-mini blue"><i class="fas fa-money-bill-wave"></i></span>
-                <p class="number blue">TSh <?= number_format($patient_bills_summary['total_paid'], 0) ?></p>
-                <p class="label">All Paid Bills</p>
+                <p class="number blue">TSh <?= number_format($patient_bills_summary['total_paid'] ?? 0, 0) ?></p>
+                <p class="label">Total Paid</p>
+                <p class="sub-label">Bills: <?= number_format($patient_bills_summary['total_bills'] ?? 0) ?></p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini purple"><i class="fas fa-prescription"></i></span>
-                <p class="number purple">TSh <?= number_format($patient_bills_summary['total_prescription'], 0) ?></p>
-                <p class="label">Prescription Bills</p>
+                <span class="card-icon-mini red"><i class="fas fa-receipt"></i></span>
+                <p class="number red">TSh <?= number_format($patient_bills_summary['total_discount'] ?? 0, 0) ?></p>
+                <p class="label">Total Discount</p>
+                <p class="sub-label">Pharmacy: TSh <?= number_format($patient_bills_summary['total_pharmacy_discount'] ?? 0, 0) ?> | Cashier: TSh <?= number_format($patient_bills_summary['total_cashier_discount'] ?? 0, 0) ?></p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini purple"><i class="fas fa-flask"></i></span>
-                <p class="number purple">TSh <?= number_format($patient_bills_summary['total_lab'], 0) ?></p>
-                <p class="label">Lab Test Bills</p>
+                <span class="card-icon-mini teal"><i class="fas fa-chart-line"></i></span>
+                <p class="number teal">TSh <?= number_format($patient_bills_summary['total_amount'] ?? 0, 0) ?></p>
+                <p class="label">Total Amount</p>
+                <p class="sub-label">Balance: TSh <?= number_format($patient_bills_summary['total_balance'] ?? 0, 0) ?></p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini orange"><i class="fas fa-syringe"></i></span>
-                <p class="number orange">TSh <?= number_format($patient_bills_summary['total_procedures_tools'], 0) ?></p>
-                <p class="label">Procedures & Tools</p>
-            </div>
-            <div class="summary-card">
-                <span class="card-icon-mini teal"><i class="fas fa-money-bill-wave"></i></span>
-                <p class="number teal">TSh <?= number_format($patient_bills_summary['total_discount'], 0) ?></p>
-                <p class="label">Total Discounts</p>
+                <span class="card-icon-mini green"><i class="fas fa-check-circle"></i></span>
+                <p class="number green"><?= number_format($patient_bills_summary['paid_count'] ?? 0) ?></p>
+                <p class="label">Paid Bills</p>
+                <p class="sub-label">Pending: <?= number_format($patient_bills_summary['pending_count'] ?? 0) ?></p>
             </div>
         </div>
         
         <div class="card animate-fade-in-up" style="animation-delay:0.12s;">
             <div class="card-header">
                 <h3 class="card-title"><i class="fas fa-user"></i> Patient Information</h3>
-                <span class="badge badge-info">ID: <?= htmlspecialchars($patient_data['patient_id']) ?></span>
+                <span class="badge badge-info">ID: <?= htmlspecialchars($patient_data['patient_id'] ?? 'N/A') ?></span>
             </div>
             <div class="card-body">
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
-                    <div><span style="color:var(--text-secondary);font-size:0.7rem;">Full Name</span><br><strong><?= htmlspecialchars($patient_data['full_name']) ?></strong></div>
+                    <div><span style="color:var(--text-secondary);font-size:0.7rem;">Full Name</span><br><strong><?= htmlspecialchars($patient_data['full_name'] ?? 'N/A') ?></strong></div>
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Gender</span><br><strong><?= htmlspecialchars($patient_data['gender'] ?? 'N/A') ?></strong></div>
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Phone</span><br><strong><?= htmlspecialchars($patient_data['phone'] ?? 'N/A') ?></strong></div>
                     <div><span style="color:var(--text-secondary);font-size:0.7rem;">Email</span><br><strong><?= htmlspecialchars($patient_data['email'] ?? 'N/A') ?></strong></div>
@@ -1942,51 +1952,87 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </div>
         
+        <!-- ============================================================ -->
+        <!-- FIXED: Bills Table - Shows ALL bills for this patient -->
+        <!-- ============================================================ -->
         <div class="card animate-fade-in-up" style="animation-delay:0.14s;">
             <div class="card-header">
-                <h3 class="card-title"><i class="fas fa-stethoscope"></i> Visit History (<?= count($patient_visits) ?>)</h3>
+                <h3 class="card-title"><i class="fas fa-file-invoice"></i> All Bills (<?= count($all_patient_bills) ?>)</h3>
+                <span class="badge badge-info">Total: TSh <?= number_format($patient_bills_summary['total_amount'] ?? 0, 0) ?></span>
             </div>
             <div class="card-body" style="padding:0;">
-                <?php if (count($patient_visits) > 0): ?>
+                <?php if (!empty($all_patient_bills)): ?>
                     <div class="overflow-x-auto">
                         <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th>Visit #</th>
-                                    <th>Date</th>
-                                    <th>Doctor</th>
+                                    <th>Bill #</th>
+                                    <th>Visit</th>
+                                    <th>Total</th>
+                                    <th>Paid</th>
+                                    <th>Balance</th>
+                                    <th>Pharmacy Disc</th>
+                                    <th>Cashier Disc</th>
+                                    <th>Total Disc</th>
                                     <th>Status</th>
-                                    <th>Diagnosis</th>
-                                    <th>Bills</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach ($patient_visits as $visit): ?>
+                                <?php foreach ($all_patient_bills as $bill): ?>
                                     <tr>
-                                        <td><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></td>
-                                        <td><?= date('M d, Y', strtotime($visit['visit_date'] ?? $visit['created_at'])) ?></td>
-                                        <td>Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'N/A') ?></td>
-                                        <td><span class="badge badge-<?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>"><?= ucfirst($visit['status'] ?? 'Pending') ?></span></td>
-                                        <td><?= htmlspecialchars(substr($visit['diagnosis'] ?? '', 0, 30)) ?></td>
-                                        <td><?= count($visit['bills'] ?? []) ?></td>
+                                        <td><strong><?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?></strong></td>
+                                        <td><?= htmlspecialchars($bill['visit_id'] ?? 'N/A') ?></td>
+                                        <td class="font-semibold">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
+                                        <td class="text-green-600">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                                        <td class="text-red-600">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></td>
+                                        <td>TSh <?= number_format($bill['pharmacy_discount'] ?? 0, 0) ?></td>
+                                        <td>TSh <?= number_format($bill['cashier_discount'] ?? 0, 0) ?></td>
+                                        <td>TSh <?= number_format($bill['total_discount'] ?? 0, 0) ?></td>
+                                        <td>
+                                            <span class="badge badge-<?= $bill['status'] === 'paid' ? 'paid' : getStatusBadgeClass($bill['status'] ?? 'pending') ?>">
+                                                <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                                            </span>
+                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
+                            <tfoot>
+                                <tr style="background:var(--bg-body);font-weight:700;">
+                                    <td colspan="2" style="text-align:right;">TOTAL</td>
+                                    <td>TSh <?= number_format($patient_bills_summary['total_amount'] ?? 0, 0) ?></td>
+                                    <td class="text-green-600">TSh <?= number_format($patient_bills_summary['total_paid'] ?? 0, 0) ?></td>
+                                    <td class="text-red-600">TSh <?= number_format($patient_bills_summary['total_balance'] ?? 0, 0) ?></td>
+                                    <td>TSh <?= number_format($patient_bills_summary['total_pharmacy_discount'] ?? 0, 0) ?></td>
+                                    <td>TSh <?= number_format($patient_bills_summary['total_cashier_discount'] ?? 0, 0) ?></td>
+                                    <td>TSh <?= number_format($patient_bills_summary['total_discount'] ?? 0, 0) ?></td>
+                                    <td></td>
+                                </tr>
+                            </tfoot>
                         </table>
                     </div>
                 <?php else: ?>
-                    <div class="empty-state"><i class="fas fa-stethoscope"></i><p>No visits found</p></div>
+                    <div class="empty-state"><i class="fas fa-file-invoice"></i><p>No bills found for this patient</p></div>
                 <?php endif; ?>
             </div>
         </div>
         
+        <?php elseif ($patient_id > 0): ?>
+            <div class="card animate-fade-in-up">
+                <div class="card-body">
+                    <div class="empty-state">
+                        <i class="fas fa-user-injured"></i>
+                        <h3>No Data Found</h3>
+                        <p>No bills or data found for the selected patient.</p>
+                    </div>
+                </div>
+            </div>
         <?php else: ?>
             <div class="card animate-fade-in-up">
                 <div class="card-body">
                     <div class="empty-state">
                         <i class="fas fa-user-injured"></i>
-                        <h3><?= $patient_id > 0 ? 'No Patient Data Found' : 'No Patient Selected' ?></h3>
-                        <p><?= $patient_id > 0 ? 'No data found for the selected patient.' : 'Please select a patient from the filter above.' ?></p>
+                        <h3>No Patient Selected</h3>
+                        <p>Please select a patient from the filter above to view their report.</p>
                     </div>
                 </div>
             </div>
@@ -2051,7 +2097,11 @@ include_once '../../components/admin_sidebar.php';
                                         <td>TSh <?= number_format($bill['pharmacy_discount'] ?? 0, 0) ?></td>
                                         <td>TSh <?= number_format($bill['cashier_discount'] ?? 0, 0) ?></td>
                                         <td>TSh <?= number_format($bill['total_discount'] ?? 0, 0) ?></td>
-                                        <td><span class="badge badge-<?= getStatusBadgeClass($bill['status'] ?? 'pending') ?>"><?= ucfirst($bill['status'] ?? 'Pending') ?></span></td>
+                                        <td>
+                                            <span class="badge badge-<?= $bill['status'] === 'paid' ? 'paid' : getStatusBadgeClass($bill['status'] ?? 'pending') ?>">
+                                                <?= ucfirst($bill['status'] ?? 'Pending') ?>
+                                            </span>
+                                        </td>
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
@@ -2239,7 +2289,11 @@ include_once '../../components/admin_sidebar.php';
                                         <td><?= !empty($test['results']) ? '✅' : '⏳' ?></td>
                                         <td>Dr. <?= htmlspecialchars($test['doctor_name'] ?? 'N/A') ?></td>
                                         <td><?= htmlspecialchars($test['technician_name'] ?? 'N/A') ?></td>
-                                        <td><span class="badge badge-<?= getStatusBadgeClass($test['status'] ?? 'pending') ?>"><?= ucfirst($test['status'] ?? 'Pending') ?></span></td>
+                                        <td>
+                                            <span class="badge badge-<?= getStatusBadgeClass($test['status'] ?? 'pending') ?>">
+                                                <?= ucfirst($test['status'] ?? 'Pending') ?>
+                                            </span>
+                                        </td>
                                         <td><?= date('M d, Y', strtotime($test['created_at'] ?? 'now')) ?></td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -2435,7 +2489,7 @@ include_once '../../components/admin_sidebar.php';
     var branchName = '<?= htmlspecialchars($branch_name) ?>';
     var reportType = '<?= $report_type ?>';
     
-    // Patient Data
+    // Patient Data - FIXED
     var patientName = '<?= isset($patient_data['full_name']) ? htmlspecialchars($patient_data['full_name']) : '' ?>';
     var patientId = '<?= isset($patient_data['patient_id']) ? htmlspecialchars($patient_data['patient_id']) : '' ?>';
     var patientPhone = '<?= isset($patient_data['phone']) ? htmlspecialchars($patient_data['phone']) : 'N/A' ?>';
@@ -2447,6 +2501,10 @@ include_once '../../components/admin_sidebar.php';
     var patientAllergies = '<?= isset($patient_data['allergies']) ? htmlspecialchars($patient_data['allergies']) : 'None' ?>';
     var visitsData = <?= json_encode($patient_visits) ?>;
     
+    // FIXED: All bills data for patient
+    var allBillsData = <?= json_encode($all_patient_bills) ?>;
+    var billsSummary = <?= json_encode($patient_bills_summary) ?>;
+    
     // Cashier Data
     var cashierData = <?= json_encode($cashier_data) ?>;
     
@@ -2457,7 +2515,7 @@ include_once '../../components/admin_sidebar.php';
     var labData = <?= json_encode($lab_data) ?>;
 
     // ================================================================
-    // PDF GENERATION - Logo starts at top, proper page breaks
+    // PDF GENERATION - FIXED
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -2469,7 +2527,11 @@ include_once '../../components/admin_sidebar.php';
         
         switch(reportType) {
             case 'patient':
-                if (visitsData && visitsData.length > 0) {
+                if (allBillsData && allBillsData.length > 0) {
+                    hasData = true;
+                    reportTitle = 'Patient Report - ' + patientName;
+                    html = buildPatientPDF();
+                } else if (patientName) {
                     hasData = true;
                     reportTitle = 'Patient Report - ' + patientName;
                     html = buildPatientPDF();
@@ -2520,7 +2582,7 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // BUILD PATIENT PDF - Logo at top, proper page breaks
+    // BUILD PATIENT PDF - FIXED with ALL bills
     // ================================================================
     function buildPatientPDF() {
         var adminPhonesText = adminPhones.length > 0 ? adminPhones.join(' | ') : '+255 700 000 001';
@@ -2531,193 +2593,185 @@ include_once '../../components/admin_sidebar.php';
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         
-        var visitsHTML = '';
-        var visitCount = 0;
+        // FIXED: Build bills table from allBillsData
+        var billsHTML = '';
+        var totalAmount = 0;
+        var totalPaid = 0;
+        var totalBalance = 0;
+        var totalPharmacyDisc = 0;
+        var totalCashierDisc = 0;
+        var totalDiscount = 0;
         
-        visitsData.forEach(function(visit) {
-            visitCount++;
-            var visitNumber = visit.visit_number || 'N/A';
-            var visitDate = visit.visit_date ? new Date(visit.visit_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A';
-            var visitTime = visit.visit_date ? new Date(visit.visit_date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'N/A';
-            var visitStatus = visit.status || 'pending';
-            var doctorName = visit.doctor_name || 'Not assigned';
-            var visitType = visit.visit_type || 'N/A';
-            var consultationFee = parseFloat(visit.consultation_fee) || 0;
-            var complaint = visit.complaint || '';
-            var symptoms = visit.symptoms || '';
-            var hpi = visit.hpi || '';
-            var physicalExam = visit.physical_exam || '';
-            var diagnosis = visit.diagnosis || '';
-            var treatment = visit.treatment || '';
-            var notes = visit.notes || '';
-            var followUpDate = visit.follow_up_date || '';
-            
-            var vs = visit.vital_signs || {};
-            var labTests = visit.lab_tests || [];
-            var prescriptions = visit.prescriptions || [];
-            var proceduresTools = visit.procedures_tools || [];
-            var bills = visit.bills || [];
-            
-            var totalAmount = 0;
-            var totalPaid = 0;
-            var totalBalance = 0;
-            var totalDiscount = 0;
-            var cancelledBills = 0;
-            bills.forEach(function(bill) {
+        if (allBillsData && allBillsData.length > 0) {
+            allBillsData.forEach(function(bill) {
                 totalAmount += parseFloat(bill.total_amount || 0);
                 totalPaid += parseFloat(bill.paid_amount || 0);
                 totalBalance += parseFloat(bill.balance || 0);
+                totalPharmacyDisc += parseFloat(bill.pharmacy_discount || 0);
+                totalCashierDisc += parseFloat(bill.cashier_discount || 0);
                 totalDiscount += parseFloat(bill.total_discount || 0);
-                if (bill.status === 'cancelled') cancelledBills++;
+                
+                var statusClass = bill.status === 'paid' ? 'paid' : '';
+                var statusColor = bill.status === 'paid' ? '#059669' : '#D97706';
+                
+                billsHTML += `
+                    <tr>
+                        <td>${escapeHtml(bill.bill_number || 'N/A')}</td>
+                        <td>${escapeHtml(bill.visit_id || 'N/A')}</td>
+                        <td>TSh ${(parseFloat(bill.total_amount) || 0).toLocaleString()}</td>
+                        <td>TSh ${(parseFloat(bill.paid_amount) || 0).toLocaleString()}</td>
+                        <td>TSh ${(parseFloat(bill.balance) || 0).toLocaleString()}</td>
+                        <td>TSh ${(parseFloat(bill.pharmacy_discount) || 0).toLocaleString()}</td>
+                        <td>TSh ${(parseFloat(bill.cashier_discount) || 0).toLocaleString()}</td>
+                        <td>TSh ${(parseFloat(bill.total_discount) || 0).toLocaleString()}</td>
+                        <td style="color:${statusColor};font-weight:${bill.status === 'paid' ? '700' : '600'};">${escapeHtml(bill.status || 'Pending')}</td>
+                    </tr>
+                `;
             });
-            var isFullyPaid = totalBalance <= 0 && totalAmount > 0;
-            
-            visitsHTML += `
-                <div class="pdf-visit-block" style="margin-bottom:12px;page-break-inside:avoid;break-inside:avoid;">
-                    <div class="visit-header" style="margin-bottom:6px;">
-                        <span>📋 Visit #${visitCount}: ${visitNumber}</span>
-                        <span style="font-size:0.8rem;color:#64748B;">${visitDate} ${visitTime}</span>
-                    </div>
-                    
-                    <div style="margin-bottom:8px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">📋 1. Visit Information</div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;font-size:14px;">
-                            <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Status</span><span style="font-size:13px;">${visitStatus.charAt(0).toUpperCase() + visitStatus.slice(1)}</span></div>
-                            <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Doctor</span><span style="font-size:13px;">Dr. ${doctorName}</span></div>
-                            <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Visit Type</span><span style="font-size:13px;">${visitType}</span></div>
-                            <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Consultation Fee</span><span style="font-size:13px;">TSh ${consultationFee.toLocaleString()}</span></div>
-                            ${followUpDate ? `<div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;grid-column:span 2;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Follow-up Date</span><span style="font-size:13px;">${new Date(followUpDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}</span></div>` : ''}
+        }
+        
+        // Build visits HTML
+        var visitsHTML = '';
+        var visitCount = 0;
+        
+        if (visitsData && visitsData.length > 0) {
+            visitsData.forEach(function(visit) {
+                visitCount++;
+                var visitNumber = visit.visit_number || 'N/A';
+                var visitDate = visit.visit_date ? new Date(visit.visit_date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'N/A';
+                var visitTime = visit.visit_date ? new Date(visit.visit_date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true }) : 'N/A';
+                var visitStatus = visit.status || 'pending';
+                var doctorName = visit.doctor_name || 'Not assigned';
+                var visitType = visit.visit_type || 'N/A';
+                var diagnosis = visit.diagnosis || '';
+                var treatment = visit.treatment || '';
+                var notes = visit.notes || '';
+                
+                var vs = visit.vital_signs || {};
+                var labTests = visit.lab_tests || [];
+                var prescriptions = visit.prescriptions || [];
+                var proceduresTools = visit.procedures_tools || [];
+                var visitBills = visit.bills || [];
+                
+                visitsHTML += `
+                    <div class="pdf-visit-block" style="margin-bottom:12px;page-break-inside:avoid;break-inside:avoid;">
+                        <div class="visit-header" style="margin-bottom:6px;">
+                            <span>📋 Visit #${visitCount}: ${visitNumber}</span>
+                            <span style="font-size:0.8rem;color:#64748B;">${visitDate} ${visitTime}</span>
                         </div>
-                    </div>
-                    
-                    ${complaint || symptoms || hpi || physicalExam || notes ? `
-                    <div style="margin-bottom:8px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🩺 2. Clinical Information</div>
-                        ${complaint ? `<div style="padding:2px 4px;background:#EFF6FF;border-radius:4px;border-left:3px solid #0B5ED7;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Complaint:</span> ${escapeHtml(complaint)}</div>` : ''}
-                        ${symptoms ? `<div style="padding:2px 4px;background:#FEF3C7;border-radius:4px;border-left:3px solid #D97706;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Symptoms:</span> ${escapeHtml(symptoms)}</div>` : ''}
-                        ${hpi ? `<div style="padding:2px 4px;background:#EDE9FE;border-radius:4px;border-left:3px solid #7C3AED;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">HPI:</span> ${escapeHtml(hpi)}</div>` : ''}
-                        ${physicalExam ? `<div style="padding:2px 4px;background:#D1FAE5;border-radius:4px;border-left:3px solid #059669;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Physical Exam:</span> ${escapeHtml(physicalExam)}</div>` : ''}
-                        ${notes ? `<div style="padding:2px 4px;background:#F1F5F9;border-radius:4px;border-left:3px solid #94A3B8;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Notes:</span> ${escapeHtml(notes)}</div>` : ''}
-                    </div>
-                    ` : ''}
-                    
-                    ${diagnosis || treatment ? `
-                    <div style="margin-bottom:8px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🏥 3. Diagnosis</div>
-                        ${diagnosis ? `<div style="padding:2px 4px;background:#EFF6FF;border-radius:4px;border-left:3px solid #0B5ED7;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Diagnosis:</span> ${escapeHtml(diagnosis)}</div>` : ''}
-                        ${treatment ? `<div style="padding:2px 4px;background:#D1FAE5;border-radius:4px;border-left:3px solid #059669;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Treatment:</span> ${escapeHtml(treatment)}</div>` : ''}
-                    </div>
-                    ` : ''}
-                    
-                    <div style="margin-bottom:8px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">❤️ 4. Vital Signs</div>
+                        
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">📋 Visit Information</div>
+                            <div style="display:grid;grid-template-columns:1fr 1fr;gap:2px 14px;font-size:14px;">
+                                <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Status</span><span style="font-size:13px;">${visitStatus.charAt(0).toUpperCase() + visitStatus.slice(1)}</span></div>
+                                <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Doctor</span><span style="font-size:13px;">Dr. ${escapeHtml(doctorName)}</span></div>
+                                <div style="display:flex;padding:1px 0;border-bottom:1px solid #E2E8F0;"><span style="font-weight:600;color:#64748B;width:120px;flex-shrink:0;font-size:13px;">Visit Type</span><span style="font-size:13px;">${escapeHtml(visitType)}</span></div>
+                            </div>
+                        </div>
+                        
+                        ${diagnosis || treatment || notes ? `
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🩺 Clinical Information</div>
+                            ${diagnosis ? `<div style="padding:2px 4px;background:#EFF6FF;border-radius:4px;border-left:3px solid #0B5ED7;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Diagnosis:</span> ${escapeHtml(diagnosis)}</div>` : ''}
+                            ${treatment ? `<div style="padding:2px 4px;background:#D1FAE5;border-radius:4px;border-left:3px solid #059669;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Treatment:</span> ${escapeHtml(treatment)}</div>` : ''}
+                            ${notes ? `<div style="padding:2px 4px;background:#F1F5F9;border-radius:4px;border-left:3px solid #94A3B8;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Notes:</span> ${escapeHtml(notes)}</div>` : ''}
+                        </div>
+                        ` : ''}
+                        
                         ${vs.temperature || vs.blood_pressure_systolic || vs.pulse_rate || vs.weight || vs.height || vs.bmi ? `
-                        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
-                            ${vs.temperature ? `<div style="background:#EFF6FF;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0B5ED7;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Temperature</div><div style="font-weight:700;color:#0B5ED7;font-size:14px;">${vs.temperature} °C</div></div>` : ''}
-                            ${vs.blood_pressure_systolic || vs.blood_pressure_diastolic ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #059669;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Blood Pressure</div><div style="font-weight:700;color:#059669;font-size:14px;">${vs.blood_pressure_systolic || '?'}/${vs.blood_pressure_diastolic || '?'} mmHg</div></div>` : ''}
-                            ${vs.pulse_rate ? `<div style="background:#EDE9FE;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #7C3AED;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Pulse Rate</div><div style="font-weight:700;color:#7C3AED;font-size:14px;">${vs.pulse_rate} bpm</div></div>` : ''}
-                            ${vs.weight ? `<div style="background:#FEF3C7;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #D97706;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Weight</div><div style="font-weight:700;color:#D97706;font-size:14px;">${vs.weight} kg</div></div>` : ''}
-                            ${vs.height ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0D9488;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Height</div><div style="font-weight:700;color:#0D9488;font-size:14px;">${vs.height} cm</div></div>` : ''}
-                            ${vs.bmi ? `<div style="background:#FEE2E2;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #DC2626;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">BMI</div><div style="font-weight:700;color:#DC2626;font-size:14px;">${vs.bmi} kg/m²</div></div>` : ''}
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">❤️ Vital Signs</div>
+                            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+                                ${vs.temperature ? `<div style="background:#EFF6FF;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0B5ED7;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Temperature</div><div style="font-weight:700;color:#0B5ED7;font-size:14px;">${vs.temperature} °C</div></div>` : ''}
+                                ${vs.blood_pressure_systolic || vs.blood_pressure_diastolic ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #059669;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Blood Pressure</div><div style="font-weight:700;color:#059669;font-size:14px;">${vs.blood_pressure_systolic || '?'}/${vs.blood_pressure_diastolic || '?'} mmHg</div></div>` : ''}
+                                ${vs.pulse_rate ? `<div style="background:#EDE9FE;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #7C3AED;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Pulse Rate</div><div style="font-weight:700;color:#7C3AED;font-size:14px;">${vs.pulse_rate} bpm</div></div>` : ''}
+                                ${vs.weight ? `<div style="background:#FEF3C7;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #D97706;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Weight</div><div style="font-weight:700;color:#D97706;font-size:14px;">${vs.weight} kg</div></div>` : ''}
+                                ${vs.height ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0D9488;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Height</div><div style="font-weight:700;color:#0D9488;font-size:14px;">${vs.height} cm</div></div>` : ''}
+                                ${vs.bmi ? `<div style="background:#FEE2E2;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #DC2626;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">BMI</div><div style="font-weight:700;color:#DC2626;font-size:14px;">${vs.bmi} kg/m²</div></div>` : ''}
+                            </div>
                         </div>
-                        ` : `<div class="pdf-empty">No vital signs recorded</div>`}
-                    </div>
-                    
-                    <div style="margin-bottom:8px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🧪 5. Lab Tests (${labTests.length})</div>
+                        ` : ''}
+                        
                         ${labTests.length > 0 ? `
-                        <table class="pdf-table" style="font-size:12px;">
-                            <thead><tr><th>Test Name</th><th>Status</th><th>Results</th><th>Technician</th></tr></thead>
-                            <tbody>
-                                ${labTests.map(function(test) {
-                                    return `<tr><td>${escapeHtml(test.test_name || 'N/A')}</td>
-                                        <td>${test.status || 'Pending'}</td>
-                                        <td>${test.results ? '✅ ' + escapeHtml(test.results.substring(0, 50)) : '⏳ Pending'}</td>
-                                        <td>${escapeHtml(test.technician_name || 'Not assigned')}</td>
-                                    </tr>`;
-                                }).join('')}
-                            </tbody>
-                        </table>
-                        ` : `<div class="pdf-empty">No lab tests found</div>`}
-                    </div>
-                    
-                    <div style="margin-bottom:8px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">💊 6. Medications (${prescriptions.length})</div>
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🧪 Lab Tests (${labTests.length})</div>
+                            <table class="pdf-table" style="font-size:12px;">
+                                <thead><tr><th>Test Name</th><th>Status</th><th>Results</th><th>Technician</th></tr></thead>
+                                <tbody>
+                                    ${labTests.map(function(test) {
+                                        return `<tr><td>${escapeHtml(test.test_name || 'N/A')}</td>
+                                            <td>${test.status || 'Pending'}</td>
+                                            <td>${test.results ? '✅ ' + escapeHtml(test.results.substring(0, 50)) : '⏳ Pending'}</td>
+                                            <td>${escapeHtml(test.technician_name || 'Not assigned')}</td>
+                                        </tr>`;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        ` : ''}
+                        
                         ${prescriptions.length > 0 ? `
-                        <table class="pdf-table" style="font-size:12px;">
-                            <thead><tr><th>Medication</th><th>Dosage</th><th>Frequency</th><th>Qty</th></tr></thead>
-                            <tbody>
-                                ${prescriptions.map(function(p) {
-                                    var medName = p.medication_name || p.inventory_medication_name || 'N/A';
-                                    return `<tr><td>${escapeHtml(medName)}</td>
-                                        <td>${escapeHtml(p.dosage || '-')}</td>
-                                        <td>${escapeHtml(p.frequency || '-')}</td>
-                                        <td>${p.quantity || 0}</td>
-                                    </tr>`;
-                                }).join('')}
-                            </tbody>
-                        </table>
-                        ` : `<div class="pdf-empty">No medications prescribed</div>`}
-                    </div>
-                    
-                    <div style="margin-bottom:8px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🔧 7. Procedures & Tools (${proceduresTools.length})</div>
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">💊 Medications (${prescriptions.length})</div>
+                            <table class="pdf-table" style="font-size:12px;">
+                                <thead><tr><th>Medication</th><th>Dosage</th><th>Frequency</th><th>Qty</th></tr></thead>
+                                <tbody>
+                                    ${prescriptions.map(function(p) {
+                                        var medName = p.medication_name || p.inventory_medication_name || 'N/A';
+                                        return `<tr><td>${escapeHtml(medName)}</td>
+                                            <td>${escapeHtml(p.dosage || '-')}</td>
+                                            <td>${escapeHtml(p.frequency || '-')}</td>
+                                            <td>${p.quantity || 0}</td>
+                                        </tr>`;
+                                    }).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                        ` : ''}
+                        
                         ${proceduresTools.length > 0 ? `
-                        <table class="pdf-table" style="font-size:12px;">
-                            <thead><tr><th>Item Name</th><th>Type</th><th>Qty</th><th>Total</th></tr></thead>
-                            <tbody>
-                                ${proceduresTools.map(function(item) {
-                                    return `<tr><td>${escapeHtml(item.item_name || 'N/A')}</td>
-                                        <td>${escapeHtml(item.item_type || 'N/A')}</td>
-                                        <td>${item.quantity || 1}</td>
-                                        <td>TSh ${(parseFloat(item.total_price) || 0).toLocaleString()}</td>
-                                    </tr>`;
-                                }).join('')}
-                            </tbody>
-                        </table>
-                        ` : `<div class="pdf-empty">No procedures or tools used</div>`}
-                    </div>
-                    
-                    <div style="margin-bottom:8px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">💰 8. Bills Summary</div>
-                        ${bills.length > 0 ? `
-                        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;margin:2px 0;">
-                            <div style="background:#EFF6FF;padding:2px 4px;border-radius:4px;text-align:center;border:1px solid #6EA8FE;"><div style="font-size:16px;font-weight:700;color:#0B5ED7;">TSh ${totalAmount.toLocaleString()}</div><div style="font-size:10px;color:#64748B;text-transform:uppercase;">Total</div></div>
-                            <div style="background:#FEF3C7;padding:2px 4px;border-radius:4px;text-align:center;border:1px solid #D97706;"><div style="font-size:16px;font-weight:700;color:#D97706;">TSh ${(totalAmount - totalPaid).toLocaleString()}</div><div style="font-size:10px;color:#64748B;text-transform:uppercase;">Balance</div></div>
-                            <div style="background:#D1FAE5;padding:2px 4px;border-radius:4px;text-align:center;border:1px solid #059669;"><div style="font-size:16px;font-weight:700;color:#059669;">TSh ${totalPaid.toLocaleString()}</div><div style="font-size:10px;color:#64748B;text-transform:uppercase;">Paid</div></div>
-                            <div style="background:#FEE2E2;padding:2px 4px;border-radius:4px;text-align:center;border:1px solid #DC2626;"><div style="font-size:16px;font-weight:700;color:#DC2626;">${cancelledBills}</div><div style="font-size:10px;color:#64748B;text-transform:uppercase;">Cancelled</div></div>
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🔧 Procedures & Tools (${proceduresTools.length})</div>
+                            <table class="pdf-table" style="font-size:12px;">
+                                <thead><tr><th>Item Name</th><th>Type</th><th>Qty</th><th>Total</th></tr></thead>
+                                <tbody>
+                                    ${proceduresTools.map(function(item) {
+                                        return `<tr><td>${escapeHtml(item.item_name || 'N/A')}</td>
+                                            <td>${escapeHtml(item.item_type || 'N/A')}</td>
+                                            <td>${item.quantity || 1}</td>
+                                            <td>TSh ${(parseFloat(item.total_price) || 0).toLocaleString()}</td>
+                                        </tr>`;
+                                    }).join('')}
+                                </tbody>
+                            </table>
                         </div>
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin:2px 0;font-size:13px;">
-                            <div><span style="font-weight:600;color:#64748B;">Total Discount:</span> <span style="color:#DC2626;font-weight:700;">TSh ${totalDiscount.toLocaleString()}</span></div>
-                            <div style="text-align:right;"><span style="font-weight:600;color:#64748B;">Status:</span> <span style="font-size:13px;padding:2px 10px;border-radius:12px;background:${isFullyPaid ? '#D1FAE5' : '#FEF3C7'};color:${isFullyPaid ? '#059669' : '#D97706'};">${isFullyPaid ? '✅ Fully Paid' : '⏳ Pending / Partial'}</span></div>
+                        ` : ''}
+                        
+                        ${visitBills.length > 0 ? `
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">💰 Visit Bills (${visitBills.length})</div>
+                            <table class="pdf-table" style="font-size:12px;">
+                                <thead><tr><th>Bill #</th><th>Total</th><th>Paid</th><th>Balance</th><th>Discount</th><th>Status</th></tr></thead>
+                                <tbody>
+                                    ${visitBills.map(function(bill) {
+                                        var statusColor = bill.status === 'paid' ? '#059669' : '#D97706';
+                                        return `<tr>
+                                            <td>${escapeHtml(bill.bill_number || 'N/A')}</td>
+                                            <td>TSh ${(parseFloat(bill.total_amount) || 0).toLocaleString()}</td>
+                                            <td>TSh ${(parseFloat(bill.paid_amount) || 0).toLocaleString()}</td>
+                                            <td>TSh ${(parseFloat(bill.balance) || 0).toLocaleString()}</td>
+                                            <td>TSh ${(parseFloat(bill.total_discount) || 0).toLocaleString()}</td>
+                                            <td style="color:${statusColor};font-weight:${bill.status === 'paid' ? '700' : '600'};">${escapeHtml(bill.status || 'Pending')}</td>
+                                        </tr>`;
+                                    }).join('')}
+                                </tbody>
+                            </table>
                         </div>
-                        ` : `<div class="pdf-empty">No bills found</div>`}
+                        ` : ''}
                     </div>
-                    
-                    <div style="margin-bottom:4px;">
-                        <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">📄 9. Bills List</div>
-                        ${bills.length > 0 ? `
-                        <table class="pdf-table" style="font-size:12px;">
-                            <thead><tr><th>Bill Number</th><th>Total</th><th>Paid</th><th>Balance</th><th>Discount</th><th>Status</th></tr></thead>
-                            <tbody>
-                                ${bills.map(function(bill) {
-                                    var statusClass = bill.status === 'paid' ? 'paid' : '';
-                                    return `<tr>
-                                        <td>${escapeHtml(bill.bill_number || 'N/A')}</td>
-                                        <td>TSh ${(parseFloat(bill.total_amount) || 0).toLocaleString()}</td>
-                                        <td>TSh ${(parseFloat(bill.paid_amount) || 0).toLocaleString()}</td>
-                                        <td>TSh ${(parseFloat(bill.balance) || 0).toLocaleString()}</td>
-                                        <td>TSh ${(parseFloat(bill.total_discount) || 0).toLocaleString()}</td>
-                                        <td style="color:${bill.status === 'paid' ? '#059669' : '#D97706'};font-weight:${bill.status === 'paid' ? '700' : '600'};">${escapeHtml(bill.status || 'Pending')}</td>
-                                    </tr>`;
-                                }).join('')}
-                            </tbody>
-                        </table>
-                        ` : `<div class="pdf-empty">No bills found</div>`}
-                    </div>
-                </div>
-            `;
-        });
+                `;
+            });
+        }
         
         return `
             <div class="pdf-header-section">
@@ -2755,10 +2809,61 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
             
+            <!-- FIXED: All Bills Summary -->
+            <div style="margin-bottom:10px;">
+                <div class="section-title"><i class="fas fa-file-invoice"></i> All Bills Summary (${allBillsData.length})</div>
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:4px 0;">
+                    <div style="background:#EFF6FF;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #6EA8FE;">
+                        <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;">TSh ${totalAmount.toLocaleString()}</div>
+                        <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Amount</div>
+                    </div>
+                    <div style="background:#D1FAE5;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #059669;">
+                        <div style="font-size:1.2rem;font-weight:700;color:#059669;">TSh ${totalPaid.toLocaleString()}</div>
+                        <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Paid</div>
+                    </div>
+                    <div style="background:#FEE2E2;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #DC2626;">
+                        <div style="font-size:1.2rem;font-weight:700;color:#DC2626;">TSh ${totalBalance.toLocaleString()}</div>
+                        <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Balance</div>
+                    </div>
+                    <div style="background:#FEF3C7;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #D97706;">
+                        <div style="font-size:1.2rem;font-weight:700;color:#D97706;">TSh ${totalDiscount.toLocaleString()}</div>
+                        <div style="font-size:0.6rem;color:#64748B;text-transform:uppercase;">Total Discount</div>
+                        <div style="font-size:0.5rem;color:#64748B;">Pharm: TSh ${totalPharmacyDisc.toLocaleString()} | Cashier: TSh ${totalCashierDisc.toLocaleString()}</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- FIXED: All Bills Table -->
+            <div style="margin-bottom:10px;">
+                <div class="section-title"><i class="fas fa-list"></i> All Bills (${allBillsData.length})</div>
+                ${allBillsData.length > 0 ? `
+                <table class="pdf-table">
+                    <thead>
+                        <tr><th>Bill #</th><th>Visit</th><th>Total</th><th>Paid</th><th>Balance</th><th>Pharm Disc</th><th>Cashier Disc</th><th>Total Disc</th><th>Status</th></tr>
+                    </thead>
+                    <tbody>${billsHTML}</tbody>
+                    <tfoot>
+                        <tr style="font-weight:700;background:#F1F5F9;">
+                            <td colspan="2" style="text-align:right;">TOTAL</td>
+                            <td>TSh ${totalAmount.toLocaleString()}</td>
+                            <td style="color:#059669;">TSh ${totalPaid.toLocaleString()}</td>
+                            <td style="color:#DC2626;">TSh ${totalBalance.toLocaleString()}</td>
+                            <td>TSh ${totalPharmacyDisc.toLocaleString()}</td>
+                            <td>TSh ${totalCashierDisc.toLocaleString()}</td>
+                            <td>TSh ${totalDiscount.toLocaleString()}</td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+                ` : `<div class="pdf-empty">No bills found for this patient</div>`}
+            </div>
+            
+            ${visitsHTML ? `
             <div>
                 <div class="section-title"><i class="fas fa-stethoscope"></i> Visit History (${visitsData.length} visits)</div>
                 ${visitsHTML}
             </div>
+            ` : ''}
             
             <div class="pdf-footer">
                 <div class="footer-stamp">
@@ -2810,7 +2915,7 @@ include_once '../../components/admin_sidebar.php';
         
         var billsHTML = '';
         cashierData.bills.forEach(function(bill) {
-            var statusClass = bill.status === 'paid' ? 'paid' : '';
+            var statusColor = bill.status === 'paid' ? '#059669' : '#D97706';
             billsHTML += `
                 <tr>
                     <td>${escapeHtml(bill.bill_number || 'N/A')}</td>
@@ -2821,7 +2926,7 @@ include_once '../../components/admin_sidebar.php';
                     <td>TSh ${(parseFloat(bill.pharmacy_discount) || 0).toLocaleString()}</td>
                     <td>TSh ${(parseFloat(bill.cashier_discount) || 0).toLocaleString()}</td>
                     <td>TSh ${(parseFloat(bill.total_discount) || 0).toLocaleString()}</td>
-                    <td style="color:${bill.status === 'paid' ? '#059669' : '#D97706'};font-weight:${bill.status === 'paid' ? '700' : '600'};">${escapeHtml(bill.status || 'Pending')}</td>
+                    <td style="color:${statusColor};font-weight:${bill.status === 'paid' ? '700' : '600'};">${escapeHtml(bill.status || 'Pending')}</td>
                 </tr>
             `;
         });
@@ -3013,7 +3118,6 @@ include_once '../../components/admin_sidebar.php';
         
         var testsHTML = '';
         labData.tests.forEach(function(test) {
-            var statusClass = test.status === 'completed' ? 'paid' : '';
             testsHTML += `
                 <tr>
                     <td><strong>${escapeHtml(test.patient_name || 'N/A')}</strong></td>
@@ -3187,19 +3291,20 @@ include_once '../../components/admin_sidebar.php';
         });
         
         console.log('✅ Reports loaded successfully');
+        console.log('✅ Patient Report FIXED - Bills loaded from patient_id');
         console.log('✅ Paid status = GREEN color');
-        console.log('✅ Discounts calculated correctly');
+        console.log('✅ Discounts calculated correctly (Pharmacy + Cashier = Total)');
         console.log('✅ PDF Export for ALL reports');
         console.log('✅ PDF Logo starts at top');
         console.log('✅ PDF Page breaks working properly');
     });
 
-    console.log('%c📊 Braick Dispensary - Reports FINAL', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📊 Braick Dispensary - Reports FIXED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Patient Report: Bills now loaded from patient_id (not visit_id)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Paid status = GREEN color', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Discounts: pharmacy_discount + cashier_discount = total_discount', 'font-size:13px; color:#34D399;');
     console.log('%c✅ PDF Export for ALL reports (Patient, Cashier, Pharmacy, Lab)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ PDF Logo starts at top left', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ PDF Page breaks with page-break-inside: avoid', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
