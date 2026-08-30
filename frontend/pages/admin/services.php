@@ -200,15 +200,21 @@ function getExpiryStatus($expiry_date) {
     return ['class' => 'valid', 'label' => 'Valid', 'days' => $days];
 }
 
+// ================================================================
+// GET BRANCH NAME - WITH NULL HANDLING
+// ================================================================
 function getBranchName($db, $branch_id) {
-    if ($branch_id === null) return 'All Branches';
+    if ($branch_id === null || $branch_id === '' || $branch_id === 'all') {
+        return 'All Branches';
+    }
+    
     try {
-        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ?");
+        $stmt = $db->prepare("SELECT name FROM branches WHERE id = ? AND status = 'active'");
         $stmt->execute([$branch_id]);
         $branch = $stmt->fetch(PDO::FETCH_ASSOC);
-        return $branch ? $branch['name'] : 'Unknown';
+        return $branch ? $branch['name'] : 'Unknown Branch (ID: ' . $branch_id . ')';
     } catch (Exception $e) {
-        return 'Unknown';
+        return 'Unknown Branch';
     }
 }
 
@@ -244,17 +250,29 @@ function buildSearchFilter($search, $fields = []) {
 function checkLabTestDuplicate($db, $test_name, $category, $branch_id, $price, $exclude_id = 0) {
     $exclude_condition = $exclude_id > 0 ? "AND id != $exclude_id" : "";
     
-    $stmt = $db->prepare("
+    $branch_condition = "";
+    $params = [$test_name, $category, $price];
+    
+    if ($branch_id === null || $branch_id === '' || $branch_id === 'all') {
+        $branch_condition = "AND (branch_id IS NULL)";
+    } else {
+        $branch_condition = "AND branch_id = ?";
+        $params[] = $branch_id;
+    }
+    
+    $sql = "
         SELECT id, test_name, category, branch_id, price 
         FROM lab_tests_catalog 
         WHERE test_name = ? 
         AND category = ? 
-        AND (branch_id = ? OR (branch_id IS NULL AND ? IS NULL))
+        $branch_condition
         AND price = ?
         $exclude_condition
         LIMIT 1
-    ");
-    $stmt->execute([$test_name, $category, $branch_id, $branch_id, $price]);
+    ";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
     return $stmt->fetch(PDO::FETCH_ASSOC);
 }
 
@@ -750,13 +768,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     }
     
     // ================================================================
-    // UPDATE LAB TEST - FIXED: Better error handling
+    // UPDATE LAB TEST - FIXED: Gets test_id from multiple possible field names
     // ================================================================
     if ($action === 'update_lab_test') {
-        // Debug: log received data
-        error_log("Update lab test - POST data: " . print_r($_POST, true));
+        // ✅ FIX: Get test_id from multiple possible field names
+        $test_id = 0;
+        if (isset($_POST['test_id']) && is_numeric($_POST['test_id'])) {
+            $test_id = (int)$_POST['test_id'];
+        } elseif (isset($_POST['lab_test_id']) && is_numeric($_POST['lab_test_id'])) {
+            $test_id = (int)$_POST['lab_test_id'];
+        }
         
-        $test_id = isset($_POST['test_id']) ? (int)$_POST['test_id'] : 0;
         $test_name = isset($_POST['test_name']) ? trim($_POST['test_name']) : '';
         $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
         $category_name = isset($_POST['category_name']) ? trim($_POST['category_name']) : '';
@@ -764,6 +786,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $description = isset($_POST['description']) ? trim($_POST['description']) : '';
         $is_active = isset($_POST['is_active']) ? 1 : 0;
         $equipment_ids = isset($_POST['equipment_ids']) && is_array($_POST['equipment_ids']) ? $_POST['equipment_ids'] : [];
+        
+        // Handle branch_id from POST
+        $branch_id_input = isset($_POST['branch_id']) ? $_POST['branch_id'] : null;
+        if ($branch_id_input === 'all' || $branch_id_input === '' || $branch_id_input === 'NULL') {
+            $branch_id = null;
+        } elseif (is_numeric($branch_id_input)) {
+            $branch_id = (int)$branch_id_input;
+        } else {
+            $branch_id = null;
+        }
         
         $final_category = '';
         if ($category_id > 0) {
@@ -791,12 +823,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         } else {
             try {
                 // Check if test exists
-                $check_stmt = $db->prepare("SELECT id FROM lab_tests_catalog WHERE id = ?");
+                $check_stmt = $db->prepare("SELECT id, branch_id FROM lab_tests_catalog WHERE id = ?");
                 $check_stmt->execute([$test_id]);
-                if (!$check_stmt->fetch()) {
+                $existing_test = $check_stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if (!$existing_test) {
                     $message = "❌ Test not found with ID: $test_id";
                     $message_type = 'error';
+                    error_log("Update lab test: Test ID $test_id not found in database");
                 } else {
+                    // Use existing branch if not provided
+                    if ($branch_id === null && $existing_test['branch_id'] !== null) {
+                        $branch_id = $existing_test['branch_id'];
+                    }
+                    
                     // Check for duplicate excluding current test
                     $duplicate = checkLabTestDuplicate($db, $test_name, $final_category, $branch_id, $price, $test_id);
                     
@@ -810,16 +850,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     } else {
                         $db->beginTransaction();
                         
-                        // Update lab test details
+                        // Update lab test details - include branch_id
                         $stmt = $db->prepare("
                             UPDATE lab_tests_catalog 
                             SET test_name = ?, category = ?, price = ?, 
-                                description = ?, is_active = ?, updated_at = NOW()
+                                description = ?, is_active = ?, 
+                                branch_id = ?,
+                                updated_at = NOW()
                             WHERE id = ?
                         ");
                         $stmt->execute([
                             $test_name, $final_category, $price, 
-                            $description, $is_active, $test_id
+                            $description, $is_active,
+                            $branch_id,
+                            $test_id
                         ]);
                         
                         // Remove existing equipment links
@@ -830,6 +874,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         if (!empty($equipment_ids)) {
                             $equipment_ids = array_map('intval', $equipment_ids);
                             foreach ($equipment_ids as $equip_id) {
+                                // Verify equipment exists
                                 $stmt = $db->prepare("SELECT id FROM medical_equipment WHERE id = ?");
                                 $stmt->execute([$equip_id]);
                                 if ($stmt->fetch()) {
@@ -846,13 +891,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                         
                         $equipment_text = '';
                         if (!empty($equipment_ids)) {
-                            $equipment_text = ' with ' . count($equipment_ids) . ' equipment(s) linked (FREE)';
+                            $equipment_text = ' with ' . count($equipment_ids) . ' equipment(s) linked';
                         }
                         
                         $message = "✅ Lab test updated successfully! Price: TSh " . number_format($price, 0) . $equipment_text;
                         $message_type = 'success';
                         
-                        // Redirect to clear edit params after 2 seconds
+                        // Redirect after 2 seconds
                         echo '<script>
                             setTimeout(function() {
                                 window.location.href = "services.php?branch=' . urlencode($selected_branch_id) . '&tab=lab_tests&success=1";
@@ -1060,7 +1105,8 @@ try {
             SUM(e.quantity) as total_quantity,
             GROUP_CONCAT(e.batch_number SEPARATOR '|') as batch_numbers
         FROM medical_equipment e
-        WHERE e.branch_id = ? OR e.branch_id IS NULL
+        WHERE (e.branch_id = ? OR e.branch_id IS NULL)
+        AND e.status = 'active'
         GROUP BY e.equipment_name, e.category
         ORDER BY e.equipment_name
     ");
@@ -1106,7 +1152,8 @@ if (isset($_GET['edit']) && is_numeric($_GET['edit']) && isset($_GET['type'])) {
         } catch (Exception $e) {}
     } elseif ($edit_type === 'lab_test') {
         try {
-            // Get lab test with current equipment IDs
+            error_log("Loading lab test for edit: ID = $edit_id");
+            
             $stmt = $db->prepare("
                 SELECT l.*, 
                        GROUP_CONCAT(DISTINCT le.equipment_id SEPARATOR ',') as current_equipment_ids
@@ -1118,17 +1165,21 @@ if (isset($_GET['edit']) && is_numeric($_GET['edit']) && isset($_GET['type'])) {
             $stmt->execute([$edit_id]);
             $edit_item = $stmt->fetch(PDO::FETCH_ASSOC);
             
-            if ($edit_item && isset($edit_item['current_equipment_ids'])) {
-                $current_equipment_ids = !empty($edit_item['current_equipment_ids']) 
-                    ? explode(',', $edit_item['current_equipment_ids']) 
-                    : [];
-            }
-            
-            // If no equipment found, set as empty array
-            if (!isset($current_equipment_ids) || !is_array($current_equipment_ids)) {
+            if ($edit_item) {
+                if (isset($edit_item['current_equipment_ids']) && !empty($edit_item['current_equipment_ids'])) {
+                    $current_equipment_ids = explode(',', $edit_item['current_equipment_ids']);
+                    $current_equipment_ids = array_map('intval', $current_equipment_ids);
+                } else {
+                    $current_equipment_ids = [];
+                }
+                error_log("Current equipment IDs: " . print_r($current_equipment_ids, true));
+            } else {
+                error_log("Lab test NOT found with ID: $edit_id");
+                $edit_item = null;
                 $current_equipment_ids = [];
             }
         } catch (Exception $e) {
+            error_log("Error loading lab test for edit: " . $e->getMessage());
             $edit_item = null;
             $current_equipment_ids = [];
         }
@@ -2861,7 +2912,7 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- EDIT MODAL -->
+    <!-- EDIT MODAL - FIXED: Uses 'test_id' as field name -->
     <!-- ================================================================ -->
     <?php if ($edit_item && isset($edit_type)): ?>
     <div class="modal-overlay show" id="editModal">
@@ -2874,7 +2925,17 @@ include_once '../../components/admin_sidebar.php';
             </div>
             <form method="POST" id="editForm">
                 <input type="hidden" name="action" value="update_<?= $edit_type ?>">
-                <input type="hidden" name="<?= $edit_type ?>_id" value="<?= $edit_item['id'] ?>">
+                
+                <!-- ✅ FIX: Use 'test_id' for lab test, and 'service_id', 'procedure_id', 'equipment_id' for others -->
+                <?php if ($edit_type === 'lab_test'): ?>
+                    <input type="hidden" name="test_id" value="<?= $edit_item['id'] ?>">
+                <?php elseif ($edit_type === 'service'): ?>
+                    <input type="hidden" name="service_id" value="<?= $edit_item['id'] ?>">
+                <?php elseif ($edit_type === 'procedure'): ?>
+                    <input type="hidden" name="procedure_id" value="<?= $edit_item['id'] ?>">
+                <?php elseif ($edit_type === 'equipment'): ?>
+                    <input type="hidden" name="equipment_id" value="<?= $edit_item['id'] ?>">
+                <?php endif; ?>
                 
                 <div class="form-group">
                     <label class="form-label">Branch <span class="required">*</span></label>
@@ -3017,7 +3078,7 @@ include_once '../../components/admin_sidebar.php';
                         </div>
                     </div>
                 <?php elseif ($edit_type === 'lab_test'): ?>
-                    <!-- Lab Test Edit -->
+                    <!-- Lab Test Edit - FIXED -->
                     <div class="form-group">
                         <label class="form-label">Test Name <span class="required">*</span></label>
                         <input type="text" name="test_name" class="form-control" value="<?= htmlspecialchars($edit_item['test_name']) ?>" required>
@@ -3066,31 +3127,49 @@ include_once '../../components/admin_sidebar.php';
                                 </span>
                                 <?php 
                                     $current_names = [];
-                                    foreach ($equipment_for_lab as $eq) {
-                                        if (in_array($eq['equipment_id'], $current_equipment_ids)) {
-                                            $current_names[] = $eq['equipment_name'];
+                                    if (!empty($current_equipment_ids)) {
+                                        $placeholders = implode(',', array_fill(0, count($current_equipment_ids), '?'));
+                                        $stmt = $db->prepare("SELECT id, equipment_name FROM medical_equipment WHERE id IN ($placeholders)");
+                                        $stmt->execute($current_equipment_ids);
+                                        $current_eq = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                                        foreach ($current_eq as $eq) {
+                                            echo '<span class="current-equipment-tag"><i class="fas fa-check-circle"></i> ' . htmlspecialchars($eq['equipment_name']) . '</span>';
                                         }
                                     }
-                                    if (!empty($current_names)) {
-                                        foreach ($current_names as $name) {
-                                            echo '<span class="current-equipment-tag"><i class="fas fa-check-circle"></i> ' . htmlspecialchars($name) . '</span>';
-                                        }
-                                    } else {
+                                    if (empty($current_names)) {
                                         echo '<span class="text-muted" style="font-size:0.7rem;">No equipment currently linked</span>';
                                     }
                                 ?>
                             </div>
                         <?php endif; ?>
                         
-                        <?php if (count($equipment_for_lab) > 0): ?>
+                        <?php 
+                        $equip_branch = ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) ? (int)$selected_branch_id : $user_branch_id;
+                        $equipment_for_lab_edit = [];
+                        try {
+                            $stmt = $db->prepare("
+                                SELECT id, equipment_name, quantity 
+                                FROM medical_equipment 
+                                WHERE (branch_id = ? OR branch_id IS NULL)
+                                AND status = 'active'
+                                ORDER BY equipment_name
+                            ");
+                            $stmt->execute([$equip_branch]);
+                            $equipment_for_lab_edit = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                        } catch (Exception $e) {
+                            $equipment_for_lab_edit = [];
+                        }
+                        ?>
+                        
+                        <?php if (count($equipment_for_lab_edit) > 0): ?>
                             <div class="equipment-checkbox-group">
-                                <?php foreach ($equipment_for_lab as $eq): 
-                                    $checked = in_array($eq['equipment_id'], $current_equipment_ids) ? 'checked' : '';
+                                <?php foreach ($equipment_for_lab_edit as $eq): 
+                                    $checked = in_array($eq['id'], $current_equipment_ids) ? 'checked' : '';
                                 ?>
                                     <label class="equipment-checkbox-item">
-                                        <input type="checkbox" name="equipment_ids[]" value="<?= $eq['equipment_id'] ?>" <?= $checked ?>>
+                                        <input type="checkbox" name="equipment_ids[]" value="<?= $eq['id'] ?>" <?= $checked ?>>
                                         <?= htmlspecialchars($eq['equipment_name']) ?>
-                                        <span class="equip-qty">(<?= $eq['total_quantity'] ?? 0 ?> in stock)</span>
+                                        <span class="equip-qty">(<?= $eq['quantity'] ?? 0 ?> in stock)</span>
                                         <span class="equip-free"><?= $checked ? '✅ Selected' : 'FREE' ?></span>
                                     </label>
                                 <?php endforeach; ?>
@@ -3105,7 +3184,7 @@ include_once '../../components/admin_sidebar.php';
                             </div>
                         <?php else: ?>
                             <div style="padding:10px;background:var(--warning-bg);border-radius:8px;color:var(--warning);font-size:0.8rem;">
-                                <i class="fas fa-exclamation-triangle"></i> No equipment available. Please add equipment first.
+                                <i class="fas fa-exclamation-triangle"></i> No equipment available for this branch. Please add equipment first.
                             </div>
                         <?php endif; ?>
                     </div>
@@ -3529,13 +3608,28 @@ include_once '../../components/admin_sidebar.php';
                         <i class="fas fa-tools"></i> Select Equipment (FREE)
                         <span style="font-size:0.6rem;font-weight:400;color:var(--gray-400);">Equipment price is NOT added to test price</span>
                     </label>
-                    <?php if (count($equipment_for_lab) > 0): ?>
+                    <?php 
+                    $equip_branch = ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) ? (int)$selected_branch_id : $user_branch_id;
+                    $equipment_for_add = [];
+                    try {
+                        $stmt = $db->prepare("
+                            SELECT id, equipment_name, quantity 
+                            FROM medical_equipment 
+                            WHERE (branch_id = ? OR branch_id IS NULL)
+                            AND status = 'active'
+                            ORDER BY equipment_name
+                        ");
+                        $stmt->execute([$equip_branch]);
+                        $equipment_for_add = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                    } catch (Exception $e) {}
+                    ?>
+                    <?php if (count($equipment_for_add) > 0): ?>
                         <div class="equipment-checkbox-group">
-                            <?php foreach ($equipment_for_lab as $eq): ?>
+                            <?php foreach ($equipment_for_add as $eq): ?>
                                 <label class="equipment-checkbox-item">
-                                    <input type="checkbox" name="equipment_ids[]" value="<?= $eq['equipment_id'] ?>">
+                                    <input type="checkbox" name="equipment_ids[]" value="<?= $eq['id'] ?>">
                                     <?= htmlspecialchars($eq['equipment_name']) ?>
-                                    <span class="equip-qty">(<?= $eq['total_quantity'] ?? 0 ?> in stock)</span>
+                                    <span class="equip-qty">(<?= $eq['quantity'] ?? 0 ?> in stock)</span>
                                     <span class="equip-free">FREE</span>
                                 </label>
                             <?php endforeach; ?>
@@ -3728,7 +3822,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c✅ Full CRUD: Add, View, Edit, Delete', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Duplicate Check for Lab Tests', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Duplicate Warning disappears after 5 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Lab Test Edit: Can add/remove equipment', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Lab Test Edit: Can add/remove equipment (FIXED)', 'font-size:13px; color:#34D399;');
     console.log('%c🔧 Equipment: <?= count($equipment) ?> | Lab Tests: <?= count($lab_tests) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>

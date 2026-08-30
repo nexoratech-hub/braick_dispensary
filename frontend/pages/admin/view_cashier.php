@@ -2,7 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_cashier.php
 // ADMIN - VIEW CASHIER BRANCH DETAILS WITH REVENUE CARDS
-// FIXED: Using EXISTING database tables (bills, bill_items, payments, lab_tests)
+// FIXED: Shows ALL cashiers + receptionists (since they handle cash)
+// FIXED: Uses paid_amount from bills (includes discounts)
+// FIXED: Excludes OTC bills (bill_number NOT LIKE 'BILL-OTC-%')
+// FIXED: Only counts paid bills and paid bill_items
+// FIXED: Prescription revenue from prescription_items table
 // ================================================================
 
 // ================================================================
@@ -72,7 +76,7 @@ if ($cashier_id <= 0) {
 }
 
 // ================================================================
-// FETCH CASHIER BRANCH DETAILS - ONLY SELECTED BRANCH
+// FETCH CASHIER BRANCH DETAILS
 // ================================================================
 try {
     $stmt = $db->prepare("
@@ -80,11 +84,13 @@ try {
             b.*,
             (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier' AND status = 'active') as active_cashiers,
             (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'cashier') as total_cashiers,
-            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending') as pending_bills,
-            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'partial') as partial_bills,
-            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid') as paid_bills,
-            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'cancelled') as cancelled_bills,
-            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id) as total_bills,
+            (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception' AND status = 'active') as active_receptions,
+            (SELECT COUNT(*) FROM users WHERE branch_id = b.id AND role = 'reception') as total_receptions,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'pending' AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as pending_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'partial' AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as partial_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'paid' AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as paid_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND status = 'cancelled' AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as cancelled_bills,
+            (SELECT COUNT(*) FROM bills WHERE branch_id = b.id AND patient_id IS NOT NULL AND visit_id IS NOT NULL AND bill_number NOT LIKE 'BILL-OTC-%') as total_bills,
             (SELECT COUNT(*) FROM payments WHERE branch_id = b.id) as total_payments,
             (SELECT COUNT(*) FROM payments WHERE branch_id = b.id AND DATE(received_at) = CURDATE()) as today_payments
         FROM branches b
@@ -104,15 +110,19 @@ try {
 }
 
 // ================================================================
-// REVENUE QUERIES - USING EXISTING TABLES
+// REVENUE QUERIES - FIXED: Using paid_amount, excludes OTC, only paid bills
 // ================================================================
 
-// 1. PATIENT BILLS REVENUE (From bills - paid)
+// 1. PATIENT BILLS REVENUE (From bills - paid, excludes OTC)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(total_amount), 0) as bills_revenue
+        SELECT COALESCE(SUM(paid_amount), 0) as bills_revenue
         FROM bills 
-        WHERE branch_id = ? AND status = 'paid'
+        WHERE branch_id = ? 
+        AND status = 'paid'
+        AND patient_id IS NOT NULL
+        AND visit_id IS NOT NULL
+        AND bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
     $bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['bills_revenue'] ?? 0;
@@ -120,15 +130,48 @@ try {
     $bills_revenue = 0;
 }
 
-// 2. PROCEDURES REVENUE (from bill_items - procedure type)
+// 2. OTC REVENUE (from otc_sales table)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as procedures_revenue
+        SELECT COALESCE(SUM(total_amount), 0) as otc_revenue
+        FROM otc_sales 
+        WHERE branch_id = ? 
+        AND payment_status = 'paid'
+    ");
+    $stmt->execute([$cashier_id]);
+    $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
+} catch (Exception $e) {
+    $otc_revenue = 0;
+}
+
+// 3. PRESCRIPTION REVENUE (from prescription_items table)
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(pi.total_price), 0) as prescription_revenue
+        FROM prescription_items pi
+        INNER JOIN prescriptions p ON pi.prescription_id = p.id
+        WHERE p.branch_id = ? 
+        AND p.status = 'dispensed'
+    ");
+    $stmt->execute([$cashier_id]);
+    $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
+} catch (Exception $e) {
+    $prescription_revenue = 0;
+}
+
+// 4. PROCEDURES REVENUE (from bill_items - procedure type, paid bills only)
+try {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(bi.final_price), 0) as procedures_revenue
         FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
         WHERE b.branch_id = ? 
+        AND b.status = 'paid'
         AND bi.item_type = 'procedure' 
         AND bi.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
     $procedures_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['procedures_revenue'] ?? 0;
@@ -136,15 +179,19 @@ try {
     $procedures_revenue = 0;
 }
 
-// 3. EQUIPMENT REVENUE (from bill_items - equipment type)
+// 5. EQUIPMENT REVENUE (from bill_items - equipment type, paid bills only)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as equipment_revenue
+        SELECT COALESCE(SUM(bi.final_price), 0) as equipment_revenue
         FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
         WHERE b.branch_id = ? 
+        AND b.status = 'paid'
         AND bi.item_type = 'equipment' 
         AND bi.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
     $equipment_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['equipment_revenue'] ?? 0;
@@ -152,15 +199,19 @@ try {
     $equipment_revenue = 0;
 }
 
-// 4. LAB TESTS REVENUE (from bill_items - lab_test type)
+// 6. LAB TESTS REVENUE (from bill_items - lab_test type, paid bills only)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as lab_tests_revenue
+        SELECT COALESCE(SUM(bi.final_price), 0) as lab_tests_revenue
         FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
         WHERE b.branch_id = ? 
+        AND b.status = 'paid'
         AND bi.item_type = 'lab_test' 
         AND bi.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
     $lab_tests_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['lab_tests_revenue'] ?? 0;
@@ -168,31 +219,19 @@ try {
     $lab_tests_revenue = 0;
 }
 
-// Also get from lab_tests table directly (completed tests)
+// 7. CONSULTATION REVENUE (from bill_items - consultation type, paid bills only)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(test_price), 0) as lab_tests_direct
-        FROM lab_tests 
-        WHERE branch_id = ? AND status = 'completed'
-    ");
-    $stmt->execute([$cashier_id]);
-    $lab_tests_direct = $stmt->fetch(PDO::FETCH_ASSOC)['lab_tests_direct'] ?? 0;
-} catch (Exception $e) {
-    $lab_tests_direct = 0;
-}
-
-// Total Lab Revenue (combine both sources but avoid double counting)
-$lab_total_revenue = $lab_tests_revenue + $lab_tests_direct;
-
-// 5. CONSULTATION REVENUE (from bill_items - consultation type)
-try {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as consultation_revenue
+        SELECT COALESCE(SUM(bi.final_price), 0) as consultation_revenue
         FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
         WHERE b.branch_id = ? 
+        AND b.status = 'paid'
         AND bi.item_type = 'consultation' 
         AND bi.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
     $consultation_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['consultation_revenue'] ?? 0;
@@ -200,15 +239,19 @@ try {
     $consultation_revenue = 0;
 }
 
-// 6. MEDICATION REVENUE (from bill_items - medication type)
+// 8. MEDICATION REVENUE (from bill_items - medication type, paid bills only)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as medication_revenue
+        SELECT COALESCE(SUM(bi.final_price), 0) as medication_revenue
         FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
         WHERE b.branch_id = ? 
+        AND b.status = 'paid'
         AND bi.item_type = 'medication' 
         AND bi.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
     $medication_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['medication_revenue'] ?? 0;
@@ -216,15 +259,19 @@ try {
     $medication_revenue = 0;
 }
 
-// 7. REGISTRATION REVENUE (from bill_items - registration type)
+// 9. REGISTRATION REVENUE (from bill_items - registration type, paid bills only)
 try {
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(bi.total_price), 0) as registration_revenue
+        SELECT COALESCE(SUM(bi.final_price), 0) as registration_revenue
         FROM bill_items bi
         INNER JOIN bills b ON bi.bill_id = b.id
         WHERE b.branch_id = ? 
+        AND b.status = 'paid'
         AND bi.item_type = 'registration' 
         AND bi.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
     $registration_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['registration_revenue'] ?? 0;
@@ -232,22 +279,22 @@ try {
     $registration_revenue = 0;
 }
 
-// 8. TOTAL BILLS REVENUE (All paid bills)
-$total_bills_revenue = $bills_revenue;
-
-// 9. OTHER BILLS - Consultation bills only (distinct bills with consultation items)
+// 10. OTHER BILLS - Consultation bills only (distinct bills with consultation items)
 $other_bills_count = 0;
 $other_bills_revenue = 0;
 try {
     $stmt = $db->prepare("
         SELECT COUNT(DISTINCT b.id) as other_bills_count,
-               COALESCE(SUM(b.total_amount), 0) as other_bills_revenue
+               COALESCE(SUM(b.paid_amount), 0) as other_bills_revenue
         FROM bills b
         INNER JOIN bill_items bi ON bi.bill_id = b.id
         WHERE b.branch_id = ? 
-        AND bi.item_type = 'consultation'
-        AND b.status != 'cancelled'
         AND b.status = 'paid'
+        AND bi.item_type = 'consultation'
+        AND bi.status = 'paid'
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -259,9 +306,9 @@ try {
 }
 
 // ================================================================
-// TOTAL REVENUE - Using bills only (no double counting)
+// TOTAL REVENUE = Patient Bills + OTC + Prescriptions
 // ================================================================
-$total_revenue = $total_bills_revenue;
+$total_revenue = $bills_revenue + $otc_revenue + $prescription_revenue;
 
 // ================================================================
 // EXPENSES (ONLY SELECTED BRANCH)
@@ -282,20 +329,30 @@ try {
 $net_profit = $total_revenue - $total_expenses;
 
 // ================================================================
-// GET CASHIERS FOR THIS BRANCH
+// GET STAFF FOR THIS BRANCH - CASHIERS + RECEPTIONISTS
+// FIXED: Shows both cashiers and receptionists
 // ================================================================
-$cashiers_list = [];
+$staff_list = [];
 try {
     $stmt = $db->prepare("
-        SELECT id, full_name, email, phone, status, created_at 
+        SELECT id, full_name, email, phone, role, status, created_at 
         FROM users 
-        WHERE branch_id = ? AND role = 'cashier'
-        ORDER BY full_name
+        WHERE branch_id = ? 
+        AND role IN ('cashier', 'reception')
+        ORDER BY role, full_name
     ");
     $stmt->execute([$cashier_id]);
-    $cashiers_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $staff_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $cashiers_list = [];
+    $staff_list = [];
+}
+
+// Separate counts for display
+$cashier_count = 0;
+$reception_count = 0;
+foreach ($staff_list as $staff) {
+    if ($staff['role'] === 'cashier') $cashier_count++;
+    if ($staff['role'] === 'reception') $reception_count++;
 }
 
 // ================================================================
@@ -345,6 +402,9 @@ try {
         FROM bills b
         LEFT JOIN patients pat ON b.patient_id = pat.id
         WHERE b.branch_id = ?
+        AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
+        AND b.bill_number NOT LIKE 'BILL-OTC-%'
         ORDER BY b.created_at DESC
         LIMIT 10
     ");
@@ -390,6 +450,14 @@ function getStatusIcon($status) {
         'cancelled' => 'fa-times-circle'
     ];
     return $icons[$status] ?? 'fa-circle';
+}
+
+function getRoleBadge($role) {
+    $badges = [
+        'cashier' => '<span class="badge badge-info" style="font-size:0.55rem;padding:1px 10px;"><i class="fas fa-cash-register"></i> Cashier</span>',
+        'reception' => '<span class="badge badge-teal" style="font-size:0.55rem;padding:1px 10px;"><i class="fas fa-headset"></i> Reception</span>'
+    ];
+    return $badges[$role] ?? '<span class="badge badge-secondary">' . ucfirst($role) . '</span>';
 }
 
 // ================================================================
@@ -965,11 +1033,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
         .card-cyan:hover { box-shadow: 0 8px 25px rgba(8, 145, 178, 0.4); }
         
+        .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
+        .card-teal:hover { box-shadow: 0 8px 25px rgba(13, 148, 136, 0.4); }
+        
         [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
         [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
         [data-theme="dark"] .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
         [data-theme="dark"] .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
+        [data-theme="dark"] .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
         
         /* ================================================================
            DATA TABLE
@@ -1109,6 +1181,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 800;
         }
         
+        .stat-mini .stat-number-mini.text-green-600 { color: #059669; }
+        .stat-mini .stat-number-mini.text-yellow-600 { color: #D97706; }
+        .stat-mini .stat-number-mini.text-purple-600 { color: #7C3AED; }
+        .stat-mini .stat-number-mini.text-teal-600 { color: #0D9488; }
+        .stat-mini .stat-number-mini.text-red-600 { color: #DC2626; }
+        
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -1244,7 +1322,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot has-notif"></span>
         </button>
         
         <a href="profile.php">
@@ -1315,8 +1393,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <p class="detail-value"><?= htmlspecialchars($cashier['email'] ?? 'N/A') ?></p>
             </div>
             <div>
-                <p class="detail-label"><i class="fas fa-user-tie mr-1"></i> Cashiers</p>
-                <p class="detail-value"><?= $cashier['active_cashiers'] ?? 0 ?> Active / <?= $cashier['total_cashiers'] ?? 0 ?> Total</p>
+                <p class="detail-label"><i class="fas fa-user-tie mr-1"></i> Staff</p>
+                <p class="detail-value">
+                    <span class="badge badge-info" style="font-size:0.6rem;padding:2px 10px;">
+                        <i class="fas fa-cash-register"></i> <?= $cashier['active_cashiers'] ?? 0 ?> Cashiers
+                    </span>
+                    <span class="badge badge-teal" style="font-size:0.6rem;padding:2px 10px;background:#0D9488;">
+                        <i class="fas fa-headset"></i> <?= $cashier['active_receptions'] ?? 0 ?> Reception
+                    </span>
+                </p>
             </div>
         </div>
     </div>
@@ -1331,7 +1416,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
             <p class="card-amount"><?= formatCurrency($total_revenue) ?></p>
             <p class="card-label">Total Revenue</p>
-            <p class="card-sub">All paid bills from this branch</p>
+            <p class="card-sub">Bills + OTC + Prescriptions</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1349,10 +1434,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="card-icon"><i class="fas fa-chart-line"></i></div>
             <p class="card-amount"><?= formatCurrency($net_profit) ?></p>
             <p class="card-label">Net Profit</p>
-            <p class="card-sub">
-                Revenue: <span class="highlight"><?= formatCurrency($total_revenue) ?></span> | 
-                Expenses: <span class="highlight"><?= formatCurrency($total_expenses) ?></span>
-            </p>
+            <p class="card-sub">Revenue - Expenses</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1360,53 +1442,53 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
             <p class="card-amount"><?= formatCurrency($bills_revenue) ?></p>
-            <p class="card-label">Bills Revenue</p>
+            <p class="card-label">Patient Bills</p>
             <p class="card-sub">All paid patient bills</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 5. PROCEDURES REVENUE - BLUE -->
-        <a href="procedures.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
+        <!-- 5. OTC REVENUE - TEAL -->
+        <a href="otc_sales.php?branch=<?= $cashier_id ?>" class="revenue-card card-teal">
+            <div class="card-icon"><i class="fas fa-cash-register"></i></div>
+            <p class="card-amount"><?= formatCurrency($otc_revenue) ?></p>
+            <p class="card-label">OTC Sales</p>
+            <p class="card-sub">Over-the-counter sales</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <!-- 6. PRESCRIPTION REVENUE - PURPLE -->
+        <a href="prescriptions.php?branch=<?= $cashier_id ?>" class="revenue-card card-purple">
+            <div class="card-icon"><i class="fas fa-prescription"></i></div>
+            <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
+            <p class="card-label">Prescriptions</p>
+            <p class="card-sub">From prescription_items</p>
+            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
+        </a>
+        
+        <!-- 7. PROCEDURES - CYAN -->
+        <a href="procedures.php?branch=<?= $cashier_id ?>" class="revenue-card card-cyan">
             <div class="card-icon"><i class="fas fa-syringe"></i></div>
             <p class="card-amount"><?= formatCurrency($procedures_revenue) ?></p>
             <p class="card-label">Procedures</p>
-            <p class="card-sub">From bill_items (procedure type)</p>
+            <p class="card-sub">From bill_items (procedure)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 6. LAB TEST REVENUE - BLUE -->
-        <a href="lab_tests.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
+        <!-- 8. LAB TESTS - PURPLE -->
+        <a href="lab_tests.php?branch=<?= $cashier_id ?>" class="revenue-card card-purple">
             <div class="card-icon"><i class="fas fa-flask"></i></div>
-            <p class="card-amount"><?= formatCurrency($lab_total_revenue) ?></p>
-            <p class="card-label">Lab Test Revenue</p>
-            <p class="card-sub">From bill_items + lab_tests table</p>
+            <p class="card-amount"><?= formatCurrency($lab_tests_revenue) ?></p>
+            <p class="card-label">Lab Tests</p>
+            <p class="card-sub">From bill_items (lab_test)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 7. CONSULTATION REVENUE - BLUE -->
+        <!-- 9. CONSULTATION - BLUE -->
         <a href="consultations.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-stethoscope"></i></div>
             <p class="card-amount"><?= formatCurrency($consultation_revenue) ?></p>
             <p class="card-label">Consultation</p>
-            <p class="card-sub">From bill_items (consultation type)</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 8. MEDICATION REVENUE - BLUE -->
-        <a href="medications.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
-            <div class="card-icon"><i class="fas fa-pills"></i></div>
-            <p class="card-amount"><?= formatCurrency($medication_revenue) ?></p>
-            <p class="card-label">Medications</p>
-            <p class="card-sub">From bill_items (medication type)</p>
-            <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
-        </a>
-        
-        <!-- 9. OTHER BILLS - CONSULTATION BILLS ONLY - PURPLE -->
-        <a href="consultation_bills.php?branch=<?= $cashier_id ?>" class="revenue-card card-purple">
-            <div class="card-icon"><i class="fas fa-file-medical-alt"></i></div>
-            <p class="card-amount"><?= number_format($other_bills_count) ?></p>
-            <p class="card-label">Other Bills</p>
-            <p class="card-sub">Consultation bills: <?= formatCurrency($other_bills_revenue) ?></p>
+            <p class="card-sub">From bill_items (consultation)</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1451,7 +1533,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
         <?php if (count($recent_payments) > 0): ?>
             <div class="overflow-x-auto">
-                <table class="data-table">
+                <table class="data-table" id="paymentsTable">
                     <thead>
                         <tr>
                             <th>Receipt #</th>
@@ -1507,7 +1589,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
         <?php if (count($recent_bills) > 0): ?>
             <div class="overflow-x-auto">
-                <table class="data-table">
+                <table class="data-table" id="billsTable">
                     <thead>
                         <tr>
                             <th>Bill #</th>
@@ -1562,43 +1644,53 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- CASHIERS LIST -->
+    <!-- STAFF LIST - CASHIERS + RECEPTIONISTS -->
     <!-- ================================================================ -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-user-tie"></i>
-                Cashiers (<?= count($cashiers_list) ?>)
+                <i class="fas fa-users"></i>
+                Staff (<?= count($staff_list) ?>)
             </h3>
-            <a href="add_employee.php?branch=<?= $cashier_id ?>&role=cashier" class="card-action">
-                <i class="fas fa-plus"></i> Add Cashier
-            </a>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;">
+                <span class="badge badge-info" style="font-size:0.55rem;padding:2px 10px;">
+                    <i class="fas fa-cash-register"></i> Cashiers: <?= $cashier_count ?>
+                </span>
+                <span class="badge badge-teal" style="font-size:0.55rem;padding:2px 10px;background:#0D9488;">
+                    <i class="fas fa-headset"></i> Reception: <?= $reception_count ?>
+                </span>
+                <a href="add_employee.php?branch=<?= $cashier_id ?>" class="card-action" style="background:rgba(255,255,255,0.15);padding:2px 12px;border-radius:12px;">
+                    <i class="fas fa-plus"></i> Add Staff
+                </a>
+            </div>
         </div>
-        <?php if (count($cashiers_list) > 0): ?>
+        <?php if (count($staff_list) > 0): ?>
             <div class="overflow-x-auto">
-                <table class="data-table">
+                <table class="data-table" id="staffTable">
                     <thead>
                         <tr>
                             <th>Name</th>
                             <th>Email</th>
                             <th>Phone</th>
+                            <th>Role</th>
                             <th>Status</th>
                             <th>Action</th>
                         </tr>
                     </thead>
                     <tbody>
-                        <?php foreach ($cashiers_list as $cashier_user): ?>
+                        <?php foreach ($staff_list as $staff): ?>
                             <tr>
-                                <td class="font-medium"><?= htmlspecialchars($cashier_user['full_name'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($cashier_user['email'] ?? 'N/A') ?></td>
-                                <td><?= htmlspecialchars($cashier_user['phone'] ?? 'N/A') ?></td>
+                                <td class="font-medium"><?= htmlspecialchars($staff['full_name'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($staff['email'] ?? 'N/A') ?></td>
+                                <td><?= htmlspecialchars($staff['phone'] ?? 'N/A') ?></td>
+                                <td><?= getRoleBadge($staff['role'] ?? 'other') ?></td>
                                 <td>
-                                    <span class="badge badge-<?= $cashier_user['status'] === 'active' ? 'success' : 'danger' ?>" style="font-size:0.6rem;padding:2px 10px;">
-                                        <?= ucfirst($cashier_user['status'] ?? 'N/A') ?>
+                                    <span class="badge badge-<?= $staff['status'] === 'active' ? 'success' : 'danger' ?>" style="font-size:0.6rem;padding:2px 10px;">
+                                        <?= ucfirst($staff['status'] ?? 'N/A') ?>
                                     </span>
                                 </td>
                                 <td>
-                                    <a href="view_employee.php?id=<?= $cashier_user['id'] ?>&branch=<?= $cashier_id ?>" class="text-green-600 text-xs hover:underline">View</a>
+                                    <a href="view_employee.php?id=<?= $staff['id'] ?>&branch=<?= $cashier_id ?>" class="text-green-600 text-xs hover:underline">View</a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -1607,9 +1699,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
         <?php else: ?>
             <div class="text-center py-6 text-gray-400">
-                <i class="fas fa-user-tie text-2xl block mb-2"></i>
-                <p>No cashiers assigned to this branch</p>
-                <a href="add_employee.php?branch=<?= $cashier_id ?>&role=cashier" class="text-green-600 text-sm hover:underline">Add Cashier</a>
+                <i class="fas fa-users text-2xl block mb-2"></i>
+                <p>No staff assigned to this branch</p>
+                <a href="add_employee.php?branch=<?= $cashier_id ?>" class="text-green-600 text-sm hover:underline">Add Staff</a>
             </div>
         <?php endif; ?>
     </div>
@@ -1646,6 +1738,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
+    // ================================================================
+    // DARK MODE
+    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1675,10 +1770,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SIDEBAR TOGGLE
+    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
 
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
@@ -1692,26 +1788,73 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
+    // ================================================================
+    // SEARCH FUNCTIONALITY
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+
     function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
-        }
+        var query = searchInput.value.trim().toLowerCase();
+        var tables = ['paymentsTable', 'billsTable', 'staffTable'];
+        
+        tables.forEach(function(tableId) {
+            var table = document.getElementById(tableId);
+            if (!table) return;
+            
+            var rows = table.getElementsByTagName('tbody')[0]?.getElementsByTagName('tr');
+            if (!rows) return;
+            
+            var visibleCount = 0;
+            for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                var text = row.textContent.toLowerCase();
+                if (query === '' || text.includes(query)) {
+                    row.style.display = '';
+                    visibleCount++;
+                } else {
+                    row.style.display = 'none';
+                }
+            }
+            
+            // Show "No results" message if needed
+            var noResults = table.parentElement.querySelector('.no-results');
+            if (visibleCount === 0 && query !== '') {
+                if (!noResults) {
+                    noResults = document.createElement('div');
+                    noResults.className = 'no-results text-center py-4 text-gray-400';
+                    noResults.innerHTML = '<i class="fas fa-search text-2xl block mb-2"></i><p>No results found for "<strong>' + query + '</strong>"</p>';
+                    table.parentElement.appendChild(noResults);
+                } else {
+                    noResults.style.display = 'block';
+                    noResults.innerHTML = '<i class="fas fa-search text-2xl block mb-2"></i><p>No results found for "<strong>' + query + '</strong>"</p>';
+                }
+            } else if (noResults) {
+                noResults.style.display = 'none';
+            }
+        });
     }
     
     searchBtn?.addEventListener('click', performSearch);
     searchInput?.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') performSearch();
     });
+    
+    // Real-time search on input
+    searchInput?.addEventListener('input', performSearch);
 
+    // ================================================================
+    // BRANCH SWITCHER
+    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
-        url.searchParams.delete('branch_id');
         window.location.href = url.toString();
     }
 
+    // ================================================================
+    // DATE & TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1729,41 +1872,72 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
+    // ================================================================
+    // TOAST NOTIFICATION
+    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
         
-        toast.className = 'toast-custom ' + type;
-        toastTitle.textContent = title;
-        toastMessage.textContent = message;
+        toast.className = 'toast-custom ' + (type || 'info');
+        toastTitle.textContent = title || 'Notification';
+        toastMessage.textContent = message || '';
         toast.style.display = 'flex';
         
-        toast.classList.add('show');
+        setTimeout(function() {
+            toast.classList.add('show');
+        }, 50);
+        
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
             setTimeout(function() {
                 toast.style.display = 'none';
             }, 400);
-        }, 3500);
+        }, 4000);
     }
 
-    console.log('%c💰 Braick Dispensary - View Cashier (USING EXISTING TABLES)', 'font-size:18px; font-weight:bold; color:#059669;');
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        // Ctrl+K or Cmd+K to focus search
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            searchInput?.focus();
+        }
+        // Escape to clear search
+        if (e.key === 'Escape' && document.activeElement === searchInput) {
+            searchInput.value = '';
+            performSearch();
+            searchInput.blur();
+        }
+    });
+
+    // ================================================================
+    // CONSOLE LOG - Debug info
+    // ================================================================
+    console.log('%c💰 Braick Dispensary - View Cashier', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Total Revenue: <?= formatCurrency($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c📊 Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Bills Revenue: <?= formatCurrency($bills_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Procedures: <?= formatCurrency($procedures_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Equipment: <?= formatCurrency($equipment_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Lab Tests: <?= formatCurrency($lab_total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Consultation: <?= formatCurrency($consultation_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Medications: <?= formatCurrency($medication_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Registration: <?= formatCurrency($registration_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Other Bills: <?= number_format($other_bills_count) ?> bills, <?= formatCurrency($other_bills_revenue) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Using tables: bills, bill_items, payments, lab_tests, expenses, users, branches', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ 9 cards in 3x3 grid', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 Revenue Breakdown:', 'font-size:13px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c   ├─ Total Revenue: <?= formatCurrency($total_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   ├─ Patient Bills: <?= formatCurrency($bills_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   ├─ OTC Sales: <?= formatCurrency($otc_revenue) ?>', 'font-size:12px; color:#0D9488;');
+    console.log('%c   ├─ Prescriptions: <?= formatCurrency($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c   ├─ Procedures: <?= formatCurrency($procedures_revenue) ?>', 'font-size:12px; color:#0891B2;');
+    console.log('%c   ├─ Lab Tests: <?= formatCurrency($lab_tests_revenue) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c   └─ Consultation: <?= formatCurrency($consultation_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c💸 Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:13px; color:#DC2626;');
+    console.log('%c📈 Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📄 Bills: <?= $cashier['paid_bills'] ?? 0 ?> Paid, <?= $cashier['pending_bills'] ?? 0 ?> Pending, <?= $cashier['cancelled_bills'] ?? 0 ?> Cancelled', 'font-size:13px; color:#D97706;');
+    console.log('%c👥 Staff: <?= count($staff_list) ?> total (Cashiers: <?= $cashier_count ?>, Reception: <?= $reception_count ?>)', 'font-size:13px; color:#4F46E5;');
+    console.log('%c✅ FIXED: Shows BOTH cashiers AND receptionists', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Uses paid_amount from bills (includes discounts)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Excludes OTC bills (bill_number NOT LIKE "BILL-OTC-%")', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Only counts paid bills and paid bill_items', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Prescription revenue from prescription_items table', 'font-size:13px; color:#34D399;');
+    console.log('%c🔍 Search: Use Ctrl+K to focus search', 'font-size:13px; color:#64748B;');
 </script>
 
 </body>

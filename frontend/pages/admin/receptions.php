@@ -4,6 +4,7 @@
 // SUPER ADMIN - VIEW ALL RECEPTIONS (BRANCHES)
 // BRAICK DISPENSARY - BLUE THEME - USING EXISTING DATABASE
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
+// FIXED: Branch filter error with invalid_id parameter
 // ================================================================
 
 // ================================================================
@@ -70,14 +71,39 @@ try {
 }
 
 // ================================================================
-// GET FILTER PARAMETERS
+// GET FILTER PARAMETERS - FIXED
 // ================================================================
-$selected_branch_id = $_GET['branch'] ?? 'all';
-$search = $_GET['search'] ?? '';
-$status_filter = $_GET['status'] ?? 'all';
+$selected_branch_id = isset($_GET['branch']) ? $_GET['branch'] : 'all';
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$status_filter = isset($_GET['status']) ? $_GET['status'] : 'all';
+$error_msg = isset($_GET['error']) ? $_GET['error'] : '';
 
 // ================================================================
-// BUILD QUERY WITH FILTERS - USING EXISTING TABLES
+// VALIDATE BRANCH ID - FIXED
+// ================================================================
+$branch_id_for_query = null;
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $branch_id_for_query = (int)$selected_branch_id;
+    
+    // Verify branch exists
+    try {
+        $stmt = $db->prepare("SELECT id FROM branches WHERE id = ? AND status = 'active'");
+        $stmt->execute([$branch_id_for_query]);
+        $branch_exists = $stmt->fetch(PDO::FETCH_ASSOC);
+        if (!$branch_exists) {
+            $error_msg = 'Branch not found or inactive';
+            $selected_branch_id = 'all';
+            $branch_id_for_query = null;
+        }
+    } catch (Exception $e) {
+        $error_msg = 'Error validating branch';
+        $selected_branch_id = 'all';
+        $branch_id_for_query = null;
+    }
+}
+
+// ================================================================
+// BUILD QUERY WITH FILTERS - FIXED
 // ================================================================
 $query = "
     SELECT 
@@ -112,14 +138,14 @@ $query = "
 
 $params = [];
 
-// Branch filter
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+// Branch filter - FIXED
+if ($branch_id_for_query !== null && is_numeric($branch_id_for_query)) {
     $query .= " AND b.id = ?";
-    $params[] = (int)$selected_branch_id;
+    $params[] = $branch_id_for_query;
 }
 
 // Status filter
-if ($status_filter !== 'all') {
+if ($status_filter !== 'all' && in_array($status_filter, ['active', 'inactive'])) {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
 }
@@ -610,6 +636,50 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           ALERT / ERROR MESSAGE
+           ================================================================ */
+        .alert {
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.9rem;
+            border: 1px solid transparent;
+            animation: slideDown 0.3s ease;
+        }
+        
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .alert-error {
+            background: var(--danger-bg);
+            color: var(--danger);
+            border-color: var(--danger);
+        }
+        
+        .alert-success {
+            background: var(--success-bg);
+            color: var(--success);
+            border-color: var(--success);
+        }
+        
+        .alert-warning {
+            background: var(--warning-bg);
+            color: var(--warning);
+            border-color: var(--warning);
+        }
+        
+        .alert-info {
+            background: var(--primary-bg);
+            color: var(--primary);
+            border-color: var(--primary);
+        }
+        
+        /* ================================================================
            STATS ROW - BOLDER BLUE CARDS
            ================================================================ */
         .stats-row {
@@ -1066,6 +1136,7 @@ include_once '../../components/admin_sidebar.php';
             display: flex;
             gap: 8px;
             justify-content: flex-end;
+            flex-wrap: wrap;
         }
         
         .reception-card .card-actions .btn-action {
@@ -1287,6 +1358,16 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
+    <!-- ERROR MESSAGE - FIXED -->
+    <!-- ================================================================ -->
+    <?php if (!empty($error_msg)): ?>
+        <div class="alert alert-error">
+            <i class="fas fa-exclamation-circle"></i>
+            <?= htmlspecialchars($error_msg) ?>
+        </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
     <!-- STATISTICS ROW - BOLDER BLUE CARDS -->
     <!-- ================================================================ -->
     <div class="stats-row animate-fade-in-up">
@@ -1384,7 +1465,7 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECEPTION GRID - BOLDER BLUE CARDS WITH BLUE HEADERS -->
+    <!-- RECEPTION GRID - FIXED LINKS -->
     <!-- ================================================================ -->
     <?php if (count($receptions) > 0): ?>
         <div class="reception-grid animate-fade-in-up" style="animation-delay:0.1s;">
@@ -1447,16 +1528,19 @@ include_once '../../components/admin_sidebar.php';
                         </div>
                     </div>
                     
+                    <!-- ================================================================ -->
+                    <!-- CARD ACTIONS - FIXED LINKS -->
+                    <!-- ================================================================ -->
                     <div class="card-actions">
-                        <a href="view_reception.php?id=<?= $reception['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                        <a href="view_branch.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                            class="btn-action primary">
                             <i class="fas fa-eye"></i> View
                         </a>
-                        <a href="edit_reception.php?id=<?= $reception['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                        <a href="edit_branch.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                            class="btn-action">
                             <i class="fas fa-edit"></i> Edit
                         </a>
-                        <a href="reception_dashboard.php?id=<?= $reception['id'] ?>&branch=<?= $selected_branch_id ?>" 
+                        <a href="branch_dashboard.php?id=<?= $reception['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                            class="btn-action">
                             <i class="fas fa-chart-bar"></i> Dashboard
                         </a>
@@ -1573,6 +1657,8 @@ include_once '../../components/admin_sidebar.php';
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
+        // Remove error param when switching branches
+        url.searchParams.delete('error');
         window.location.href = url.toString();
     }
 
@@ -1605,6 +1691,8 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Using tables: branches, users, patients, visits, appointments, bills', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Branch filter with invalid_id parameter', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Links now use view_branch.php, edit_branch.php, branch_dashboard.php', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

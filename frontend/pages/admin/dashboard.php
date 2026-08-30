@@ -2,11 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/dashboard.php
 // SUPER ADMIN DASHBOARD - MODERN DESIGN
-// 8 CARDS ONLY: Revenue, Expenses, Profit, Prescriptions, OTC, Stock, Expiry, Patients
-// FIXED: Using correct tables: bills, otc_sales, prescriptions, prescription_items
-// FIXED: Column 'branch_id' ambiguous - added table prefixes for ALL queries
-// SOLID COLORS - CLEAN MODERN LOOK
-// BRAICK DISPENSARY
+// 8 CARDS: Revenue, Expenses, Profit, Prescriptions, OTC, Stock, Expiry, Equipment
 // ================================================================
 
 // ================================================================
@@ -17,7 +13,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -41,7 +37,7 @@ if ($_SESSION['role'] !== 'admin') {
 }
 
 // ================================================================
-// GET ADMIN DATA FROM SESSION
+// GET ADMIN DATA
 // ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
@@ -78,18 +74,6 @@ $selected_branch_id = $_GET['branch'] ?? 'all';
 $branch_name_display = 'All Branches';
 
 // ================================================================
-// FUNCTION TO CHECK IF COLUMN EXISTS
-// ================================================================
-function columnExists($db, $table, $column) {
-    try {
-        $stmt = $db->query("SHOW COLUMNS FROM $table LIKE '$column'");
-        return $stmt->rowCount() > 0;
-    } catch (Exception $e) {
-        return false;
-    }
-}
-
-// ================================================================
 // BRANCH NAME
 // ================================================================
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
@@ -105,7 +89,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
-// ✅ BRANCH FILTERS - WITH TABLE PREFIXES (FIXED)
+// BRANCH FILTERS
 // ================================================================
 
 // For bills table (b)
@@ -120,12 +104,6 @@ if ($selected_branch_id !== 'all') {
     $branch_filter_p = " AND p.branch_id = " . (int)$selected_branch_id;
 }
 
-// For prescription_items table (pi) - if needed
-$branch_filter_pi = "";
-if ($selected_branch_id !== 'all') {
-    $branch_filter_pi = " AND pi.branch_id = " . (int)$selected_branch_id;
-}
-
 // For other tables (single table)
 $branch_filter = "";
 if ($selected_branch_id !== 'all') {
@@ -135,20 +113,23 @@ if ($selected_branch_id !== 'all') {
 $today = date('Y-m-d');
 
 // ================================================================
-// ✅ 1. PATIENT BILLS REVENUE - FROM bills TABLE
-// ✅ FIXED: Uses b.branch_id, b.patient_id IS NOT NULL
+// ✅ 1. PATIENT BILLS REVENUE - Uses paid_amount from bills
+//    Only bills with visit_id NOT NULL (consultation bills)
+//    Bills with status = 'paid'
+//    Ignores lab test status (pending or paid) because patient has already paid
 // ================================================================
 $stmt = $db->query("
-    SELECT COALESCE(SUM(b.total_amount), 0) as total 
+    SELECT COALESCE(SUM(b.paid_amount), 0) as total 
     FROM bills b
     WHERE b.status = 'paid'
     AND b.patient_id IS NOT NULL
+    AND b.visit_id IS NOT NULL
     $branch_filter_b
 ");
 $patient_bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 2. OTC REVENUE - FROM otc_sales
+// ✅ 2. OTC REVENUE - All paid OTC sales
 // ================================================================
 $stmt = $db->query("
     SELECT COALESCE(SUM(total_amount), 0) as total 
@@ -159,7 +140,7 @@ $stmt = $db->query("
 $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 3. PRESCRIPTION REVENUE - FIXED AMBIGUOUS branch_id
+// ✅ 3. PRESCRIPTION REVENUE
 // ================================================================
 $stmt = $db->query("
     SELECT COALESCE(SUM(pi.total_price), 0) as total 
@@ -171,7 +152,7 @@ $stmt = $db->query("
 $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 4. TOTAL REVENUE
+// ✅ 4. TOTAL REVENUE = Patient Bills (paid_amount) + OTC + Prescriptions
 // ================================================================
 $total_revenue = $patient_bills_revenue + $otc_revenue + $prescription_revenue;
 
@@ -206,7 +187,7 @@ $net_profit = $total_revenue - $total_expenses;
 $profit_percentage = ($total_revenue > 0) ? round(($net_profit / $total_revenue) * 100, 1) : 0;
 
 // ================================================================
-// ✅ 7. PRESCRIPTION COUNT - FIXED AMBIGUOUS branch_id
+// ✅ 7. PRESCRIPTION COUNT
 // ================================================================
 $stmt = $db->query("
     SELECT COUNT(*) as count 
@@ -231,7 +212,7 @@ $otc_count = $otc_data['count'] ?? 0;
 $otc_total = $otc_data['total'] ?? 0;
 
 // ================================================================
-// ✅ 9. STOCK - Out of Stock & Low Stock
+// ✅ 9. MEDICATION STOCK
 // ================================================================
 $stmt = $db->query("
     SELECT 
@@ -242,48 +223,48 @@ $stmt = $db->query("
     $branch_filter
 ");
 $stock_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$out_of_stock = $stock_data['out_of_stock'] ?? 0;
-$low_stock = $stock_data['low_stock'] ?? 0;
+$med_out_of_stock = $stock_data['out_of_stock'] ?? 0;
+$med_low_stock = $stock_data['low_stock'] ?? 0;
 
 // ================================================================
-// ✅ 10. EXPIRY - Expired & Expiring Soon
+// ✅ 10. MEDICATION EXPIRY
 // ================================================================
 $today_date = date('Y-m-d');
 $stmt = $db->query("
     SELECT 
-        SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL THEN 1 ELSE 0 END) as expired,
-        SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL THEN 1 ELSE 0 END) as expiring_soon
+        SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN 1 ELSE 0 END) as expired,
+        SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN 1 ELSE 0 END) as expiring_soon
     FROM medications_inventory 
     WHERE status = 'active' 
     $branch_filter
 ");
 $expiry_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$expired = $expiry_data['expired'] ?? 0;
-$expiring_soon = $expiry_data['expiring_soon'] ?? 0;
+$med_expired = $expiry_data['expired'] ?? 0;
+$med_expiring_soon = $expiry_data['expiring_soon'] ?? 0;
 
 // ================================================================
-// ✅ 11. PATIENTS - Total Patients
+// ✅ 11. MEDICAL EQUIPMENT - Shows ALL equipment
 // ================================================================
 $stmt = $db->query("
-    SELECT COUNT(*) as count 
-    FROM patients 
-    WHERE 1=1 
+    SELECT 
+        COUNT(*) as total_equipment,
+        SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END) as out_of_stock,
+        SUM(CASE WHEN quantity > 0 AND quantity <= reorder_level THEN 1 ELSE 0 END) as low_stock,
+        SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN 1 ELSE 0 END) as expired,
+        SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN 1 ELSE 0 END) as expiring_soon
+    FROM medical_equipment 
+    WHERE status = 'active' 
     $branch_filter
 ");
-$total_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-
-// Today's patients
-$stmt = $db->prepare("
-    SELECT COUNT(*) as count 
-    FROM patients 
-    WHERE DATE(created_at) = ? 
-    $branch_filter
-");
-$stmt->execute([$today]);
-$today_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$equipment_data = $stmt->fetch(PDO::FETCH_ASSOC);
+$total_equipment = $equipment_data['total_equipment'] ?? 0;
+$equip_out_of_stock = $equipment_data['out_of_stock'] ?? 0;
+$equip_low_stock = $equipment_data['low_stock'] ?? 0;
+$equip_expired = $equipment_data['expired'] ?? 0;
+$equip_expiring_soon = $equipment_data['expiring_soon'] ?? 0;
 
 // ================================================================
-// CHART DATA - Last 7 Days Revenue
+// CHART DATA - Last 7 Days Revenue (uses paid_amount)
 // ================================================================
 $chart_labels = [];
 $chart_values = [];
@@ -294,13 +275,14 @@ for ($i = 6; $i >= 0; $i--) {
     
     $daily_total = 0;
     
-    // Bills (patient bills only)
+    // Bills (patient bills with visit_id) - uses paid_amount
     $stmt = $db->prepare("
-        SELECT COALESCE(SUM(b.total_amount), 0) as total 
+        SELECT COALESCE(SUM(b.paid_amount), 0) as total 
         FROM bills b
         WHERE DATE(b.created_at) = ? 
         AND b.status = 'paid'
         AND b.patient_id IS NOT NULL
+        AND b.visit_id IS NOT NULL
         $branch_filter_b
     ");
     $stmt->execute([$date]);
@@ -317,7 +299,7 @@ for ($i = 6; $i >= 0; $i--) {
     $stmt->execute([$date]);
     $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // Prescription Sales - FIXED AMBIGUOUS branch_id
+    // Prescription Sales
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(pi.total_price), 0) as total 
         FROM prescription_items pi
@@ -338,34 +320,6 @@ for ($i = 6; $i >= 0; $i--) {
 $branches = [];
 $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active'");
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// GET RECENT PATIENTS
-// ================================================================
-$recent_patients = [];
-$has_patient_branch = columnExists($db, 'patients', 'branch_id');
-
-if ($selected_branch_id !== 'all' && $has_patient_branch) {
-    $stmt = $db->prepare("
-        SELECT p.*, b.name as branch_name 
-        FROM patients p
-        LEFT JOIN branches b ON p.branch_id = b.id
-        WHERE p.branch_id = ?
-        ORDER BY p.created_at DESC
-        LIMIT 5
-    ");
-    $stmt->execute([(int)$selected_branch_id]);
-    $recent_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} else {
-    $stmt = $db->query("
-        SELECT p.*, b.name as branch_name 
-        FROM patients p
-        LEFT JOIN branches b ON p.branch_id = b.id
-        ORDER BY p.created_at DESC
-        LIMIT 5
-    ");
-    $recent_patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-}
 
 // ================================================================
 // GET RECENT ACTIVITIES
@@ -459,7 +413,7 @@ include_once '../../components/admin_sidebar.php';
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAV - SHARED HEADER
+           TOP NAV
            ================================================================ */
         .top-nav {
             position: fixed;
@@ -715,18 +669,6 @@ include_once '../../components/admin_sidebar.php';
             font-weight: 600;
         }
         
-        .page-header .role-badge-display {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
         .page-header .header-badge {
             background: rgba(255,255,255,0.1);
             color: white;
@@ -791,89 +733,30 @@ include_once '../../components/admin_sidebar.php';
             border: none;
         }
         
-        /* ================================================================
-           SOLID COLORS - NO OPACITY
-           ================================================================ */
+        /* SOLID COLORS */
+        .stat-card.card-revenue { background: #0B5ED7; }
+        .stat-card.card-revenue:hover { background: #0A4CA8; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(11,94,215,0.35); }
         
-        /* 1. Revenue - Solid Blue */
-        .stat-card.card-revenue {
-            background: #0B5ED7;
-        }
-        .stat-card.card-revenue:hover {
-            background: #0A4CA8;
-            transform: translateY(-6px);
-            box-shadow: 0 8px 35px rgba(11, 94, 215, 0.35);
-        }
+        .stat-card.card-expenses { background: #E11D48; }
+        .stat-card.card-expenses:hover { background: #BE123C; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(225,29,72,0.35); }
         
-        /* 2. Expenses - Solid Rose */
-        .stat-card.card-expenses {
-            background: #E11D48;
-        }
-        .stat-card.card-expenses:hover {
-            background: #BE123C;
-            transform: translateY(-6px);
-            box-shadow: 0 8px 35px rgba(225, 29, 72, 0.35);
-        }
+        .stat-card.card-profit { background: #059669; }
+        .stat-card.card-profit:hover { background: #047857; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(5,150,105,0.35); }
         
-        /* 3. Profit - Solid Green */
-        .stat-card.card-profit {
-            background: #059669;
-        }
-        .stat-card.card-profit:hover {
-            background: #047857;
-            transform: translateY(-6px);
-            box-shadow: 0 8px 35px rgba(5, 150, 105, 0.35);
-        }
+        .stat-card.card-prescription { background: #7C3AED; }
+        .stat-card.card-prescription:hover { background: #6D28D9; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(124,58,237,0.35); }
         
-        /* 4. Prescription - Solid Purple */
-        .stat-card.card-prescription {
-            background: #7C3AED;
-        }
-        .stat-card.card-prescription:hover {
-            background: #6D28D9;
-            transform: translateY(-6px);
-            box-shadow: 0 8px 35px rgba(124, 58, 237, 0.35);
-        }
+        .stat-card.card-otc { background: #D97706; }
+        .stat-card.card-otc:hover { background: #B45309; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(217,119,6,0.35); }
         
-        /* 5. OTC - Solid Amber */
-        .stat-card.card-otc {
-            background: #D97706;
-        }
-        .stat-card.card-otc:hover {
-            background: #B45309;
-            transform: translateY(-6px);
-            box-shadow: 0 8px 35px rgba(217, 119, 6, 0.35);
-        }
+        .stat-card.card-stock { background: #0891B2; }
+        .stat-card.card-stock:hover { background: #0E7490; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(8,145,178,0.35); }
         
-        /* 6. Stock - Solid Cyan */
-        .stat-card.card-stock {
-            background: #0891B2;
-        }
-        .stat-card.card-stock:hover {
-            background: #0E7490;
-            transform: translateY(-6px);
-            box-shadow: 0 8px 35px rgba(8, 145, 178, 0.35);
-        }
+        .stat-card.card-expiry { background: #DC2626; }
+        .stat-card.card-expiry:hover { background: #B91C1C; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(220,38,38,0.35); }
         
-        /* 7. Expiry - Solid Red */
-        .stat-card.card-expiry {
-            background: #DC2626;
-        }
-        .stat-card.card-expiry:hover {
-            background: #B91C1C;
-            transform: translateY(-6px);
-            box-shadow: 0 8px 35px rgba(220, 38, 38, 0.35);
-        }
-        
-        /* 8. Patients - Solid Indigo */
-        .stat-card.card-patients {
-            background: #4F46E5;
-        }
-        .stat-card.card-patients:hover {
-            background: #4338CA;
-            transform: translateY(-6px);
-            box-shadow: 0 8px 35px rgba(79, 70, 229, 0.35);
-        }
+        .stat-card.card-equipment { background: #4F46E5; }
+        .stat-card.card-equipment:hover { background: #4338CA; transform: translateY(-6px); box-shadow: 0 8px 35px rgba(79,70,229,0.35); }
         
         /* Subtle decorative circles */
         .stat-card::before {
@@ -902,21 +785,10 @@ include_once '../../components/admin_sidebar.php';
             transition: var(--transition);
         }
         
-        .stat-card:hover::before {
-            transform: scale(1.2);
-            right: -20%;
-        }
+        .stat-card:hover::before { transform: scale(1.2); right: -20%; }
+        .stat-card:hover::after { transform: scale(1.3); bottom: -30%; }
+        .stat-card:active { transform: scale(0.97); }
         
-        .stat-card:hover::after {
-            transform: scale(1.3);
-            bottom: -30%;
-        }
-        
-        .stat-card:active {
-            transform: scale(0.97);
-        }
-        
-        /* Card Inner Content */
         .stat-card .card-content {
             position: relative;
             z-index: 1;
@@ -989,22 +861,22 @@ include_once '../../components/admin_sidebar.php';
         
         .stat-card .stat-badge-row {
             display: flex;
-            gap: 8px;
+            gap: 4px;
             margin-top: 4px;
             flex-wrap: wrap;
         }
         
         .stat-card .stat-badge {
-            font-size: 0.6rem;
+            font-size: 0.55rem;
             font-weight: 600;
-            padding: 2px 12px;
+            padding: 2px 10px;
             border-radius: 20px;
             background: rgba(255,255,255,0.1);
             color: white;
             backdrop-filter: blur(4px);
             display: inline-flex;
             align-items: center;
-            gap: 4px;
+            gap: 3px;
         }
         
         .stat-card .stat-badge.danger {
@@ -1038,7 +910,7 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
-           CARD - For Recent Items
+           CARD
            ================================================================ */
         .card {
             background: var(--bg-card);
@@ -1049,9 +921,7 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: var(--shadow-sm);
         }
         
-        .card:hover {
-            box-shadow: var(--shadow-md);
-        }
+        .card:hover { box-shadow: var(--shadow-md); }
         
         .card-header {
             padding: 10px 16px;
@@ -1064,9 +934,7 @@ include_once '../../components/admin_sidebar.php';
             gap: 4px;
         }
         
-        [data-theme="dark"] .card-header {
-            background: #0F172A;
-        }
+        [data-theme="dark"] .card-header { background: #0F172A; }
         
         .card-title {
             font-size: 0.85rem;
@@ -1077,16 +945,10 @@ include_once '../../components/admin_sidebar.php';
             align-items: center;
         }
         
-        .card-title i {
-            margin-right: 6px;
-        }
-        
+        .card-title i { margin-right: 6px; }
         .title-blue { color: #0B5ED7; }
         .title-green { color: #059669; }
         
-        /* ================================================================
-           DATA TABLE
-           ================================================================ */
         .data-table {
             width: 100%;
             border-collapse: separate;
@@ -1114,18 +976,13 @@ include_once '../../components/admin_sidebar.php';
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
-            transition: background 0.2s ease;
         }
         
-        .data-table tbody tr:hover td { background: var(--table-hover); }
         .data-table tbody tr:last-child td { border-bottom: none; }
         
         .max-h-50 { max-height: 160px; overflow-y: auto; }
         .overflow-x-auto { overflow-x: auto; }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1158,9 +1015,6 @@ include_once '../../components/admin_sidebar.php';
             color: var(--primary);
         }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer {
             margin-top: 16px;
             padding: 10px 0;
@@ -1175,6 +1029,7 @@ include_once '../../components/admin_sidebar.php';
             font-weight: 600;
         }
         
+        /* Utilities */
         .mb-4 { margin-bottom: 16px; }
         .py-2 { padding-top: 8px; padding-bottom: 8px; }
         .px-1 { padding-left: 4px; padding-right: 4px; }
@@ -1189,7 +1044,7 @@ include_once '../../components/admin_sidebar.php';
         .space-y-1 > * + * { margin-top: 4px; }
         .gap-2 { gap: 8px; }
         .gap-4 { gap: 16px; }
-        .gap-1\\.5 { gap: 6px; }
+        .gap-1\.5 { gap: 6px; }
         .flex { display: flex; }
         .flex-wrap { flex-wrap: wrap; }
         .items-center { align-items: center; }
@@ -1198,38 +1053,30 @@ include_once '../../components/admin_sidebar.php';
         .grid { display: grid; }
         .grid-cols-1 { grid-template-columns: 1fr; }
         .lg\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
-        .gap-4 { gap: 16px; }
-        .mt-0 { margin-top: 0; }
-        .mb-4 { margin-bottom: 16px; }
-        .p-1\\.5 { padding: 6px; }
-        .p-2 { padding: 8px; }
-        .px-2 { padding-left: 8px; padding-right: 8px; }
+        .p-1\.5 { padding: 6px; }
         .w-6 { width: 24px; }
         .h-6 { height: 24px; }
         .rounded-full { border-radius: 50%; }
         .rounded-lg { border-radius: 8px; }
-        .mt-0\\.5 { margin-top: 2px; }
-        .text-\\[5px\\] { font-size: 5px; }
-        .text-\\[10px\\] { font-size: 10px; }
-        .text-\\[9px\\] { font-size: 9px; }
+        .mt-0\.5 { margin-top: 2px; }
+        .text-\[5px\] { font-size: 5px; }
+        .text-\[10px\] { font-size: 10px; }
+        .text-\[9px\] { font-size: 9px; }
         .bg-blue-600 { background: #0B5ED7; }
         .bg-blue-50 { background: #E8F0FE; }
-        .dark\\:bg-blue-900\\/20 { background: rgba(30, 58, 95, 0.2); }
+        .dark\:bg-blue-900\/20 { background: rgba(30, 58, 95, 0.2); }
         .text-gray-800 { color: #1E293B; }
         .text-gray-500 { color: #64748B; }
-        .text-gray-400 { color: #94A3B8; }
-        .dark\\:text-gray-200 { color: #E2E8F0; }
-        .dark\\:text-gray-400 { color: #94A3B8; }
-        .dark\\:text-gray-500 { color: #64748B; }
+        .dark\:text-gray-200 { color: #E2E8F0; }
+        .dark\:text-gray-400 { color: #94A3B8; }
+        .dark\:text-gray-500 { color: #64748B; }
         .transition { transition: var(--transition); }
-        .hover\\:bg-blue-50:hover { background: #E8F0FE; }
-        .dark\\:hover\\:bg-blue-900\\/20:hover { background: rgba(30, 58, 95, 0.2); }
+        .hover\:bg-blue-50:hover { background: #E8F0FE; }
+        .dark\:hover\:bg-blue-900\/20:hover { background: rgba(30, 58, 95, 0.2); }
         .mt-1 { margin-top: 4px; }
         .ml-2 { margin-left: 8px; }
-        .mr-2 { margin-right: 8px; }
         .mx-2 { margin-left: 8px; margin-right: 8px; }
         .mr-1 { margin-right: 4px; }
-        .mb-4 { margin-bottom: 16px; }
         .text-left { text-align: left; }
         .text-center { text-align: center; }
         .font-mono { font-family: monospace; }
@@ -1239,146 +1086,56 @@ include_once '../../components/admin_sidebar.php';
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1200px) {
-            .stat-grid {
-                grid-template-columns: repeat(4, 1fr);
-                gap: 12px;
-            }
-            .stat-card .stat-number {
-                font-size: 1.4rem;
-            }
+            .stat-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; }
+            .stat-card .stat-number { font-size: 1.4rem; }
         }
         
         @media (max-width: 992px) {
-            .stat-grid {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 12px;
-            }
-            .stat-card {
-                min-height: 110px;
-                padding: 16px 18px;
-            }
-            .stat-card .stat-number {
-                font-size: 1.3rem;
-            }
-            .stat-card .stat-icon {
-                width: 38px;
-                height: 38px;
-                font-size: 1rem;
-            }
-            .main-content {
-                margin-left: 0;
-                padding: 16px;
-            }
-            .top-nav {
-                left: 0;
-            }
-            .top-nav .search-wrapper {
-                max-width: 300px;
-            }
+            .stat-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+            .stat-card { min-height: 110px; padding: 16px 18px; }
+            .stat-card .stat-number { font-size: 1.3rem; }
+            .stat-card .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .top-nav { left: 0; }
+            .top-nav .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 768px) {
-            .stat-grid {
-                grid-template-columns: 1fr 1fr;
-                gap: 10px;
-            }
-            .stat-card {
-                min-height: 95px;
-                padding: 14px 16px;
-            }
-            .stat-card .stat-number {
-                font-size: 1.1rem;
-            }
-            .stat-card .stat-label {
-                font-size: 0.6rem;
-            }
-            .stat-card .stat-sub {
-                font-size: 0.55rem;
-            }
-            .stat-card .stat-icon {
-                width: 32px;
-                height: 32px;
-                font-size: 0.85rem;
-            }
-            .stat-card .stat-arrow {
-                display: none;
-            }
-            .stat-card .stat-badge {
-                font-size: 0.5rem;
-                padding: 1px 8px;
-            }
-            .page-header {
-                padding: 14px 18px;
-            }
-            .page-header .page-title {
-                font-size: 1.1rem;
-            }
-            .page-header .page-subtitle {
-                font-size: 0.7rem;
-            }
-            .top-nav .search-wrapper {
-                max-width: 180px;
-            }
-            .top-nav .datetime {
-                display: none;
-            }
-            .lg\:grid-cols-2 {
-                grid-template-columns: 1fr;
-            }
+            .stat-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .stat-card { min-height: 95px; padding: 14px 16px; }
+            .stat-card .stat-number { font-size: 1.1rem; }
+            .stat-card .stat-label { font-size: 0.6rem; }
+            .stat-card .stat-sub { font-size: 0.55rem; }
+            .stat-card .stat-icon { width: 32px; height: 32px; font-size: 0.85rem; }
+            .stat-card .stat-arrow { display: none; }
+            .stat-card .stat-badge { font-size: 0.5rem; padding: 1px 8px; }
+            .page-header { padding: 14px 18px; }
+            .page-header .page-title { font-size: 1.1rem; }
+            .page-header .page-subtitle { font-size: 0.7rem; }
+            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .datetime { display: none; }
+            .lg\:grid-cols-2 { grid-template-columns: 1fr; }
         }
         
         @media (max-width: 480px) {
-            .stat-grid {
-                grid-template-columns: 1fr 1fr;
-                gap: 8px;
-            }
-            .stat-card {
-                min-height: 80px;
-                padding: 10px 12px;
-                border-radius: 12px;
-            }
-            .stat-card .stat-number {
-                font-size: 0.95rem;
-            }
-            .stat-card .stat-label {
-                font-size: 0.5rem;
-            }
-            .stat-card .stat-sub {
-                font-size: 0.45rem;
-            }
-            .stat-card .stat-icon {
-                width: 26px;
-                height: 26px;
-                font-size: 0.7rem;
-            }
-            .main-content {
-                padding: 10px;
-            }
-            .page-header {
-                padding: 10px 14px;
-                flex-direction: column;
-                align-items: flex-start !important;
-            }
-            .page-header .page-title {
-                font-size: 0.95rem;
-            }
-            .page-header .page-subtitle {
-                font-size: 0.6rem;
-            }
+            .stat-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+            .stat-card { min-height: 80px; padding: 10px 12px; border-radius: 12px; }
+            .stat-card .stat-number { font-size: 0.95rem; }
+            .stat-card .stat-label { font-size: 0.5rem; }
+            .stat-card .stat-sub { font-size: 0.45rem; }
+            .stat-card .stat-icon { width: 26px; height: 26px; font-size: 0.7rem; }
+            .main-content { padding: 10px; }
+            .page-header { padding: 10px 14px; flex-direction: column; align-items: flex-start !important; }
+            .page-header .page-title { font-size: 0.95rem; }
+            .page-header .page-subtitle { font-size: 0.6rem; }
         }
         
-        /* ================================================================
-           PRINT
-           ================================================================ */
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
             .footer, #sidebarToggle { display: none !important; }
             
-            .main-content {
-                margin: 0;
-                padding: 20px;
-            }
+            .main-content { margin: 0; padding: 20px; }
             
             .stat-card {
                 border: 1px solid #ddd !important;
@@ -1393,30 +1150,21 @@ include_once '../../components/admin_sidebar.php';
             .stat-card.card-otc { background: #D97706 !important; }
             .stat-card.card-stock { background: #0891B2 !important; }
             .stat-card.card-expiry { background: #DC2626 !important; }
-            .stat-card.card-patients { background: #4F46E5 !important; }
+            .stat-card.card-equipment { background: #4F46E5 !important; }
             
             .stat-card .stat-number,
             .stat-card .stat-label,
-            .stat-card .stat-sub {
-                color: white !important;
-            }
-            .stat-card .stat-icon {
-                background: rgba(255,255,255,0.2) !important;
-            }
+            .stat-card .stat-sub { color: white !important; }
+            .stat-card .stat-icon { background: rgba(255,255,255,0.2) !important; }
             
             .page-header {
                 background: #0B5ED7 !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
-            .page-title, .page-subtitle {
-                color: white !important;
-            }
+            .page-title, .page-subtitle { color: white !important; }
             
-            .card {
-                border: 1px solid #ddd !important;
-                box-shadow: none !important;
-            }
+            .card { border: 1px solid #ddd !important; box-shadow: none !important; }
             .data-table thead th {
                 background: #0B5ED7 !important;
                 -webkit-print-color-adjust: exact !important;
@@ -1429,7 +1177,7 @@ include_once '../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1518,7 +1266,7 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-arrow-up"></i> All time</div>
+                <div class="stat-trend"><i class="fas fa-arrow-up"></i> Paid amounts only</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1599,45 +1347,45 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 6. STOCK - Out of Stock & Low Stock -->
+        <!-- 6. MEDICATION STOCK -->
         <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-stock">
             <div class="card-content">
                 <div class="card-top">
                     <div>
-                        <p class="stat-label">Stock Status</p>
+                        <p class="stat-label">Medication Stock</p>
                         <p class="stat-number">
                             <?php 
-                                $total_stock_issues = $out_of_stock + $low_stock;
-                                echo number_format($total_stock_issues);
+                                $total_med_stock_issues = $med_out_of_stock + $med_low_stock;
+                                echo number_format($total_med_stock_issues);
                             ?>
                         </p>
                         <div class="stat-badge-row">
-                            <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $out_of_stock ?> Out</span>
-                            <span class="stat-badge warning"><i class="fas fa-exclamation-triangle"></i> <?= $low_stock ?> Low</span>
+                            <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $med_out_of_stock ?> Out</span>
+                            <span class="stat-badge warning"><i class="fas fa-exclamation-triangle"></i> <?= $med_low_stock ?> Low</span>
                         </div>
                     </div>
-                    <div class="stat-icon"><i class="fas fa-warehouse"></i></div>
+                    <div class="stat-icon"><i class="fas fa-pills"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-pills"></i> Needs attention</div>
+                <div class="stat-trend"><i class="fas fa-warehouse"></i> Needs attention</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 7. EXPIRY - Expired & Expiring Soon -->
+        <!-- 7. MEDICATION EXPIRY -->
         <a href="inventory.php?filter=expired&branch=<?= $selected_branch_id ?>" class="stat-card card-expiry">
             <div class="card-content">
                 <div class="card-top">
                     <div>
-                        <p class="stat-label">Expiry Status</p>
+                        <p class="stat-label">Medication Expiry</p>
                         <p class="stat-number">
                             <?php 
-                                $total_expiry_issues = $expired + $expiring_soon;
-                                echo number_format($total_expiry_issues);
+                                $total_med_expiry_issues = $med_expired + $med_expiring_soon;
+                                echo number_format($total_med_expiry_issues);
                             ?>
                         </p>
                         <div class="stat-badge-row">
-                            <span class="stat-badge danger"><i class="fas fa-skull"></i> <?= $expired ?> Expired</span>
-                            <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $expiring_soon ?> Soon</span>
+                            <span class="stat-badge danger"><i class="fas fa-skull"></i> <?= $med_expired ?> Expired</span>
+                            <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $med_expiring_soon ?> Soon</span>
                         </div>
                     </div>
                     <div class="stat-icon"><i class="fas fa-calendar-times"></i></div>
@@ -1647,18 +1395,27 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 8. PATIENTS -->
-        <a href="patients.php?branch=<?= $selected_branch_id ?>" class="stat-card card-patients">
+        <!-- 8. MEDICAL EQUIPMENT - Shows TOTAL EQUIPMENT count -->
+        <a href="equipment_inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-equipment">
             <div class="card-content">
                 <div class="card-top">
                     <div>
-                        <p class="stat-label">Total Patients</p>
-                        <p class="stat-number"><?= number_format($total_patients) ?></p>
-                        <p class="stat-sub"><i class="fas fa-user-plus"></i> <?= $today_patients ?> today</p>
+                        <p class="stat-label">Medical Equipment</p>
+                        <p class="stat-number">
+                            <?= number_format($total_equipment) ?>  <!-- Shows 22 (Total Equipment) -->
+                        </p>
+                        <div class="stat-badge-row" style="flex-wrap: wrap; gap: 3px;">
+                            <span class="stat-badge" style="background: rgba(255,255,255,0.15);"><i class="fas fa-boxes"></i> Total: <?= $total_equipment ?></span>
+                            <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $equip_out_of_stock ?> Out</span>
+                            <span class="stat-badge warning"><i class="fas fa-exclamation-triangle"></i> <?= $equip_low_stock ?> Low</span>
+                            <span class="stat-badge danger"><i class="fas fa-calendar-times"></i> <?= $equip_expired ?> Expired</span>
+                            <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $equip_expiring_soon ?> Soon</span>
+                        </div>
+                        <p class="stat-sub" style="margin-top: 3px;">All equipment inventory</p>
                     </div>
-                    <div class="stat-icon"><i class="fas fa-users"></i></div>
+                    <div class="stat-icon"><i class="fas fa-microscope"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-user-injured"></i> All time</div>
+                <div class="stat-trend"><i class="fas fa-tools"></i> <?= $total_equipment ?> items total</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1681,49 +1438,9 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PATIENTS & ACTIVITIES -->
+    <!-- RECENT ACTIVITIES -->
     <!-- ================================================================ -->
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
-        
-        <div class="card">
-            <div class="card-header py-2">
-                <h3 class="card-title text-sm">
-                    <i class="fas fa-user-injured title-blue mr-2"></i> Recent Patients
-                </h3>
-                <a href="patients.php?branch=<?= $selected_branch_id ?>" class="text-xs text-blue-600 font-medium hover:underline">View All →</a>
-            </div>
-            <div class="overflow-x-auto max-h-50 overflow-y-auto">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Patient ID</th>
-                            <th>Name</th>
-                            <th>Branch</th>
-                            <th>Registered</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php if (count($recent_patients) > 0): ?>
-                            <?php foreach ($recent_patients as $patient): ?>
-                                <tr>
-                                    <td class="font-mono text-xs"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
-                                    <td class="font-medium"><?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?></td>
-                                    <td class="text-xs"><?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?></td>
-                                    <td class="text-xs"><?= date('M d, Y', strtotime($patient['created_at'])) ?></td>
-                                    <td>
-                                        <a href="patient_details.php?id=<?= $patient['id'] ?>&branch=<?= $selected_branch_id ?>" 
-                                           class="text-blue-600 text-xs hover:underline">View</a>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <tr><td colspan="5" class="text-center text-gray-400 text-sm py-2">No patients found</td></tr>
-                        <?php endif; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
+    <div class="grid grid-cols-1 gap-4 mb-4">
         
         <div class="card">
             <div class="card-header py-2">
@@ -1770,6 +1487,7 @@ include_once '../../components/admin_sidebar.php';
             <a href="reports.php?type=medicine&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Medicine</a>
             <a href="reports.php?type=laboratory&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Laboratory</a>
             <a href="reports.php?type=expenses&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Expenses</a>
+            <a href="equipment_inventory.php?branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm text-xs">Equipment</a>
             <div class="flex-1"></div>
             <button onclick="window.print()" class="btn btn-outline btn-sm text-xs">
                 <i class="fas fa-print"></i> Print
@@ -1982,20 +1700,18 @@ include_once '../../components/admin_sidebar.php';
 
     console.log('%c🏥 Braick Dispensary - Super Admin Dashboard', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c   ├─ Patient Bills (paid_amount): TSh <?= number_format($patient_bills_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   ├─ OTC Sales: TSh <?= number_format($otc_revenue) ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c   └─ Prescriptions: TSh <?= number_format($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c💸 Total Expenses: TSh <?= number_format($total_expenses) ?>', 'font-size:13px; color:#E11D48;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit) ?> (<?= $profit_percentage ?>%)', 'font-size:13px; color:<?= $net_profit >= 0 ? '#059669' : '#EF4444' ?>;');
-    console.log('%c💊 Prescription Sales: TSh <?= number_format($prescription_revenue) ?> (<?= $prescription_count ?> prescriptions)', 'font-size:13px; color:#7C3AED;');
-    console.log('%c🏪 OTC Sales: TSh <?= number_format($otc_total) ?> (<?= $otc_count ?> transactions)', 'font-size:13px; color:#D97706;');
-    console.log('%c📦 Stock Issues: <?= $out_of_stock + $low_stock ?> (Out: <?= $out_of_stock ?>, Low: <?= $low_stock ?>)', 'font-size:13px; color:#0891B2;');
-    console.log('%c📅 Expiry Issues: <?= $expired + $expiring_soon ?> (Expired: <?= $expired ?>, Soon: <?= $expiring_soon ?>)', 'font-size:13px; color:#DC2626;');
-    console.log('%c👤 Total Patients: <?= number_format($total_patients) ?> (Today: <?= $today_patients ?>)', 'font-size:13px; color:#4F46E5;');
-    console.log('%c🎯 8 CARDS - SOLID COLORS', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ FIXED: Login session protection active', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Using correct tables: bills, otc_sales, prescriptions, prescription_items', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Column "branch_id" ambiguous - added table prefixes (b., p., pi.)', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: All queries now use proper table prefixes', 'font-size:13px; color:#059669;');
+    console.log('%c🔬 Medical Equipment: <?= $total_equipment ?> total (Out: <?= $equip_out_of_stock ?>, Low: <?= $equip_low_stock ?>, Expired: <?= $equip_expired ?>, Soon: <?= $equip_expiring_soon ?>)', 'font-size:13px; color:#4F46E5;');
+    console.log('%c✅ FIXED: Revenue uses paid_amount from bills (not final_price)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Bills with visit_id NOT NULL (consultation bills)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Lab test status ignored - patient already paid', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: OTC from otc_sales table', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Equipment shows TOTAL <?= $total_equipment ?> items (not issues)', 'font-size:13px; color:#059669;');
 </script>
 
 </body>
