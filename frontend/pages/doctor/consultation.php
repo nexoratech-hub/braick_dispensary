@@ -3,7 +3,7 @@
 // FILE: frontend/pages/doctor/consultation.php
 // COMPLETE CONSULTATION - FIXED STATUS ISSUE
 // BRAICK DISPENSARY
-// FIXED: Status changes to 'waiting' on save, not overwritten
+// FIXED: Status changes to 'waiting' on save
 // ================================================================
 
 // Start session
@@ -730,6 +730,7 @@ function getStatusBadgeClass($status) {
         'with_doctor' => 'badge-info',
         'lab_test' => 'badge-warning',
         'in_progress' => 'badge-info',
+        'lab_completed' => 'badge-info',
         'prescribed' => 'badge-purple',
         'waiting' => 'badge-purple',
         'completed' => 'badge-success',
@@ -2363,7 +2364,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         }
         
         // IMPORTANT FIX: Update visit status to 'waiting' explicitly
-        // Make sure we don't accidentally set status to symptoms
+        // DO NOT use $_POST['status'] - it may contain symptoms or be empty
         $stmt = $db->prepare("
             UPDATE visits 
             SET status = 'waiting',
@@ -2456,6 +2457,9 @@ $lab_cart_count = count($lab_cart);
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
+
+<!-- THE REST OF THE HTML CONTENT GOES HERE -->
+<!-- (Same as before, with the corrected form field name="symptoms") -->
 
 <!DOCTYPE html>
 <html lang="en">
