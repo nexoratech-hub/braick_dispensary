@@ -2,12 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_pharmacy.php
 // SUPER ADMIN - VIEW PHARMACY BRANCH DETAILS
-// FIXED: Header inaonekana vizuri na ina support ya profile pic
+// FIXED: Uses shared header, prescription revenue from bill_items
+// WITH DARK MODE, CLOCK, SHARED HEADER
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
+// Start session
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -55,7 +54,6 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
-$dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
 
 // ================================================================
 // INCLUDE DATABASE
@@ -81,7 +79,7 @@ if ($pharmacy_id <= 0) {
 }
 
 // ================================================================
-// FETCH PHARMACY DETAILS
+// FETCH PHARMACY DETAILS - FIXED PRESCRIPTION REVENUE
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -96,12 +94,19 @@ $stmt = $db->prepare("
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'confirmed') as confirmed_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id AND status = 'cancelled') as cancelled_prescriptions,
         (SELECT COUNT(*) FROM prescriptions WHERE branch_id = b.id) as total_prescriptions,
-        (SELECT COALESCE(SUM(bi.final_price), 0) 
+        -- FIXED: Prescription revenue from bill_items.total_price (not final_price)
+        (SELECT COALESCE(SUM(bi.total_price), 0) 
          FROM bill_items bi
          INNER JOIN bills bl ON bi.bill_id = bl.id
          WHERE bi.item_type = 'medication' 
          AND bl.branch_id = b.id 
          AND bl.status = 'paid') as prescription_revenue,
+        -- FIXED: Also get prescription discount total
+        (SELECT COALESCE(SUM(bl.total_discount), 0) 
+         FROM bills bl
+         WHERE bl.branch_id = b.id 
+         AND bl.status = 'paid'
+         AND bl.visit_id IS NOT NULL) as prescription_discount_total,
         (SELECT COUNT(*) FROM otc_sales WHERE branch_id = b.id) as total_otc_sales,
         (SELECT COALESCE(SUM(total_amount), 0) 
          FROM otc_sales 
@@ -121,19 +126,11 @@ if (!$pharmacy) {
     exit;
 }
 
-$total_revenue = ($pharmacy['prescription_revenue'] ?? 0) + ($pharmacy['otc_revenue'] ?? 0);
-
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
-try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
+// Calculate total revenue (prescription + OTC)
+$prescription_revenue = $pharmacy['prescription_revenue'] ?? 0;
+$prescription_discount = $pharmacy['prescription_discount_total'] ?? 0;
+$otc_revenue = $pharmacy['otc_revenue'] ?? 0;
+$total_revenue = $prescription_revenue + $otc_revenue;
 
 // ================================================================
 // GET BRANCHES FOR FILTER
@@ -164,7 +161,7 @@ try {
 }
 
 // ================================================================
-// GET RECENT PRESCRIPTIONS
+// GET RECENT PRESCRIPTIONS - WITH ACTUAL AMOUNT FROM bill_items
 // ================================================================
 $recent_prescriptions = [];
 try {
@@ -177,13 +174,20 @@ try {
             pat.full_name as patient_name,
             u.full_name as doctor_name,
             COALESCE((
-                SELECT SUM(bi.final_price) 
+                SELECT SUM(bi.total_price) 
                 FROM bill_items bi
                 INNER JOIN bills bl ON bi.bill_id = bl.id
                 WHERE bi.reference_id = p.id 
                 AND bi.reference_type = 'prescription'
-                AND bl.status = 'paid'
-            ), 0) as total_amount
+            ), 0) as total_amount,
+            COALESCE((
+                SELECT bl.total_discount 
+                FROM bills bl
+                INNER JOIN bill_items bi ON bl.id = bi.bill_id
+                WHERE bi.reference_id = p.id 
+                AND bi.reference_type = 'prescription'
+                LIMIT 1
+            ), 0) as discount_amount
         FROM prescriptions p
         LEFT JOIN patients pat ON p.patient_id = pat.id
         LEFT JOIN users u ON p.doctor_id = u.id
@@ -252,6 +256,18 @@ try {
 }
 
 // ================================================================
+// GET UNREAD NOTIFICATIONS
+// ================================================================
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+} catch (Exception $e) {
+    $unread_notifications = 0;
+}
+
+// ================================================================
 // STATUS BADGE CLASS
 // ================================================================
 function getStatusBadge($status) {
@@ -277,27 +293,34 @@ function format_currency($amount) {
 }
 
 // ================================================================
-// INCLUDE SIDEBAR ONLY (header itakuwa moja kwa moja hapa)
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
-include_once __DIR__ . '/../../components/admin_sidebar.php';
+include_once '../../components/admin_header.php';
+
+// Sidebar stats
+$total_employees_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
+$total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_doctors_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+$total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+$total_branches_sidebar = 0;
+$stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
+$total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+include_once '../../components/admin_sidebar.php';
 ?>
 <!DOCTYPE html>
-<html lang="en" data-theme="<?= $dark_mode === 'true' ? 'dark' : 'light' ?>">
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>View Pharmacy - Braick Dispensary</title>
-    
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
     <style>
-        /* ================================================================
-           CSS VARIABLES
-           ================================================================ */
+        /* ================================================================ */
+        /* CSS VARIABLES - DARK MODE SUPPORT */
+        /* ================================================================ */
         :root {
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
@@ -309,6 +332,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --primary-dark: #0A4CA8;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
+            --primary-light: #6EA8FE;
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
@@ -324,6 +348,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --border-color: #334155;
             --primary: #3B82F6;
             --primary-dark: #2563EB;
+            --primary-light: #60A5FA;
             --table-hover: #1E293B;
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
@@ -340,9 +365,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
 
-        /* ================================================================
-           TOP NAV - HEADER (FIXED)
-           ================================================================ */
+        /* ================================================================ */
+        /* TOP NAV - SHARED HEADER STYLES */
+        /* ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -350,14 +375,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             right: 0;
             height: 68px;
             background: var(--bg-nav);
-            z-index: 1000;
+            z-index: 40;
             display: flex;
             align-items: center;
             justify-content: space-between;
             padding: 0 24px;
             border-bottom: 2px solid var(--border-color);
-            transition: background 0.3s ease, border-color 0.3s ease;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.06);
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+            box-shadow: var(--shadow-sm);
         }
         
         .top-nav .search-wrapper {
@@ -370,10 +396,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             flex: 1;
             max-width: 500px;
         }
+        
         .top-nav .search-wrapper:focus-within {
-            border-color: var(--primary);
+            border-color: #0B5ED7;
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
         }
+        
         .top-nav .search-wrapper input {
             border: none;
             background: transparent;
@@ -383,11 +411,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             outline: none;
             color: var(--text-primary);
         }
+        
         .top-nav .search-wrapper input::placeholder {
             color: var(--text-secondary);
         }
+        
         .top-nav .search-wrapper .search-btn {
-            background: var(--primary);
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
             border: none;
             padding: 8px 16px;
@@ -397,8 +427,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transition: all 0.3s;
             white-space: nowrap;
         }
+        
         .top-nav .search-wrapper .search-btn:hover {
-            background: var(--primary-dark);
+            transform: scale(1.02);
         }
         
         .top-nav .branch-selector {
@@ -414,8 +445,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
             transition: all 0.3s;
         }
+        
         .top-nav .branch-selector:focus {
-            border-color: var(--primary);
+            border-color: #0B5ED7;
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
         }
         
@@ -423,6 +455,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-size: 0.78rem;
             color: var(--text-secondary);
             font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .top-nav .datetime i {
+            color: var(--primary-light);
         }
         
         .top-nav .avatar {
@@ -434,8 +473,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             cursor: pointer;
             transition: all 0.3s;
         }
+        
         .top-nav .avatar:hover {
-            border-color: var(--primary);
+            border-color: #0B5ED7;
             transform: scale(1.05);
         }
         
@@ -453,9 +493,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             cursor: pointer;
             position: relative;
         }
+        
         .top-nav .icon-btn:hover {
             background: var(--bg-body);
-            color: var(--primary);
+            color: #0B5ED7;
         }
         
         .notif-dot {
@@ -468,8 +509,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border: 2px solid var(--bg-nav);
             animation: pulse-dot 2s infinite;
         }
-        .notif-dot.has-notif { background: #EF4444; }
-        .notif-dot.no-notif { background: #94A3B8; animation: none; }
+        
+        .notif-dot.has-notif {
+            background: #EF4444;
+        }
+        
+        .notif-dot.no-notif {
+            background: #94A3B8;
+            animation: none;
+        }
         
         @keyframes pulse-dot {
             0%, 100% { transform: scale(1); }
@@ -489,15 +537,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             align-items: center;
             gap: 6px;
         }
+        
         .dark-toggle-btn:hover {
-            border-color: var(--primary);
+            border-color: #0B5ED7;
             background: var(--bg-card);
         }
-        .dark-toggle-btn i { font-size: 0.9rem; }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
+        .dark-toggle-btn i {
+            font-size: 0.9rem;
+        }
+
+        /* ================================================================ */
+        /* MAIN CONTENT */
+        /* ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -506,9 +558,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transition: background 0.3s ease;
         }
 
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
+        /* ================================================================ */
+        /* PAGE HEADER */
+        /* ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: 16px;
@@ -634,9 +686,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             z-index: 1;
         }
 
-        /* ================================================================
-           STATS GRID
-           ================================================================ */
+        /* ================================================================ */
+        /* STATS GRID */
+        /* ================================================================ */
         .stats-grid-8 {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -782,9 +834,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
         [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
 
-        /* ================================================================
-           DETAIL CARD
-           ================================================================ */
+        /* ================================================================ */
+        /* DETAIL CARD */
+        /* ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -811,9 +863,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
 
-        /* ================================================================
-           CARDS
-           ================================================================ */
+        /* ================================================================ */
+        /* CARDS */
+        /* ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -849,9 +901,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .card-header .card-action:hover { color: white; }
         .card-body { padding: 0; overflow-x: auto; }
 
-        /* ================================================================
-           TABLES
-           ================================================================ */
+        /* ================================================================ */
+        /* TABLES */
+        /* ================================================================ */
         .data-table {
             width: 100%;
             border-collapse: collapse;
@@ -882,9 +934,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         .data-table tr:last-child td { border-bottom: none; }
 
-        /* ================================================================
-           BADGES
-           ================================================================ */
+        /* ================================================================ */
+        /* BADGES */
+        /* ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -922,9 +974,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .status-badge.info { background: #1E3A5F; color: #3B82F6; }
         [data-theme="dark"] .status-badge.secondary { background: #2D3748; color: #94A3B8; }
 
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
+        /* ================================================================ */
+        /* BUTTONS */
+        /* ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1013,9 +1065,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: white;
         }
 
-        /* ================================================================
-           EMPTY STATE & FOOTER
-           ================================================================ */
+        /* ================================================================ */
+        /* EMPTY STATE & FOOTER */
+        /* ================================================================ */
         .empty-state {
             text-align: center;
             padding: 40px 20px;
@@ -1038,20 +1090,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
 
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
+        /* ================================================================ */
+        /* RESPONSIVE */
+        /* ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
-            .top-nav .search-wrapper { max-width: 300px; }
             .page-header { padding: 20px 24px; }
             .page-header .page-title { font-size: 1.5rem; }
         }
         @media (max-width: 768px) {
             .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .branch-selector { min-width: 120px; font-size: 0.7rem; }
             .top-nav .datetime { display: none; }
             .stats-grid-8 { grid-template-columns: 1fr 1fr; }
             .page-header .page-title { font-size: 1.3rem; }
@@ -1065,8 +1115,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper { max-width: 120px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
             .stats-grid-8 { grid-template-columns: 1fr; }
             .stat-card-8 { padding: 12px 14px; min-height: 80px; }
             .stat-card-8 .stat-number-small { font-size: 1.6rem; }
@@ -1110,9 +1158,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <div id="sidebarOverlay"></div>
 
 <!-- ================================================================ -->
-<!-- TOP NAV - HEADER (FIXED - INAONEKANA VIZURI) -->
+<!-- TOP NAVIGATION - SHARED HEADER -->
 <!-- ================================================================ -->
-<nav class="top-nav no-print">
+<nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
@@ -1127,7 +1175,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
     
-    <div class="flex items-center gap-3 no-print">
+    <div class="flex items-center gap-3">
         <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php foreach ($branches as $b): ?>
@@ -1137,7 +1185,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <?php endforeach; ?>
         </select>
         
-        <span class="datetime" id="currentDateTime"></span>
+        <span class="datetime" id="currentDateTime">
+            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
+            <span id="clockDisplay" style="font-weight:500;"><?= date('d M Y • h:i:s A') ?></span>
+        </span>
         
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
@@ -1146,7 +1197,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
@@ -1241,9 +1292,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Total Prescriptions</p>
-                <div class="flex-row">
+                <div>
                     <span class="stat-number-small"><?= number_format($pharmacy['total_prescriptions'] ?? 0) ?></span>
-                    <span class="stat-amount-large" style="font-size:1.4rem;">TSh <?= number_format($pharmacy['prescription_revenue'] ?? 0, 0) ?></span>
+                    <span class="stat-amount-large" style="font-size:1.2rem;display:block;">TSh <?= number_format($prescription_revenue, 0) ?></span>
                 </div>
                 <p class="stat-sub"><?= $pharmacy['pending_prescriptions'] ?? 0 ?> pending · <?= $pharmacy['dispensed_prescriptions'] ?? 0 ?> dispensed</p>
             </div>
@@ -1254,11 +1305,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="stat-icon"><i class="fas fa-shopping-cart"></i></div>
             <div class="stat-content">
                 <p class="stat-label">OTC Sales</p>
-                <div class="flex-row">
+                <div>
                     <span class="stat-number-small"><?= number_format($pharmacy['total_otc_sales'] ?? 0) ?></span>
-                    <span class="stat-amount-large" style="font-size:1.4rem;">TSh <?= number_format($pharmacy['otc_revenue'] ?? 0, 0) ?></span>
+                    <span class="stat-amount-large" style="font-size:1.2rem;display:block;">TSh <?= number_format($otc_revenue, 0) ?></span>
                 </div>
-                <p class="stat-sub">💰 Paid OTC revenue (after discount)</p>
+                <p class="stat-sub">💰 Paid OTC revenue</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1268,7 +1319,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="stat-content">
                 <p class="stat-label">Total Revenue</p>
                 <p class="stat-amount-large"><span class="stat-currency">TSh</span> <?= number_format($total_revenue, 0) ?></p>
-                <p class="stat-sub">Rx: TSh <?= number_format($pharmacy['prescription_revenue'] ?? 0, 0) ?> · OTC: TSh <?= number_format($pharmacy['otc_revenue'] ?? 0, 0) ?></p>
+                <p class="stat-sub">Rx: TSh <?= number_format($prescription_revenue, 0) ?> · OTC: TSh <?= number_format($otc_revenue, 0) ?></p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1315,7 +1366,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PRESCRIPTIONS -->
+    <!-- RECENT PRESCRIPTIONS - FIXED AMOUNT -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
@@ -1344,6 +1395,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <td><?= htmlspecialchars($rx['doctor_name'] ?? 'N/A') ?></td>
                                 <td class="text-right font-semibold text-blue-600 dark:text-blue-400">
                                     <?= format_currency($rx['total_amount'] ?? 0) ?>
+                                    <?php if (($rx['discount_amount'] ?? 0) > 0): ?>
+                                        <span class="text-xs text-red-500 dark:text-red-400 block">(Discount: TSh <?= number_format($rx['discount_amount'], 0) ?>)</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <span class="status-badge <?= getStatusBadge($rx['status'] ?? 'pending') ?>">
@@ -1563,36 +1617,86 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE
+    // DARK MODE TOGGLE - FIXED
     // ================================================================
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
-    }
-    
-    darkModeToggle?.addEventListener('click', function() {
-        var isDark = htmlElement.getAttribute('data-theme') === 'dark';
-        if (isDark) {
-            htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
-            localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
-        } else {
-            htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
-            localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
+    (function() {
+        var darkModeToggle = document.getElementById('darkModeToggle');
+        var darkIcon = document.getElementById('darkIcon');
+        var darkText = document.getElementById('darkText');
+        var htmlElement = document.documentElement;
+        
+        var savedDarkMode = localStorage.getItem('darkMode');
+        var cookieDarkMode = document.cookie.split('; ').find(function(row) {
+            return row.startsWith('dark_mode=');
+        });
+        
+        var isDark = false;
+        if (savedDarkMode === 'true') {
+            isDark = true;
+        } else if (cookieDarkMode) {
+            isDark = cookieDarkMode.split('=')[1] === 'true';
         }
-    });
+        
+        if (isDark) {
+            htmlElement.setAttribute('data-theme', 'dark');
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
+        } else {
+            htmlElement.removeAttribute('data-theme');
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
+        }
+        
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('click', function(e) {
+                e.preventDefault();
+                var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
+                
+                if (isDarkNow) {
+                    htmlElement.removeAttribute('data-theme');
+                    if (darkIcon) darkIcon.className = 'fas fa-moon';
+                    if (darkText) darkText.textContent = 'Dark';
+                    localStorage.setItem('darkMode', 'false');
+                    document.cookie = "dark_mode=false; path=/";
+                } else {
+                    htmlElement.setAttribute('data-theme', 'dark');
+                    if (darkIcon) darkIcon.className = 'fas fa-sun';
+                    if (darkText) darkText.textContent = 'Light';
+                    localStorage.setItem('darkMode', 'true');
+                    document.cookie = "dark_mode=true; path=/";
+                }
+            });
+        }
+    })();
+
+    // ================================================================
+    // BRANCH SWITCHER
+    // ================================================================
+    function switchBranch(branchId) {
+        var url = new URL(window.location.href);
+        url.searchParams.set('branch', branchId);
+        url.searchParams.delete('error');
+        window.location.href = url.toString();
+    }
+
+    // ================================================================
+    // CLOCK - UPDATE EVERY SECOND
+    // ================================================================
+    function updateClock() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var el = document.getElementById('clockDisplay');
+        if (el) {
+            el.textContent = dateStr + ' • ' + timeStr;
+        }
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1635,27 +1739,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
-    function switchBranch(branchId) {
-        var url = new URL(window.location.href);
-        url.searchParams.set('branch', branchId);
-        url.searchParams.delete('error');
-        window.location.href = url.toString();
-    }
-
-    // ================================================================
     // SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
-    
+
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            var url = new URL(window.location.href);
-            url.searchParams.set('search', query);
-            window.location.href = url.toString();
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
         }
     }
     
@@ -1677,21 +1770,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         });
         var dtEl = document.getElementById('currentDateTime');
         if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+        
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // CONSOLE LOG
-    // ================================================================
-    console.log('%c💊 Braick Dispensary - View Pharmacy (HEADER FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick Dispensary - View Pharmacy (SHARED HEADER FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏥 Pharmacy: <?= htmlspecialchars($pharmacy['name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: <?= format_currency($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ FIXED: Header inaonekana vizuri na profile pic inasupport', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Prescription amount from bill_items.final_price (after discount)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: OTC revenue from otc_sales.total_amount (after discount)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ SHARED HEADER: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ CLOCK: WORKING', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ DARK MODE: WORKING', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Prescription amount from bill_items.total_price', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
