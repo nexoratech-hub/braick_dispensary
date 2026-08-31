@@ -2,8 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/add_employee.php
 // SUPER ADMIN - ADD EMPLOYEE
-// BRAICK DISPENSARY - USING EXISTING DB TABLES
-// WITH SHARED HEADER & SIDEBAR
+// BRAICK DISPENSARY - WITH PROPER PASSWORD HANDLING
 // ================================================================
 
 // ================================================================
@@ -14,7 +13,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -102,7 +101,7 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
 }
 
 // ================================================================
-// DEFINED ROLES (From users.role ENUM)
+// DEFINED ROLES
 // ================================================================
 $available_roles = [
     ['name' => 'doctor', 'label' => 'Doctor', 'icon' => 'fa-user-md', 'color' => '#0B5ED7'],
@@ -113,7 +112,7 @@ $available_roles = [
 ];
 
 // ================================================================
-// GET EXISTING DEPARTMENT CATEGORIES (from service_categories)
+// GET EXISTING DEPARTMENTS
 // ================================================================
 $departments = [];
 $stmt = $db->query("SELECT id, category_name, description, icon, color FROM service_categories WHERE is_active = 1 ORDER BY category_name");
@@ -122,7 +121,7 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
 }
 
 // ================================================================
-// AUTO-GENERATE PASSWORD FUNCTION
+// AUTO-GENERATE PASSWORD FUNCTION - WITH BRANCH CODE
 // ================================================================
 function generatePassword($full_name, $branch_id, $user_id = null) {
     // Get first 4 letters of full name
@@ -162,6 +161,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $full_name = $_POST['full_name'] ?? '';
     $branch_id = (int)($_POST['branch_id'] ?? 0);
     $user_id = (int)($_POST['user_id'] ?? 0);
+    $username = $_POST['username'] ?? '';
     
     if (empty($full_name) || $branch_id <= 0) {
         echo json_encode(['success' => false, 'password' => '', 'error' => 'Name and branch required']);
@@ -262,11 +262,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     if (empty($errors)) {
         $hashed_password = password_hash($form_data['password'], PASSWORD_DEFAULT);
         
-        // Insert into users table
+        // Insert into users table - with password_changed_at and is_default_password
         $stmt = $db->prepare("
             INSERT INTO users 
-            (username, password, full_name, email, phone, role, branch_id, specialty, status, created_at) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', NOW())
+            (username, password, password_changed_at, is_default_password, full_name, email, phone, role, branch_id, specialty, status, created_at) 
+            VALUES (?, ?, NOW(), 1, ?, ?, ?, ?, ?, ?, 'active', NOW())
         ");
         
         if ($stmt->execute([
@@ -281,15 +281,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
         ])) {
             $new_user_id = $db->lastInsertId();
             
-            // ================================================================
-            // STORE MULTIPLE ROLES - Using JSON in a separate approach
-            // Since we don't have employee_roles table, we'll:
-            // 1. Store primary role in users.role (already done)
-            // 2. For additional roles, we could use a JSON field or
-            //    create a simple mapping table
-            // ================================================================
-            
-            // Try to create employee_roles table if it doesn't exist
+            // Store multiple roles
             try {
                 $db->exec("
                     CREATE TABLE IF NOT EXISTS employee_roles (
@@ -303,20 +295,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
                     )
                 ");
                 
-                // Insert all selected roles into employee_roles
                 foreach ($form_data['selected_roles'] as $role_name) {
                     $stmt = $db->prepare("INSERT INTO employee_roles (user_id, role_name, assigned_by) VALUES (?, ?, ?)");
                     $stmt->execute([$new_user_id, $role_name, $_SESSION['user_id']]);
                 }
             } catch (Exception $e) {
-                // Table creation failed or already exists - log but continue
                 error_log("Employee roles table error: " . $e->getMessage());
             }
             
-            // ================================================================
-            // STORE DEPARTMENTS - Using service_categories table
-            // Since we don't have employee_departments table, we'll create it
-            // ================================================================
+            // Store departments
             if (!empty($form_data['selected_departments'])) {
                 try {
                     $db->exec("
@@ -348,11 +335,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
                 $stmt->execute([$_SESSION['user_id'], $form_data['branch_id'], "Employee {$form_data['full_name']} added with roles: $role_str"]);
             } catch (Exception $e) {}
             
-            $message = "Employee added successfully!<br>Roles: <strong>" . implode('</strong>, <strong>', $form_data['selected_roles']) . "</strong><br>Password: <strong>{$form_data['password']}</strong>";
+            $message = "Employee added successfully!<br>Roles: <strong>" . implode('</strong>, <strong>', $form_data['selected_roles']) . "</strong><br>Password: <strong>{$form_data['password']}</strong><br><span style='font-size:0.8rem;color:#059669;'><i class='fas fa-info-circle'></i> User will be prompted to change password on first login.</span>";
             $message_type = 'success';
             
             // Redirect to employees list
-            echo '<script>setTimeout(function(){ window.location.href = "employees.php?branch=' . $form_data['branch_id'] . '&success=1"; }, 2500);</script>';
+            echo '<script>setTimeout(function(){ window.location.href = "employees.php?branch=' . $form_data['branch_id'] . '&success=1"; }, 3000);</script>';
         } else {
             $errors[] = 'Failed to add employee. Please try again.';
         }
@@ -391,11 +378,10 @@ include_once '../../components/admin_sidebar.php';
 ?>
 
 <style>
-    /* ================================================================
-       ADDITIONAL FORM STYLES - BEAUTIFUL LIKE DASHBOARD
-       ================================================================ */
+    /* ================================================================ */
+    /* ADDITIONAL FORM STYLES */
+    /* ================================================================ */
     
-    /* Form Card */
     .form-card {
         background: var(--bg-card);
         border-radius: 20px;
@@ -410,7 +396,6 @@ include_once '../../components/admin_sidebar.php';
         box-shadow: 0 8px 30px rgba(11, 94, 215, 0.08);
     }
     
-    /* Form Header */
     .form-header {
         display: flex;
         align-items: center;
@@ -447,7 +432,6 @@ include_once '../../components/admin_sidebar.php';
         margin: 0;
     }
     
-    /* Form Labels */
     .form-label {
         font-size: 0.85rem;
         font-weight: 600;
@@ -467,7 +451,6 @@ include_once '../../components/admin_sidebar.php';
         margin-left: 2px;
     }
     
-    /* Form Controls */
     .form-control {
         width: 100%;
         padding: 10px 16px;
@@ -497,7 +480,6 @@ include_once '../../components/admin_sidebar.php';
         cursor: not-allowed;
     }
     
-    /* Password Input Group */
     .password-input-group {
         position: relative;
         display: flex;
@@ -530,7 +512,6 @@ include_once '../../components/admin_sidebar.php';
         pointer-events: none;
     }
     
-    /* Generate Button */
     .btn-generate {
         display: inline-flex;
         align-items: center;
@@ -563,7 +544,6 @@ include_once '../../components/admin_sidebar.php';
         font-size: 0.8rem;
     }
     
-    /* Password Actions */
     .password-actions {
         display: flex;
         gap: 8px;
@@ -572,12 +552,6 @@ include_once '../../components/admin_sidebar.php';
         margin-top: 4px;
     }
     
-    .password-actions .help-text {
-        margin-top: 0;
-        font-size: 0.65rem;
-    }
-    
-    /* Form Row with Icon */
     .form-row-icon {
         position: relative;
     }
@@ -602,7 +576,6 @@ include_once '../../components/admin_sidebar.php';
         color: #0B5ED7;
     }
     
-    /* Checkbox Group */
     .checkbox-group {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -670,14 +643,12 @@ include_once '../../components/admin_sidebar.php';
         opacity: 0.7;
     }
     
-    /* Role Badge Colors */
     .role-badge-doctor { border-color: #0B5ED7; }
     .role-badge-reception { border-color: #059669; }
     .role-badge-pharmacy { border-color: #D97706; }
     .role-badge-laboratory { border-color: #7C3AED; }
     .role-badge-cashier { border-color: #0D9488; }
     
-    /* Buttons */
     .btn {
         display: inline-flex;
         align-items: center;
@@ -731,7 +702,6 @@ include_once '../../components/admin_sidebar.php';
         min-width: 90px;
     }
     
-    /* Button Group */
     .form-actions {
         display: flex;
         flex-wrap: wrap;
@@ -741,7 +711,6 @@ include_once '../../components/admin_sidebar.php';
         border-top: 2px solid var(--border-color);
     }
     
-    /* Section Title */
     .section-title {
         font-size: 1rem;
         font-weight: 600;
@@ -775,7 +744,6 @@ include_once '../../components/admin_sidebar.php';
         margin-left: 8px;
     }
     
-    /* Tips Cards */
     .tip-card {
         background: var(--bg-card);
         border-radius: 16px;
@@ -804,22 +772,10 @@ include_once '../../components/admin_sidebar.php';
         flex-shrink: 0;
     }
     
-    .tip-card .tip-icon.blue { 
-        background: #E8F0FE; 
-        color: #0B5ED7; 
-    }
-    .tip-card .tip-icon.green { 
-        background: #E6F7EE; 
-        color: #059669; 
-    }
-    .tip-card .tip-icon.yellow { 
-        background: #FEF3C7; 
-        color: #F59E0B; 
-    }
-    .tip-card .tip-icon.purple { 
-        background: #F3E8FF; 
-        color: #7C3AED; 
-    }
+    .tip-card .tip-icon.blue { background: #E8F0FE; color: #0B5ED7; }
+    .tip-card .tip-icon.green { background: #E6F7EE; color: #059669; }
+    .tip-card .tip-icon.yellow { background: #FEF3C7; color: #F59E0B; }
+    .tip-card .tip-icon.purple { background: #F3E8FF; color: #7C3AED; }
     
     .tip-card .tip-text h4 {
         font-size: 0.85rem;
@@ -834,65 +790,48 @@ include_once '../../components/admin_sidebar.php';
         margin: 0;
     }
     
-    /* Dark Mode Support */
-    [data-theme="dark"] .tip-card .tip-icon.blue { 
-        background: #1E3A5F; 
-        color: #6EA8FE; 
-    }
-    [data-theme="dark"] .tip-card .tip-icon.green { 
-        background: #1A3A2A; 
-        color: #34D399; 
-    }
-    [data-theme="dark"] .tip-card .tip-icon.yellow { 
-        background: #3A2A1A; 
-        color: #FBBF24; 
-    }
-    [data-theme="dark"] .tip-card .tip-icon.purple { 
-        background: #2A1A3A; 
-        color: #9B4DCA; 
+    [data-theme="dark"] .tip-card .tip-icon.blue { background: #1E3A5F; color: #6EA8FE; }
+    [data-theme="dark"] .tip-card .tip-icon.green { background: #1A3A2A; color: #34D399; }
+    [data-theme="dark"] .tip-card .tip-icon.yellow { background: #3A2A1A; color: #FBBF24; }
+    [data-theme="dark"] .tip-card .tip-icon.purple { background: #2A1A3A; color: #9B4DCA; }
+    
+    /* Password Strength Indicator */
+    .password-strength {
+        display: flex;
+        gap: 4px;
+        margin-top: 4px;
     }
     
-    /* Responsive */
+    .password-strength .strength-bar {
+        height: 4px;
+        flex: 1;
+        border-radius: 4px;
+        background: var(--border-color);
+        transition: all 0.3s ease;
+    }
+    
+    .password-strength .strength-bar.weak { background: #EF4444; }
+    .password-strength .strength-bar.medium { background: #F59E0B; }
+    .password-strength .strength-bar.strong { background: #10B981; }
+    .password-strength .strength-bar.very-strong { background: #059669; }
+    
+    .password-strength-text {
+        font-size: 0.7rem;
+        color: var(--text-secondary);
+        margin-top: 2px;
+    }
+    
     @media (max-width: 640px) {
-        .form-card {
-            padding: 18px 16px;
-        }
-        .form-header {
-            flex-direction: column;
-            text-align: center;
-        }
-        .form-header-icon {
-            width: 48px;
-            height: 48px;
-            font-size: 1.2rem;
-        }
-        .btn {
-            padding: 8px 16px;
-            font-size: 0.8rem;
-            min-height: 38px;
-            min-width: 100%;
-        }
-        .form-actions {
-            flex-direction: column;
-        }
-        .form-actions .btn {
-            width: 100%;
-            justify-content: center;
-        }
-        .checkbox-group {
-            grid-template-columns: 1fr;
-        }
-        .tip-card {
-            padding: 12px 16px;
-        }
-        .password-actions {
-            flex-direction: column;
-            align-items: stretch;
-        }
-        .btn-generate {
-            width: 100%;
-            justify-content: center;
-        }
+        .form-card { padding: 18px 16px; }
+        .form-header { flex-direction: column; text-align: center; }
+        .form-header-icon { width: 48px; height: 48px; font-size: 1.2rem; }
+        .btn { padding: 8px 16px; font-size: 0.8rem; min-height: 38px; min-width: 100%; }
+        .form-actions { flex-direction: column; }
+        .form-actions .btn { width: 100%; justify-content: center; }
+        .checkbox-group { grid-template-columns: 1fr; }
+        .tip-card { padding: 12px 16px; }
+        .password-actions { flex-direction: column; align-items: stretch; }
+        .btn-generate { width: 100%; justify-content: center; }
     }
 </style>
 
@@ -926,7 +865,6 @@ include_once '../../components/admin_sidebar.php';
         
         <span class="datetime" id="currentDateTime"></span>
         
-        <!-- Dark Mode Toggle -->
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
@@ -1066,7 +1004,7 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- Specialty (For Doctors) -->
+                <!-- Specialty -->
                 <div>
                     <label class="form-label">
                         <i class="fas fa-stethoscope text-purple-600"></i> Specialty
@@ -1120,6 +1058,14 @@ include_once '../../components/admin_sidebar.php';
                         </button>
                         <span class="help-text">Format: Name + Branch + User ID</span>
                     </div>
+                    <!-- Password Strength Indicator -->
+                    <div class="password-strength" id="passwordStrength">
+                        <div class="strength-bar" data-index="0"></div>
+                        <div class="strength-bar" data-index="1"></div>
+                        <div class="strength-bar" data-index="2"></div>
+                        <div class="strength-bar" data-index="3"></div>
+                    </div>
+                    <div class="password-strength-text" id="passwordStrengthText">Enter a password to check strength</div>
                 </div>
                 
                 <!-- ================================================================ -->
@@ -1211,36 +1157,28 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mt-5">
         <div class="tip-card">
-            <div class="tip-icon blue">
-                <i class="fas fa-lightbulb"></i>
-            </div>
+            <div class="tip-icon blue"><i class="fas fa-lightbulb"></i></div>
             <div class="tip-text">
                 <h4>Tip #1</h4>
                 <p>Select at least one role</p>
             </div>
         </div>
         <div class="tip-card">
-            <div class="tip-icon green">
-                <i class="fas fa-check-circle"></i>
-            </div>
+            <div class="tip-icon green"><i class="fas fa-check-circle"></i></div>
             <div class="tip-text">
                 <h4>Tip #2</h4>
                 <p>Multiple roles allowed</p>
             </div>
         </div>
         <div class="tip-card">
-            <div class="tip-icon yellow">
-                <i class="fas fa-key"></i>
-            </div>
+            <div class="tip-icon yellow"><i class="fas fa-key"></i></div>
             <div class="tip-text">
                 <h4>Tip #3</h4>
                 <p>Click Generate for strong password</p>
             </div>
         </div>
         <div class="tip-card">
-            <div class="tip-icon purple">
-                <i class="fas fa-eye"></i>
-            </div>
+            <div class="tip-icon purple"><i class="fas fa-eye"></i></div>
             <div class="tip-text">
                 <h4>Tip #4</h4>
                 <p>Click 👁️ to view password</p>
@@ -1475,6 +1413,53 @@ include_once '../../components/admin_sidebar.php';
     });
 
     // ================================================================
+    // PASSWORD STRENGTH INDICATOR
+    // ================================================================
+    document.getElementById('passwordField')?.addEventListener('input', function() {
+        var password = this.value;
+        var strength = checkPasswordStrength(password);
+        updatePasswordStrength(strength);
+    });
+
+    function checkPasswordStrength(password) {
+        if (password.length === 0) return { score: 0, label: 'Enter a password to check strength', class: '' };
+        
+        var score = 0;
+        if (password.length >= 8) score++;
+        if (password.length >= 12) score++;
+        if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
+        if (/\d/.test(password)) score++;
+        if (/[^a-zA-Z0-9]/.test(password)) score++;
+        
+        var labels = ['Weak', 'Weak', 'Medium', 'Strong', 'Very Strong'];
+        var classes = ['', 'weak', 'medium', 'strong', 'very-strong'];
+        var scoreIndex = Math.min(score, 4);
+        
+        return { score: scoreIndex, label: labels[scoreIndex], class: classes[scoreIndex] };
+    }
+
+    function updatePasswordStrength(strength) {
+        var bars = document.querySelectorAll('.strength-bar');
+        var text = document.getElementById('passwordStrengthText');
+        
+        bars.forEach(function(bar, index) {
+            bar.className = 'strength-bar';
+            if (index < strength.score) {
+                bar.classList.add(strength.class);
+            }
+        });
+        
+        if (strength.score === 0) {
+            text.textContent = 'Enter a password to check strength';
+        } else {
+            text.textContent = 'Strength: ' + strength.label;
+            text.style.color = strength.class === 'weak' ? '#EF4444' : 
+                               strength.class === 'medium' ? '#F59E0B' : 
+                               strength.class === 'strong' ? '#10B981' : '#059669';
+        }
+    }
+
+    // ================================================================
     // GENERATE PASSWORD BUTTON
     // ================================================================
     document.getElementById('generatePasswordBtn')?.addEventListener('click', function() {
@@ -1517,11 +1502,15 @@ include_once '../../components/admin_sidebar.php';
         })
         .then(function(data) {
             if (data.success) {
-                document.getElementById('passwordField').value = data.password;
+                var passwordField = document.getElementById('passwordField');
+                passwordField.value = data.password;
                 showToast('✅ Success', 'Password generated successfully!', 'success');
                 
+                // Trigger password strength check
+                var event = new Event('input', { bubbles: true });
+                passwordField.dispatchEvent(event);
+                
                 // Show password briefly
-                var passwordField = document.getElementById('passwordField');
                 passwordField.type = 'text';
                 var icon = document.querySelector('#togglePassword i');
                 if (icon) icon.className = 'fas fa-eye-slash';
@@ -1548,8 +1537,9 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c✅ Table: users (role is ENUM)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ Department: service_categories', 'font-size:13px; color:#7C3AED;');
     console.log('%c🔑 Password format: NAME + BRCODE + UID + ID', 'font-size:13px; color:#D97706;');
+    console.log('%c🔒 is_default_password = 1 for new users', 'font-size:13px; color:#059669;');
+    console.log('%c🔄 password_changed_at = NOW() on creation', 'font-size:13px; color:#059669;');
     console.log('%c👁️ Password toggle show/hide', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

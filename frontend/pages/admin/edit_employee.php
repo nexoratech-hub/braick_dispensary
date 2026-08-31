@@ -2,8 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_employee.php
 // SUPER ADMIN - EDIT EMPLOYEE
-// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
-// WITH SHARED HEADER & SIDEBAR
+// BRAICK DISPENSARY - FIXED WITH PASSWORD INVALIDATION
 // ================================================================
 
 // ================================================================
@@ -74,7 +73,12 @@ if ($employee_id <= 0) {
 // ================================================================
 // GET EMPLOYEE DATA
 // ================================================================
-$stmt = $db->prepare("SELECT * FROM users WHERE id = ?");
+$stmt = $db->prepare("
+    SELECT id, username, password, full_name, email, phone, role, branch_id, 
+           specialty, status, created_at, updated_at, 
+           password_changed_at, is_default_password 
+    FROM users WHERE id = ?
+");
 $stmt->execute([$employee_id]);
 $employee = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -106,7 +110,7 @@ $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER 
 $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// AVAILABLE ROLES (from users table ENUM)
+// AVAILABLE ROLES
 // ================================================================
 $available_roles = [
     'doctor' => 'Medical Doctor',
@@ -212,10 +216,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
         $errors[] = 'Branch is required';
     }
     
-    // Password handling
+    // Password handling - FIXED: Proper invalidation
+    $new_password = null;
     if (!empty($generated_password)) {
-        $password = $generated_password;
-        $confirm_password = $generated_password;
+        $new_password = $generated_password;
         $password_changed = true;
     } else if (!empty($password)) {
         if (strlen($password) < 6) {
@@ -224,7 +228,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
         if ($password !== $confirm_password) {
             $errors[] = 'Passwords do not match';
         }
-        $password_changed = true;
+        if (empty($errors)) {
+            $new_password = $password;
+            $password_changed = true;
+        }
     }
     
     // Check if username exists
@@ -250,13 +257,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
         try {
             $db->beginTransaction();
             
-            $sql = "UPDATE users SET full_name = ?, username = ?, email = ?, phone = ?, role = ?, branch_id = ?, status = ?, specialty = ?";
+            $sql = "UPDATE users SET 
+                    full_name = ?, 
+                    username = ?, 
+                    email = ?, 
+                    phone = ?, 
+                    role = ?, 
+                    branch_id = ?, 
+                    status = ?, 
+                    specialty = ?";
             $params = [$full_name, $username, $email, $phone, $role, $branch_id, $status, $specialty];
             
-            if ($password_changed && $password !== null) {
-                $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+            // ================================================================
+            // FIXED: Password invalidation - set is_default_password = 0
+            // and password_changed_at = NOW() when password is changed
+            // ================================================================
+            if ($password_changed && $new_password !== null) {
+                $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
                 $sql .= ", password = ?";
                 $params[] = $hashed_password;
+                
+                // Invalidate old password - set is_default_password = 0
+                $sql .= ", is_default_password = 0";
+                
+                // Set password_changed_at to NOW() to track when password was changed
+                $sql .= ", password_changed_at = NOW()";
             }
             
             $sql .= ", updated_at = NOW() WHERE id = ?";
@@ -273,7 +298,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
                     ");
                     $details = "Employee {$full_name} updated (Role: {$role})";
                     if ($password_changed) {
-                        $details .= " - Password updated";
+                        $details .= " - Password UPDATED and INVALIDATED old password";
                     }
                     $stmt->execute([$user_id, $branch_id, $details]);
                 } catch (Exception $e) {}
@@ -281,9 +306,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
                 $db->commit();
                 
                 $message = "✅ Employee updated successfully!";
-                if ($password_changed && $password !== null) {
-                    $message .= "<br>🔑 New Password: <strong>" . htmlspecialchars($password) . "</strong>";
+                if ($password_changed && $new_password !== null) {
+                    $message .= "<br>🔑 <strong>New Password:</strong> <span style='font-family:monospace;background:#1E293B;color:#34D399;padding:4px 12px;border-radius:6px;'>" . htmlspecialchars($new_password) . "</span>";
                     $message .= "<br>📋 Please copy this password and share with the employee.";
+                    $message .= "<br>🔒 <span style='color:#EF4444;'>Old password is now INVALID</span>";
                 }
                 $message_type = 'success';
                 
@@ -308,14 +334,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
                 echo '<script>
                     setTimeout(function(){ 
                         window.location.href = "employees.php?branch=' . $branch_id . '&updated=1"; 
-                    }, 3000);
+                    }, 4000);
                 </script>';
                 
             } else {
                 $errors[] = 'Failed to update employee. Please try again.';
             }
         } catch (Exception $e) {
-            $db->rollBack();
+            if (isset($db)) $db->rollBack();
             $errors[] = 'Error: ' . $e->getMessage();
         }
     }
@@ -353,20 +379,14 @@ $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
-
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edit Employee - Braick Dispensary</title>
-    
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_url ?>" type="image/png">
-    
-    <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
     <style>
         :root {
             --primary: #0B5ED7;
@@ -493,16 +513,10 @@ include_once '../../components/admin_sidebar.php';
             height: 8px;
             border-radius: 50%;
             border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
         }
         
         .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
+        .notif-dot.no-notif { background: var(--gray-400); }
         
         .dark-toggle-btn {
             background: var(--bg-body);
@@ -718,11 +732,9 @@ include_once '../../components/admin_sidebar.php';
         }
         
         select.form-control { appearance: auto; cursor: pointer; }
-        textarea.form-control { resize: vertical; min-height: 80px; }
         
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
         .form-row { margin-bottom: 20px; }
-        .form-row:last-child { margin-bottom: 0; }
         
         .form-row-icon { position: relative; }
         .form-row-icon .form-control { padding-left: 44px; }
@@ -794,8 +806,6 @@ include_once '../../components/admin_sidebar.php';
         .badge-warning { background: var(--warning); color: #1E293B; }
         .badge-info { background: var(--primary); }
         .badge-secondary { background: #64748B; }
-        
-        [data-theme="dark"] .badge-warning { color: #1E293B; }
         
         .password-section {
             background: var(--primary-bg);
@@ -914,6 +924,18 @@ include_once '../../components/admin_sidebar.php';
             background: #1E3A5F;
             color: #6EA8FE;
             border-color: #1E3A5F;
+        }
+        
+        .password-badge.invalidated {
+            background: #FEE2E2;
+            color: #DC2626;
+            border-color: #F87171;
+        }
+        
+        [data-theme="dark"] .password-badge.invalidated {
+            background: #3A1A1A;
+            color: #F87171;
+            border-color: #DC2626;
         }
         
         .password-action-row {
@@ -1120,35 +1142,15 @@ include_once '../../components/admin_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
-        
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle { display: none !important; }
-            .main-content { margin: 0; padding: 20px; }
-            .form-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .page-header {
-                background: #0B5ED7 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-title, .page-subtitle, .header-badge, .role-badge-display {
-                color: white !important;
-            }
-        }
     </style>
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
             <i class="fas fa-bars text-lg"></i>
         </button>
-        
         <div class="search-wrapper">
             <i class="fas fa-search text-gray-400 ml-3"></i>
             <input type="text" id="searchInput" placeholder="Search...">
@@ -1157,7 +1159,6 @@ include_once '../../components/admin_sidebar.php';
             </button>
         </div>
     </div>
-    
     <div class="flex items-center gap-3">
         <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
@@ -1167,19 +1168,15 @@ include_once '../../components/admin_sidebar.php';
                 </option>
             <?php endforeach; ?>
         </select>
-        
         <span class="datetime" id="currentDateTime"></span>
-        
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
-        
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
             <span class="notif-dot"></span>
         </button>
-        
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
@@ -1187,12 +1184,8 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </nav>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1211,32 +1204,24 @@ include_once '../../components/admin_sidebar.php';
                     <i class="fas fa-tag"></i>
                     <?= ucfirst($employee['role']) ?>
                 </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
-                    <i class="fas fa-store"></i>
-                    <?php 
-                        $branch_name = 'N/A';
-                        foreach ($branches_list as $b) {
-                            if ($b['id'] == $employee['branch_id']) {
-                                $branch_name = $b['name'];
-                                break;
-                            }
-                        }
-                        echo htmlspecialchars($branch_name);
-                    ?>
-                </span>
+                <?php if ($employee['is_default_password'] == 1): ?>
+                    <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                        <i class="fas fa-key"></i> Default Password
+                    </span>
+                <?php else: ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                        <i class="fas fa-check-circle"></i> Password Set
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="view_employee.php?id=<?= $employee_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
-                <i class="fas fa-eye"></i> View
-            </a>
             <a href="employees.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
-    <!-- Message -->
     <?php if ($message): ?>
         <div class="alert alert-<?= $message_type === 'success' ? 'success' : 'danger' ?>" style="max-width:1100px;margin:0 auto 16px;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
@@ -1244,9 +1229,6 @@ include_once '../../components/admin_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- EDIT FORM -->
-    <!-- ================================================================ -->
     <div class="form-card animate-fade-in-up">
         <div class="form-header">
             <div class="form-icon">
@@ -1379,19 +1361,22 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- ================================================================ -->
                 <!-- Password Section -->
-                <!-- ================================================================ -->
                 <div class="form-row" style="grid-column: 1 / -1;">
                     <div class="password-section">
                         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
                             <div style="font-weight:600;color:var(--text-primary);font-size:0.85rem;">
                                 <i class="fas fa-key" style="color:var(--primary);margin-right:6px;"></i>
                                 Password Settings
-                                <span class="password-badge">
-                                    <i class="fas fa-check-circle"></i> 
-                                    <?= $employee['password'] ? 'Current password set' : 'No password set' ?>
-                                </span>
+                                <?php if ($employee['is_default_password'] == 1): ?>
+                                    <span class="password-badge" style="background:#FEF3C7;color:#D97706;border-color:#FCD34D;">
+                                        <i class="fas fa-exclamation-triangle"></i> Default Password
+                                    </span>
+                                <?php else: ?>
+                                    <span class="password-badge">
+                                        <i class="fas fa-check-circle"></i> Password Set
+                                    </span>
+                                <?php endif; ?>
                             </div>
                         </div>
                         
@@ -1441,14 +1426,18 @@ include_once '../../components/admin_sidebar.php';
                         
                         <div class="password-info-text">
                             <i class="fas fa-info-circle text-primary mr-1"></i>
-                            <?php if ($employee['password']): ?>
-                                Current password is set. Leave password fields empty to keep current password.
+                            <?php if ($employee['is_default_password'] == 1): ?>
+                                <span style="color:#D97706;font-weight:600;">⚠️ This employee is using the default password.</span>
+                                <strong>Please generate or set a new password to secure this account.</strong>
                             <?php else: ?>
-                                No password set. Please generate or enter a password for this employee.
+                                Current password is set and secure.
                             <?php endif; ?>
                             <br>
                             <i class="fas fa-lightbulb text-warning mr-1"></i>
-                            <span style="font-size:0.65rem;">Click <strong>"Generate Password"</strong> to auto-generate a secure password. You can also type manually.</span>
+                            <span style="font-size:0.65rem;">
+                                <strong style="color:#EF4444;">🔒 IMPORTANT:</strong> 
+                                When you change the password, the <strong style="color:#EF4444;">old password will become INVALID</strong> immediately.
+                            </span>
                         </div>
                     </div>
                 </div>
@@ -1457,7 +1446,6 @@ include_once '../../components/admin_sidebar.php';
                 <input type="hidden" name="generated_password" id="generatedPasswordHidden" value="">
             </div>
             
-            <!-- Form Actions -->
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">
                     <i class="fas fa-save"></i> Update Employee
@@ -1472,16 +1460,11 @@ include_once '../../components/admin_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Edit Employee
-            <span class="text-gray-300 mx-2">|</span>
-            <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -1489,9 +1472,6 @@ include_once '../../components/admin_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1500,9 +1480,6 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
     // ================================================================
     // DARK MODE
@@ -1577,17 +1554,11 @@ include_once '../../components/admin_sidebar.php';
 
     function updateDateTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
         var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
-        var ftEl = document.getElementById('footerTime');
-        if (ftEl) ftEl.textContent = timeStr;
+        if (dtEl) {
+            dtEl.textContent = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) + ' • ' + 
+                now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+        }
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
@@ -1625,7 +1596,6 @@ include_once '../../components/admin_sidebar.php';
         var radio = document.getElementById('role_' + roleKey);
         if (radio) radio.checked = true;
         
-        // Show/hide specialty section
         var specialtySection = document.getElementById('specialtySection');
         if (roleKey === 'doctor') {
             specialtySection.style.display = 'block';
@@ -1649,7 +1619,7 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // GENERATE PASSWORD
+    // GENERATE PASSWORD - FIXED
     // ================================================================
     function generateAndFillPassword() {
         var generateBtn = document.getElementById('generateBtn');
@@ -1706,7 +1676,6 @@ include_once '../../components/admin_sidebar.php';
                 passwordHidden.value = password;
                 generatedBadge.style.display = 'inline-flex';
                 
-                // Auto copy
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     navigator.clipboard.writeText(password).catch(function() {});
                 }
@@ -1772,6 +1741,19 @@ include_once '../../components/admin_sidebar.php';
         var confirmPassword = document.getElementById('confirmPassword');
         var generatedPassword = document.getElementById('generatedPasswordHidden').value;
         var hasCurrentPassword = <?= $employee['password'] ? 'true' : 'false' ?>;
+        var isDefaultPassword = <?= $employee['is_default_password'] == 1 ? 'true' : 'false' ?>;
+        
+        // If using default password, force password change
+        if (isDefaultPassword && newPassword.value.trim() === '' && generatedPassword === '') {
+            e.preventDefault();
+            alert('⚠️ This employee is using the default password. You must generate or enter a new password.');
+            document.getElementById('newPassword').focus();
+            document.getElementById('newPassword').style.borderColor = '#EF4444';
+            setTimeout(function() {
+                document.getElementById('newPassword').style.borderColor = '';
+            }, 3000);
+            return false;
+        }
         
         if (newPassword.value.trim() !== '' || confirmPassword.value.trim() !== '') {
             if (newPassword.value.trim() !== confirmPassword.value.trim()) {
@@ -1796,25 +1778,15 @@ include_once '../../components/admin_sidebar.php';
             }
         }
         
-        if (!hasCurrentPassword && newPassword.value.trim() === '' && generatedPassword === '') {
-            e.preventDefault();
-            alert('⚠️ This employee has no password set. Please generate or enter a password.');
-            document.getElementById('newPassword').focus();
-            document.getElementById('newPassword').style.borderColor = '#EF4444';
-            setTimeout(function() {
-                document.getElementById('newPassword').style.borderColor = '';
-            }, 3000);
-            return false;
-        }
-        
         return true;
     });
 
     console.log('%c👤 Braick - Edit Employee', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Employee: <?= htmlspecialchars($employee['full_name']) ?> (ID: <?= $employee_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🔒 is_default_password: <?= $employee['is_default_password'] ?>', 'font-size:13px; color:#D97706;');
     console.log('%c🔑 Click "Generate Password" to generate a secure password', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📋 Using users table: role ENUM (doctor, pharmacy, reception, laboratory, cashier, admin)', 'font-size:13px; color:#34D399;');
-    console.log('%c🔐 Password properly hashed using password_hash()', 'font-size:13px; color:#F59E0B;');
+    console.log('%c🔐 Old password will be INVALIDATED when new password is set', 'font-size:13px; color:#EF4444;');
+    console.log('%c📋 Using users table: is_default_password, password_changed_at', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

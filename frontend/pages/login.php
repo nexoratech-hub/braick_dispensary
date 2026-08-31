@@ -1,50 +1,63 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/login.php
-// BRAICK DISPENSARY - LOGIN PAGE (FULLY FIXED)
-// SUPPORTS ALL ROLES & ALL BRANCHES
+// BRAICK DISPENSARY - LOGIN PAGE
+// FIXED: AJAX JSON response for admin session
 // ================================================================
 
-// Start session
+// ================================================================
+// START SESSION
+// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
 // ================================================================
-// IF ALREADY LOGGED IN, REDIRECT TO DASHBOARD
+// INCLUDE DATABASE
+// ================================================================
+require_once __DIR__ . '/../../backend/config/database.php';
+
+// ================================================================
+// CHECK IF AJAX REQUEST
+// ================================================================
+$is_ajax = isset($_POST['ajax']) || isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest';
+
+// ================================================================
+// IF ALREADY LOGGED IN - FIXED FOR AJAX
 // ================================================================
 if (isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
+    if ($is_ajax) {
+        header('Content-Type: application/json');
+        $role = $_SESSION['role'];
+        switch ($role) {
+            case 'admin': $redirect = 'admin/dashboard.php'; break;
+            case 'doctor': $redirect = 'doctor/dashboard.php'; break;
+            case 'reception': $redirect = 'reception/dashboard.php'; break;
+            case 'pharmacy': $redirect = 'pharmacy/dashboard.php'; break;
+            case 'laboratory': $redirect = 'laboratory/dashboard.php'; break;
+            case 'cashier': $redirect = 'cashier/dashboard.php'; break;
+            default: $redirect = 'dashboard.php'; break;
+        }
+        echo json_encode([
+            'success' => true, 
+            'redirect' => $redirect,
+            'message' => 'Already logged in'
+        ]);
+        exit;
+    }
+    
     $role = $_SESSION['role'];
     switch ($role) {
-        case 'admin': 
-            header('Location: admin/dashboard.php'); 
-            break;
-        case 'doctor': 
-            header('Location: doctor/dashboard.php'); 
-            break;
-        case 'reception': 
-            header('Location: reception/dashboard.php'); 
-            break;
-        case 'pharmacy': 
-            header('Location: pharmacy/dashboard.php'); 
-            break;
-        case 'laboratory': 
-            header('Location: laboratory/dashboard.php'); 
-            break;
-        case 'cashier': 
-            header('Location: cashier/dashboard.php'); 
-            break;
-        default: 
-            header('Location: login.php'); 
-            break;
+        case 'admin': header('Location: admin/dashboard.php'); break;
+        case 'doctor': header('Location: doctor/dashboard.php'); break;
+        case 'reception': header('Location: reception/dashboard.php'); break;
+        case 'pharmacy': header('Location: pharmacy/dashboard.php'); break;
+        case 'laboratory': header('Location: laboratory/dashboard.php'); break;
+        case 'cashier': header('Location: cashier/dashboard.php'); break;
+        default: header('Location: login.php'); break;
     }
     exit;
 }
-
-// ================================================================
-// INCLUDE DATABASE - CORRECT PATH
-// ================================================================
-require_once __DIR__ . '/../../backend/config/database.php';
 
 $error = '';
 $success = '';
@@ -56,17 +69,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
     $remember = isset($_POST['remember']) ? true : false;
+    $is_ajax = isset($_POST['ajax']) ? true : $is_ajax;
+    
+    // Function to send JSON response
+    function sendJsonResponse($success, $message, $data = []) {
+        header('Content-Type: application/json');
+        echo json_encode(array_merge(['success' => $success, 'message' => $message], $data));
+        exit;
+    }
     
     if (empty($username) || empty($password)) {
+        if ($is_ajax) {
+            sendJsonResponse(false, 'Please enter both username/email and password.');
+        }
         $error = 'Please enter both username/email and password.';
     } else {
         try {
             $db = Database::getInstance()->getConnection();
             
-            // Get user by username OR email
             $stmt = $db->prepare("
                 SELECT id, username, password, full_name, email, phone, role, branch_id, 
-                       specialty, is_online, profile_pic, status, created_at 
+                       specialty, is_online, profile_pic, status, created_at,
+                       password_changed_at, is_default_password
                 FROM users 
                 WHERE (username = ? OR email = ?) AND status = 'active'
             ");
@@ -75,28 +99,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             if ($user) {
                 // ================================================================
-                // CHECK PASSWORD - SUPPORTS BOTH HASHED & PLAIN TEXT
+                // CHECK PASSWORD
                 // ================================================================
                 $password_valid = false;
+                $is_default_used = false;
                 
-                // Check if password is hashed (starts with $2y$)
                 if (str_starts_with($user['password'], '$2y$')) {
                     $password_valid = password_verify($password, $user['password']);
-                } 
-                
-                // Check plain text password
-                if (!$password_valid) {
+                } else {
                     $password_valid = ($password === $user['password']);
                 }
                 
-                // For demo users with password '12345678'
                 if (!$password_valid && $password === '12345678') {
-                    $password_valid = true;
+                    if ($user['is_default_password'] == 1) {
+                        $password_valid = true;
+                        $is_default_used = true;
+                    }
                 }
                 
                 if ($password_valid) {
                     // ================================================================
-                    // LOGIN SUCCESSFUL - SET SESSION
+                    // LOGIN SUCCESSFUL
                     // ================================================================
                     $_SESSION['user_id'] = $user['id'];
                     $_SESSION['username'] = $user['username'];
@@ -110,7 +133,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['is_online'] = $user['is_online'] ?? 0;
                     $_SESSION['login_time'] = time();
                     
-                    // Get branch name
+                    if ($is_default_used || $user['is_default_password'] == 1) {
+                        $_SESSION['force_password_change'] = true;
+                        $_SESSION['force_password_change_message'] = '⚠️ Please change your default password for security reasons.';
+                    }
+                    
                     try {
                         $stmt2 = $db->prepare("SELECT name FROM branches WHERE id = ?");
                         $stmt2->execute([$user['branch_id']]);
@@ -120,23 +147,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $_SESSION['branch_name'] = 'Dodoma';
                     }
                     
-                    // If doctor, also set doctor_id
                     if ($user['role'] === 'doctor') {
                         $_SESSION['doctor_id'] = $user['id'];
                     }
                     
-                    // Update last login time
                     $stmt = $db->prepare("UPDATE users SET last_online = NOW() WHERE id = ?");
                     $stmt->execute([$user['id']]);
                     
-                    // If doctor, set online status
                     if ($user['role'] === 'doctor') {
                         $stmt = $db->prepare("UPDATE users SET is_online = 1 WHERE id = ?");
                         $stmt->execute([$user['id']]);
                         $_SESSION['is_online'] = 1;
                     }
                     
-                    // Log activity
                     try {
                         $stmt = $db->prepare("
                             INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
@@ -154,38 +177,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // ================================================================
                     $role = $user['role'];
                     switch ($role) {
-                        case 'admin': 
-                            $redirect_url = 'admin/dashboard.php'; 
-                            break;
-                        case 'doctor': 
-                            $redirect_url = 'doctor/dashboard.php'; 
-                            break;
-                        case 'reception': 
-                            $redirect_url = 'reception/dashboard.php'; 
-                            break;
-                        case 'pharmacy': 
-                            $redirect_url = 'pharmacy/dashboard.php'; 
-                            break;
-                        case 'laboratory': 
-                            $redirect_url = 'laboratory/dashboard.php'; 
-                            break;
-                        case 'cashier': 
-                            $redirect_url = 'cashier/dashboard.php'; 
-                            break;
-                        default: 
-                            $redirect_url = 'dashboard.php'; 
-                            break;
+                        case 'admin': $redirect_url = 'admin/dashboard.php'; break;
+                        case 'doctor': $redirect_url = 'doctor/dashboard.php'; break;
+                        case 'reception': $redirect_url = 'reception/dashboard.php'; break;
+                        case 'pharmacy': $redirect_url = 'pharmacy/dashboard.php'; break;
+                        case 'laboratory': $redirect_url = 'laboratory/dashboard.php'; break;
+                        case 'cashier': $redirect_url = 'cashier/dashboard.php'; break;
+                        default: $redirect_url = 'dashboard.php'; break;
+                    }
+                    
+                    if ($is_ajax) {
+                        sendJsonResponse(true, 'Login successful', ['redirect' => $redirect_url]);
                     }
                     
                     header('Location: ' . $redirect_url);
                     exit;
                 } else {
+                    if ($is_ajax) {
+                        sendJsonResponse(false, 'Invalid username/email or password. Please try again.');
+                    }
                     $error = 'Invalid username/email or password. Please try again.';
                 }
             } else {
+                if ($is_ajax) {
+                    sendJsonResponse(false, 'Invalid username/email or password. Please try again.');
+                }
                 $error = 'Invalid username/email or password. Please try again.';
             }
         } catch (Exception $e) {
+            if ($is_ajax) {
+                sendJsonResponse(false, 'Login error: ' . $e->getMessage());
+            }
             $error = 'Login error: ' . $e->getMessage();
         }
     }
@@ -220,7 +242,6 @@ foreach ($possible_paths as $path) {
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
-    
     <style>
         :root {
             --primary: #0B5ED7;
@@ -304,9 +325,6 @@ foreach ($possible_paths as $path) {
             to { opacity: 1; transform: translateY(0); }
         }
         
-        /* ================================================================ */
-        /* LEFT PANEL - Branding with LOGO */
-        /* ================================================================ */
         .login-left {
             flex: 1.2;
             background: linear-gradient(160deg, #0B5ED7 0%, #0A4CA8 50%, #083A8A 100%);
@@ -345,9 +363,6 @@ foreach ($possible_paths as $path) {
             pointer-events: none;
         }
         
-        /* ================================================================ */
-        /* LOGO KUBWA - HAKUNA DUARA */
-        /* ================================================================ */
         .login-brand-wrapper {
             display: flex;
             flex-direction: column;
@@ -358,7 +373,6 @@ foreach ($possible_paths as $path) {
             margin-bottom: 0px;
         }
         
-        /* LOGO - KUBWA SANA */
         .login-logo-image {
             width: 8rem;
             height: 8rem;
@@ -382,7 +396,6 @@ foreach ($possible_paths as $path) {
             letter-spacing: -2px;
         }
         
-        /* BRAND TEXT - CENTERED */
         .login-brand-text {
             text-align: center;
         }
@@ -416,7 +429,6 @@ foreach ($possible_paths as $path) {
             margin: 4px auto 4px auto;
         }
         
-        /* WELCOME TEXT */
         .welcome-message {
             font-size: 0.95rem;
             font-weight: 500;
@@ -425,7 +437,6 @@ foreach ($possible_paths as $path) {
             letter-spacing: 1px;
         }
         
-        /* ROLES - FONTS NDOGO */
         .roles-list {
             display: flex;
             flex-wrap: wrap;
@@ -464,9 +475,6 @@ foreach ($possible_paths as $path) {
             background: #6EE7B7;
         }
         
-        /* ================================================================ */
-        /* RIGHT PANEL - Login Form */
-        /* ================================================================ */
         .login-right {
             flex: 1;
             padding: 50px 45px;
@@ -547,7 +555,6 @@ foreach ($possible_paths as $path) {
             color: var(--gray-400);
         }
         
-        /* Password toggle button */
         .password-toggle {
             position: absolute;
             right: 14px;
@@ -621,6 +628,9 @@ foreach ($possible_paths as $path) {
             text-decoration: underline;
         }
         
+        /* ================================================================ */
+        /* LOGIN BUTTON */
+        /* ================================================================ */
         .btn-login {
             width: 100%;
             padding: 15px;
@@ -638,21 +648,96 @@ foreach ($possible_paths as $path) {
             justify-content: center;
             gap: 10px;
             box-shadow: 0 4px 16px rgba(11, 94, 215, 0.3);
+            position: relative;
+            overflow: hidden;
         }
         
-        .btn-login:hover {
+        .btn-login:hover:not(.loading):not(.success):not(.error) {
             transform: translateY(-2px);
             box-shadow: 0 8px 32px rgba(11, 94, 215, 0.4);
         }
         
-        .btn-login:active {
+        .btn-login:active:not(.loading):not(.success):not(.error) {
             transform: scale(0.98);
         }
         
         .btn-login:disabled {
-            opacity: 0.6;
             cursor: not-allowed;
-            transform: none;
+        }
+        
+        .btn-login.loading {
+            background: linear-gradient(135deg, #0B5ED7 0%, #1A73E8 100%);
+            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.4);
+            animation: btnPulse 0.8s ease-in-out infinite;
+        }
+        
+        @keyframes btnPulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.01); }
+            100% { transform: scale(1); }
+        }
+        
+        .btn-login.loading .btn-icon {
+            animation: spinIcon 0.8s linear infinite;
+        }
+        
+        @keyframes spinIcon {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        
+        .btn-login.success {
+            background: linear-gradient(135deg, #059669 0%, #047857 100%);
+            box-shadow: 0 4px 30px rgba(5, 150, 105, 0.6);
+            animation: btnSuccessGlow 0.5s ease forwards;
+        }
+        
+        @keyframes btnSuccessGlow {
+            0% { box-shadow: 0 4px 20px rgba(5, 150, 105, 0.3); transform: scale(1); }
+            50% { box-shadow: 0 4px 50px rgba(5, 150, 105, 0.8); transform: scale(1.03); }
+            100% { box-shadow: 0 4px 30px rgba(5, 150, 105, 0.5); transform: scale(1); }
+        }
+        
+        .btn-login.success .btn-text { animation: textPop 0.3s ease forwards; }
+        @keyframes textPop {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+        
+        .btn-login.success .btn-icon { animation: checkPop 0.5s ease forwards; }
+        @keyframes checkPop {
+            0% { transform: scale(0); }
+            50% { transform: scale(1.5); }
+            100% { transform: scale(1); }
+        }
+        
+        .btn-login.error {
+            background: linear-gradient(135deg, #DC2626 0%, #B91C1C 100%);
+            box-shadow: 0 4px 30px rgba(220, 38, 38, 0.6);
+            animation: btnErrorShake 0.5s ease forwards;
+        }
+        
+        @keyframes btnErrorShake {
+            0% { transform: translateX(0); }
+            20% { transform: translateX(-10px); }
+            40% { transform: translateX(10px); }
+            60% { transform: translateX(-6px); }
+            80% { transform: translateX(6px); }
+            100% { transform: translateX(0); }
+        }
+        
+        .btn-login .ripple {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(0);
+            animation: rippleAnim 0.6s linear;
+            pointer-events: none;
+        }
+        
+        @keyframes rippleAnim {
+            to { transform: scale(4); opacity: 0; }
         }
         
         .alert {
@@ -699,200 +784,84 @@ foreach ($possible_paths as $path) {
             color: #EF4444;
         }
         
-        /* ================================================================ */
-        /* RESPONSIVE */
-        /* ================================================================ */
         @media (max-width: 992px) {
-            .login-container {
-                flex-direction: column;
-                max-width: 480px;
-                min-height: auto;
-            }
-            .login-left {
-                padding: 32px 24px;
-                border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-            }
-            .login-logo-image {
-                width: 6rem;
-                height: 6rem;
-            }
-            .login-brand-text .brand-name {
-                font-size: 2.5rem;
-            }
-            .login-brand-text .brand-tagline {
-                font-size: 0.8rem;
-            }
-            .welcome-message {
-                font-size: 0.85rem;
-            }
-            .roles-list {
-                gap: 4px 10px;
-                padding: 6px 12px;
-            }
-            .roles-list .role-item {
-                font-size: 0.55rem;
-            }
-            .login-right {
-                padding: 32px 24px;
-            }
+            .login-container { flex-direction: column; max-width: 480px; min-height: auto; }
+            .login-left { padding: 32px 24px; border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+            .login-logo-image { width: 6rem; height: 6rem; }
+            .login-brand-text .brand-name { font-size: 2.5rem; }
+            .login-brand-text .brand-tagline { font-size: 0.8rem; }
+            .welcome-message { font-size: 0.85rem; }
+            .roles-list { gap: 4px 10px; padding: 6px 12px; }
+            .roles-list .role-item { font-size: 0.55rem; }
+            .login-right { padding: 32px 24px; }
         }
         
         @media (max-width: 600px) {
-            .login-left {
-                padding: 24px 16px;
-            }
-            .login-logo-image {
-                width: 4.5rem;
-                height: 4.5rem;
-            }
-            .login-brand-text .brand-name {
-                font-size: 2rem;
-            }
-            .login-brand-text .brand-tagline {
-                font-size: 0.7rem;
-                letter-spacing: 2px;
-            }
-            .welcome-message {
-                font-size: 0.75rem;
-            }
-            .roles-list {
-                gap: 3px 8px;
-                padding: 5px 10px;
-                border-radius: 20px;
-            }
-            .roles-list .role-item {
-                font-size: 0.5rem;
-            }
-            .login-right {
-                padding: 24px 16px;
-            }
-            .login-right .welcome-text h2 {
-                font-size: 1.3rem;
-            }
-            .login-right .form-group .input-wrapper input {
-                padding: 11px 40px 11px 40px;
-                font-size: 0.9rem;
-            }
-            .login-options {
-                flex-direction: column;
-                gap: 10px;
-                align-items: flex-start;
-            }
-            .btn-login {
-                padding: 13px;
-                font-size: 0.9rem;
-            }
-            .password-toggle {
-                width: 28px;
-                height: 28px;
-                padding: 4px;
-            }
-            .password-toggle i {
-                font-size: 0.85rem;
-            }
-            .login-brand-text .divider-line {
-                width: 40px;
-                height: 2px;
-            }
+            .login-left { padding: 24px 16px; }
+            .login-logo-image { width: 4.5rem; height: 4.5rem; }
+            .login-brand-text .brand-name { font-size: 2rem; }
+            .login-brand-text .brand-tagline { font-size: 0.7rem; letter-spacing: 2px; }
+            .welcome-message { font-size: 0.75rem; }
+            .roles-list { gap: 3px 8px; padding: 5px 10px; border-radius: 20px; }
+            .roles-list .role-item { font-size: 0.5rem; }
+            .login-right { padding: 24px 16px; }
+            .login-right .welcome-text h2 { font-size: 1.3rem; }
+            .login-right .form-group .input-wrapper input { padding: 11px 40px 11px 40px; font-size: 0.9rem; }
+            .login-options { flex-direction: column; gap: 10px; align-items: flex-start; }
+            .btn-login { padding: 13px; font-size: 0.9rem; }
+            .password-toggle { width: 28px; height: 28px; padding: 4px; }
+            .password-toggle i { font-size: 0.85rem; }
+            .login-brand-text .divider-line { width: 40px; height: 2px; }
         }
         
         @media (max-width: 400px) {
-            .login-left {
-                padding: 16px 12px;
-            }
-            .login-logo-image {
-                width: 3.5rem;
-                height: 3.5rem;
-            }
-            .login-brand-text .brand-name {
-                font-size: 1.5rem;
-            }
-            .login-brand-text .brand-tagline {
-                font-size: 0.6rem;
-            }
-            .welcome-message {
-                font-size: 0.65rem;
-            }
-            .roles-list .role-item {
-                font-size: 0.45rem;
-            }
-            .login-right {
-                padding: 16px 12px;
-            }
-            .login-right .welcome-text h2 {
-                font-size: 1.1rem;
-            }
+            .login-left { padding: 16px 12px; }
+            .login-logo-image { width: 3.5rem; height: 3.5rem; }
+            .login-brand-text .brand-name { font-size: 1.5rem; }
+            .login-brand-text .brand-tagline { font-size: 0.6rem; }
+            .welcome-message { font-size: 0.65rem; }
+            .roles-list .role-item { font-size: 0.45rem; }
+            .login-right { padding: 16px 12px; }
+            .login-right .welcome-text h2 { font-size: 1.1rem; }
         }
     </style>
 </head>
 <body>
 
 <div class="login-container">
-    
-    <!-- ================================================================ -->
-    <!-- LEFT PANEL - Branding (Logo, Braick, Welcome, Roles) -->
-    <!-- ================================================================ -->
     <div class="login-left">
-        
-        <!-- LOGO KUBWA -->
         <div class="login-brand-wrapper">
             <div class="login-logo-image">
                 <img src="<?= $logo_url ?>" 
                      alt="Braick Dispensary" 
                      onerror="this.style.display='none'; this.parentElement.innerHTML='<span class=\'logo-placeholder\'>B</span>';">
             </div>
-            
-            <!-- Braick + Dispensary & Healthcare -->
             <div class="login-brand-text">
                 <h1 class="brand-name">Braick</h1>
                 <div class="divider-line"></div>
                 <p class="brand-tagline">Dispensary &amp; Healthcare</p>
             </div>
         </div>
-        
-        <!-- Welcome Message -->
-        <div class="welcome-message">
-            Welcome to Braick Dispensary
-        </div>
-        
-        <!-- Roles - Admin, Reception, Doctor, Laboratory Technician, Pharmacy, Cashier -->
+        <div class="welcome-message">Welcome to Braick Dispensary</div>
         <div class="roles-list">
             <span class="role-item highlight"><span class="role-dot"></span>Admin</span>
             <span class="role-item"><span class="role-dot"></span>Reception</span>
             <span class="role-item"><span class="role-dot"></span>Doctor</span>
-            <span class="role-item"><span class="role-dot"></span>Laboratory Technician</span>
+            <span class="role-item"><span class="role-dot"></span>Lab Technician</span>
             <span class="role-item"><span class="role-dot"></span>Pharmacy</span>
             <span class="role-item"><span class="role-dot"></span>Cashier</span>
         </div>
-        
     </div>
     
-    <!-- ================================================================ -->
-    <!-- RIGHT PANEL - Login Form -->
-    <!-- ================================================================ -->
     <div class="login-right">
-        
         <div class="welcome-text">
             <h2>Welcome Back</h2>
             <p class="subtitle">Enter your credentials to access your account</p>
         </div>
         
-        <?php if ($error): ?>
-            <div class="alert alert-error">
-                <i class="fas fa-exclamation-circle"></i>
-                <?= htmlspecialchars($error) ?>
-            </div>
-        <?php endif; ?>
-        
-        <?php if ($success): ?>
-            <div class="alert alert-success">
-                <i class="fas fa-check-circle"></i>
-                <?= htmlspecialchars($success) ?>
-            </div>
-        <?php endif; ?>
+        <div id="alertContainer"></div>
         
         <form method="POST" action="" id="loginForm" autocomplete="off">
-            
             <div class="form-group">
                 <label for="username">Username or Email</label>
                 <div class="input-wrapper">
@@ -925,9 +894,9 @@ foreach ($possible_paths as $path) {
             </div>
             
             <button type="submit" class="btn-login" id="loginBtn">
-                <i class="fas fa-sign-in-alt"></i> Sign In
+                <span class="btn-icon"><i class="fas fa-sign-in-alt"></i></span>
+                <span class="btn-text">Sign In</span>
             </button>
-            
         </form>
         
         <div class="login-footer">
@@ -935,73 +904,208 @@ foreach ($possible_paths as $path) {
             <span style="margin:0 6px;">|</span>
             Made with <span class="heart">❤</span> for healthcare
         </div>
-        
     </div>
-    
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
-    // PASSWORD TOGGLE - Show/Hide Password with Eye Icon
-    // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        const togglePassword = document.getElementById('togglePassword');
-        const passwordInput = document.getElementById('password');
-        const toggleIcon = document.getElementById('toggleIcon');
-        
-        if (togglePassword && passwordInput) {
-            togglePassword.addEventListener('click', function(e) {
-                e.preventDefault();
-                // Toggle password visibility
-                const isPassword = passwordInput.getAttribute('type') === 'password';
-                passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
-                
-                // Toggle icon
-                if (isPassword) {
-                    toggleIcon.classList.remove('fa-eye');
-                    toggleIcon.classList.add('fa-eye-slash');
-                } else {
-                    toggleIcon.classList.remove('fa-eye-slash');
-                    toggleIcon.classList.add('fa-eye');
-                }
-                
-                // Focus the input
-                passwordInput.focus();
-            });
-        }
-    });
+// ================================================================
+// PASSWORD TOGGLE
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    const togglePassword = document.getElementById('togglePassword');
+    const passwordInput = document.getElementById('password');
+    const toggleIcon = document.getElementById('toggleIcon');
     
-    // Show loading state on submit
-    document.getElementById('loginForm').addEventListener('submit', function(e) {
-        var btn = document.getElementById('loginBtn');
-        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Signing in...';
-        btn.disabled = true;
-    });
-    
-    // Auto-focus username if empty
-    document.addEventListener('DOMContentLoaded', function() {
-        var username = document.getElementById('username');
-        if (!username.value) {
-            username.focus();
-        }
-    });
-    
-    // Allow Enter key to submit
-    document.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') {
-            var active = document.activeElement;
-            if (active && (active.id === 'username' || active.id === 'password')) {
-                document.getElementById('loginForm').submit();
+    if (togglePassword && passwordInput) {
+        togglePassword.addEventListener('click', function(e) {
+            e.preventDefault();
+            const isPassword = passwordInput.getAttribute('type') === 'password';
+            passwordInput.setAttribute('type', isPassword ? 'text' : 'password');
+            
+            if (isPassword) {
+                toggleIcon.classList.remove('fa-eye');
+                toggleIcon.classList.add('fa-eye-slash');
+            } else {
+                toggleIcon.classList.remove('fa-eye-slash');
+                toggleIcon.classList.add('fa-eye');
             }
-        }
-    });
+            passwordInput.focus();
+        });
+    }
+});
+
+// ================================================================
+// LOGIN BUTTON - WITH JSON RESPONSE HANDLING
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    const loginForm = document.getElementById('loginForm');
+    const loginBtn = document.getElementById('loginBtn');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
+    const alertContainer = document.getElementById('alertContainer');
     
-    console.log('%c🏥 Braick Dispensary Login', 'font-size:24px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📁 Logo Path: <?= $logo_url ?>', 'font-size:14px; color:#6EA8FE;');
-    console.log('%c🔑 Password for all demo users: 12345678', 'font-size:14px; color:#059669;');
+    function showError(message) {
+        const alertDiv = document.createElement('div');
+        alertDiv.className = 'alert alert-error';
+        alertDiv.innerHTML = '<i class="fas fa-exclamation-circle"></i> ' + message;
+        alertContainer.appendChild(alertDiv);
+        
+        setTimeout(function() {
+            if (alertDiv.parentNode) {
+                alertDiv.style.opacity = '0';
+                alertDiv.style.transition = 'opacity 0.5s ease';
+                setTimeout(function() {
+                    if (alertDiv.parentNode) alertDiv.remove();
+                }, 500);
+            }
+        }, 5000);
+    }
+    
+    function clearAlerts() {
+        const alerts = alertContainer.querySelectorAll('.alert');
+        alerts.forEach(function(el) { el.remove(); });
+    }
+    
+    if (loginForm && loginBtn) {
+        loginForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            loginBtn.disabled = true;
+            
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+            
+            if (!username || !password) {
+                showError('Please enter both username/email and password.');
+                loginBtn.disabled = false;
+                return;
+            }
+            
+            // Loading state
+            loginBtn.className = 'btn-login loading';
+            const btnIcon = loginBtn.querySelector('.btn-icon i');
+            const btnText = loginBtn.querySelector('.btn-text');
+            
+            if (btnIcon) btnIcon.className = 'fas fa-spinner fa-spin';
+            if (btnText) btnText.textContent = 'Signing in...';
+            
+            clearAlerts();
+            
+            const formData = new FormData(loginForm);
+            formData.append('ajax', '1');
+            
+            fetch(window.location.href, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest'
+                }
+            })
+            .then(function(response) {
+                // Check if response is JSON
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('application/json')) {
+                    return response.json();
+                } else {
+                    // If not JSON, something went wrong
+                    return response.text().then(function(text) {
+                        console.error('Non-JSON response:', text.substring(0, 200));
+                        throw new Error('Server returned HTML instead of JSON. Please check server logs.');
+                    });
+                }
+            })
+            .then(function(data) {
+                if (data.success) {
+                    loginBtn.className = 'btn-login success';
+                    if (btnIcon) btnIcon.className = 'fas fa-check-circle';
+                    if (btnText) btnText.textContent = '✅ Success!';
+                    
+                    setTimeout(function() {
+                        window.location.href = data.redirect || 'dashboard.php';
+                    }, 2500);
+                } else {
+                    loginBtn.className = 'btn-login error';
+                    if (btnIcon) btnIcon.className = 'fas fa-times-circle';
+                    if (btnText) btnText.textContent = '❌ Failed';
+                    
+                    showError(data.message || 'Invalid username/email or password.');
+                    
+                    setTimeout(function() {
+                        loginBtn.className = 'btn-login';
+                        if (btnIcon) btnIcon.className = 'fas fa-sign-in-alt';
+                        if (btnText) btnText.textContent = 'Sign In';
+                        loginBtn.disabled = false;
+                        passwordInput.focus();
+                        passwordInput.select();
+                    }, 2500);
+                }
+            })
+            .catch(function(error) {
+                console.error('Login error:', error);
+                loginBtn.className = 'btn-login error';
+                if (btnIcon) btnIcon.className = 'fas fa-times-circle';
+                if (btnText) btnText.textContent = '❌ Error';
+                
+                showError('Network error: ' + error.message);
+                
+                setTimeout(function() {
+                    loginBtn.className = 'btn-login';
+                    if (btnIcon) btnIcon.className = 'fas fa-sign-in-alt';
+                    if (btnText) btnText.textContent = 'Sign In';
+                    loginBtn.disabled = false;
+                }, 2500);
+            });
+        });
+    }
+});
+
+// ================================================================
+// ENTER KEY SUPPORT
+// ================================================================
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') {
+        const active = document.activeElement;
+        if (active && (active.id === 'username' || active.id === 'password')) {
+            document.getElementById('loginForm').dispatchEvent(new Event('submit'));
+        }
+    }
+});
+
+// ================================================================
+// RIPPLE EFFECT
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    const loginBtn = document.getElementById('loginBtn');
+    if (loginBtn) {
+        loginBtn.addEventListener('click', function(e) {
+            if (this.classList.contains('loading') || 
+                this.classList.contains('success') || 
+                this.classList.contains('error')) return;
+            
+            const ripple = document.createElement('span');
+            ripple.classList.add('ripple');
+            const rect = this.getBoundingClientRect();
+            const size = Math.max(rect.width, rect.height);
+            ripple.style.width = ripple.style.height = size + 'px';
+            ripple.style.left = (e.clientX - rect.left - size/2) + 'px';
+            ripple.style.top = (e.clientY - rect.top - size/2) + 'px';
+            this.appendChild(ripple);
+            setTimeout(function() { ripple.remove(); }, 600);
+        });
+    }
+});
+
+// ================================================================
+// AUTO-FOCUS
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    const username = document.getElementById('username');
+    if (!username.value) username.focus();
+});
+
+console.log('%c🏥 Braick Dispensary Login', 'font-size:24px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ AJAX Login with JSON response handling', 'font-size:14px; color:#059669;');
+console.log('%c🔑 Default password: 12345678 (only if is_default_password=1)', 'font-size:14px; color:#D97706;');
 </script>
 
 </body>
