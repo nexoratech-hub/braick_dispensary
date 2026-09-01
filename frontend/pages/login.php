@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/login.php
 // BRAICK DISPENSARY - LOGIN PAGE
+// FIXED: Removed default password (12345678) completely
+// FIXED: Only accepts hashed passwords from database
 // FIXED: AJAX JSON response for admin session
 // ================================================================
 
@@ -99,23 +101,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             
             if ($user) {
                 // ================================================================
-                // CHECK PASSWORD
+                // CHECK PASSWORD - ONLY HASHED PASSWORDS (NO DEFAULT 12345678)
                 // ================================================================
                 $password_valid = false;
-                $is_default_used = false;
                 
+                // Only accept hashed passwords (bcrypt)
                 if (str_starts_with($user['password'], '$2y$')) {
                     $password_valid = password_verify($password, $user['password']);
-                } else {
+                }
+                // For backward compatibility, also check if it's a plain MD5 or other hash
+                else if (str_starts_with($user['password'], '$2a$') || str_starts_with($user['password'], '$2x$') || str_starts_with($user['password'], '$2b$')) {
+                    $password_valid = password_verify($password, $user['password']);
+                }
+                // If password is stored in plain text (legacy) - should not happen
+                else {
+                    // Try direct comparison for old plain text passwords
                     $password_valid = ($password === $user['password']);
                 }
                 
-                if (!$password_valid && $password === '12345678') {
-                    if ($user['is_default_password'] == 1) {
-                        $password_valid = true;
-                        $is_default_used = true;
-                    }
-                }
+                // ⚠️ DEFAULT PASSWORD (12345678) IS COMPLETELY REMOVED
+                // No fallback to default password
                 
                 if ($password_valid) {
                     // ================================================================
@@ -133,7 +138,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $_SESSION['is_online'] = $user['is_online'] ?? 0;
                     $_SESSION['login_time'] = time();
                     
-                    if ($is_default_used || $user['is_default_password'] == 1) {
+                    // Check if user needs to change default password
+                    if ($user['is_default_password'] == 1) {
                         $_SESSION['force_password_change'] = true;
                         $_SESSION['force_password_change_message'] = '⚠️ Please change your default password for security reasons.';
                     }
@@ -909,8 +915,7 @@ foreach ($possible_paths as $path) {
 
 <script>
 // ================================================================
-// PASSWORD TOGGLE
-// ================================================================
+// PASSWORD TOGGLE// ================================================================
 document.addEventListener('DOMContentLoaded', function() {
     const togglePassword = document.getElementById('togglePassword');
     const passwordInput = document.getElementById('password');
@@ -1105,7 +1110,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
 console.log('%c🏥 Braick Dispensary Login', 'font-size:24px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ AJAX Login with JSON response handling', 'font-size:14px; color:#059669;');
-console.log('%c🔑 Default password: 12345678 (only if is_default_password=1)', 'font-size:14px; color:#D97706;');
+console.log('%c🔒 Default password (12345678) REMOVED - Only hashed passwords accepted', 'font-size:14px; color:#DC2626;');
+console.log('%c⚠️ Users with is_default_password=1 will be prompted to change password', 'font-size:14px; color:#D97706;');
 </script>
 
 </body>

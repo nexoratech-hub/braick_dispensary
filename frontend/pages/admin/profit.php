@@ -5,9 +5,10 @@
 // PROFIT = REVENUE - EXPENSES
 // FIXED: Revenue uses paid_amount from bills (includes discounts)
 // FIXED: Includes OTC revenue from otc_sales
-// FIXED: Includes Prescription revenue from prescription_items
+// FIXED: Prescription revenue - FOR DISPLAY ONLY (already in bills)
 // FIXED: Column 'branch_id' ambiguous - added table prefix
 // FIXED: Header with clock and dark mode support
+// FIXED: Total Revenue = Patient Bills + OTC ONLY (no double counting)
 // ================================================================
 
 // ================================================================
@@ -203,7 +204,7 @@ try {
 }
 
 // ================================================================
-// 3. PRESCRIPTION REVENUE - from prescription_items table
+// 3. PRESCRIPTION REVENUE - FOR DISPLAY ONLY (already in bills)
 // ================================================================
 $prescription_revenue = 0;
 $prescription_count = 0;
@@ -248,9 +249,10 @@ try {
 }
 
 // ================================================================
-// 4. TOTAL REVENUE = Patient Bills + OTC + Prescriptions
+// 4. TOTAL REVENUE = Patient Bills + OTC ONLY
+//    FIXED: Removed prescription to avoid double counting
 // ================================================================
-$total_revenue = $patient_bills_revenue + $otc_revenue + $prescription_revenue;
+$total_revenue = $patient_bills_revenue + $otc_revenue;
 
 // ================================================================
 // 5. BREAKDOWN BY CATEGORY (from bill_items - for display only)
@@ -1325,6 +1327,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="header-badge" style="background:rgba(52,211,153,0.2);color:#34D399;">
                     <i class="fas fa-calendar-alt"></i> <?= date('M d, Y', strtotime($date_from)) ?> - <?= date('M d, Y', strtotime($date_to)) ?>
                 </span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.15);color:#34D399;border-color:rgba(52,211,153,0.2);">
+                    <i class="fas fa-info-circle"></i> Prescriptions included in bills
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1399,26 +1404,32 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="breakdown-item">
                 <div class="label">Patient Bills</div>
                 <div class="value" style="color:#2563EB;">TSh <?= formatMoney($patient_bills_revenue) ?></div>
+                <div style="font-size:0.6rem;color:var(--text-secondary);"><?= number_format($patient_bills_count) ?> bills (includes prescriptions)</div>
             </div>
             <div class="breakdown-item">
                 <div class="label">OTC Sales</div>
                 <div class="value" style="color:#0891B2;">TSh <?= formatMoney($otc_revenue) ?></div>
+                <div style="font-size:0.6rem;color:var(--text-secondary);"><?= number_format($otc_count) ?> transactions</div>
             </div>
             <div class="breakdown-item">
                 <div class="label">Prescriptions</div>
                 <div class="value" style="color:#7C3AED;">TSh <?= formatMoney($prescription_revenue) ?></div>
+                <div style="font-size:0.6rem;color:var(--text-secondary);"><?= number_format($prescription_count) ?> items (already in bills)</div>
             </div>
             <div class="breakdown-item">
                 <div class="label">Consultation</div>
                 <div class="value" style="color:#059669;">TSh <?= formatMoney($consultation_revenue) ?></div>
+                <div style="font-size:0.6rem;color:var(--text-secondary);"><?= number_format($consultation_count) ?> consultations</div>
             </div>
             <div class="breakdown-item">
                 <div class="label">Lab Tests</div>
                 <div class="value" style="color:#7C3AED;">TSh <?= formatMoney($lab_revenue) ?></div>
+                <div style="font-size:0.6rem;color:var(--text-secondary);"><?= number_format($lab_count) ?> tests</div>
             </div>
             <div class="breakdown-item">
                 <div class="label">Medications</div>
                 <div class="value" style="color:#D97706;">TSh <?= formatMoney($medication_revenue) ?></div>
+                <div style="font-size:0.6rem;color:var(--text-secondary);"><?= number_format($medication_count) ?> items</div>
             </div>
         </div>
     </div>
@@ -1800,16 +1811,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c💰 Braick - Profit Report', 'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c🏢 Branch: <?= $branch_name ?> (ID: <?= $selected_branch_id ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c🔵 Total Revenue: TSh <?= formatMoney($total_revenue) ?>', 'font-size:12px; color:#2563EB;');
-    console.log('%c   ├─ Patient Bills: TSh <?= formatMoney($patient_bills_revenue) ?> (<?= number_format($patient_bills_count) ?> bills)', 'font-size:11px; color:#2563EB;');
+    console.log('%c🔵 Total Revenue: TSh <?= formatMoney($total_revenue) ?> (Bills + OTC)', 'font-size:12px; color:#2563EB;');
+    console.log('%c   ├─ Patient Bills: TSh <?= formatMoney($patient_bills_revenue) ?> (<?= number_format($patient_bills_count) ?> bills - includes prescriptions)', 'font-size:11px; color:#2563EB;');
     console.log('%c   ├─ OTC: TSh <?= formatMoney($otc_revenue) ?> (<?= number_format($otc_count) ?> transactions)', 'font-size:11px; color:#0891B2;');
-    console.log('%c   └─ Prescriptions: TSh <?= formatMoney($prescription_revenue) ?> (<?= number_format($prescription_count) ?> items)', 'font-size:11px; color:#7C3AED;');
+    console.log('%c   └─ Prescriptions: TSh <?= formatMoney($prescription_revenue) ?> (<?= number_format($prescription_count) ?> items - FOR DISPLAY ONLY)', 'font-size:11px; color:#7C3AED;');
     console.log('%c🔴 Expenses: TSh <?= formatMoney($expense_data['total_expenses']) ?>', 'font-size:12px; color:#DC2626;');
     console.log('%c🟢 Net Profit: TSh <?= formatMoney($profit_data['net_profit']) ?>', 'font-size:12px; color:#059669;');
     console.log('%c🟣 Profit Margin: <?= $profit_data['profit_margin'] ?>%', 'font-size:12px; color:#7C3AED;');
-    console.log('%c✅ FIXED: Revenue = Patient Bills (paid_amount) + OTC + Prescriptions', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ FIXED: Excludes OTC bills from bills table', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ FIXED: Header with clock and dark mode support', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: Revenue = Patient Bills (paid_amount) + OTC ONLY (no double counting)', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ FIXED: Prescriptions are displayed separately but NOT added to total revenue', 'font-size:12px; color:#34D399;');
     console.log('%c🌙 Dark Mode Toggle: WORKING', 'font-size:12px; color:#3B82F6;');
     console.log('%c🕐 Clock: WORKING', 'font-size:12px; color:#3B82F6;');
 </script>

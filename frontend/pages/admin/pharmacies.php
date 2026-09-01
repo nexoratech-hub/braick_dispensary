@@ -4,7 +4,9 @@
 // SUPER ADMIN - VIEW ALL PHARMACIES WITH BRANCH FILTERING
 // 8 CARDS WITH CUSTOM COLORS: BLUE, GREEN, ORANGE, RED
 // DATA FILTERED BY SELECTED BRANCH
-// FIXED FOR EXISTING DATABASE
+// FIXED: Total Revenue = Prescription Revenue + OTC Revenue ONLY
+// ADDED: Inventory Table showing all medicines per branch
+// ADDED: ONE Inventory button on top header (GREEN color)
 // ================================================================
 
 // ================================================================
@@ -206,6 +208,11 @@ try {
 }
 
 // ================================================================
+// FIXED: TOTAL REVENUE = Prescription Revenue + OTC Revenue ONLY
+// ================================================================
+$total_revenue = $total_prescription_revenue + $total_otc_revenue_db;
+
+// ================================================================
 // BUILD QUERY FOR PHARMACIES
 // ================================================================
 $sql = "
@@ -267,7 +274,7 @@ $total_pending = 0;
 $total_otc_sales = 0;
 $total_otc_revenue = 0;
 $total_prescription_revenue_sum = 0;
-$total_revenue = 0;
+$total_revenue_sum = 0;
 $total_out_of_stock = 0;
 $total_low_stock = 0;
 $total_expired = 0;
@@ -281,11 +288,63 @@ foreach ($pharmacies as $p) {
     $total_otc_sales += $p['total_otc_sales'] ?? 0;
     $total_otc_revenue += $p['otc_revenue'] ?? 0;
     $total_prescription_revenue_sum += $p['prescription_revenue'] ?? 0;
-    $total_revenue += ($p['prescription_revenue'] ?? 0) + ($p['otc_revenue'] ?? 0);
+    $total_revenue_sum += ($p['prescription_revenue'] ?? 0) + ($p['otc_revenue'] ?? 0);
     $total_out_of_stock += $p['out_of_stock_items'] ?? 0;
     $total_low_stock += $p['low_stock_items'] ?? 0;
     $total_expired += $p['expired_medicines'] ?? 0;
     $total_expiring_soon += $p['expiring_soon_medicines'] ?? 0;
+}
+
+// ================================================================
+// GET INVENTORY DATA FOR TABLE (Filtered by selected branch)
+// ================================================================
+$inventory_items = [];
+try {
+    $sql_inventory = "
+        SELECT 
+            mi.id,
+            mi.medication_name,
+            mi.category,
+            mi.unit,
+            mi.quantity,
+            mi.reorder_level,
+            mi.unit_cost,
+            mi.selling_price,
+            mi.supplier,
+            mi.expiry_date,
+            mi.batch_number,
+            mi.branch_id,
+            mi.status,
+            b.name as branch_name
+        FROM medications_inventory mi
+        INNER JOIN branches b ON mi.branch_id = b.id
+        WHERE mi.status = 'active'
+    ";
+    
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $sql_inventory .= " AND mi.branch_id = " . (int)$selected_branch_id;
+    }
+    
+    $sql_inventory .= " ORDER BY b.name, mi.medication_name ASC";
+    
+    $stmt = $db->query($sql_inventory);
+    $inventory_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    error_log("Error fetching inventory: " . $e->getMessage());
+    $inventory_items = [];
+}
+
+// ================================================================
+// GET BRANCH NAME FOR DISPLAY
+// ================================================================
+$display_branch_name = 'All Branches';
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch_id) {
+            $display_branch_name = $b['name'];
+            break;
+        }
+    }
 }
 
 // ================================================================
@@ -305,24 +364,38 @@ function getStatusBadge($status) {
     return $classes[$status] ?? 'secondary';
 }
 
+function getInventoryStatusBadge($quantity, $reorder_level) {
+    if ($quantity <= 0) {
+        return '<span class="badge badge-danger" style="font-size:0.6rem;"><i class="fas fa-times-circle"></i> Out of Stock</span>';
+    } elseif ($quantity <= $reorder_level) {
+        return '<span class="badge badge-warning" style="font-size:0.6rem;"><i class="fas fa-exclamation-triangle"></i> Low Stock</span>';
+    } else {
+        return '<span class="badge badge-success" style="font-size:0.6rem;"><i class="fas fa-check-circle"></i> In Stock</span>';
+    }
+}
+
+function getExpiryBadge($expiry_date) {
+    if (empty($expiry_date)) {
+        return '<span class="badge badge-secondary" style="font-size:0.6rem;">N/A</span>';
+    }
+    $today = new DateTime();
+    $expiry = new DateTime($expiry_date);
+    $diff = $today->diff($expiry)->days;
+    
+    if ($expiry < $today) {
+        return '<span class="badge badge-danger" style="font-size:0.6rem;"><i class="fas fa-skull"></i> Expired</span>';
+    } elseif ($diff <= 30) {
+        return '<span class="badge badge-warning" style="font-size:0.6rem;"><i class="fas fa-clock"></i> ' . $diff . ' days</span>';
+    } else {
+        return '<span class="badge badge-success" style="font-size:0.6rem;"><i class="fas fa-check"></i> ' . $diff . ' days</span>';
+    }
+}
+
 function format_currency($amount) {
     if ($amount == 0) {
         return 'TSh 0';
     }
     return 'TSh ' . number_format($amount, 0);
-}
-
-// ================================================================
-// GET BRANCH NAME FOR DISPLAY
-// ================================================================
-$display_branch_name = 'All Branches';
-if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    foreach ($branches as $b) {
-        if ($b['id'] == $selected_branch_id) {
-            $display_branch_name = $b['name'];
-            break;
-        }
-    }
 }
 ?>
 
@@ -351,6 +424,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             --primary-dark: #0A4CA8;
             --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             --primary-gradient-strong: linear-gradient(135deg, #0A4CA8, #083C8A);
+            --table-hover: #F1F5F9;
         }
         [data-theme="dark"] {
             --bg-body: #0F172A;
@@ -361,6 +435,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             --border-color: #334155;
             --primary: #3B82F6;
             --primary-dark: #2563EB;
+            --table-hover: #1E293B;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -925,6 +1000,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         .badge-danger { background: #DC2626; }
         .badge-warning { background: #D97706; color: #1E293B; }
         .badge-info { background: #0B5ED7; }
+        .badge-secondary { background: #64748B; }
         
         .pharmacy-card-body { padding: 16px 20px; }
         .revenue-section {
@@ -1143,6 +1219,40 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             letter-spacing: 0.05em;
             backdrop-filter: blur(4px);
         }
+        .page-header-box .page-title .branch-name-display {
+            background: rgba(255,255,255,0.15);
+            padding: 2px 14px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            color: white;
+        }
+        /* GREEN INVENTORY BUTTON - TOP HEADER */
+        .page-header-box .page-title .btn-inventory-top-green {
+            background: #059669;
+            color: white;
+            border: none;
+            padding: 6px 20px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+            margin-left: 4px;
+        }
+        .page-header-box .page-title .btn-inventory-top-green:hover {
+            background: #047857;
+            transform: translateY(-2px) scale(1.03);
+            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.5);
+        }
+        .page-header-box .page-title .btn-inventory-top-green i {
+            font-size: 0.9rem;
+        }
+        
         .page-header-box .page-subtitle {
             color: rgba(255,255,255,0.85);
             font-size: 0.85rem;
@@ -1157,14 +1267,6 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         .page-header-box .page-subtitle strong {
             color: white;
             font-weight: 600;
-        }
-        .page-header-box .page-subtitle .branch-name-display {
-            background: rgba(255,255,255,0.15);
-            padding: 2px 14px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 500;
-            color: white;
         }
         .page-header-box .header-badge {
             background: rgba(255,255,255,0.12);
@@ -1201,6 +1303,79 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             color: #FDBA74;
         }
         
+        /* Inventory Table Styles */
+        .inventory-table-container {
+            background: var(--bg-card);
+            border-radius: 18px;
+            border: 2px solid var(--border-color);
+            overflow: hidden;
+            margin-bottom: 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .inventory-table-container .table-header {
+            padding: 16px 20px;
+            background: var(--primary-gradient-strong);
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+        .inventory-table-container .table-header .table-title {
+            font-size: 0.95rem;
+            font-weight: 700;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .inventory-table-container .table-header .table-title i {
+            color: rgba(255,255,255,0.8);
+        }
+        .inventory-table-container .table-header .table-badge {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            padding: 3px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+        }
+        .inventory-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.78rem;
+        }
+        .inventory-table thead th {
+            background: var(--bg-body);
+            color: var(--text-secondary);
+            font-weight: 700;
+            padding: 10px 14px;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border-bottom: 2px solid var(--border-color);
+            text-align: left;
+            position: sticky;
+            top: 0;
+            z-index: 2;
+        }
+        [data-theme="dark"] .inventory-table thead th {
+            background: #0F172A;
+        }
+        .inventory-table td {
+            padding: 8px 14px;
+            border-bottom: 1px solid var(--border-color);
+            color: var(--text-primary);
+            vertical-align: middle;
+        }
+        .inventory-table tbody tr:hover td {
+            background: var(--table-hover);
+        }
+        .inventory-table tbody tr:last-child td {
+            border-bottom: none;
+        }
+        
         #sidebarOverlay {
             position: fixed;
             top: 0;
@@ -1231,6 +1406,8 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             .stat-card-8 .stat-number-small { font-size: 1.8rem; }
             .stat-card-8 .stat-amount-large { font-size: 1.4rem; }
             .stat-card-8 .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
+            .inventory-table { font-size: 0.65rem; }
+            .inventory-table thead th, .inventory-table td { padding: 6px 8px; }
         }
         @media (max-width: 480px) {
             .stats-grid-8 { grid-template-columns: 1fr; }
@@ -1240,6 +1417,8 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             .stat-card-8 .stat-icon { width: 34px; height: 34px; font-size: 0.85rem; }
             .page-header-box .page-title { font-size: 1rem; flex-direction: column; align-items: flex-start; }
             .page-header-box .page-subtitle { font-size: 0.75rem; flex-direction: column; align-items: flex-start; gap: 4px; }
+            .inventory-table { font-size: 0.55rem; }
+            .inventory-table thead th, .inventory-table td { padding: 4px 6px; }
         }
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
@@ -1249,6 +1428,16 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
+        
+        /* Scrollable table container */
+        .table-scroll {
+            overflow-x: auto;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .text-danger { color: #DC2626; }
+        .text-warning { color: #D97706; }
+        .text-success { color: #059669; }
     </style>
 </head>
 <body>
@@ -1348,7 +1537,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
+    <!-- Page Header with GREEN Inventory Button -->
     <div class="page-header-box animate-fade-in-up">
         <div>
             <h1 class="page-title">
@@ -1358,6 +1547,10 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
                 <span class="branch-name-display">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
                 </span>
+                <!-- GREEN INVENTORY BUTTON - ONLY ONE ON TOP HEADER -->
+                <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="btn-inventory-top-green">
+                    <i class="fas fa-boxes"></i> 📦 Inventory
+                </a>
             </h1>
             <p class="page-subtitle">
                 <strong><?= $total_pharmacies ?></strong> pharmacy branches
@@ -1402,22 +1595,22 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 3. Total Revenue - GREEN -->
+        <!-- 3. Total Revenue - GREEN (FIXED: Prescription + OTC) -->
         <div class="stat-card-8 card-green">
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Total Revenue</p>
                 <p class="stat-amount-large"><span class="stat-currency">TSh</span> <?= number_format($total_revenue, 0) ?></p>
                 <p class="stat-sub">
-                    <span class="highlight">Rx: TSh <?= number_format($total_prescription_revenue_sum, 0) ?></span>
-                    <span class="highlight">OTC: TSh <?= number_format($total_otc_revenue, 0) ?></span>
+                    <span class="highlight">💊 Rx: TSh <?= number_format($total_prescription_revenue, 0) ?></span>
+                    <span class="highlight">🛒 OTC: TSh <?= number_format($total_otc_revenue_db, 0) ?></span>
                 </p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 4. Prescriptions - GREEN -->
-        <div class="stat-card-8 card-green">
+        <!-- 4. Prescriptions - PURPLE -->
+        <div class="stat-card-8" style="background:linear-gradient(135deg, #7C3AED, #6D28D9);">
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Prescriptions</p>
@@ -1428,13 +1621,14 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
                 <p class="stat-sub">
                     <span class="badge-mini success">✅ <?= number_format($total_dispensed_count) ?> dispensed</span>
                     <span class="badge-mini warning">⏳ <?= number_format($total_pending_count) ?> pending</span>
+                    <span class="badge-mini" style="background:rgba(255,255,255,0.15);">Included in Total Revenue</span>
                 </p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 5. OTC Sales - BLUE -->
-        <div class="stat-card-8 card-blue">
+        <!-- 5. OTC Sales - ORANGE -->
+        <div class="stat-card-8 card-orange">
             <div class="stat-icon"><i class="fas fa-shopping-cart"></i></div>
             <div class="stat-content">
                 <p class="stat-label">OTC Sales</p>
@@ -1511,7 +1705,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         </form>
     </div>
 
-    <!-- PHARMACY GRID -->
+    <!-- PHARMACY GRID - NO INVENTORY BUTTONS ON CARDS -->
     <?php if (count($pharmacies) > 0): ?>
         <div class="pharmacy-grid animate-fade-in-up" style="animation-delay:0.15s;">
             <?php foreach ($pharmacies as $pharmacy): 
@@ -1609,6 +1803,7 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
                         </div>
                     </div>
                     
+                    <!-- FOOTER - NO INVENTORY BUTTON -->
                     <div class="pharmacy-card-footer">
                         <a href="view_pharmacy.php?id=<?= $pharmacy['id'] ?>&branch=<?= $selected_branch_id ?>" class="btn-sm btn-sm-primary">
                             <i class="fas fa-eye"></i> View
@@ -1627,12 +1822,13 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         <div class="text-center text-sm text-gray-500 dark:text-gray-400 py-2">
             Showing <strong><?= count($pharmacies) ?></strong> pharmacy branch<?= count($pharmacies) > 1 ? 'es' : '' ?>
             <?php if ($total_prescriptions_count > 0): ?>
-                · <span class="text-green-500">✅ <?= number_format($total_dispensed_count) ?> dispensed</span>
-                · <span class="text-blue-500">💰 TSh <?= number_format($total_prescription_revenue, 0) ?></span>
+                · <span class="text-purple-500">💊 <?= number_format($total_prescriptions_count) ?> Rx</span>
+                · <span class="text-green-500">💰 TSh <?= number_format($total_prescription_revenue, 0) ?></span>
             <?php endif; ?>
             <?php if ($total_otc_sales_db > 0): ?>
                 · <span class="text-orange-500">🛒 <?= number_format($total_otc_sales_db) ?> OTC · TSh <?= number_format($total_otc_revenue_db, 0) ?></span>
             <?php endif; ?>
+            · <span class="text-blue-500">📊 Total Revenue: TSh <?= number_format($total_revenue, 0) ?></span>
         </div>
         
     <?php else: ?>
@@ -1646,12 +1842,101 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
         </div>
     <?php endif; ?>
 
+    <!-- ================================================================ -->
+    <!-- INVENTORY TABLE - Shows all medicines based on selected branch -->
+    <!-- ================================================================ -->
+    <div id="inventory-table" class="inventory-table-container animate-fade-in-up" style="animation-delay:0.25s;">
+        <div class="table-header">
+            <h3 class="table-title">
+                <i class="fas fa-boxes"></i>
+                Medicine Inventory
+                <span class="table-badge">
+                    <i class="fas fa-pills"></i> <?= count($inventory_items) ?> Medicines
+                </span>
+                <?php if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)): ?>
+                    <span class="table-badge" style="background:rgba(255,255,255,0.1);">
+                        <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
+                    </span>
+                <?php else: ?>
+                    <span class="table-badge" style="background:rgba(255,255,255,0.1);">
+                        <i class="fas fa-globe"></i> All Branches
+                    </span>
+                <?php endif; ?>
+            </h3>
+            <div>
+                <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="btn-sm btn-sm-primary" style="display:inline-flex;align-items:center;gap:4px;padding:6px 14px;border-radius:6px;background:rgba(255,255,255,0.15);color:white;text-decoration:none;font-size:0.7rem;font-weight:600;">
+                    <i class="fas fa-arrow-right"></i> View All
+                </a>
+            </div>
+        </div>
+        
+        <?php if (count($inventory_items) > 0): ?>
+            <div class="table-scroll">
+                <table class="inventory-table" id="inventoryTable">
+                    <thead>
+                        <tr>
+                            <th>Branch</th>
+                            <th>Medication Name</th>
+                            <th>Category</th>
+                            <th>Unit</th>
+                            <th>Quantity</th>
+                            <th>Selling Price</th>
+                            <th>Stock Status</th>
+                            <th>Expiry</th>
+                            <th>Batch #</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($inventory_items as $item): 
+                            $quantity = (int)$item['quantity'];
+                            $reorder_level = (int)$item['reorder_level'];
+                            $selling_price = (float)($item['selling_price'] ?? $item['unit_cost'] ?? 0);
+                            $unit = htmlspecialchars($item['unit'] ?? 'pcs');
+                        ?>
+                            <tr>
+                                <td>
+                                    <span class="font-semibold text-xs" style="color:var(--primary);">
+                                        <i class="fas fa-store-alt"></i> <?= htmlspecialchars($item['branch_name'] ?? 'N/A') ?>
+                                    </span>
+                                </td>
+                                <td class="font-medium"><?= htmlspecialchars($item['medication_name'] ?? 'N/A') ?></td>
+                                <td>
+                                    <span class="badge badge-info" style="font-size:0.55rem;padding:1px 8px;">
+                                        <?= htmlspecialchars($item['category'] ?? 'N/A') ?>
+                                    </span>
+                                </td>
+                                <td><?= $unit ?></td>
+                                <td class="font-semibold <?= $quantity <= 0 ? 'text-danger' : ($quantity <= $reorder_level ? 'text-warning' : 'text-success') ?>">
+                                    <?= number_format($quantity) ?>
+                                </td>
+                                <td>TSh <?= number_format($selling_price, 0) ?></td>
+                                <td><?= getInventoryStatusBadge($quantity, $reorder_level) ?></td>
+                                <td><?= getExpiryBadge($item['expiry_date'] ?? null) ?></td>
+                                <td class="font-mono text-xs"><?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="text-center py-8 text-gray-400">
+                <i class="fas fa-boxes text-3xl block mb-3" style="color:var(--border-color);"></i>
+                <p>No medicines found in inventory</p>
+                <?php if ($selected_branch_id !== 'all'): ?>
+                    <p class="text-xs">No inventory items for <?= htmlspecialchars($display_branch_name) ?></p>
+                <?php endif; ?>
+            </div>
+        <?php endif; ?>
+    </div>
+
     <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             Pharmacies - <?= $total_pharmacies ?> branches
+            <span class="text-gray-300 mx-2">|</span>
+            Inventory - <?= count($inventory_items) ?> medicines
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTime"><?= date('H:i:s') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1775,13 +2060,13 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     console.log('%c🏪 Branch: <?= htmlspecialchars($display_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📊 Total Pharmacies: <?= $total_pharmacies ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💊 Total Medicines: <?= number_format($total_medicines) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?> (Rx + OTC)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Prescriptions: <?= number_format($total_prescriptions_count) ?> (TSh <?= number_format($total_prescription_revenue, 0) ?>)', 'font-size:13px; color:#7C3AED;');
     console.log('%c🛒 OTC Sales: <?= number_format($total_otc_sales_db) ?> (TSh <?= number_format($total_otc_revenue_db, 0) ?>)', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Using tables: branches, users, medications_inventory, prescriptions, otc_sales', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ prescription_sales table removed - using prescriptions + prescription_items', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ net_amount removed - using total_amount from otc_sales', 'font-size:13px; color:#34D399;');
-    console.log('%c❌ Add Pharmacy Button: REMOVED', 'font-size:13px; color:#DC2626;');
+    console.log('%c📦 Inventory Items: <?= count($inventory_items) ?>', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ ONE GREEN Inventory button on top header only', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Inventory buttons removed from branch cards', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Total Revenue = Prescription Revenue + OTC Revenue (No double counting)', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

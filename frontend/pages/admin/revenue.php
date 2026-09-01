@@ -4,9 +4,10 @@
 // SUPER ADMIN - REVENUE REPORT PAGE - FIXED
 // BRAICK DISPENSARY - USING EXISTING DATABASE TABLES
 // FIXED: No undefined variables
-// FIXED: Revenue = Patient Bills (paid_amount) + OTC + Prescriptions
+// FIXED: Revenue = Patient Bills (paid_amount) + OTC ONLY
+// FIXED: Prescription is included in Patient Bills - NO DOUBLE COUNT
 // FIXED: Excludes OTC bills from bills table
-// FIXED: Prescription revenue from prescription_items table
+// FIXED: Prescription revenue from prescription_items table (DISPLAY ONLY)
 // FIXED: Header displays correctly with date/time
 // WITH DARK MODE SUPPORT - Toggle works
 // ================================================================
@@ -184,7 +185,7 @@ try {
 }
 
 // ================================================================
-// ✅ 3. PRESCRIPTION REVENUE - from prescription_items table
+// ✅ 3. PRESCRIPTION REVENUE - from prescription_items table (DISPLAY ONLY)
 // ================================================================
 $prescription_revenue = 0;
 $prescription_count = 0;
@@ -359,9 +360,10 @@ try {
 }
 
 // ================================================================
-// ✅ 9. TOTAL REVENUE = Patient Bills + OTC + Prescriptions
+// ✅ 9. TOTAL REVENUE = Patient Bills + OTC ONLY
+//     (Prescription is already included in Patient Bills)
 // ================================================================
-$total_revenue = $patient_bills_revenue + $otc_revenue + $prescription_revenue;
+$total_revenue = $patient_bills_revenue + $otc_revenue;
 
 // Total transactions = paid bills + OTC transactions + prescriptions
 $total_transactions = $patient_bills_count + $otc_count + $prescription_count;
@@ -450,7 +452,7 @@ for ($i = 11; $i >= 0; $i--) {
     $otc_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     $monthly_otc[] = (float)$otc_total;
     
-    // Prescriptions
+    // Prescriptions (DISPLAY ONLY - NOT ADDED TO TOTAL)
     $sql = "
         SELECT COALESCE(SUM(pi.total_price), 0) as total 
         FROM prescription_items pi
@@ -466,7 +468,8 @@ for ($i = 11; $i >= 0; $i--) {
     $pres_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     $monthly_prescription[] = (float)$pres_total;
     
-    $monthly_total[] = (float)($patient_total + $otc_total + $pres_total);
+    // TOTAL = Patient + OTC ONLY (Prescription already in Patient)
+    $monthly_total[] = (float)($patient_total + $otc_total);
 }
 
 // ================================================================
@@ -525,7 +528,7 @@ for ($i = 29; $i >= 0; $i--) {
     $otc_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     $daily_otc[] = (float)$otc_total;
     
-    // Prescriptions
+    // Prescriptions (DISPLAY ONLY - NOT ADDED TO TOTAL)
     $sql = "
         SELECT COALESCE(SUM(pi.total_price), 0) as total 
         FROM prescription_items pi
@@ -541,7 +544,8 @@ for ($i = 29; $i >= 0; $i--) {
     $pres_total = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     $daily_prescription[] = (float)$pres_total;
     
-    $daily_total[] = (float)($patient_total + $otc_total + $pres_total);
+    // TOTAL = Patient + OTC ONLY (Prescription already in Patient)
+    $daily_total[] = (float)($patient_total + $otc_total);
 }
 
 // ================================================================
@@ -1463,6 +1467,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="header-badge" style="background:rgba(96,165,250,0.2);border-color:rgba(96,165,250,0.3);color:#60A5FA;">
                     <i class="fas fa-receipt"></i> <?= number_format($total_transactions) ?> Transactions
                 </span>
+                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
+                    <i class="fas fa-prescription"></i> Presc: TSh <?= number_format($prescription_revenue, 0) ?> (In Bills)
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1486,7 +1493,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div>
                 <p class="stat-label">Total Revenue</p>
                 <p class="stat-value">TSh <?= number_format($total_revenue, 0) ?></p>
-                <p class="stat-sub">Bills + OTC + Prescriptions</p>
+                <p class="stat-sub">Bills + OTC (Presc in Bills)</p>
             </div>
         </div>
         
@@ -1510,13 +1517,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <!-- 4. Prescription Revenue -->
+        <!-- 4. Prescription Revenue (DISPLAY ONLY) -->
         <div class="stat-card card-prescription">
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div>
                 <p class="stat-label">Prescriptions</p>
                 <p class="stat-value">TSh <?= number_format($prescription_revenue, 0) ?></p>
-                <p class="stat-sub"><?= number_format($prescription_count) ?> dispensed</p>
+                <p class="stat-sub"><?= number_format($prescription_count) ?> dispensed (In Bills)</p>
             </div>
         </div>
         
@@ -1656,8 +1663,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </td>
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($otc_count) ?></td>
                     </tr>
-                    <tr>
-                        <td><span style="color:#7C3AED;">●</span> Prescriptions</td>
+                    <tr style="background:var(--primary-bg);">
+                        <td><span style="color:#7C3AED;">●</span> Prescriptions <span style="font-size:0.6rem;color:var(--text-secondary);">(included in Bills)</span></td>
                         <td style="text-align:right;font-weight:600;color:#7C3AED;">TSh <?= number_format($prescription_revenue, 0) ?></td>
                         <td style="text-align:right;color:var(--text-secondary);">
                             <?= $total_revenue > 0 ? round(($prescription_revenue / $total_revenue) * 100, 1) : 0 ?>%
@@ -1705,7 +1712,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <td style="text-align:right;color:var(--text-secondary);"><?= number_format($registration_count) ?></td>
                     </tr>
                     <tr class="total-row">
-                        <td style="font-weight:700;font-size:0.95rem;">TOTAL</td>
+                        <td style="font-weight:700;font-size:0.95rem;">TOTAL REVENUE</td>
                         <td style="text-align:right;font-weight:700;font-size:0.95rem;color:var(--primary);">TSh <?= number_format($total_revenue, 0) ?></td>
                         <td style="text-align:right;font-weight:700;font-size:0.95rem;color:var(--primary);">100%</td>
                         <td style="text-align:right;font-weight:700;font-size:0.95rem;color:var(--primary);"><?= number_format($total_transactions) ?></td>
@@ -1933,7 +1940,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             barPercentage: 0.3
                         },
                         {
-                            label: 'Prescriptions',
+                            label: 'Prescriptions (In Bills)',
                             data: monthlyPrescription,
                             backgroundColor: '#7C3AED',
                             borderRadius: 3,
@@ -2019,7 +2026,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             borderWidth: 2
                         },
                         {
-                            label: 'Prescriptions',
+                            label: 'Prescriptions (In Bills)',
                             data: dailyPrescription,
                             borderColor: '#7C3AED',
                             backgroundColor: 'rgba(124, 58, 237, 0.08)',
@@ -2027,7 +2034,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             tension: 0.4,
                             pointRadius: 1.5,
                             pointBackgroundColor: '#7C3AED',
-                            borderWidth: 2
+                            borderWidth: 2,
+                            borderDash: [4, 4]
                         }
                     ]
                 },
@@ -2094,15 +2102,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c   ├─ Patient Bills: TSh <?= number_format($patient_bills_revenue, 0) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c   ├─ OTC Sales: TSh <?= number_format($otc_revenue, 0) ?>', 'font-size:12px; color:#0891B2;');
-    console.log('%c   └─ Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c   └─ Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?> (DISPLAY ONLY - Included in Bills)', 'font-size:12px; color:#7C3AED;');
     console.log('%c💸 Expenses: TSh <?= number_format($total_expenses, 0) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit, 0) ?> (<?= $profit_percentage ?>%)', 'font-size:13px; color:#059669;');
     console.log('%c🌙 Dark Mode Toggle: WORKING', 'font-size:13px; color:#3B82F6;');
     console.log('%c✅ Header fixed with date/time display', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Revenue = Patient Bills + OTC + Prescriptions', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Total Revenue = Patient Bills + OTC ONLY', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Prescription is in Patient Bills - NO DOUBLE COUNT', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Uses paid_amount from bills (includes discounts)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Excludes OTC bills from bills table', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Prescription revenue from prescription_items table', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

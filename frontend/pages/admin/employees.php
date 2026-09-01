@@ -309,10 +309,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </p>
         </div>
         <div class="flex gap-2 flex-wrap">
-            <a href="add_employee.php?branch=<?= $selected_branch_id ?>" class="btn btn-blue btn-sm">
+            <!-- ADD EMPLOYEE BUTTON - LARGER SIZE -->
+            <a href="add_employee.php?branch=<?= $selected_branch_id ?>" class="btn btn-blue" style="padding: 10px 24px; font-size: 0.95rem; border-radius: 10px; min-height: 44px;">
                 <i class="fas fa-user-plus"></i> Add Employee
             </a>
-            <button onclick="location.reload()" class="btn btn-outline btn-sm">
+            <button onclick="location.reload()" class="btn btn-outline btn-sm" style="padding: 8px 16px; border-radius: 10px; min-height: 38px; font-size: 0.85rem;">
                 <i class="fas fa-sync-alt"></i> Refresh
             </button>
         </div>
@@ -816,6 +817,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .btn-success { background: #059669; color: white; }
     .btn-success:hover { background: #047857; }
     
+    .btn-blue {
+        background: #0B5ED7;
+        color: white;
+    }
+    .btn-blue:hover {
+        background: #0A4CA8;
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+    }
+    
+    .btn-outline {
+        background: transparent;
+        color: var(--text-secondary);
+        border: 2px solid var(--border-color);
+    }
+    .btn-outline:hover {
+        background: var(--bg-body);
+        border-color: #0B5ED7;
+        color: #0B5ED7;
+    }
+    
     /* Message Box */
     .message-box {
         padding: 12px 16px;
@@ -994,6 +1016,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             padding: 6px 8px !important;
             font-size: 0.7rem !important;
         }
+        .btn-blue {
+            padding: 8px 18px !important;
+            font-size: 0.85rem !important;
+            min-height: 38px !important;
+        }
     }
     
     @media (max-width: 480px) {
@@ -1009,6 +1036,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         .action-buttons {
             gap: 2px !important;
+        }
+        .btn-blue {
+            padding: 6px 14px !important;
+            font-size: 0.8rem !important;
+            min-height: 34px !important;
         }
     }
 </style>
@@ -1210,6 +1242,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c📌 Action Buttons: 3 buttons (View, Edit, Deactivate/Reactivate)', 'font-size:13px; color:#F59E0B;');
     console.log('%c📊 Tables: users, branches, activity_logs, notifications', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c🔵 Add Employee button size increased', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

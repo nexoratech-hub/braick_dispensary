@@ -6,6 +6,8 @@
 // FIXED: Prescription revenue from prescription_items table
 // FIXED: OTC revenue from otc_sales table
 // FIXED: Bills count excludes OTC bills (bill_number LIKE 'BILL-OTC-%')
+// FIXED: Total revenue = patient_bills_revenue + otc_revenue ONLY
+//        (Prescription is already included in patient_bills_revenue)
 // ================================================================
 
 // ================================================================
@@ -149,7 +151,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
     $results['otc_revenue'] = $otc_revenue;
     
-    // 3. PRESCRIPTION REVENUE - from prescription_items table
+    // 3. PRESCRIPTION REVENUE - from prescription_items table (FOR DISPLAY ONLY)
     $sql_prescription = "
         SELECT COALESCE(SUM(pi.total_price), 0) as prescription_revenue
         FROM prescription_items pi
@@ -166,8 +168,9 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['prescription_revenue'] ?? 0;
     $results['prescription_revenue'] = $prescription_revenue;
     
-    // 4. TOTAL REVENUE = Patient Bills + OTC + Prescriptions
-    $results['total_revenue'] = $patient_revenue + $otc_revenue + $prescription_revenue;
+    // 4. TOTAL REVENUE = Patient Bills + OTC ONLY
+    //    (Prescription is already included in patient_bills_revenue)
+    $results['total_revenue'] = $patient_revenue + $otc_revenue;
     
     // 5. TOTAL EXPENSES - from expenses table
     $sql_expenses = "
@@ -265,6 +268,7 @@ $financial = getFinancialSummary($db, $selected_branch_id);
 // ================================================================
 // BUILD QUERY FOR BRANCHES - SHOW ALL ACTIVE BRANCHES
 // FIXED: Uses correct table names and excludes OTC bills
+// FIXED: Total revenue = patient_bills_revenue + otc_revenue ONLY
 // ================================================================
 $query = "
     SELECT 
@@ -368,11 +372,7 @@ $query = "
                 (SELECT COALESCE(SUM(os.total_amount), 0) 
                  FROM otc_sales os
                  WHERE os.branch_id = b.id AND os.payment_status = 'paid')
-                +
-                (SELECT COALESCE(SUM(pi.total_price), 0) 
-                 FROM prescription_items pi
-                 INNER JOIN prescriptions p ON pi.prescription_id = p.id
-                 WHERE p.branch_id = b.id AND p.status = 'dispensed')
+                -- PRESCRIPTION REMOVED FROM TOTAL REVENUE (already in patient_bills)
             ), 
             0
         ) as total_revenue
@@ -1131,6 +1131,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .revenue-breakdown .item .amount.green { color: #059669; }
         .revenue-breakdown .item .amount.red { color: #DC2626; }
         .revenue-breakdown .item .amount.teal { color: #0D9488; }
+        .revenue-breakdown .item .amount.purple { color: #7C3AED; }
         
         .cashier-card .card-stats {
             display: grid;
@@ -1495,7 +1496,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="stat-content">
                 <p class="stat-label">Total Revenue</p>
                 <p class="stat-number">TSh <?= number_format($financial['total_revenue'], 0) ?></p>
-                <p class="stat-sub">Bills + OTC + Prescriptions</p>
+                <p class="stat-sub">Bills + OTC (Prescription included in Bills)</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
@@ -1522,13 +1523,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 4. Prescription Revenue - BLUE -->
-        <div class="stat-card-8 card-blue">
+        <!-- 4. Prescription Revenue - PURPLE (DISPLAY ONLY) -->
+        <div class="stat-card-8" style="background: linear-gradient(135deg, #7C3AED, #6D28D9);">
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Prescription Revenue</p>
                 <p class="stat-number">TSh <?= number_format($financial['prescription_revenue'], 0) ?></p>
-                <p class="stat-sub">From prescription_items</p>
+                <p class="stat-sub">(Included in Bills - DISPLAY ONLY)</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
@@ -1862,11 +1863,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c📊 Total Revenue: TSh <?= number_format($financial['total_revenue'], 0) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c   ├─ Patient Bills: TSh <?= number_format($financial['patient_revenue'], 0) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c   ├─ OTC Sales: TSh <?= number_format($financial['otc_revenue'], 0) ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c   └─ Prescriptions: TSh <?= number_format($financial['prescription_revenue'], 0) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c   └─ Prescriptions: TSh <?= number_format($financial['prescription_revenue'], 0) ?> (DISPLAY ONLY - Included in Bills)', 'font-size:12px; color:#7C3AED;');
     console.log('%c💸 Total Expenses: TSh <?= number_format($financial['total_expenses'], 0) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ FIXED: Revenue = Patient Bills + OTC + Prescriptions', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Total Revenue = Patient Bills + OTC ONLY', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Prescription is already in Patient Bills - NO DOUBLE COUNT', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FIXED: Excludes OTC bills from bills table (bill_number LIKE "BILL-OTC-%")', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Prescription revenue from prescription_items table', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FIXED: Patient bills use paid_amount (not total_amount)', 'font-size:13px; color:#34D399;');
 </script>
 

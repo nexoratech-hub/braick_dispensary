@@ -3,8 +3,10 @@
 // FILE: frontend/pages/admin/view_branch.php
 // VIEW BRANCH DETAILS - WITH SHARED HEADER & SIDEBAR
 // BRAICK DISPENSARY - USING EXISTING DATABASE TABLES
-// FIXED: Total Revenue uses paid_amount from paid bills only (no double counting)
-// FIXED: Excludes OTC bills
+// FIXED: Total Revenue = Patient Bills + OTC ONLY (No double counting)
+// FIXED: Prescription is included in Patient Bills - DISPLAY ONLY
+// FIXED: Excludes OTC bills from bills table
+// FIXED: 3 CARDS PER ROW (6 cards total = 2 rows of 3)
 // WITH DARK MODE SUPPORT & CLOCK
 // ================================================================
 
@@ -165,7 +167,7 @@ $stmt->execute([$branch_id]);
 $otc_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total_otc_revenue'] ?? 0);
 
 // ================================================================
-// ✅ PRESCRIPTION REVENUE - from prescription_items table
+// ✅ PRESCRIPTION REVENUE - from prescription_items table (DISPLAY ONLY)
 // ================================================================
 $stmt = $db->prepare("
     SELECT COALESCE(SUM(pi.total_price), 0) as total_prescription_revenue
@@ -178,9 +180,10 @@ $stmt->execute([$branch_id]);
 $prescription_revenue = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total_prescription_revenue'] ?? 0);
 
 // ================================================================
-// ✅ TOTAL REVENUE = Patient Bills + OTC + Prescriptions
+// ✅ TOTAL REVENUE = Patient Bills + OTC ONLY
+//     (Prescription is already included in Patient Bills)
 // ================================================================
-$total_revenue = $bill_revenue + $otc_revenue + $prescription_revenue;
+$total_revenue = $bill_revenue + $otc_revenue;
 
 // ================================================================
 // PENDING BILLS (from bills table, excludes OTC)
@@ -414,10 +417,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - 6 CARDS -->
+    <!-- STATS CARDS - 6 CARDS (3 PER ROW) -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         
+        <!-- 1. Total Employees -->
         <div class="stat-card blue">
             <div class="stat-icon"><i class="fas fa-users"></i></div>
             <div>
@@ -426,6 +430,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
         </div>
         
+        <!-- 2. Total Patients -->
         <div class="stat-card blue">
             <div class="stat-icon"><i class="fas fa-user-injured"></i></div>
             <div>
@@ -434,15 +439,17 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
         </div>
         
+        <!-- 3. Total Revenue -->
         <div class="stat-card green">
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
             <div>
                 <p class="stat-label">Total Revenue</p>
                 <p class="stat-value">TSh <?= number_format($total_revenue, 0) ?></p>
-                <p class="stat-sub">Bills: TSh <?= number_format($bill_revenue, 0) ?></p>
+                <p class="stat-sub">Bills + OTC (Prescription in Bills)</p>
             </div>
         </div>
         
+        <!-- 4. Total Expenses -->
         <div class="stat-card red">
             <div class="stat-icon"><i class="fas fa-arrow-up"></i></div>
             <div>
@@ -451,6 +458,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
         </div>
         
+        <!-- 5. Net Profit -->
         <div class="stat-card green">
             <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
             <div>
@@ -459,6 +467,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             </div>
         </div>
         
+        <!-- 6. Pending Revenue -->
         <div class="stat-card orange">
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
             <div>
@@ -559,8 +568,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <p style="font-size:1.3rem;font-weight:700;color:var(--success);margin:0;">TSh <?= number_format($total_revenue, 0) ?></p>
                     <div style="display:flex;gap:8px;font-size:0.55rem;color:var(--text-secondary);margin-top:4px;flex-wrap:wrap;">
                         <span>📋 Bills: TSh <?= number_format($bill_revenue, 0) ?></span>
-                        <span>💊 Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?></span>
                         <span>🏪 OTC: TSh <?= number_format($otc_revenue, 0) ?></span>
+                        <span style="font-style:italic;">💊 Presc: TSh <?= number_format($prescription_revenue, 0) ?> (in Bills)</span>
                     </div>
                 </div>
                 
@@ -759,7 +768,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- Quick Actions -->
-    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-5">
+    <div class="quick-actions-grid">
         <a href="add_employee.php?branch=<?= $branch_id ?>" class="quick-action">
             <span class="icon">👤</span>
             <span class="label">Add Employee</span>
@@ -1198,12 +1207,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
     
     /* ================================================================
-       STATS CARDS
+       STATS CARDS - 3 PER ROW (FIXED)
        ================================================================ */
     .stats-grid {
         display: grid;
-        grid-template-columns: repeat(6, 1fr);
-        gap: 16px;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 18px;
         margin-bottom: 28px;
     }
     
@@ -1217,6 +1226,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         border: none;
         cursor: default;
+        min-height: 90px;
     }
     
     .stat-card:hover {
@@ -1260,6 +1270,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         margin-top: 2px;
     }
     
+    /* Card Colors */
     .stat-card.blue { background: #1A56DB; }
     .stat-card.blue:hover { background: #1A3E8C; }
     .stat-card.green { background: #16A34A; }
@@ -1268,6 +1279,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     .stat-card.red:hover { background: #B91C1C; }
     .stat-card.orange { background: #D97706; }
     .stat-card.orange:hover { background: #B45309; }
+    
+    /* ================================================================
+       QUICK ACTIONS GRID
+       ================================================================ */
+    .quick-actions-grid {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 16px;
+        margin-top: 20px;
+    }
     
     /* ================================================================
        DETAIL CARDS
@@ -1529,31 +1550,51 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     }
     
+    /* ================================================================
+       RESPONSIVE - FIXED FOR 3 CARDS PER ROW
+       ================================================================ */
     @media (max-width: 1024px) {
         .main-content { margin-left: 0; padding: 16px; }
-        .stats-grid { grid-template-columns: repeat(3, 1fr); }
+        .stats-grid { 
+            grid-template-columns: repeat(2, 1fr); 
+        }
+        .quick-actions-grid {
+            grid-template-columns: repeat(2, 1fr);
+        }
     }
     
     @media (max-width: 768px) {
         .top-nav .datetime { display: none; }
         .page-header { padding: 16px 18px; }
         .page-header .page-title { font-size: 1.3rem; }
-        .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+        .stats-grid { 
+            grid-template-columns: 1fr 1fr; 
+            gap: 10px; 
+        }
         .stat-card { padding: 14px 16px; }
         .stat-card .stat-value { font-size: 1.2rem; }
         .stat-icon { width: 40px; height: 40px; font-size: 1rem; }
         .detail-card { padding: 14px 16px; }
         .detail-row { flex-direction: column; gap: 2px; }
         .grid-cols-2 { grid-template-columns: 1fr; }
+        .quick-actions-grid {
+            grid-template-columns: 1fr 1fr;
+        }
     }
     
     @media (max-width: 480px) {
         .main-content { padding: 10px; }
-        .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+        .stats-grid { 
+            grid-template-columns: 1fr; 
+            gap: 8px; 
+        }
         .stat-card { padding: 10px 12px; }
         .stat-card .stat-value { font-size: 1rem; }
         .stat-icon { width: 32px; height: 32px; font-size: 0.85rem; }
         .page-header .page-title { font-size: 1.1rem; }
+        .quick-actions-grid {
+            grid-template-columns: 1fr 1fr;
+        }
     }
     
     @keyframes fadeInUp {
@@ -1703,14 +1744,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?> (ID: <?= $branch_id ?>)', 'font-size:13px; color:#1A56DB;');
     console.log('%c👥 Employees: <?= $total_employees ?>, Patients: <?= $total_patients ?>', 'font-size:13px; color:#7B2FBE;');
     console.log('%c💰 Revenue Breakdown:', 'font-size:13px; color:#16A34A;');
-    console.log('%c   ├─ Patient Bills: TSh <?= number_format($bill_revenue, 0) ?>', 'font-size:12px; color:#16A34A;');
+    console.log('%c   ├─ Patient Bills: TSh <?= number_format($bill_revenue, 0) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c   ├─ OTC: TSh <?= number_format($otc_revenue, 0) ?>', 'font-size:12px; color:#0891B2;');
-    console.log('%c   └─ Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c   └─ Prescriptions: TSh <?= number_format($prescription_revenue, 0) ?> (DISPLAY ONLY - In Bills)', 'font-size:12px; color:#7C3AED;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#16A34A;');
     console.log('%c📤 Expenses: TSh <?= number_format($total_expenses, 0) ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit, 0) ?>', 'font-size:13px; color:#16A34A;');
     console.log('%c⏳ Pending: TSh <?= number_format($pending_revenue, 0) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ FIXED: Revenue = Patient Bills + OTC + Prescriptions (NO DOUBLE COUNTING)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Total Revenue = Patient Bills + OTC ONLY (Prescription in Bills)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: No double counting of prescriptions', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: 3 CARDS PER ROW (6 cards = 2 rows)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FIXED: Excludes OTC bills from bills table', 'font-size:13px; color:#34D399;');
     console.log('%c🕐 Dark Mode + Clock Support: ACTIVE', 'font-size:13px; color:#3B82F6;');
 </script>

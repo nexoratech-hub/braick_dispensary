@@ -8,6 +8,7 @@
 // FIXED: Only counts paid bills and paid bill_items
 // FIXED: Prescription revenue from prescription_items table
 // 6 CARDS ONLY: Total Revenue, Expenses, Net Profit, Patient Bills, OTC, Prescriptions
+// FIXED: Total Revenue = Patient Bills + OTC ONLY (Prescription is separate display)
 // ================================================================
 
 // ================================================================
@@ -126,9 +127,9 @@ try {
         AND bill_number NOT LIKE 'BILL-OTC-%'
     ");
     $stmt->execute([$cashier_id]);
-    $bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['bills_revenue'] ?? 0;
+    $patient_bills_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['bills_revenue'] ?? 0;
 } catch (Exception $e) {
-    $bills_revenue = 0;
+    $patient_bills_revenue = 0;
 }
 
 // 2. OTC REVENUE (from otc_sales table)
@@ -145,7 +146,7 @@ try {
     $otc_revenue = 0;
 }
 
-// 3. PRESCRIPTION REVENUE (from prescription_items table)
+// 3. PRESCRIPTION REVENUE (from prescription_items table) - FOR DISPLAY ONLY
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(pi.total_price), 0) as prescription_revenue
@@ -160,8 +161,11 @@ try {
     $prescription_revenue = 0;
 }
 
-// 4. TOTAL REVENUE = Patient Bills + OTC + Prescriptions
-$total_revenue = $bills_revenue + $otc_revenue + $prescription_revenue;
+// ================================================================
+// TOTAL REVENUE = Patient Bills + OTC ONLY (Prescription is separate)
+// FIXED: Removed prescription from total to avoid double counting
+// ================================================================
+$total_revenue = $patient_bills_revenue + $otc_revenue;
 
 // 5. EXPENSES (ONLY SELECTED BRANCH)
 try {
@@ -1308,7 +1312,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
             <p class="card-amount"><?= formatCurrency($total_revenue) ?></p>
             <p class="card-label">Total Revenue</p>
-            <p class="card-sub">Bills + OTC + Prescriptions</p>
+            <p class="card-sub">Patient Bills + OTC Sales</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1333,9 +1337,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <!-- 4. BILLS REVENUE - BLUE -->
         <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
-            <p class="card-amount"><?= formatCurrency($bills_revenue) ?></p>
+            <p class="card-amount"><?= formatCurrency($patient_bills_revenue) ?></p>
             <p class="card-label">Patient Bills</p>
-            <p class="card-sub">All paid patient bills</p>
+            <p class="card-sub">Includes prescriptions</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1348,12 +1352,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 6. PRESCRIPTION REVENUE - PURPLE -->
+        <!-- 6. PRESCRIPTION REVENUE - PURPLE (FOR DISPLAY ONLY) -->
         <a href="prescriptions.php?branch=<?= $cashier_id ?>" class="revenue-card card-purple">
             <div class="card-icon"><i class="fas fa-prescription"></i></div>
             <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
             <p class="card-label">Prescriptions</p>
-            <p class="card-sub">From prescription_items</p>
+            <p class="card-sub">Already included in bills</p>
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
@@ -1822,15 +1826,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c💰 Braick Dispensary - View Cashier (6 Cards)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c📊 6 Revenue Cards:', 'font-size:13px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c   ├─ Total Revenue: <?= formatCurrency($total_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   ├─ Total Revenue: <?= formatCurrency($total_revenue) ?> (Patient Bills + OTC)', 'font-size:12px; color:#0B5ED7;');
     console.log('%c   ├─ Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:12px; color:#DC2626;');
     console.log('%c   ├─ Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c   ├─ Patient Bills: <?= formatCurrency($bills_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   ├─ Patient Bills: <?= formatCurrency($patient_bills_revenue) ?> (includes prescriptions)', 'font-size:12px; color:#0B5ED7;');
     console.log('%c   ├─ OTC Sales: <?= formatCurrency($otc_revenue) ?>', 'font-size:12px; color:#0D9488;');
-    console.log('%c   └─ Prescriptions: <?= formatCurrency($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c   └─ Prescriptions: <?= formatCurrency($prescription_revenue) ?> (already included in bills)', 'font-size:12px; color:#7C3AED;');
     console.log('%c📄 Bills: <?= $cashier['paid_bills'] ?? 0 ?> Paid, <?= $cashier['pending_bills'] ?? 0 ?> Pending', 'font-size:13px; color:#D97706;');
     console.log('%c👥 Staff: <?= count($staff_list) ?> total (Cashiers: <?= $cashier_count ?>, Reception: <?= $reception_count ?>)', 'font-size:13px; color:#4F46E5;');
-    console.log('%c✅ 6 CARDS ONLY - Removed: Procedures, Lab Tests, Consultation', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: Prescription revenue is now correctly included in Patient Bills (no double counting)', 'font-size:13px; color:#34D399;');
     console.log('%c🌙 Dark Mode: WORKING | 🕐 Clock: WORKING', 'font-size:13px; color:#3B82F6;');
 </script>
 

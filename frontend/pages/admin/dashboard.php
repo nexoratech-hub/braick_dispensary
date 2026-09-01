@@ -117,6 +117,7 @@ $today = date('Y-m-d');
 //    Only bills with visit_id NOT NULL (consultation bills)
 //    Bills with status = 'paid'
 //    Ignores lab test status (pending or paid) because patient has already paid
+//    THIS INCLUDES: Consultation fees + Prescription items + Lab tests
 // ================================================================
 $stmt = $db->query("
     SELECT COALESCE(SUM(b.paid_amount), 0) as total 
@@ -140,7 +141,9 @@ $stmt = $db->query("
 $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 3. PRESCRIPTION REVENUE
+// ✅ 3. PRESCRIPTION REVENUE - FOR DISPLAY ONLY (NOT ADDED TO TOTAL)
+//    This is already included in patient_bills_revenue
+//    We keep this for display purposes only
 // ================================================================
 $stmt = $db->query("
     SELECT COALESCE(SUM(pi.total_price), 0) as total 
@@ -152,9 +155,11 @@ $stmt = $db->query("
 $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
-// ✅ 4. TOTAL REVENUE = Patient Bills (paid_amount) + OTC + Prescriptions
+// ✅ 4. TOTAL REVENUE = Patient Bills (paid_amount) + OTC
+//     PRESCRIPTIONS ARE ALREADY INCLUDED IN PATIENT BILLS
+//     DO NOT ADD prescription_revenue HERE - IT CAUSES DOUBLE COUNTING!
 // ================================================================
-$total_revenue = $patient_bills_revenue + $otc_revenue + $prescription_revenue;
+$total_revenue = $patient_bills_revenue + $otc_revenue;
 
 // ================================================================
 // ✅ 5. TOTAL EXPENSES
@@ -276,6 +281,7 @@ for ($i = 6; $i >= 0; $i--) {
     $daily_total = 0;
     
     // Bills (patient bills with visit_id) - uses paid_amount
+    // This already includes prescriptions
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(b.paid_amount), 0) as total 
         FROM bills b
@@ -299,17 +305,8 @@ for ($i = 6; $i >= 0; $i--) {
     $stmt->execute([$date]);
     $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
     
-    // Prescription Sales
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(pi.total_price), 0) as total 
-        FROM prescription_items pi
-        INNER JOIN prescriptions p ON pi.prescription_id = p.id
-        WHERE DATE(p.created_at) = ? 
-        AND p.status = 'dispensed'
-        $branch_filter_p
-    ");
-    $stmt->execute([$date]);
-    $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    // DO NOT add prescription sales here separately
+    // They are already included in bills paid_amount above
     
     $chart_values[] = (float)$daily_total;
 }
@@ -1251,18 +1248,18 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 8 CARDS - SOLID COLORS -->
+    <!-- 8 CARDS - SOLID COLORS WITH CORRECT NAVIGATION LINKS -->
     <!-- ================================================================ -->
     <div class="stat-grid">
         
-        <!-- 1. TOTAL REVENUE -->
-        <a href="reports.php?type=revenue&branch=<?= $selected_branch_id ?>" class="stat-card card-revenue">
+        <!-- 1. TOTAL REVENUE -> revenue.php -->
+        <a href="revenue.php?branch=<?= $selected_branch_id ?>" class="stat-card card-revenue">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Total Revenue</p>
                         <p class="stat-number">TSh <?= number_format($total_revenue) ?></p>
-                        <p class="stat-sub">Bills + OTC + Prescriptions</p>
+                        <p class="stat-sub">Bills + OTC (Prescriptions included in Bills)</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
                 </div>
@@ -1271,8 +1268,8 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 2. TOTAL EXPENSES -->
-        <a href="../cashier/expenses.php?branch=<?= $selected_branch_id ?>" class="stat-card card-expenses">
+        <!-- 2. TOTAL EXPENSES -> expenses.php -->
+        <a href="expenses.php?branch=<?= $selected_branch_id ?>" class="stat-card card-expenses">
             <div class="card-content">
                 <div class="card-top">
                     <div>
@@ -1287,8 +1284,8 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 3. NET PROFIT -->
-        <a href="reports.php?type=profit&branch=<?= $selected_branch_id ?>" class="stat-card card-profit">
+        <!-- 3. NET PROFIT -> profit.php -->
+        <a href="profit.php?branch=<?= $selected_branch_id ?>" class="stat-card card-profit">
             <div class="card-content">
                 <div class="card-top">
                     <div>
@@ -1315,7 +1312,7 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 4. PRESCRIPTION SALES -->
+        <!-- 4. PRESCRIPTION SALES -> prescriptions.php -->
         <a href="prescriptions.php?branch=<?= $selected_branch_id ?>" class="stat-card card-prescription">
             <div class="card-content">
                 <div class="card-top">
@@ -1323,16 +1320,17 @@ include_once '../../components/admin_sidebar.php';
                         <p class="stat-label">Prescription Sales</p>
                         <p class="stat-number">TSh <?= number_format($prescription_revenue) ?></p>
                         <p class="stat-sub"><?= $prescription_count ?> prescriptions</p>
+                        <p class="stat-sub" style="font-size: 0.5rem; opacity: 0.7;">* Included in Bills Revenue</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-prescription"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-pills"></i> Dispensed</div>
+                <div class="stat-trend"><i class="fas fa-pills"></i> Dispensed (Display Only)</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 5. OTC SALES -->
-        <a href="../pharmacy/otc_sales.php?branch=<?= $selected_branch_id ?>" class="stat-card card-otc">
+        <!-- 5. OTC SALES -> otc_sales.php -->
+        <a href="../admin/otc_sales.php?branch=<?= $selected_branch_id ?>" class="stat-card card-otc">
             <div class="card-content">
                 <div class="card-top">
                     <div>
@@ -1347,7 +1345,7 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 6. MEDICATION STOCK -->
+        <!-- 6. MEDICATION STOCK -> inventory.php -->
         <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-stock">
             <div class="card-content">
                 <div class="card-top">
@@ -1371,7 +1369,7 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 7. MEDICATION EXPIRY -->
+        <!-- 7. MEDICATION EXPIRY -> inventory.php?filter=expired -->
         <a href="inventory.php?filter=expired&branch=<?= $selected_branch_id ?>" class="stat-card card-expiry">
             <div class="card-content">
                 <div class="card-top">
@@ -1395,14 +1393,14 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 8. MEDICAL EQUIPMENT - Shows TOTAL EQUIPMENT count -->
+        <!-- 8. MEDICAL EQUIPMENT -> equipment_inventory.php -->
         <a href="equipment_inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-equipment">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Medical Equipment</p>
                         <p class="stat-number">
-                            <?= number_format($total_equipment) ?>  <!-- Shows 22 (Total Equipment) -->
+                            <?= number_format($total_equipment) ?>
                         </p>
                         <div class="stat-badge-row" style="flex-wrap: wrap; gap: 3px;">
                             <span class="stat-badge" style="background: rgba(255,255,255,0.15);"><i class="fas fa-boxes"></i> Total: <?= $total_equipment ?></span>
@@ -1702,8 +1700,9 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c   ├─ Patient Bills (paid_amount): TSh <?= number_format($patient_bills_revenue) ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c   ├─ OTC Sales: TSh <?= number_format($otc_revenue) ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c   └─ Prescriptions: TSh <?= number_format($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
+    console.log('%c   │  └─ Includes: Consultation + Prescriptions + Lab Tests', 'font-size:11px; color:#64748B;');
+    console.log('%c   └─ OTC Sales: TSh <?= number_format($otc_revenue) ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c💊 Prescription Revenue (Display Only - Already in Bills): TSh <?= number_format($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c💸 Total Expenses: TSh <?= number_format($total_expenses) ?>', 'font-size:13px; color:#E11D48;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit) ?> (<?= $profit_percentage ?>%)', 'font-size:13px; color:<?= $net_profit >= 0 ? '#059669' : '#EF4444' ?>;');
     console.log('%c🔬 Medical Equipment: <?= $total_equipment ?> total (Out: <?= $equip_out_of_stock ?>, Low: <?= $equip_low_stock ?>, Expired: <?= $equip_expired ?>, Soon: <?= $equip_expiring_soon ?>)', 'font-size:13px; color:#4F46E5;');
@@ -1712,6 +1711,17 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c✅ FIXED: Lab test status ignored - patient already paid', 'font-size:13px; color:#059669;');
     console.log('%c✅ FIXED: OTC from otc_sales table', 'font-size:13px; color:#059669;');
     console.log('%c✅ FIXED: Equipment shows TOTAL <?= $total_equipment ?> items (not issues)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ FIXED: Prescription NOT double-counted in total revenue', 'font-size:13px; color:#059669; font-weight:bold;');
+    console.log('%c📊 Revenue Formula: Total = Bills(paid_amount) + OTC', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
+    console.log('%c🔗 Navigation Links Updated:', 'font-size:13px; color:#4F46E5; font-weight:bold;');
+    console.log('%c   ├─ Revenue → revenue.php', 'font-size:11px; color:#4F46E5;');
+    console.log('%c   ├─ Expenses → expenses.php', 'font-size:11px; color:#4F46E5;');
+    console.log('%c   ├─ Profit → profit.php', 'font-size:11px; color:#4F46E5;');
+    console.log('%c   ├─ Prescriptions → prescriptions.php', 'font-size:11px; color:#4F46E5;');
+    console.log('%c   ├─ OTC → ../pharmacy/otc_sales.php', 'font-size:11px; color:#4F46E5;');
+    console.log('%c   ├─ Stock → inventory.php', 'font-size:11px; color:#4F46E5;');
+    console.log('%c   ├─ Expiry → inventory.php?filter=expired', 'font-size:11px; color:#4F46E5;');
+    console.log('%c   └─ Equipment → equipment_inventory.php', 'font-size:11px; color:#4F46E5;');
 </script>
 
 </body>
