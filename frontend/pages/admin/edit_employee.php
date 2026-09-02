@@ -2,7 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_employee.php
 // SUPER ADMIN - EDIT EMPLOYEE
-// BRAICK DISPENSARY - FIXED WITH PASSWORD INVALIDATION
+// BRAICK DISPENSARY - UPDATED WITH NEW DESIGN
 // ================================================================
 
 // ================================================================
@@ -88,6 +88,30 @@ if (!$employee) {
 }
 
 // ================================================================
+// GET EMPLOYEE ROLES (from employee_roles table)
+// ================================================================
+$employee_roles = [];
+try {
+    $stmt = $db->prepare("SELECT role_name FROM employee_roles WHERE user_id = ?");
+    $stmt->execute([$employee_id]);
+    $employee_roles = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $employee_roles = [$employee['role']];
+}
+
+// ================================================================
+// GET EMPLOYEE DEPARTMENTS
+// ================================================================
+$employee_departments = [];
+try {
+    $stmt = $db->prepare("SELECT department_id FROM employee_departments WHERE user_id = ?");
+    $stmt->execute([$employee_id]);
+    $employee_departments = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $employee_departments = [];
+}
+
+// ================================================================
 // GET STATISTICS
 // ================================================================
 $total_employees = 0;
@@ -106,36 +130,59 @@ $total_branches = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 // GET BRANCHES
 // ================================================================
 $branches_list = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+$stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'active' ORDER BY name");
 $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
 // AVAILABLE ROLES
 // ================================================================
 $available_roles = [
-    'doctor' => 'Medical Doctor',
-    'pharmacy' => 'Pharmacy Staff',
-    'reception' => 'Receptionist',
-    'laboratory' => 'Lab Technician',
-    'cashier' => 'Cashier',
-    'admin' => 'Administrator'
+    ['name' => 'doctor', 'label' => 'Doctor', 'icon' => 'fa-user-md', 'color' => '#0B5ED7'],
+    ['name' => 'reception', 'label' => 'Reception', 'icon' => 'fa-user-tie', 'color' => '#059669'],
+    ['name' => 'pharmacy', 'label' => 'Pharmacy', 'icon' => 'fa-pills', 'color' => '#D97706'],
+    ['name' => 'laboratory', 'label' => 'Laboratory', 'icon' => 'fa-microscope', 'color' => '#7C3AED'],
+    ['name' => 'cashier', 'label' => 'Cashier', 'icon' => 'fa-cash-register', 'color' => '#0D9488']
 ];
 
 // ================================================================
-// GENERATE PASSWORD FUNCTION
+// GET DEPARTMENTS
 // ================================================================
-function generatePassword($full_name, $branch_id, $user_id) {
+$departments = [];
+$stmt = $db->query("SELECT id, category_name, description, icon, color FROM service_categories WHERE is_active = 1 ORDER BY category_name");
+while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $departments[] = $row;
+}
+
+// ================================================================
+// GENERATE PASSWORD FUNCTION - NEW FORMAT
+// ================================================================
+function generatePassword($full_name, $branch_id, $user_id = null) {
+    // Clean name and get first 4 letters (mixed case)
     $clean_name = preg_replace('/[^a-zA-Z]/', '', $full_name);
-    $name_part = strtoupper(substr($clean_name, 0, 4));
+    $name_part = substr($clean_name, 0, 4);
+    
+    // Ensure at least 3 characters
     if (strlen($name_part) < 3) {
-        $name_part = 'USER';
+        $name_part = 'User';
     }
     
-    $branch_code = 'BR' . str_pad($branch_id, 2, '0', STR_PAD_LEFT);
-    $user_code = 'UID' . str_pad($user_id, 4, '0', STR_PAD_LEFT);
+    // Capitalize first letter, rest lowercase
+    $name_part = ucfirst(strtolower($name_part));
     
+    // Get branch code (BR + 2-digit branch ID)
+    $branch_code = 'BR' . str_pad($branch_id, 2, '0', STR_PAD_LEFT);
+    
+    // Get user ID part (UID + last 2 digits of user_id or random)
+    if ($user_id && $user_id > 0) {
+        $user_code = 'U' . str_pad($user_id, 2, '0', STR_PAD_LEFT);
+    } else {
+        $user_code = 'U' . rand(10, 99);
+    }
+    
+    // Combine: Name(4) + Branch(4) + User(3) = 11 characters
     $password = $name_part . $branch_code . $user_code;
     
+    // Ensure exactly 8+ characters
     if (strlen($password) < 8) {
         $password .= rand(100, 999);
     }
@@ -181,9 +228,10 @@ $form_data = [
     'email' => $employee['email'],
     'phone' => $employee['phone'] ?? '',
     'branch_id' => $employee['branch_id'],
-    'role' => $employee['role'],
-    'status' => $employee['status'] ?? 'active',
+    'selected_roles' => $employee_roles,
+    'selected_departments' => $employee_departments,
     'specialty' => $employee['specialty'] ?? '',
+    'status' => $employee['status'] ?? 'active',
     'password' => '',
     'password_changed' => false
 ];
@@ -193,13 +241,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     $username = trim($_POST['username'] ?? '');
     $email = trim($_POST['email'] ?? '');
     $phone = trim($_POST['phone'] ?? '');
-    $role = $_POST['role'] ?? 'doctor';
     $status = $_POST['status'] ?? 'active';
     $branch_id = (int)($_POST['branch_id'] ?? 0);
     $specialty = trim($_POST['specialty'] ?? '');
     $password = $_POST['password'] ?? '';
     $confirm_password = $_POST['confirm_password'] ?? '';
     $generated_password = $_POST['generated_password'] ?? '';
+    $selected_roles = $_POST['roles'] ?? [];
+    $selected_departments = $_POST['departments'] ?? [];
     $password_changed = false;
     
     // Validation
@@ -215,8 +264,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
     if ($branch_id <= 0) {
         $errors[] = 'Branch is required';
     }
+    if (empty($selected_roles)) {
+        $errors[] = 'At least one role must be selected';
+    }
     
-    // Password handling - FIXED: Proper invalidation
+    // Validate roles: Max 2 roles, if 2 roles one must be reception
+    if (count($selected_roles) > 2) {
+        $errors[] = 'Maximum of 2 roles allowed per employee';
+    }
+    if (count($selected_roles) == 2 && !in_array('reception', $selected_roles)) {
+        $errors[] = 'If assigning 2 roles, one must be Reception';
+    }
+    
+    // Password handling - NOT REQUIRED for editing
     $new_password = null;
     if (!empty($generated_password)) {
         $new_password = $generated_password;
@@ -233,6 +293,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
             $password_changed = true;
         }
     }
+    // If password is empty, keep the old password (no change)
     
     // Check if username exists
     if (empty($errors) && $username !== $employee['username']) {
@@ -257,6 +318,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
         try {
             $db->beginTransaction();
             
+            // Primary role = first selected role
+            $primary_role = $selected_roles[0];
+            
             $sql = "UPDATE users SET 
                     full_name = ?, 
                     username = ?, 
@@ -266,21 +330,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
                     branch_id = ?, 
                     status = ?, 
                     specialty = ?";
-            $params = [$full_name, $username, $email, $phone, $role, $branch_id, $status, $specialty];
+            $params = [$full_name, $username, $email, $phone, $primary_role, $branch_id, $status, $specialty];
             
-            // ================================================================
-            // FIXED: Password invalidation - set is_default_password = 0
-            // and password_changed_at = NOW() when password is changed
-            // ================================================================
+            // Update password only if changed
             if ($password_changed && $new_password !== null) {
                 $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
                 $sql .= ", password = ?";
                 $params[] = $hashed_password;
-                
-                // Invalidate old password - set is_default_password = 0
                 $sql .= ", is_default_password = 0";
-                
-                // Set password_changed_at to NOW() to track when password was changed
                 $sql .= ", password_changed_at = NOW()";
             }
             
@@ -290,17 +347,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
             $stmt = $db->prepare($sql);
             
             if ($stmt->execute($params)) {
+                // Update employee_roles
+                try {
+                    // Delete old roles
+                    $stmt = $db->prepare("DELETE FROM employee_roles WHERE user_id = ?");
+                    $stmt->execute([$employee_id]);
+                    
+                    // Insert new roles
+                    foreach ($selected_roles as $role_name) {
+                        $stmt = $db->prepare("INSERT INTO employee_roles (user_id, role_name, assigned_by) VALUES (?, ?, ?)");
+                        $stmt->execute([$employee_id, $role_name, $_SESSION['user_id']]);
+                    }
+                } catch (Exception $e) {
+                    error_log("Employee roles update error: " . $e->getMessage());
+                }
+                
+                // Update employee_departments
+                try {
+                    // Delete old departments
+                    $stmt = $db->prepare("DELETE FROM employee_departments WHERE user_id = ?");
+                    $stmt->execute([$employee_id]);
+                    
+                    // Insert new departments
+                    foreach ($selected_departments as $dept_id) {
+                        $stmt = $db->prepare("INSERT INTO employee_departments (user_id, department_id, assigned_by) VALUES (?, ?, ?)");
+                        $stmt->execute([$employee_id, $dept_id, $_SESSION['user_id']]);
+                    }
+                } catch (Exception $e) {
+                    error_log("Employee departments update error: " . $e->getMessage());
+                }
+                
                 // Log activity
                 try {
                     $stmt = $db->prepare("
                         INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
                         VALUES (?, ?, 'employee_updated', ?, NOW())
                     ");
-                    $details = "Employee {$full_name} updated (Role: {$role})";
+                    $details = "Employee {$full_name} updated (Roles: " . implode(', ', $selected_roles) . ")";
                     if ($password_changed) {
-                        $details .= " - Password UPDATED and INVALIDATED old password";
+                        $details .= " - Password UPDATED";
                     }
-                    $stmt->execute([$user_id, $branch_id, $details]);
+                    $stmt->execute([$_SESSION['user_id'], $branch_id, $details]);
                 } catch (Exception $e) {}
                 
                 $db->commit();
@@ -309,7 +396,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
                 if ($password_changed && $new_password !== null) {
                     $message .= "<br>🔑 <strong>New Password:</strong> <span style='font-family:monospace;background:#1E293B;color:#34D399;padding:4px 12px;border-radius:6px;'>" . htmlspecialchars($new_password) . "</span>";
                     $message .= "<br>📋 Please copy this password and share with the employee.";
-                    $message .= "<br>🔒 <span style='color:#EF4444;'>Old password is now INVALID</span>";
                 }
                 $message_type = 'success';
                 
@@ -324,9 +410,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
                     'email' => $employee['email'],
                     'phone' => $employee['phone'] ?? '',
                     'branch_id' => $employee['branch_id'],
-                    'role' => $employee['role'],
-                    'status' => $employee['status'] ?? 'active',
+                    'selected_roles' => $selected_roles,
+                    'selected_departments' => $selected_departments,
                     'specialty' => $employee['specialty'] ?? '',
+                    'status' => $employee['status'] ?? 'active',
                     'password_changed' => $password_changed
                 ];
                 
@@ -355,9 +442,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
             'email' => $email,
             'phone' => $phone,
             'branch_id' => $branch_id,
-            'role' => $role,
-            'status' => $status,
+            'selected_roles' => $selected_roles,
+            'selected_departments' => $selected_departments,
             'specialty' => $specialty,
+            'status' => $status,
             'password' => $password ?? '',
             'password_changed' => $password_changed
         ];
@@ -388,6 +476,9 @@ include_once '../../components/admin_sidebar.php';
     <link rel="icon" href="<?= $logo_url ?>" type="image/png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
+        /* ================================================================ */
+        /* VARIABLES - SAME AS ADD EMPLOYEE */
+        /* ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -435,6 +526,9 @@ include_once '../../components/admin_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease;
         }
         
+        /* ================================================================ */
+        /* TOP NAV - SAME AS ADD EMPLOYEE */
+        /* ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -514,7 +608,6 @@ include_once '../../components/admin_sidebar.php';
             border-radius: 50%;
             border: 2px solid var(--bg-nav);
         }
-        
         .notif-dot.has-notif { background: var(--danger); }
         .notif-dot.no-notif { background: var(--gray-400); }
         
@@ -549,6 +642,9 @@ include_once '../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        /* ================================================================ */
+        /* PAGE HEADER */
+        /* ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: var(--radius-lg);
@@ -638,91 +734,95 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        /* ================================================================ */
+        /* FORM CARD - SAME AS ADD EMPLOYEE */
+        /* ================================================================ */
         .form-card {
             background: var(--bg-card);
-            border-radius: var(--radius-lg);
-            padding: 32px 36px;
+            border-radius: 20px;
+            padding: 28px 32px;
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.04);
             max-width: 1100px;
             margin: 0 auto;
-            box-shadow: var(--shadow-md);
         }
         
         .form-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-lg);
+            border-color: #0B5ED7;
+            box-shadow: 0 8px 30px rgba(11, 94, 215, 0.08);
         }
         
-        .form-card .form-header {
+        .form-header {
             display: flex;
             align-items: center;
             gap: 16px;
-            margin-bottom: 28px;
             padding-bottom: 20px;
+            margin-bottom: 24px;
             border-bottom: 2px solid var(--border-color);
         }
         
-        .form-card .form-header .form-icon {
-            width: 52px;
-            height: 52px;
-            background: var(--primary-gradient);
-            border-radius: 14px;
+        .form-header-icon {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
-            font-size: 1.4rem;
+            font-size: 1.6rem;
             flex-shrink: 0;
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.25);
+            background: linear-gradient(135deg, #0B5ED7, #1A73E8);
+            color: white;
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
         }
         
-        .form-card .form-header .form-title {
+        .form-header h3 {
             font-size: 1.2rem;
-            font-weight: 600;
+            font-weight: 700;
             color: var(--text-primary);
+            margin: 0;
         }
         
-        .form-card .form-header .form-subtitle {
-            font-size: 0.8rem;
+        .form-header p {
+            font-size: 0.85rem;
             color: var(--text-secondary);
-            margin-top: 2px;
+            margin: 0;
         }
         
         .form-label {
-            font-size: 0.78rem;
+            font-size: 0.85rem;
             font-weight: 600;
             color: var(--text-primary);
-            margin-bottom: 5px;
+            margin-bottom: 6px;
             display: block;
         }
         
-        .form-label .required { color: var(--danger); margin-left: 2px; }
-        .form-label .label-icon { margin-right: 4px; color: var(--primary); }
-        .form-label .label-badge {
-            font-weight: 400;
-            font-size: 0.6rem;
-            padding: 1px 10px;
-            border-radius: 12px;
-            background: var(--gray-100);
-            color: var(--text-secondary);
-            margin-left: 6px;
+        .form-label i {
+            width: 20px;
+            text-align: center;
+            font-size: 0.85rem;
+        }
+        
+        .form-label .required {
+            color: #EF4444;
+            margin-left: 2px;
         }
         
         .form-control {
             width: 100%;
             padding: 10px 16px;
             border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            font-size: 0.85rem;
+            border-radius: 12px;
+            font-size: 0.9rem;
             transition: all 0.3s ease;
             outline: none;
             background: var(--bg-card);
             color: var(--text-primary);
+            font-family: 'Inter', 'Segoe UI', sans-serif;
         }
         
         .form-control:focus {
-            border-color: var(--primary);
+            border-color: #0B5ED7;
             box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
         }
         
@@ -731,13 +831,93 @@ include_once '../../components/admin_sidebar.php';
             opacity: 0.5;
         }
         
-        select.form-control { appearance: auto; cursor: pointer; }
+        .form-control:disabled {
+            background: var(--bg-body);
+            color: var(--text-secondary);
+            cursor: not-allowed;
+        }
         
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-        .form-row { margin-bottom: 20px; }
+        /* Password Input Group */
+        .password-input-group {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
         
-        .form-row-icon { position: relative; }
-        .form-row-icon .form-control { padding-left: 44px; }
+        .password-input-group .form-control {
+            padding-right: 50px;
+        }
+        
+        .password-input-group .password-toggle {
+            position: absolute;
+            right: 12px;
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 6px 8px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+            border-radius: 8px;
+        }
+        
+        .password-input-group .password-toggle:hover {
+            color: #0B5ED7;
+            background: var(--bg-body);
+        }
+        
+        .password-input-group .password-toggle i {
+            pointer-events: none;
+        }
+        
+        .btn-generate {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            background: #0B5ED7;
+            color: white;
+            white-space: nowrap;
+            min-height: 34px;
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
+        }
+        
+        .btn-generate:hover {
+            background: #0A4CA8;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 14px rgba(11, 94, 215, 0.35);
+        }
+        
+        .btn-generate:active {
+            transform: translateY(0px);
+        }
+        
+        .btn-generate i {
+            font-size: 0.8rem;
+        }
+        
+        .password-actions {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-top: 4px;
+        }
+        
+        .form-row-icon {
+            position: relative;
+        }
+        
+        .form-row-icon .form-control {
+            padding-left: 44px;
+        }
+        
         .form-row-icon .input-icon {
             position: absolute;
             left: 14px;
@@ -746,229 +926,167 @@ include_once '../../components/admin_sidebar.php';
             color: var(--text-secondary);
             font-size: 1rem;
             pointer-events: none;
+            transition: color 0.3s ease;
         }
         
+        .form-row-icon .form-control:focus + .input-icon,
+        .form-row-icon .form-control:focus ~ .input-icon {
+            color: #0B5ED7;
+        }
+        
+        /* ================================================================ */
+        /* CHECKBOX GROUP - SAME AS ADD EMPLOYEE */
+        /* ================================================================ */
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+            padding: 12px 14px;
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            background: var(--bg-body);
+            min-height: 60px;
+            transition: border-color 0.3s ease;
+        }
+        
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 14px;
+            border-radius: 10px;
+            background: var(--bg-card);
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+        
+        .checkbox-item:hover {
+            border-color: #0B5ED7;
+            background: #E8F0FE;
+            transform: translateY(-1px);
+        }
+        
+        [data-theme="dark"] .checkbox-item:hover {
+            background: #1E3A5F;
+        }
+        
+        .checkbox-item.checked {
+            border-color: #0B5ED7;
+            background: #E8F0FE;
+        }
+        
+        [data-theme="dark"] .checkbox-item.checked {
+            background: #1E3A5F;
+        }
+        
+        .checkbox-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            accent-color: #0B5ED7;
+            cursor: pointer;
+            flex-shrink: 0;
+        }
+        
+        .checkbox-item label {
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--text-primary);
+            cursor: pointer;
+            width: 100%;
+        }
+        
+        .checkbox-item .role-desc {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            font-weight: 400;
+            display: block;
+            opacity: 0.7;
+        }
+        
+        .role-badge-doctor { border-color: #0B5ED7; }
+        .role-badge-reception { border-color: #059669; }
+        .role-badge-pharmacy { border-color: #D97706; }
+        .role-badge-laboratory { border-color: #7C3AED; }
+        .role-badge-cashier { border-color: #0D9488; }
+        
+        /* ================================================================ */
+        /* BUTTONS */
+        /* ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
-            gap: 8px;
+            justify-content: center;
+            gap: 10px;
             padding: 10px 24px;
-            border-radius: var(--radius);
+            border-radius: 12px;
             font-weight: 600;
-            font-size: 0.85rem;
+            font-size: 0.9rem;
             transition: all 0.3s ease;
             cursor: pointer;
             border: none;
             text-decoration: none;
+            min-height: 44px;
+            min-width: 120px;
         }
-        
-        .btn:hover { transform: translateY(-2px); }
         
         .btn-primary {
-            background: var(--primary-gradient);
+            background: linear-gradient(135deg, #0B5ED7, #1A73E8);
             color: white;
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
         }
-        .btn-primary:hover { box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35); }
+        
+        .btn-primary:hover {
+            background: linear-gradient(135deg, #0A4CA8, #1557B0);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4);
+        }
+        
+        .btn-primary:active {
+            transform: translateY(0px);
+        }
         
         .btn-outline {
             background: transparent;
-            color: var(--text-secondary);
+            color: var(--text-primary);
             border: 2px solid var(--border-color);
         }
-        .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
         
-        .btn-sm { padding: 5px 14px; font-size: 0.75rem; border-radius: 8px; }
+        .btn-outline:hover {
+            background: var(--bg-body);
+            border-color: #0B5ED7;
+            color: #0B5ED7;
+            transform: translateY(-2px);
+        }
+        
+        .btn-sm {
+            padding: 6px 16px;
+            font-size: 0.8rem;
+            min-height: 36px;
+            min-width: 90px;
+        }
         
         .form-actions {
             display: flex;
+            flex-wrap: wrap;
             gap: 12px;
-            padding-top: 20px;
-            margin-top: 20px;
+            padding-top: 24px;
+            margin-top: 24px;
             border-top: 2px solid var(--border-color);
-            flex-wrap: wrap;
-        }
-        
-        .badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            padding: 2px 10px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            color: white;
-            letter-spacing: 0.02em;
-        }
-        
-        .badge-success { background: var(--success); }
-        .badge-danger { background: var(--danger); }
-        .badge-warning { background: var(--warning); color: #1E293B; }
-        .badge-info { background: var(--primary); }
-        .badge-secondary { background: #64748B; }
-        
-        .password-section {
-            background: var(--primary-bg);
-            border-radius: var(--radius);
-            padding: 16px 18px;
-            border: 2px solid var(--primary);
-            margin-top: 8px;
-        }
-        
-        .password-section .password-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-        }
-        
-        .password-section .form-group { position: relative; }
-        
-        .password-section .form-group .password-toggle {
-            position: absolute;
-            right: 10px;
-            top: 50%;
-            transform: translateY(-50%);
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            cursor: pointer;
-            padding: 4px;
-            font-size: 0.9rem;
-        }
-        
-        .password-section .form-group .password-toggle:hover { color: var(--primary); }
-        
-        .generate-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 18px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            cursor: pointer;
-            border: none;
-            background: var(--success);
-            color: white;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-            min-height: 38px;
-        }
-        
-        .generate-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(5, 150, 105, 0.4);
-            background: #047857;
-        }
-        
-        .generated-password-box {
-            background: #1E293B;
-            color: #34D399;
-            padding: 10px 16px;
-            border-radius: 8px;
-            font-family: 'Courier New', monospace;
-            font-size: 0.95rem;
-            font-weight: 600;
-            display: none;
-            margin-top: 10px;
-            border: 1px solid #334155;
-            word-break: break-all;
-        }
-        
-        [data-theme="dark"] .generated-password-box {
-            background: #0F172A;
-            border-color: #1E293B;
-        }
-        
-        .generated-password-box .copy-btn {
-            background: rgba(255,255,255,0.1);
-            border: none;
-            color: #94A3B8;
-            padding: 3px 12px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 0.65rem;
-            margin-left: 10px;
-        }
-        
-        .generated-password-box .copy-btn:hover {
-            background: rgba(255,255,255,0.2);
-            color: white;
-        }
-        
-        .password-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 0.65rem;
-            font-weight: 500;
-            padding: 2px 10px;
-            border-radius: 12px;
-            background: #ECFDF5;
-            color: #059669;
-            border: 1px solid #6EE7B7;
-        }
-        
-        [data-theme="dark"] .password-badge {
-            background: #1A3A2A;
-            color: #34D399;
-            border-color: #065F46;
-        }
-        
-        .password-badge.generated {
-            background: #EFF6FF;
-            color: #0B5ED7;
-            border-color: #93C5FD;
-        }
-        
-        [data-theme="dark"] .password-badge.generated {
-            background: #1E3A5F;
-            color: #6EA8FE;
-            border-color: #1E3A5F;
-        }
-        
-        .password-badge.invalidated {
-            background: #FEE2E2;
-            color: #DC2626;
-            border-color: #F87171;
-        }
-        
-        [data-theme="dark"] .password-badge.invalidated {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: #DC2626;
-        }
-        
-        .password-action-row {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            margin-top: 4px;
-        }
-        
-        .password-info-text {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            margin-top: 8px;
-            padding: 8px 12px;
-            background: var(--bg-body);
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-        }
-        
-        [data-theme="dark"] .password-info-text {
-            background: #0F172A;
-            border-color: #1E293B;
         }
         
         .section-title {
             font-size: 1rem;
             font-weight: 600;
-            color: var(--primary);
+            color: #0B5ED7;
             margin-bottom: 8px;
             display: flex;
             align-items: center;
             gap: 8px;
+        }
+        
+        [data-theme="dark"] .section-title {
+            color: #6EA8FE;
         }
         
         .section-divider {
@@ -983,17 +1101,44 @@ include_once '../../components/admin_sidebar.php';
             margin-top: 4px;
         }
         
-        .footer {
-            padding: 14px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
+        .badge-count {
             font-size: 0.7rem;
+            font-weight: 400;
             color: var(--text-secondary);
+            margin-left: 8px;
         }
         
-        .footer .footer-brand { color: var(--primary); font-weight: 700; }
+        /* ================================================================ */
+        /* PASSWORD STRENGTH */
+        /* ================================================================ */
+        .password-strength {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+        }
         
+        .password-strength .strength-bar {
+            height: 4px;
+            flex: 1;
+            border-radius: 4px;
+            background: var(--border-color);
+            transition: all 0.3s ease;
+        }
+        
+        .password-strength .strength-bar.weak { background: #EF4444; }
+        .password-strength .strength-bar.medium { background: #F59E0B; }
+        .password-strength .strength-bar.strong { background: #10B981; }
+        .password-strength .strength-bar.very-strong { background: #059669; }
+        
+        .password-strength-text {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        
+        /* ================================================================ */
+        /* TOAST / ALERT */
+        /* ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1051,68 +1196,27 @@ include_once '../../components/admin_sidebar.php';
             border-color: #DC2626;
         }
         
-        .role-radio-group {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-            gap: 10px;
-            padding: 12px 14px;
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
-            background: var(--bg-body);
-            min-height: 60px;
-        }
-        
-        .role-radio-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 14px;
-            border-radius: 10px;
-            background: var(--bg-card);
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            cursor: pointer;
-        }
-        
-        .role-radio-item:hover {
-            border-color: var(--primary);
-            background: var(--primary-bg);
-        }
-        
-        .role-radio-item.selected {
-            border-color: var(--primary);
-            background: var(--primary-bg);
-        }
-        
-        .role-radio-item input[type="radio"] {
-            width: 18px;
-            height: 18px;
-            accent-color: var(--primary);
-            cursor: pointer;
-            flex-shrink: 0;
-        }
-        
-        .role-radio-item label {
-            font-size: 0.85rem;
-            font-weight: 500;
-            color: var(--text-primary);
-            cursor: pointer;
-            width: 100%;
-        }
-        
-        .role-radio-item .role-desc {
-            font-size: 0.65rem;
+        /* ================================================================ */
+        /* FOOTER */
+        /* ================================================================ */
+        .footer {
+            padding: 14px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
             color: var(--text-secondary);
-            font-weight: 400;
-            display: block;
-            opacity: 0.7;
         }
         
+        .footer .footer-brand { color: var(--primary); font-weight: 700; }
+        
+        /* ================================================================ */
+        /* RESPONSIVE */
+        /* ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
-            .grid-2 { grid-template-columns: 1fr; gap: 14px; }
         }
         
         @media (max-width: 768px) {
@@ -1123,14 +1227,19 @@ include_once '../../components/admin_sidebar.php';
             .form-card { padding: 16px; }
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; justify-content: center; }
-            .password-section .password-row { grid-template-columns: 1fr; }
-            .role-radio-group { grid-template-columns: 1fr 1fr; }
+            .checkbox-group { grid-template-columns: 1fr 1fr; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
-            .role-radio-group { grid-template-columns: 1fr; }
+            .checkbox-group { grid-template-columns: 1fr; }
+            .form-header { flex-direction: column; text-align: center; }
+            .form-header-icon { width: 48px; height: 48px; font-size: 1.2rem; }
+            .btn { padding: 8px 16px; font-size: 0.8rem; min-height: 38px; min-width: 100%; }
+            .form-actions .btn { width: 100%; justify-content: center; }
+            .password-actions { flex-direction: column; align-items: stretch; }
+            .btn-generate { width: 100%; justify-content: center; }
         }
         
         @keyframes fadeInUp {
@@ -1142,10 +1251,66 @@ include_once '../../components/admin_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
+        
+        .flex { display: flex; }
+        .flex-wrap { flex-wrap: wrap; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .gap-3 { gap: 12px; }
+        .gap-4 { gap: 16px; }
+        .gap-6 { gap: 24px; }
+        .grid { display: grid; }
+        .grid-cols-1 { grid-template-columns: 1fr; }
+        .grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .md\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
+        .md\:grid-cols-4 { grid-template-columns: 1fr 1fr 1fr 1fr; }
+        .md\:col-span-2 { grid-column: span 2; }
+        .mt-2 { margin-top: 8px; }
+        .mt-5 { margin-top: 20px; }
+        .mb-2 { margin-bottom: 8px; }
+        .mb-4 { margin-bottom: 16px; }
+        .mb-5 { margin-bottom: 20px; }
+        .mr-1 { margin-right: 4px; }
+        .mr-2 { margin-right: 8px; }
+        .ml-2 { margin-left: 8px; }
+        .text-sm { font-size: 0.85rem; }
+        .text-xs { font-size: 0.7rem; }
+        .text-gray-400 { color: var(--text-secondary); }
+        .text-blue-600 { color: #0B5ED7; }
+        .text-green-600 { color: #059669; }
+        .text-purple-600 { color: #7C3AED; }
+        .text-yellow-600 { color: #D97706; }
+        .text-center { text-align: center; }
+        .col-span-full { grid-column: 1 / -1; }
+        .inline-flex { display: inline-flex; }
+        .underline { text-decoration: underline; }
+        .rounded-full { border-radius: 9999px; }
+        .border { border: 1px solid; }
+        .border-green-200 { border-color: #A7F3D0; }
+        .border-blue-200 { border-color: #BFDBFE; }
+        .border-purple-200 { border-color: #DDD6FE; }
+        .bg-green-100 { background: #D1FAE5; }
+        .bg-blue-100 { background: #DBEAFE; }
+        .bg-purple-100 { background: #EDE9FE; }
+        .text-green-700 { color: #065F46; }
+        .text-blue-700 { color: #1D4ED8; }
+        .text-purple-700 { color: #5B21B6; }
+        .px-3 { padding-left: 12px; padding-right: 12px; }
+        .py-1 { padding-top: 4px; padding-bottom: 4px; }
+        .p-4 { padding: 16px; }
+        .rounded-xl { border-radius: 12px; }
+        .bg-red-100 { background: #FEE2E2; }
+        .text-red-700 { color: #991B1B; }
+        .border-red-200 { border-color: #FCA5A5; }
+        .lg\:hidden { display: none; }
+        @media (max-width: 1024px) { .lg\:hidden { display: block; } }
     </style>
 </head>
 <body>
 
+<!-- ================================================================ -->
+<!-- TOP NAV -->
+<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -1184,8 +1349,12 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </nav>
 
+<!-- ================================================================ -->
+<!-- MAIN CONTENT -->
+<!-- ================================================================ -->
 <main class="main-content">
 
+    <!-- Page Header -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1215,13 +1384,14 @@ include_once '../../components/admin_sidebar.php';
                 <?php endif; ?>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
+        <div>
             <a href="employees.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
         </div>
     </div>
 
+    <!-- Messages -->
     <?php if ($message): ?>
         <div class="alert alert-<?= $message_type === 'success' ? 'success' : 'danger' ?>" style="max-width:1100px;margin:0 auto 16px;">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
@@ -1229,23 +1399,38 @@ include_once '../../components/admin_sidebar.php';
         </div>
     <?php endif; ?>
 
+    <!-- ================================================================ -->
+    <!-- FORM CARD -->
+    <!-- ================================================================ -->
     <div class="form-card animate-fade-in-up">
         <div class="form-header">
-            <div class="form-icon">
+            <div class="form-header-icon">
                 <i class="fas fa-user-edit"></i>
             </div>
             <div>
-                <h3 class="form-title">Edit Employee Information</h3>
-                <p class="form-subtitle">Update employee details, role, and password</p>
+                <h3>Edit Employee Information</h3>
+                <p>Update employee details, roles, departments, and password</p>
             </div>
         </div>
         
         <form method="POST" action="" id="editEmployeeForm">
-            <div class="grid-2">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                
+                <!-- ================================================================ -->
+                <!-- Personal Information -->
+                <!-- ================================================================ -->
+                <div class="md:col-span-2">
+                    <h3 class="section-title">
+                        <i class="fas fa-user-circle"></i> Personal Information
+                    </h3>
+                    <hr class="section-divider">
+                </div>
+                
                 <!-- Full Name -->
-                <div class="form-row">
+                <div>
                     <label class="form-label">
-                        <i class="fas fa-user label-icon"></i> Full Name <span class="required">*</span>
+                        <i class="fas fa-user text-blue-600"></i> Full Name
+                        <span class="required">*</span>
                     </label>
                     <div class="form-row-icon">
                         <input type="text" name="full_name" id="fullName" class="form-control" 
@@ -1256,9 +1441,10 @@ include_once '../../components/admin_sidebar.php';
                 </div>
                 
                 <!-- Username -->
-                <div class="form-row">
+                <div>
                     <label class="form-label">
-                        <i class="fas fa-at label-icon"></i> Username <span class="required">*</span>
+                        <i class="fas fa-at text-blue-600"></i> Username
+                        <span class="required">*</span>
                     </label>
                     <div class="form-row-icon">
                         <input type="text" name="username" id="username" class="form-control" 
@@ -1269,9 +1455,10 @@ include_once '../../components/admin_sidebar.php';
                 </div>
                 
                 <!-- Email -->
-                <div class="form-row">
+                <div>
                     <label class="form-label">
-                        <i class="fas fa-envelope label-icon"></i> Email <span class="required">*</span>
+                        <i class="fas fa-envelope text-green-600"></i> Email
+                        <span class="required">*</span>
                     </label>
                     <div class="form-row-icon">
                         <input type="email" name="email" class="form-control" 
@@ -1282,9 +1469,9 @@ include_once '../../components/admin_sidebar.php';
                 </div>
                 
                 <!-- Phone -->
-                <div class="form-row">
+                <div>
                     <label class="form-label">
-                        <i class="fas fa-phone label-icon"></i> Phone Number
+                        <i class="fas fa-phone text-blue-600"></i> Phone Number
                     </label>
                     <div class="form-row-icon">
                         <input type="text" name="phone" class="form-control" 
@@ -1294,27 +1481,44 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- Branch -->
-                <div class="form-row">
+                <!-- Specialty -->
+                <div>
                     <label class="form-label">
-                        <i class="fas fa-store label-icon"></i> Branch <span class="required">*</span>
+                        <i class="fas fa-stethoscope text-purple-600"></i> Specialty
+                    </label>
+                    <div class="form-row-icon">
+                        <input type="text" name="specialty" class="form-control" 
+                               placeholder="e.g. Cardiology, Pediatrics, etc." 
+                               value="<?= htmlspecialchars($form_data['specialty']) ?>">
+                        <span class="input-icon"><i class="fas fa-stethoscope"></i></span>
+                    </div>
+                    <p class="help-text">Mainly for doctors, leave empty if not applicable</p>
+                </div>
+                
+                <!-- Branch -->
+                <div>
+                    <label class="form-label">
+                        <i class="fas fa-store-alt text-green-600"></i> Branch
+                        <span class="required">*</span>
                     </label>
                     <div class="form-row-icon">
                         <select name="branch_id" id="branchSelect" class="form-control" required>
+                            <option value="">Select Branch</option>
                             <?php foreach ($branches_list as $branch): ?>
                                 <option value="<?= $branch['id'] ?>" <?= $branch['id'] == $form_data['branch_id'] ? 'selected' : '' ?>>
                                     <?= htmlspecialchars($branch['name']) ?>
+                                    <?= !empty($branch['location']) ? '- ' . htmlspecialchars($branch['location']) : '' ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
-                        <span class="input-icon"><i class="fas fa-store"></i></span>
+                        <span class="input-icon"><i class="fas fa-store-alt"></i></span>
                     </div>
                 </div>
                 
                 <!-- Status -->
-                <div class="form-row">
+                <div>
                     <label class="form-label">
-                        <i class="fas fa-toggle-on label-icon"></i> Status
+                        <i class="fas fa-toggle-on text-blue-600"></i> Status
                     </label>
                     <div class="form-row-icon">
                         <select name="status" class="form-control">
@@ -1325,127 +1529,159 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- Role -->
-                <div class="form-row">
-                    <label class="form-label">
-                        <i class="fas fa-user-tag label-icon"></i> Role <span class="required">*</span>
-                    </label>
-                    <div class="role-radio-group" id="rolesContainer">
-                        <?php foreach ($available_roles as $role_key => $role_desc): ?>
-                            <div class="role-radio-item <?= $form_data['role'] === $role_key ? 'selected' : '' ?>" 
-                                 onclick="selectRole(this, '<?= $role_key ?>')">
-                                <input type="radio" name="role" value="<?= $role_key ?>" 
-                                       id="role_<?= $role_key ?>"
-                                       <?= $form_data['role'] === $role_key ? 'checked' : '' ?>>
-                                <label for="role_<?= $role_key ?>">
-                                    <i class="fas fa-circle text-[6px] text-primary mr-1"></i>
-                                    <?= htmlspecialchars($role_desc) ?>
-                                    <span class="role-desc"><?= ucfirst($role_key) ?></span>
-                                </label>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-                
-                <!-- Specialty -->
-                <div class="form-row" id="specialtySection" style="display: <?= $form_data['role'] === 'doctor' ? 'block' : 'none' ?>;">
-                    <label class="form-label">
-                        <i class="fas fa-stethoscope label-icon"></i> Specialty
-                        <span class="label-badge">For Doctors</span>
-                    </label>
-                    <div class="form-row-icon">
-                        <input type="text" name="specialty" class="form-control" 
-                               placeholder="Enter medical specialty" 
-                               value="<?= htmlspecialchars($form_data['specialty']) ?>">
-                        <span class="input-icon"><i class="fas fa-stethoscope"></i></span>
-                    </div>
-                </div>
-                
-                <!-- Password Section -->
-                <div class="form-row" style="grid-column: 1 / -1;">
-                    <div class="password-section">
-                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">
-                            <div style="font-weight:600;color:var(--text-primary);font-size:0.85rem;">
-                                <i class="fas fa-key" style="color:var(--primary);margin-right:6px;"></i>
-                                Password Settings
-                                <?php if ($employee['is_default_password'] == 1): ?>
-                                    <span class="password-badge" style="background:#FEF3C7;color:#D97706;border-color:#FCD34D;">
-                                        <i class="fas fa-exclamation-triangle"></i> Default Password
-                                    </span>
-                                <?php else: ?>
-                                    <span class="password-badge">
-                                        <i class="fas fa-check-circle"></i> Password Set
-                                    </span>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        
-                        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;" id="passwordFields">
-                            <div style="position:relative;">
-                                <label class="form-label" style="font-size:0.7rem;">
-                                    <i class="fas fa-lock"></i> New Password
-                                    <span style="font-weight:400;font-size:0.6rem;color:var(--text-secondary);margin-left:6px;">Leave empty to keep current</span>
-                                </label>
+                <!-- ================================================================ -->
+                <!-- Password Section - NOT REQUIRED -->
+                <!-- ================================================================ -->
+                <div class="md:col-span-2">
+                    <h3 class="section-title">
+                        <i class="fas fa-key text-yellow-600"></i> Password Settings
+                        <span class="badge-count">(Leave empty to keep current password)</span>
+                    </h3>
+                    <hr class="section-divider">
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- New Password -->
+                        <div>
+                            <label class="form-label">
+                                <i class="fas fa-lock text-blue-600"></i> New Password
+                                <span style="font-weight:400;font-size:0.7rem;color:var(--text-secondary);">(Optional)</span>
+                            </label>
+                            <div class="password-input-group">
                                 <input type="password" name="password" id="newPassword" class="form-control" 
-                                       placeholder="Enter new password..." style="padding-right:40px;">
+                                       placeholder="Enter new password or leave empty">
                                 <button type="button" class="password-toggle" onclick="togglePasswordVisibility('newPassword', this)">
                                     <i class="fas fa-eye"></i>
                                 </button>
                             </div>
-                            
-                            <div style="position:relative;">
-                                <label class="form-label" style="font-size:0.7rem;">
-                                    <i class="fas fa-lock"></i> Confirm Password
-                                </label>
+                        </div>
+                        
+                        <!-- Confirm Password -->
+                        <div>
+                            <label class="form-label">
+                                <i class="fas fa-lock text-blue-600"></i> Confirm Password
+                            </label>
+                            <div class="password-input-group">
                                 <input type="password" name="confirm_password" id="confirmPassword" class="form-control" 
-                                       placeholder="Confirm new password..." style="padding-right:40px;">
+                                       placeholder="Confirm new password">
                                 <button type="button" class="password-toggle" onclick="togglePasswordVisibility('confirmPassword', this)">
                                     <i class="fas fa-eye"></i>
                                 </button>
                             </div>
                         </div>
-                        
-                        <div class="password-action-row">
-                            <button type="button" class="generate-btn" id="generateBtn" onclick="generateAndFillPassword()">
-                                <i class="fas fa-magic"></i> Generate Password
-                            </button>
-                            <span class="password-badge generated" id="generatedBadge" style="display:none;">
-                                <i class="fas fa-check"></i> Generated
-                            </span>
+                    </div>
+                    
+                    <!-- Password Actions -->
+                    <div class="password-actions mt-2">
+                        <button type="button" class="btn-generate" id="generatePasswordBtn">
+                            <i class="fas fa-sync-alt"></i> Generate Password
+                        </button>
+                        <span class="help-text">Format: Name + Branch Code + User ID (e.g. EricBR01U23)</span>
+                    </div>
+                    
+                    <!-- Generated Password Box -->
+                    <div class="generated-password-box" id="generatedPasswordBox" style="display:none;background:#1E293B;color:#34D399;padding:10px 16px;border-radius:8px;font-family:'Courier New',monospace;font-size:0.95rem;font-weight:600;margin-top:10px;border:1px solid #334155;word-break:break-all;">
+                        <span id="generatedPasswordDisplay">****************</span>
+                        <button type="button" class="copy-btn" onclick="copyGeneratedPassword()" style="background:rgba(255,255,255,0.1);border:none;color:#94A3B8;padding:3px 12px;border-radius:4px;cursor:pointer;font-size:0.65rem;margin-left:10px;">
+                            <i class="fas fa-copy"></i> Copy
+                        </button>
+                        <div style="font-size:0.6rem;color:#94A3B8;margin-top:4px;font-family:'Inter',sans-serif;font-weight:400;">
+                            <i class="fas fa-sync-alt"></i> Click "Generate Password" again to regenerate
                         </div>
-                        
-                        <div class="generated-password-box" id="generatedPasswordBox">
-                            <span id="generatedPasswordDisplay">****************</span>
-                            <button type="button" class="copy-btn" onclick="copyGeneratedPassword()">
-                                <i class="fas fa-copy"></i> Copy
-                            </button>
-                            <div style="font-size:0.6rem;color:#94A3B8;margin-top:4px;font-family:'Inter',sans-serif;font-weight:400;">
-                                <i class="fas fa-sync-alt"></i> Click "Generate Password" again to regenerate
-                            </div>
-                        </div>
-                        
-                        <div class="password-info-text">
-                            <i class="fas fa-info-circle text-primary mr-1"></i>
+                    </div>
+                    
+                    <!-- Password Strength -->
+                    <div class="password-strength" id="passwordStrength">
+                        <div class="strength-bar" data-index="0"></div>
+                        <div class="strength-bar" data-index="1"></div>
+                        <div class="strength-bar" data-index="2"></div>
+                        <div class="strength-bar" data-index="3"></div>
+                    </div>
+                    <div class="password-strength-text" id="passwordStrengthText">Enter a password to check strength</div>
+                    
+                    <!-- Hidden field for generated password -->
+                    <input type="hidden" name="generated_password" id="generatedPasswordHidden" value="">
+                    
+                    <div class="help-text mt-2" style="padding:8px 12px;background:var(--bg-body);border-radius:8px;border:1px solid var(--border-color);">
+                        <i class="fas fa-info-circle text-blue-600 mr-1"></i>
+                        <span style="font-size:0.75rem;">
+                            <strong>Note:</strong> Password is optional. Leave fields empty to keep the current password.
                             <?php if ($employee['is_default_password'] == 1): ?>
-                                <span style="color:#D97706;font-weight:600;">⚠️ This employee is using the default password.</span>
-                                <strong>Please generate or set a new password to secure this account.</strong>
-                            <?php else: ?>
-                                Current password is set and secure.
+                                <span style="color:#D97706;font-weight:600;">⚠️ This employee is using the default password. We recommend setting a new password.</span>
                             <?php endif; ?>
-                            <br>
-                            <i class="fas fa-lightbulb text-warning mr-1"></i>
-                            <span style="font-size:0.65rem;">
-                                <strong style="color:#EF4444;">🔒 IMPORTANT:</strong> 
-                                When you change the password, the <strong style="color:#EF4444;">old password will become INVALID</strong> immediately.
-                            </span>
-                        </div>
+                        </span>
                     </div>
                 </div>
                 
-                <!-- Hidden field for generated password -->
-                <input type="hidden" name="generated_password" id="generatedPasswordHidden" value="">
+                <!-- ================================================================ -->
+                <!-- Roles Selection - Max 2, One must be Reception -->
+                <!-- ================================================================ -->
+                <div class="md:col-span-2 mt-2">
+                    <h3 class="section-title">
+                        <i class="fas fa-user-tag"></i> Select Roles
+                        <span class="required">*</span>
+                        <span class="badge-count">(Max 2 roles, one must be Reception)</span>
+                    </h3>
+                    <p class="help-text mb-2">Click on a role to select/deselect it. At least one role is required.</p>
+                    <hr class="section-divider">
+                    
+                    <div class="checkbox-group" id="rolesContainer">
+                        <?php foreach ($available_roles as $role): ?>
+                            <div class="checkbox-item role-badge-<?= $role['name'] ?>" onclick="toggleCheckbox(this)">
+                                <input type="checkbox" name="roles[]" value="<?= $role['name'] ?>" 
+                                       id="role_<?= $role['name'] ?>"
+                                       <?= in_array($role['name'], $form_data['selected_roles']) ? 'checked' : '' ?>>
+                                <label for="role_<?= $role['name'] ?>">
+                                    <i class="fas <?= $role['icon'] ?>" style="color: <?= $role['color'] ?>;"></i>
+                                    <?= ucfirst($role['label']) ?>
+                                    <span class="role-desc"><?= ucfirst($role['name']) ?></span>
+                                </label>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                    <p class="help-text mt-2" id="roleCount">Selected: <strong id="selectedRoleCount">0</strong> roles</p>
+                </div>
+                
+                <!-- ================================================================ -->
+                <!-- Departments Selection -->
+                <!-- ================================================================ -->
+                <div class="md:col-span-2 mt-2">
+                    <h3 class="section-title">
+                        <i class="fas fa-building"></i> Select Departments
+                        <span class="badge-count">(<?= count($departments) ?> available)</span>
+                    </h3>
+                    <p class="help-text mb-2">Click on a department to select/deselect it.</p>
+                    <hr class="section-divider">
+                    
+                    <div class="checkbox-group" id="departmentsContainer">
+                        <?php if (!empty($departments)): ?>
+                            <?php foreach ($departments as $dept): ?>
+                                <div class="checkbox-item" onclick="toggleCheckbox(this)">
+                                    <input type="checkbox" name="departments[]" value="<?= $dept['id'] ?>" 
+                                           id="dept_<?= $dept['id'] ?>"
+                                           <?= in_array($dept['id'], $form_data['selected_departments']) ? 'checked' : '' ?>>
+                                    <label for="dept_<?= $dept['id'] ?>">
+                                        <i class="fas <?= $dept['icon'] ?? 'fa-building' ?>" style="color: <?= $dept['color'] ?? '#0B5ED7' ?>;"></i>
+                                        <?= htmlspecialchars($dept['category_name']) ?>
+                                        <?php if (!empty($dept['description'])): ?>
+                                            <span class="role-desc"><?= htmlspecialchars($dept['description']) ?></span>
+                                        <?php endif; ?>
+                                    </label>
+                                </div>
+                            <?php endforeach; ?>
+                        <?php else: ?>
+                            <p class="text-gray-400 text-sm col-span-full text-center">
+                                <i class="fas fa-info-circle mr-1"></i> 
+                                No departments available. Please add departments first via 
+                                <a href="departments.php" class="text-blue-600 underline">Departments</a> page.
+                            </p>
+                        <?php endif; ?>
+                    </div>
+                    <p class="help-text mt-2">Selected: <strong id="selectedDeptCount">0</strong> departments</p>
+                </div>
+                
             </div>
             
+            <!-- Form Actions -->
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">
                     <i class="fas fa-save"></i> Update Employee
@@ -1460,6 +1696,7 @@ include_once '../../components/admin_sidebar.php';
         </form>
     </div>
 
+    <!-- Footer -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1472,6 +1709,9 @@ include_once '../../components/admin_sidebar.php';
 
 </main>
 
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1480,6 +1720,9 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </div>
 
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
     // ================================================================
     // DARK MODE
@@ -1503,24 +1746,20 @@ include_once '../../components/admin_sidebar.php';
             darkIcon.className = 'fas fa-moon';
             darkText.textContent = 'Dark';
             localStorage.setItem('darkMode', 'false');
-            document.cookie = "dark_mode=false; path=/";
         } else {
             htmlElement.setAttribute('data-theme', 'dark');
             darkIcon.className = 'fas fa-sun';
             darkText.textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
-            document.cookie = "dark_mode=true; path=/";
         }
     });
 
     // ================================================================
-    // DOM ELEMENTS
+    // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
+    
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
@@ -1533,35 +1772,197 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
+    // ================================================================
+    // TOGGLE CHECKBOX
+    // ================================================================
+    function toggleCheckbox(element) {
+        var checkbox = element.querySelector('input[type="checkbox"]');
+        if (checkbox) {
+            checkbox.checked = !checkbox.checked;
+            if (checkbox.checked) {
+                element.classList.add('checked');
+            } else {
+                element.classList.remove('checked');
+            }
+            var event = new Event('change', { bubbles: true });
+            checkbox.dispatchEvent(event);
+            updateCounts();
+            
+            // Validate roles - max 2, one must be reception
+            validateRoles();
         }
     }
-    
-    searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
+
+    // ================================================================
+    // UPDATE CHECKBOX COUNTS
+    // ================================================================
+    function updateCounts() {
+        var rolesChecked = document.querySelectorAll('input[name="roles[]"]:checked');
+        var roleCount = document.getElementById('selectedRoleCount');
+        if (roleCount) roleCount.textContent = rolesChecked.length;
+        
+        var deptsChecked = document.querySelectorAll('input[name="departments[]"]:checked');
+        var deptCount = document.getElementById('selectedDeptCount');
+        if (deptCount) deptCount.textContent = deptsChecked.length;
+    }
+
+    // ================================================================
+    // VALIDATE ROLES - Max 2, one must be reception
+    // ================================================================
+    function validateRoles() {
+        var rolesChecked = document.querySelectorAll('input[name="roles[]"]:checked');
+        var rolesContainer = document.getElementById('rolesContainer');
+        var errorMsg = document.getElementById('roleErrorMsg');
+        
+        // Remove existing error message
+        if (errorMsg) {
+            errorMsg.remove();
+        }
+        
+        if (rolesChecked.length > 2) {
+            // Uncheck the last checked checkbox
+            var lastChecked = rolesChecked[rolesChecked.length - 1];
+            lastChecked.checked = false;
+            lastChecked.closest('.checkbox-item').classList.remove('checked');
+            
+            // Show error
+            var msg = document.createElement('p');
+            msg.id = 'roleErrorMsg';
+            msg.className = 'help-text mt-1 text-red-700';
+            msg.style.color = '#EF4444';
+            msg.innerHTML = '<i class="fas fa-exclamation-circle mr-1"></i> Maximum of 2 roles allowed. Please select only 2 roles.';
+            rolesContainer.parentNode.insertBefore(msg, rolesContainer.nextSibling);
+            
+            showToast('⚠️ Warning', 'Maximum of 2 roles allowed per employee', 'warning');
+            updateCounts();
+            return false;
+        }
+        
+        if (rolesChecked.length == 2) {
+            var hasReception = false;
+            rolesChecked.forEach(function(cb) {
+                if (cb.value === 'reception') {
+                    hasReception = true;
+                }
+            });
+            
+            if (!hasReception) {
+                // Uncheck the last checked checkbox
+                var lastChecked = rolesChecked[rolesChecked.length - 1];
+                lastChecked.checked = false;
+                lastChecked.closest('.checkbox-item').classList.remove('checked');
+                
+                var msg = document.createElement('p');
+                msg.id = 'roleErrorMsg';
+                msg.className = 'help-text mt-1 text-red-700';
+                msg.style.color = '#EF4444';
+                msg.innerHTML = '<i class="fas fa-exclamation-circle mr-1"></i> If selecting 2 roles, one must be Reception.';
+                rolesContainer.parentNode.insertBefore(msg, rolesContainer.nextSibling);
+                
+                showToast('⚠️ Warning', 'If selecting 2 roles, one must be Reception', 'warning');
+                updateCounts();
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    // ================================================================
+    // UPDATE CHECKBOX STYLES ON LOAD
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        var checkboxes = document.querySelectorAll('.checkbox-item input[type="checkbox"]');
+        checkboxes.forEach(function(checkbox) {
+            if (checkbox.checked) {
+                checkbox.closest('.checkbox-item').classList.add('checked');
+            }
+        });
+        updateCounts();
     });
 
+    // ================================================================
+    // VALIDATION - Form Submit
+    // ================================================================
+    document.getElementById('editEmployeeForm')?.addEventListener('submit', function(e) {
+        var rolesChecked = document.querySelectorAll('input[name="roles[]"]:checked');
+        if (rolesChecked.length === 0) {
+            e.preventDefault();
+            showToast('⚠️ Warning', 'Please select at least one role for this employee.', 'warning');
+            document.getElementById('rolesContainer').style.borderColor = '#EF4444';
+            setTimeout(function() {
+                document.getElementById('rolesContainer').style.borderColor = '';
+            }, 3000);
+            return false;
+        }
+        
+        // Validate roles again
+        if (!validateRoles()) {
+            e.preventDefault();
+            return false;
+        }
+        
+        // Check if default password is used and no new password set
+        var isDefaultPassword = <?= $employee['is_default_password'] == 1 ? 'true' : 'false' ?>;
+        var newPassword = document.getElementById('newPassword').value.trim();
+        var generatedPassword = document.getElementById('generatedPasswordHidden').value.trim();
+        
+        if (isDefaultPassword && newPassword === '' && generatedPassword === '') {
+            var confirmChange = confirm('⚠️ This employee is using the default password.\n\nWe strongly recommend setting a new password for security.\n\nClick "OK" to continue without changing the password, or "Cancel" to go back and set a new password.');
+            if (!confirmChange) {
+                e.preventDefault();
+                document.getElementById('newPassword').focus();
+                document.getElementById('newPassword').style.borderColor = '#EF4444';
+                setTimeout(function() {
+                    document.getElementById('newPassword').style.borderColor = '';
+                }, 3000);
+                return false;
+            }
+        }
+        
+        // Validate password if entered
+        var pass = document.getElementById('newPassword').value.trim();
+        var confirm = document.getElementById('confirmPassword').value.trim();
+        var genPass = document.getElementById('generatedPasswordHidden').value.trim();
+        
+        // If password is entered (not empty) validate it
+        if (pass !== '' || confirm !== '' || genPass !== '') {
+            // If generated password is set, use it
+            if (genPass !== '') {
+                // Valid
+            } else if (pass !== '' || confirm !== '') {
+                if (pass !== confirm) {
+                    e.preventDefault();
+                    showToast('⚠️ Warning', 'Passwords do not match!', 'warning');
+                    document.getElementById('confirmPassword').style.borderColor = '#EF4444';
+                    setTimeout(function() {
+                        document.getElementById('confirmPassword').style.borderColor = '';
+                    }, 3000);
+                    return false;
+                }
+                if (pass.length < 6) {
+                    e.preventDefault();
+                    showToast('⚠️ Warning', 'Password must be at least 6 characters long!', 'warning');
+                    document.getElementById('newPassword').style.borderColor = '#EF4444';
+                    setTimeout(function() {
+                        document.getElementById('newPassword').style.borderColor = '';
+                    }, 3000);
+                    return false;
+                }
+            }
+        }
+        
+        return true;
+    });
+
+    // ================================================================
+    // BRANCH SWITCHER
+    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
-
-    function updateDateTime() {
-        var now = new Date();
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) {
-            dtEl.textContent = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) + ' • ' + 
-                now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-        }
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
 
     // ================================================================
     // TOAST
@@ -1580,29 +1981,44 @@ include_once '../../components/admin_sidebar.php';
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() { toast.style.display = 'none'; }, 400);
+            setTimeout(function() {
+                toast.style.display = 'none';
+            }, 400);
         }, 3500);
     }
 
     // ================================================================
-    // SELECT ROLE
+    // DATE & TIME
     // ================================================================
-    function selectRole(element, roleKey) {
-        document.querySelectorAll('.role-radio-item').forEach(function(el) {
-            el.classList.remove('selected');
-        });
-        element.classList.add('selected');
-        
-        var radio = document.getElementById('role_' + roleKey);
-        if (radio) radio.checked = true;
-        
-        var specialtySection = document.getElementById('specialtySection');
-        if (roleKey === 'doctor') {
-            specialtySection.style.display = 'block';
-        } else {
-            specialtySection.style.display = 'none';
+    function updateDateTime() {
+        var now = new Date();
+        var dtEl = document.getElementById('currentDateTime');
+        if (dtEl) {
+            dtEl.textContent = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' }) + ' • ' + 
+                now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
         }
     }
+    updateDateTime();
+    setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            var branch = '<?= $selected_branch_id ?>';
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performSearch();
+    });
 
     // ================================================================
     // TOGGLE PASSWORD VISIBILITY
@@ -1619,18 +2035,61 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // GENERATE PASSWORD - FIXED
+    // PASSWORD STRENGTH INDICATOR
     // ================================================================
-    function generateAndFillPassword() {
-        var generateBtn = document.getElementById('generateBtn');
+    document.getElementById('newPassword')?.addEventListener('input', function() {
+        var password = this.value;
+        var strength = checkPasswordStrength(password);
+        updatePasswordStrength(strength);
+    });
+
+    function checkPasswordStrength(password) {
+        if (password.length === 0) return { score: 0, label: 'Enter a password to check strength', class: '' };
+        
+        var score = 0;
+        if (password.length >= 8) score++;
+        if (password.length >= 12) score++;
+        if (/[a-z]/.test(password) && /[A-Z]/.test(password)) score++;
+        if (/\d/.test(password)) score++;
+        if (/[^a-zA-Z0-9]/.test(password)) score++;
+        
+        var labels = ['Weak', 'Weak', 'Medium', 'Strong', 'Very Strong'];
+        var classes = ['', 'weak', 'medium', 'strong', 'very-strong'];
+        var scoreIndex = Math.min(score, 4);
+        
+        return { score: scoreIndex, label: labels[scoreIndex], class: classes[scoreIndex] };
+    }
+
+    function updatePasswordStrength(strength) {
+        var bars = document.querySelectorAll('#passwordStrength .strength-bar');
+        var text = document.getElementById('passwordStrengthText');
+        
+        bars.forEach(function(bar, index) {
+            bar.className = 'strength-bar';
+            if (index < strength.score) {
+                bar.classList.add(strength.class);
+            }
+        });
+        
+        if (strength.score === 0) {
+            text.textContent = 'Enter a password to check strength';
+            text.style.color = '';
+        } else {
+            text.textContent = 'Strength: ' + strength.label;
+            text.style.color = strength.class === 'weak' ? '#EF4444' : 
+                               strength.class === 'medium' ? '#F59E0B' : 
+                               strength.class === 'strong' ? '#10B981' : '#059669';
+        }
+    }
+
+    // ================================================================
+    // GENERATE PASSWORD - NEW FORMAT
+    // ================================================================
+    document.getElementById('generatePasswordBtn')?.addEventListener('click', function() {
         var fullName = document.getElementById('fullName').value.trim();
         var branchId = document.getElementById('branchSelect').value;
-        var newPassword = document.getElementById('newPassword');
-        var confirmPassword = document.getElementById('confirmPassword');
-        var passwordBox = document.getElementById('generatedPasswordBox');
-        var passwordDisplay = document.getElementById('generatedPasswordDisplay');
-        var passwordHidden = document.getElementById('generatedPasswordHidden');
-        var generatedBadge = document.getElementById('generatedBadge');
+        var userId = <?= $employee_id ?>;
+        var username = document.getElementById('username').value.trim();
         
         if (!fullName) {
             showToast('⚠️ Warning', 'Please enter the full name first', 'warning');
@@ -1644,8 +2103,16 @@ include_once '../../components/admin_sidebar.php';
             return;
         }
         
-        generateBtn.disabled = true;
-        generateBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+        // Show loading state
+        var btn = this;
+        var originalText = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
+        btn.disabled = true;
+        
+        var passwordBox = document.getElementById('generatedPasswordBox');
+        var passwordDisplay = document.getElementById('generatedPasswordDisplay');
+        var passwordHidden = document.getElementById('generatedPasswordHidden');
+        
         passwordDisplay.textContent = 'Generating...';
         passwordBox.style.display = 'block';
         
@@ -1653,9 +2120,9 @@ include_once '../../components/admin_sidebar.php';
         formData.append('action', 'generate_password');
         formData.append('full_name', fullName);
         formData.append('branch_id', branchId);
-        formData.append('user_id', <?= $employee_id ?>);
-        formData.append('current_user_id', <?= $employee_id ?>);
-        formData.append('username', document.getElementById('username').value.trim());
+        formData.append('user_id', userId);
+        formData.append('current_user_id', userId);
+        formData.append('username', username);
         
         fetch(window.location.href, {
             method: 'POST',
@@ -1665,21 +2132,26 @@ include_once '../../components/admin_sidebar.php';
             return response.json();
         })
         .then(function(data) {
-            generateBtn.disabled = false;
-            generateBtn.innerHTML = '<i class="fas fa-magic"></i> Generate Password';
+            btn.innerHTML = originalText;
+            btn.disabled = false;
             
             if (data.success) {
                 var password = data.password;
                 passwordDisplay.textContent = password;
-                newPassword.value = password;
-                confirmPassword.value = password;
+                document.getElementById('newPassword').value = password;
+                document.getElementById('confirmPassword').value = password;
                 passwordHidden.value = password;
-                generatedBadge.style.display = 'inline-flex';
                 
+                // Trigger password strength check
+                var event = new Event('input', { bubbles: true });
+                document.getElementById('newPassword').dispatchEvent(event);
+                
+                showToast('✅ Success', 'Password generated successfully!', 'success');
+                
+                // Copy to clipboard
                 if (navigator.clipboard && navigator.clipboard.writeText) {
                     navigator.clipboard.writeText(password).catch(function() {});
                 }
-                showToast('🔑 Password Generated', 'Password generated and copied to clipboard!', 'success');
                 
                 passwordBox.style.borderColor = '#34D399';
                 setTimeout(function() {
@@ -1689,18 +2161,16 @@ include_once '../../components/admin_sidebar.php';
                 showToast('❌ Error', data.error || 'Failed to generate password', 'error');
                 passwordBox.style.display = 'none';
                 passwordHidden.value = '';
-                generatedBadge.style.display = 'none';
             }
         })
         .catch(function(error) {
-            generateBtn.disabled = false;
-            generateBtn.innerHTML = '<i class="fas fa-magic"></i> Generate Password';
+            btn.innerHTML = originalText;
+            btn.disabled = false;
             showToast('❌ Error', 'Network error: ' + error.message, 'error');
             passwordBox.style.display = 'none';
             passwordHidden.value = '';
-            generatedBadge.style.display = 'none';
         });
-    }
+    });
 
     // ================================================================
     // COPY GENERATED PASSWORD
@@ -1733,60 +2203,12 @@ include_once '../../components/admin_sidebar.php';
         document.body.removeChild(textarea);
     }
 
-    // ================================================================
-    // VALIDATION
-    // ================================================================
-    document.getElementById('editEmployeeForm')?.addEventListener('submit', function(e) {
-        var newPassword = document.getElementById('newPassword');
-        var confirmPassword = document.getElementById('confirmPassword');
-        var generatedPassword = document.getElementById('generatedPasswordHidden').value;
-        var hasCurrentPassword = <?= $employee['password'] ? 'true' : 'false' ?>;
-        var isDefaultPassword = <?= $employee['is_default_password'] == 1 ? 'true' : 'false' ?>;
-        
-        // If using default password, force password change
-        if (isDefaultPassword && newPassword.value.trim() === '' && generatedPassword === '') {
-            e.preventDefault();
-            alert('⚠️ This employee is using the default password. You must generate or enter a new password.');
-            document.getElementById('newPassword').focus();
-            document.getElementById('newPassword').style.borderColor = '#EF4444';
-            setTimeout(function() {
-                document.getElementById('newPassword').style.borderColor = '';
-            }, 3000);
-            return false;
-        }
-        
-        if (newPassword.value.trim() !== '' || confirmPassword.value.trim() !== '') {
-            if (newPassword.value.trim() !== confirmPassword.value.trim()) {
-                e.preventDefault();
-                alert('⚠️ Passwords do not match!');
-                confirmPassword.focus();
-                confirmPassword.style.borderColor = '#EF4444';
-                setTimeout(function() {
-                    confirmPassword.style.borderColor = '';
-                }, 3000);
-                return false;
-            }
-            if (newPassword.value.trim().length < 6) {
-                e.preventDefault();
-                alert('⚠️ Password must be at least 6 characters long!');
-                newPassword.focus();
-                newPassword.style.borderColor = '#EF4444';
-                setTimeout(function() {
-                    newPassword.style.borderColor = '';
-                }, 3000);
-                return false;
-            }
-        }
-        
-        return true;
-    });
-
     console.log('%c👤 Braick - Edit Employee', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Employee: <?= htmlspecialchars($employee['full_name']) ?> (ID: <?= $employee_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Max 2 roles, one must be Reception', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🔑 Password optional - leave empty to keep current', 'font-size:13px; color:#D97706;');
     console.log('%c🔒 is_default_password: <?= $employee['is_default_password'] ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c🔑 Click "Generate Password" to generate a secure password', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c🔐 Old password will be INVALIDATED when new password is set', 'font-size:13px; color:#EF4444;');
-    console.log('%c📋 Using users table: is_default_password, password_changed_at', 'font-size:13px; color:#34D399;');
+    console.log('%c🔐 Password format: Name(4) + Branch(4) + User(3) = 11 chars', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

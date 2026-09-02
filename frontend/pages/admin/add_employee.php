@@ -240,6 +240,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['action'])) {
         $errors[] = 'Branch is required';
     }
     
+    // ================================================================
+    // NEW: VALIDATE ROLES - Max 2, one must be reception
+    // ================================================================
+    if (count($form_data['selected_roles']) > 2) {
+        $errors[] = 'Maximum of 2 roles allowed per employee';
+    }
+    if (count($form_data['selected_roles']) == 2 && !in_array('reception', $form_data['selected_roles'])) {
+        $errors[] = 'If assigning 2 roles, one must be Reception';
+    }
+    
     // Check if username exists
     if (empty($errors)) {
         $stmt = $db->prepare("SELECT id FROM users WHERE username = ?");
@@ -821,6 +831,27 @@ include_once '../../components/admin_sidebar.php';
         margin-top: 2px;
     }
     
+    /* Role restriction note */
+    .role-restriction-note {
+        font-size: 0.7rem;
+        padding: 6px 12px;
+        border-radius: 8px;
+        background: #FEF3C7;
+        color: #92400E;
+        border: 1px solid #FCD34D;
+        margin-top: 4px;
+    }
+    
+    [data-theme="dark"] .role-restriction-note {
+        background: #3A2A1A;
+        color: #FBBF24;
+        border-color: #F59E0B;
+    }
+    
+    .role-restriction-note i {
+        margin-right: 4px;
+    }
+    
     @media (max-width: 640px) {
         .form-card { padding: 18px 16px; }
         .form-header { flex-direction: column; text-align: center; }
@@ -1069,15 +1100,22 @@ include_once '../../components/admin_sidebar.php';
                 </div>
                 
                 <!-- ================================================================ -->
-                <!-- Roles Selection -->
+                <!-- Roles Selection - Max 2, One must be Reception -->
                 <!-- ================================================================ -->
                 <div class="md:col-span-2 mt-2">
                     <h3 class="section-title">
                         <i class="fas fa-user-tag"></i> Select Roles
                         <span class="required">*</span>
-                        <span class="badge-count">(<?= count($available_roles) ?> available)</span>
+                        <span class="badge-count">(Max 2 roles, one must be Reception)</span>
                     </h3>
                     <p class="help-text mb-2">Click on a role to select/deselect it. At least one role is required.</p>
+                    
+                    <!-- Role Restriction Note -->
+                    <div class="role-restriction-note">
+                        <i class="fas fa-info-circle"></i>
+                        <strong>Note:</strong> Maximum of <strong>2 roles</strong> allowed. If selecting 2 roles, <strong>one must be Reception</strong>.
+                    </div>
+                    
                     <hr class="section-divider">
                     
                     <div class="checkbox-group" id="rolesContainer">
@@ -1095,6 +1133,9 @@ include_once '../../components/admin_sidebar.php';
                         <?php endforeach; ?>
                     </div>
                     <p class="help-text mt-2" id="roleCount">Selected: <strong id="selectedRoleCount">0</strong> roles</p>
+                    
+                    <!-- Error message container for role validation -->
+                    <div id="roleErrorContainer"></div>
                 </div>
                 
                 <!-- ================================================================ -->
@@ -1167,7 +1208,7 @@ include_once '../../components/admin_sidebar.php';
             <div class="tip-icon green"><i class="fas fa-check-circle"></i></div>
             <div class="tip-text">
                 <h4>Tip #2</h4>
-                <p>Multiple roles allowed</p>
+                <p>Max 2 roles, one must be Reception</p>
             </div>
         </div>
         <div class="tip-card">
@@ -1277,6 +1318,9 @@ include_once '../../components/admin_sidebar.php';
             var event = new Event('change', { bubbles: true });
             checkbox.dispatchEvent(event);
             updateCounts();
+            
+            // Validate roles after change
+            validateRoles();
         }
     }
 
@@ -1294,6 +1338,70 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
+    // VALIDATE ROLES - Max 2, one must be reception
+    // ================================================================
+    function validateRoles() {
+        var rolesChecked = document.querySelectorAll('input[name="roles[]"]:checked');
+        var container = document.getElementById('rolesContainer');
+        var errorContainer = document.getElementById('roleErrorContainer');
+        
+        // Clear previous errors
+        errorContainer.innerHTML = '';
+        container.style.borderColor = '';
+        
+        if (rolesChecked.length > 2) {
+            // Uncheck the last checked checkbox
+            var lastChecked = rolesChecked[rolesChecked.length - 1];
+            lastChecked.checked = false;
+            lastChecked.closest('.checkbox-item').classList.remove('checked');
+            
+            // Show error
+            errorContainer.innerHTML = `
+                <p class="help-text mt-2" style="color:#EF4444;">
+                    <i class="fas fa-exclamation-circle mr-1"></i> 
+                    Maximum of <strong>2 roles</strong> allowed. Please select only 2 roles.
+                </p>
+            `;
+            container.style.borderColor = '#EF4444';
+            
+            showToast('⚠️ Warning', 'Maximum of 2 roles allowed per employee', 'warning');
+            updateCounts();
+            return false;
+        }
+        
+        if (rolesChecked.length == 2) {
+            var hasReception = false;
+            rolesChecked.forEach(function(cb) {
+                if (cb.value === 'reception') {
+                    hasReception = true;
+                }
+            });
+            
+            if (!hasReception) {
+                // Uncheck the last checked checkbox
+                var lastChecked = rolesChecked[rolesChecked.length - 1];
+                lastChecked.checked = false;
+                lastChecked.closest('.checkbox-item').classList.remove('checked');
+                
+                // Show error
+                errorContainer.innerHTML = `
+                    <p class="help-text mt-2" style="color:#EF4444;">
+                        <i class="fas fa-exclamation-circle mr-1"></i> 
+                        If selecting <strong>2 roles</strong>, <strong>one must be Reception</strong>.
+                    </p>
+                `;
+                container.style.borderColor = '#EF4444';
+                
+                showToast('⚠️ Warning', 'If selecting 2 roles, one must be Reception', 'warning');
+                updateCounts();
+                return false;
+            }
+        }
+        
+        return true;
+    }
+
+    // ================================================================
     // UPDATE CHECKBOX STYLES ON LOAD
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
@@ -1307,19 +1415,36 @@ include_once '../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // VALIDATION - Ensure at least one role is selected
+    // VALIDATION - Ensure at least one role is selected and validate roles
     // ================================================================
     document.getElementById('addEmployeeForm')?.addEventListener('submit', function(e) {
         var rolesChecked = document.querySelectorAll('input[name="roles[]"]:checked');
+        var container = document.getElementById('rolesContainer');
+        var errorContainer = document.getElementById('roleErrorContainer');
+        
+        // Clear previous errors
+        errorContainer.innerHTML = '';
+        container.style.borderColor = '';
+        
         if (rolesChecked.length === 0) {
             e.preventDefault();
-            alert('⚠️ Please select at least one role for this employee.');
-            document.getElementById('rolesContainer').style.borderColor = '#EF4444';
-            setTimeout(function() {
-                document.getElementById('rolesContainer').style.borderColor = '#E2E8F0';
-            }, 3000);
+            errorContainer.innerHTML = `
+                <p class="help-text mt-2" style="color:#EF4444;">
+                    <i class="fas fa-exclamation-circle mr-1"></i> 
+                    Please select at least <strong>one role</strong> for this employee.
+                </p>
+            `;
+            container.style.borderColor = '#EF4444';
+            showToast('⚠️ Warning', 'Please select at least one role for this employee.', 'warning');
             return false;
         }
+        
+        // Validate roles again
+        if (!validateRoles()) {
+            e.preventDefault();
+            return false;
+        }
+        
         return true;
     });
 
@@ -1540,6 +1665,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c🔒 is_default_password = 1 for new users', 'font-size:13px; color:#059669;');
     console.log('%c🔄 password_changed_at = NOW() on creation', 'font-size:13px; color:#059669;');
     console.log('%c👁️ Password toggle show/hide', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📋 Max 2 roles, one must be Reception', 'font-size:13px; color:#EF4444;');
 </script>
 
 </body>
