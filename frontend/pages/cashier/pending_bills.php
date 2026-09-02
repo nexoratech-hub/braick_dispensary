@@ -2,9 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/cashier/pending_bills.php
 // CASHIER - PENDING BILLS LIST
-// FIXED: Excludes OTC bills (visit_id IS NOT NULL)
-// FIXED: Only shows bills with balance > 0
-// Shows bills from bills table ONLY (OTC from otc_sales)
+// FIXED: Shows ALL bills including prescription bills
+// FIXED: Prescription bills show as LOCKED until confirmed
+// FIXED: Only bills with balance > 0
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -190,9 +190,7 @@ try {
     }
     
     // ================================================================
-    // PART 1: GET PENDING BILLS FROM bills TABLE
-    // ✅ FIX: visit_id IS NOT NULL (exclude OTC bills)
-    // ✅ FIX: balance > 0 (not fully paid)
+    // GET PENDING BILLS - SHOW ALL BILLS INCLUDING PRESCRIPTIONS
     // ================================================================
     $sql = "
         SELECT 
@@ -213,7 +211,25 @@ try {
             (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as payment_count,
             (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = b.id) as total_paid,
             (SELECT COALESCE(SUM(discount_amount), 0) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication') as pharmacy_discount,
-            (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication' AND discount_amount > 0) as med_discount_items
+            (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication' AND discount_amount > 0) as med_discount_items,
+            -- ✅ Check if this bill has confirmed prescriptions
+            (SELECT COUNT(*) 
+             FROM bill_items bi2 
+             JOIN prescriptions pr ON bi2.reference_id = pr.id 
+             WHERE bi2.bill_id = b.id 
+             AND bi2.item_type = 'medication' 
+             AND bi2.reference_type = 'prescription'
+             AND pr.status IN ('confirmed', 'dispensed')
+            ) as confirmed_prescriptions,
+            -- ✅ Check if this bill has pending prescriptions
+            (SELECT COUNT(*) 
+             FROM bill_items bi2 
+             JOIN prescriptions pr ON bi2.reference_id = pr.id 
+             WHERE bi2.bill_id = b.id 
+             AND bi2.item_type = 'medication' 
+             AND bi2.reference_type = 'prescription'
+             AND pr.status NOT IN ('confirmed', 'dispensed')
+            ) as pending_prescriptions
         FROM bills b
         LEFT JOIN patients p ON b.patient_id = p.id
         LEFT JOIN users u ON b.created_by = u.id
@@ -222,6 +238,7 @@ try {
         AND b.status IN ('pending', 'partial')
         AND b.balance > 0
         AND b.visit_id IS NOT NULL
+        -- ✅ ALL bills shown (including prescriptions)
         $date_condition
         $search_condition
         ORDER BY b.created_at DESC
@@ -236,7 +253,7 @@ try {
     $regular_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // PART 2: GET OTC SALES WITH PENDING PAYMENT
+    // GET OTC SALES WITH PENDING PAYMENT
     // ================================================================
     $otc_sql = "
         SELECT 
@@ -392,7 +409,9 @@ try {
                 'total_balance' => 0,
                 'total_paid' => 0,
                 'total_discount' => 0,
-                'bill_count' => 0
+                'bill_count' => 0,
+                'total_pending_prescriptions' => 0,
+                'total_confirmed_prescriptions' => 0
             ];
         }
         
@@ -402,6 +421,8 @@ try {
         $patient_bills[$patient_key]['total_paid'] += ($bill['total_paid'] ?? 0);
         $patient_bills[$patient_key]['total_discount'] += ($bill['pharmacy_discount'] ?? 0) + ($bill['discount_amount'] ?? 0);
         $patient_bills[$patient_key]['bill_count']++;
+        $patient_bills[$patient_key]['total_pending_prescriptions'] += ($bill['pending_prescriptions'] ?? 0);
+        $patient_bills[$patient_key]['total_confirmed_prescriptions'] += ($bill['confirmed_prescriptions'] ?? 0);
     }
     
     $total_bills_count = count($all_bills);
@@ -550,6 +571,8 @@ include_once '../../components/cashier_sidebar.php';
             --purple-bg: #EDE9FE;
             --otc-color: #8B5CF6;
             --otc-bg: #EDE9FE;
+            --locked-color: #DC2626;
+            --locked-bg: #FEE2E2;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -597,6 +620,7 @@ include_once '../../components/cashier_sidebar.php';
             --info-bg: #1E3A5F;
             --purple-bg: #2A1A3A;
             --otc-bg: #2A1A3A;
+            --locked-bg: #3A1A1A;
             --gray-100: #1E293B;
             --gray-200: #334155;
         }
@@ -669,6 +693,16 @@ include_once '../../components/cashier_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 6px;
+        }
+        .page-header .header-badge.locked {
+            background: rgba(239, 68, 68, 0.3);
+            border-color: rgba(239, 68, 68, 0.3);
+            color: #F87171;
+        }
+        .page-header .header-badge.confirmed {
+            background: rgba(52, 211, 153, 0.2);
+            border-color: rgba(52, 211, 153, 0.2);
+            color: #34D399;
         }
         .page-header .role-badge {
             background: rgba(255,255,255,0.2);
@@ -827,6 +861,7 @@ include_once '../../components/cashier_sidebar.php';
         .stat-card.blue::before { background: var(--primary); }
         .stat-card.purple::before { background: var(--purple); }
         .stat-card.otc::before { background: #8B5CF6; }
+        .stat-card.locked::before { background: #DC2626; }
         .stat-card:hover {
             transform: translateY(-4px);
             box-shadow: var(--shadow-lg);
@@ -839,6 +874,7 @@ include_once '../../components/cashier_sidebar.php';
         .stat-card .stat-number.blue { color: var(--primary); }
         .stat-card .stat-number.purple { color: var(--purple); }
         .stat-card .stat-number.otc { color: #8B5CF6; }
+        .stat-card .stat-number.red { color: #DC2626; }
         .stat-card .stat-label { font-size: 0.65rem; color: var(--text-secondary); font-weight: 500; margin-top: 2px; }
         .stat-card .stat-sub { font-size: 0.55rem; color: var(--text-secondary); opacity: 0.7; margin-top: 1px; }
         
@@ -932,6 +968,7 @@ include_once '../../components/cashier_sidebar.php';
         .total-badge.blue { background: var(--info-bg); color: var(--info); }
         .total-badge.purple { background: var(--purple-bg); color: var(--purple); }
         .total-badge.discount { background: #FEF3C7; color: #D97706; border: 1px solid #D97706; }
+        .total-badge.locked { background: var(--locked-bg); color: var(--locked-color); border: 1px solid var(--locked-color); }
         .patient-card-header .total-amount {
             font-weight: 700;
             font-size: 1.1rem;
@@ -948,6 +985,17 @@ include_once '../../components/cashier_sidebar.php';
         [data-theme="dark"] .otc-tag {
             background: #6D28D9;
             color: #DDD6FE;
+        }
+        .locked-tag {
+            background: var(--locked-color);
+            color: white;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
         }
         .chevron-icon {
             transition: transform 0.3s ease;
@@ -1009,6 +1057,14 @@ include_once '../../components/cashier_sidebar.php';
         .data-table tbody tr:last-child td { border-bottom: none; }
         .data-table .bill-number { font-weight: 600; font-size: 0.7rem; font-family: monospace; color: var(--text-primary); }
         
+        .locked-row td {
+            background: var(--locked-bg) !important;
+            opacity: 0.7;
+        }
+        [data-theme="dark"] .locked-row td {
+            background: #3A1A1A !important;
+        }
+        
         .otc-item-list { font-size: 0.6rem; color: var(--text-secondary); max-width: 200px; }
         .otc-item-list .item-tag {
             display: inline-block;
@@ -1034,6 +1090,7 @@ include_once '../../components/cashier_sidebar.php';
         .status-badge.paid { background: var(--success-bg); color: var(--success); }
         .status-badge.cancelled { background: var(--danger-bg); color: var(--danger); }
         .status-badge.otc-pending { background: var(--purple-bg); color: var(--purple); }
+        .status-badge.locked { background: var(--locked-bg); color: var(--locked-color); border: 1px solid var(--locked-color); }
         
         .discount-badge {
             display: inline-block;
@@ -1081,6 +1138,7 @@ include_once '../../components/cashier_sidebar.php';
         .btn-view:hover { background: var(--primary-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3); }
         .btn-process { background: var(--success); color: white; }
         .btn-process:hover { background: var(--success-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3); }
+        .btn-process:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
         .btn-cancel { background: var(--danger); color: white; }
         .btn-cancel:hover { background: var(--danger-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3); }
         .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
@@ -1188,6 +1246,12 @@ include_once '../../components/cashier_sidebar.php';
                 <i class="fas fa-clock"></i>
                 Pending Bills
                 <span class="role-badge"><?= strtoupper($user_role) ?></span>
+                <span class="header-badge locked">
+                    <i class="fas fa-lock"></i> Prescriptions Locked
+                </span>
+                <span class="header-badge confirmed">
+                    <i class="fas fa-check-circle"></i> Confirmed Ready
+                </span>
                 <?php if ($is_admin): ?>
                     <span class="role-badge" style="background:rgba(124,58,237,0.4);">
                         <i class="fas fa-user-shield"></i> Admin
@@ -1216,9 +1280,6 @@ include_once '../../components/cashier_sidebar.php';
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);">
                     <i class="fas fa-tag"></i> Pharmacy Discounts Shown
-                </span>
-                <span class="header-badge" style="background:rgba(59,130,246,0.2);border-color:rgba(59,130,246,0.2);color:#60A5FA;">
-                    <i class="fas fa-filter"></i> Visit ID Only
                 </span>
             </p>
         </div>
@@ -1303,19 +1364,26 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-number blue"><?= count($patient_bills) ?></p>
             <p class="stat-label">Patients/Customers</p>
         </div>
+        <div class="stat-card locked">
+            <div class="stat-icon">🔒</div>
+            <p class="stat-number red">
+                <?php 
+                    $total_locked = 0;
+                    foreach ($patient_bills as $patient) {
+                        $total_locked += $patient['total_pending_prescriptions'] ?? 0;
+                    }
+                    echo $total_locked;
+                ?>
+            </p>
+            <p class="stat-label">Locked Prescriptions</p>
+            <p class="stat-sub">Pending Pharmacy Confirmation</p>
+        </div>
         <div class="stat-card purple">
             <div class="stat-icon">🛒</div>
             <p class="stat-number purple"><?= $otc_pending_count ?? 0 ?></p>
             <p class="stat-label">OTC Sales Pending</p>
             <p class="stat-sub">TSh <?= number_format($otc_pending_total ?? 0, 0) ?></p>
         </div>
-        <?php if ($is_admin): ?>
-        <div class="stat-card green">
-            <div class="stat-icon">💰</div>
-            <p class="stat-number green"><?= $currency ?> <?= number_format($total_pending_amount, 0) ?></p>
-            <p class="stat-label">Total Balance</p>
-        </div>
-        <?php endif; ?>
     </div>
 
     <!-- PATIENT BILLS LIST -->
@@ -1323,6 +1391,8 @@ include_once '../../components/cashier_sidebar.php';
         <?php foreach ($patient_bills as $patient): 
             $is_otc = $patient['is_otc'] ?? false;
             $card_class = $is_otc ? 'otc-card' : '';
+            $has_pending_prescriptions = ($patient['total_pending_prescriptions'] ?? 0) > 0;
+            $has_confirmed_prescriptions = ($patient['total_confirmed_prescriptions'] ?? 0) > 0;
         ?>
             <div class="patient-card <?= $card_class ?> animate-fade-in-up">
                 <!-- Patient Header -->
@@ -1336,6 +1406,9 @@ include_once '../../components/cashier_sidebar.php';
                                 <?= htmlspecialchars($patient['patient_name']) ?>
                                 <?php if ($is_otc): ?>
                                     <span class="otc-tag"><i class="fas fa-shopping-cart"></i> OTC</span>
+                                <?php endif; ?>
+                                <?php if ($has_pending_prescriptions): ?>
+                                    <span class="locked-tag"><i class="fas fa-lock"></i> <?= $patient['total_pending_prescriptions'] ?> Prescriptions Locked</span>
                                 <?php endif; ?>
                             </div>
                             <div class="patient-meta">
@@ -1411,15 +1484,28 @@ include_once '../../components/cashier_sidebar.php';
                                     $status = $bill['status'] ?? ($is_otc_bill ? 'pending' : 'pending');
                                     $status_class = $is_otc_bill ? 'otc-pending' : $status;
                                     $bill_balance = ($bill['total_amount'] ?? 0) - ($bill['total_paid'] ?? 0);
+                                    
+                                    // ✅ Check if this bill has pending prescriptions (locked)
+                                    $has_pending_prescriptions = ($bill['pending_prescriptions'] ?? 0) > 0;
+                                    $has_confirmed_prescriptions = ($bill['confirmed_prescriptions'] ?? 0) > 0;
+                                    $is_locked = $has_pending_prescriptions;
+                                    $row_class = $is_locked ? 'locked-row' : '';
                                 ?>
-                                    <tr>
+                                    <tr class="<?= $row_class ?>">
                                         <td><?= $i++ ?></td>
                                         <td>
                                             <span class="bill-number">
                                                 <?= $is_otc_bill ? htmlspecialchars($bill['sale_number'] ?? $bill['bill_number'] ?? 'OTC-' . $bill['id']) : htmlspecialchars($bill['bill_number']) ?>
                                             </span>
-                                            <?php if (($bill['total_amount'] ?? 0) == 0): ?>
-                                                <span class="text-xs text-gray-400 block">(Zero)</span>
+                                            <?php if ($is_locked): ?>
+                                                <span class="locked-tag" style="font-size:0.45rem;padding:1px 6px;display:block;margin-top:2px;">
+                                                    <i class="fas fa-lock"></i> <?= $bill['pending_prescriptions'] ?> Pending
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($has_confirmed_prescriptions): ?>
+                                                <span style="font-size:0.45rem;color:var(--success);display:block;margin-top:2px;">
+                                                    <i class="fas fa-check-circle"></i> <?= $bill['confirmed_prescriptions'] ?> Confirmed
+                                                </span>
                                             <?php endif; ?>
                                         </td>
                                         <?php if ($is_otc_bill): ?>
@@ -1480,9 +1566,15 @@ include_once '../../components/cashier_sidebar.php';
                                             </td>
                                         <?php endif; ?>
                                         <td>
-                                            <span class="status-badge <?= $status_class ?>">
-                                                <?= $is_otc_bill ? 'Pending (OTC)' : ucfirst($status) ?>
-                                            </span>
+                                            <?php if ($is_locked): ?>
+                                                <span class="status-badge locked">
+                                                    <i class="fas fa-lock"></i> Locked
+                                                </span>
+                                            <?php else: ?>
+                                                <span class="status-badge <?= $status_class ?>">
+                                                    <?= $is_otc_bill ? 'Pending (OTC)' : ucfirst($status) ?>
+                                                </span>
+                                            <?php endif; ?>
                                         </td>
                                         <td class="text-center">
                                             <span class="text-sm font-semibold"><?= $bill['item_count'] ?? 0 ?></span>
@@ -1510,13 +1602,17 @@ include_once '../../components/cashier_sidebar.php';
                                                         <i class="fas fa-eye"></i> View
                                                     </a>
                                                     
-                                                    <?php if (!$is_admin && ($bill['total_amount'] ?? 0) > 0): ?>
+                                                    <?php if (!$is_locked && ($bill['total_amount'] ?? 0) > 0): ?>
                                                         <a href="process_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-process" title="Process Payment">
                                                             <i class="fas fa-money-bill-wave"></i> Pay
                                                         </a>
+                                                    <?php elseif ($is_locked): ?>
+                                                        <span class="action-status" title="Prescription pending confirmation">
+                                                            <i class="fas fa-lock"></i> Wait Pharm
+                                                        </span>
                                                     <?php endif; ?>
                                                     
-                                                    <?php if ($can_cancel): ?>
+                                                    <?php if ($can_cancel && !$is_locked): ?>
                                                         <a href="?cancel_bill=<?= $bill['id'] ?>&filter=<?= $filter ?>&search=<?= urlencode($search) ?>" 
                                                            class="btn btn-cancel" 
                                                            title="Cancel this bill"
@@ -1573,10 +1669,23 @@ include_once '../../components/cashier_sidebar.php';
                             <a href="patient_bills.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-view" style="width:auto;padding:6px 16px;">
                                 <i class="fas fa-file-invoice"></i> All Bills
                             </a>
-                            <?php if (!$is_admin): ?>
+                            <?php 
+                                $has_locked = false;
+                                foreach ($patient['bills'] as $bill) {
+                                    if (($bill['pending_prescriptions'] ?? 0) > 0) {
+                                        $has_locked = true;
+                                        break;
+                                    }
+                                }
+                            ?>
+                            <?php if (!$has_locked && !$is_admin): ?>
                                 <a href="process_payment.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-process" style="width:auto;padding:6px 16px;">
                                     <i class="fas fa-money-bill-wave"></i> Pay All
                                 </a>
+                            <?php elseif ($has_locked): ?>
+                                <span class="action-status" style="width:auto;padding:6px 16px;background:var(--locked-bg);color:var(--locked-color);border:1px solid var(--locked-color);">
+                                    <i class="fas fa-lock"></i> Wait for Prescription Confirmation
+                                </span>
                             <?php endif; ?>
                         <?php endif; ?>
                     </div>
@@ -1702,12 +1811,12 @@ include_once '../../components/cashier_sidebar.php';
     updateFooterTime();
     setInterval(updateFooterTime, 1000);
 
-    console.log('%c🏥 Braick - Pending Bills (Visit ID Only)', 'font-size:18px;font-weight:bold;color:#059669;');
-    console.log('%c✅ FIXED: Excludes OTC bills (visit_id IS NOT NULL)', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ OTC bills come from otc_sales table', 'font-size:13px;color:#8B5CF6;');
-    console.log('%c✅ Bills with NULL visit_id are EXCLUDED', 'font-size:13px;color:#DC2626;');
+    console.log('%c🏥 Braick - Pending Bills (All Bills Shown)', 'font-size:18px;font-weight:bold;color:#059669;');
+    console.log('%c✅ FIXED: Shows ALL bills including prescriptions', 'font-size:13px;color:#34D399;');
+    console.log('%c🔒 Prescription bills show as LOCKED until confirmed', 'font-size:13px;color:#DC2626;');
+    console.log('%c✅ Confirmed prescriptions ready for payment', 'font-size:13px;color:#34D399;');
     console.log('%c📊 Total Bills: <?= $total_bills_count ?>', 'font-size:13px;color:#64748B;');
-    console.log('%c🛒 OTC Sales: <?= $otc_pending_count ?? 0 ?>', 'font-size:13px;color:#8B5CF6;');
+    console.log('%c🔒 Locked Prescriptions: <?= $total_locked ?? 0 ?>', 'font-size:13px;color:#DC2626;');
 </script>
 
 </body>

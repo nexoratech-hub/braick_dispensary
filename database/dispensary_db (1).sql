@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Aug 31, 2026 at 05:56 PM
+-- Generation Time: Sep 01, 2026 at 09:37 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -303,7 +303,8 @@ INSERT INTO `activity_logs` (`id`, `user_id`, `branch_id`, `patient_id`, `action
 (256, 1, 1, NULL, 'user_login', 'User logged in: System Admin (Role: admin)', NULL, NULL, '2026-08-31 15:39:13', '2026-08-31 15:39:13'),
 (257, 1, 1, NULL, 'employee_updated', 'Employee ANGERITHA KIMARO updated (Role: laboratory) - Password UPDATED and INVALIDATED old password', NULL, NULL, '2026-08-31 15:55:29', '2026-08-31 15:55:29'),
 (258, 1, 1, NULL, 'user_logout', 'User logged out: System Admin (Role: admin)', NULL, NULL, '2026-08-31 15:55:32', '2026-08-31 15:55:32'),
-(259, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-08-31 15:55:42', '2026-08-31 15:55:42');
+(259, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-08-31 15:55:42', '2026-08-31 15:55:42'),
+(260, 1, 1, NULL, 'profile_updated', 'Profile updated by: System Admin', NULL, NULL, '2026-09-01 19:34:37', '2026-09-01 19:34:37');
 
 -- --------------------------------------------------------
 
@@ -873,7 +874,8 @@ CREATE TABLE `medications_inventory` (
 INSERT INTO `medications_inventory` (`id`, `medication_name`, `category`, `unit`, `quantity`, `reorder_level`, `unit_cost`, `selling_price`, `supplier`, `expiry_date`, `batch_number`, `branch_id`, `status`, `created_at`, `updated_at`) VALUES
 (4, 'AMOXILINE', 'Antibiotics', 'bottle', 70, 50, 1000.00, 2000.00, '', '2027-01-24', 'BATCH-20260824-914E09', 1, 'active', '2026-08-24 13:57:47', '2026-08-31 15:15:41'),
 (5, 'AMOXILINE', 'Antibiotics', 'bottle', 0, 50, 1200.00, 2400.00, '', '2026-12-24', 'BATCH-20260824-F8F23A', 1, 'active', '2026-08-24 13:58:28', '2026-08-25 21:52:29'),
-(6, 'ALBENDAZOLE', 'Antibiotics', 'pcs', 64, 50, 1000.00, 2000.00, 'AVANA MEDICS', '2027-03-25', 'BATCH-20260825-AEB716', 1, 'active', '2026-08-25 08:31:29', '2026-08-31 15:15:49');
+(6, 'ALBENDAZOLE', 'Antibiotics', 'pcs', 64, 50, 1000.00, 2000.00, 'AVANA MEDICS', '2027-03-25', 'BATCH-20260825-AEB716', 1, 'active', '2026-08-25 08:31:29', '2026-08-31 15:15:49'),
+(7, 'ALBENDAZOLE', 'Antibiotics', 'pcs', 1000, 100, 700.00, 1500.00, '', '2027-09-01', 'BATCH-20260901-D1469C', 1, 'active', '2026-09-01 18:41:14', '2026-09-01 18:41:14');
 
 -- --------------------------------------------------------
 
@@ -1754,7 +1756,7 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`id`, `username`, `password`, `password_changed_at`, `is_default_password`, `full_name`, `email`, `phone`, `role`, `branch_id`, `specialty`, `is_online`, `last_online`, `profile_pic`, `status`, `created_at`, `updated_at`) VALUES
-(1, 'admin1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', NULL, 1, 'System Admin', 'admin@braick.com', '+255 700 000 000', 'admin', 1, NULL, 0, '2026-08-31 15:39:13', NULL, 'active', '2026-08-23 12:26:10', '2026-08-31 15:39:13'),
+(1, 'admin1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', NULL, 1, 'System Admin', 'admin@braick.com', '+255 700 000 000', 'admin', 1, NULL, 0, '2026-08-31 15:39:13', 'user_1_1788291272.png', 'active', '2026-08-23 12:26:10', '2026-09-01 19:34:37'),
 (3, 'admin2', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', NULL, 1, 'BRAICK', 'braick.admin@braick.com', '+255 700 000 000', 'admin', 1, NULL, 0, '2026-08-26 14:10:40', NULL, 'active', '2026-08-23 12:41:40', '2026-08-31 15:39:04'),
 (4, 'Dr.Dodoma1', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', '2026-08-31 15:39:04', 0, 'Dr.ERICK JOHN', 'erick.dodoma@braick.com', '+255 700 000 011', 'doctor', 1, 'General Medicine', 0, '2026-08-31 15:29:43', 'user_4_1787697956.png', 'active', '2026-08-23 12:41:40', '2026-08-31 15:39:04'),
 (5, 'Dr.Dodoma2', '$2y$10$92IXUNpkjO0rOQ5byMi.Ye4oKoEa3Ro9llC/.og/at2.uheWG/igi', NULL, 1, 'Dr. Grace Peter', 'grace.dodoma@braick.com', '+255 700 000 012', 'doctor', 1, 'Pediatrics', 0, '2026-08-29 06:27:23', NULL, 'active', '2026-08-23 12:41:40', '2026-08-29 06:27:23'),
@@ -2418,7 +2420,7 @@ ALTER TABLE `vital_signs`
 -- AUTO_INCREMENT for table `activity_logs`
 --
 ALTER TABLE `activity_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=260;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=261;
 
 --
 -- AUTO_INCREMENT for table `appointments`
@@ -2496,7 +2498,7 @@ ALTER TABLE `medical_equipment`
 -- AUTO_INCREMENT for table `medications_inventory`
 --
 ALTER TABLE `medications_inventory`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=7;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=8;
 
 --
 -- AUTO_INCREMENT for table `notifications`
