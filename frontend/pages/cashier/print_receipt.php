@@ -4,6 +4,7 @@
 // CASHIER - PRINT RECEIPT 
 // SUPPORTS: Regular Bills (with visit_id) AND OTC Sales
 // WITH BEAUTIFUL DESIGN AND PRINT BUTTON
+// FIXED: Medication instructions show dosage, route, frequency, instructions
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -207,7 +208,7 @@ try {
     }
     
     // ================================================================
-    // CASE 2: REGULAR BILL
+    // CASE 2: REGULAR BILL - FIXED QUERY FOR MEDICATION INSTRUCTIONS
     // ================================================================
     if (!$is_otc && $bill_id > 0) {
         $stmt = $db->prepare("
@@ -241,25 +242,133 @@ try {
         $bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($bill) {
+            // ================================================================
+            // STEP 1: Get bill items
+            // ================================================================
             $stmt = $db->prepare("
                 SELECT 
-                    bi.*,
-                    pi.instructions as medication_instructions,
-                    pi.dosage,
-                    pi.frequency,
-                    pi.duration,
-                    pi.route,
-                    p.prescription_number,
-                    p.status as prescription_status
+                    bi.*
                 FROM bill_items bi
-                LEFT JOIN prescriptions p ON bi.reference_id = p.id AND bi.reference_type = 'prescription'
-                LEFT JOIN prescription_items pi ON p.id = pi.prescription_id AND pi.medication_name = bi.item_name
                 WHERE bi.bill_id = ? AND bi.status != 'cancelled'
-                ORDER BY bi.item_type ASC, bi.created_at ASC
+                ORDER BY 
+                    CASE 
+                        WHEN bi.item_type = 'medication' THEN 1 
+                        ELSE 2 
+                    END,
+                    bi.created_at ASC
             ");
             $stmt->execute([$bill_id]);
-            $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            $bill_items_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
+            // ================================================================
+            // STEP 2: Get prescriptions and their items for this visit
+            // ================================================================
+            // First get the visit_id from the bill
+            $visit_id = $bill['visit_id'] ?? 0;
+            
+            $prescription_items_map = [];
+            $prescription_numbers = [];
+            
+            if ($visit_id > 0) {
+                // Get all prescriptions for this visit
+                $stmt = $db->prepare("
+                    SELECT 
+                        p.id as prescription_id,
+                        p.prescription_number,
+                        p.status as prescription_status,
+                        pi.id as item_id,
+                        pi.medication_name,
+                        pi.dosage,
+                        pi.frequency,
+                        pi.quantity as rx_quantity,
+                        pi.duration,
+                        pi.route,
+                        pi.instructions,
+                        pi.pharmacy_instructions,
+                        pi.unit_price,
+                        pi.total_price as rx_total_price,
+                        pi.inventory_id
+                    FROM prescriptions p
+                    LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
+                    WHERE p.visit_id = ?
+                    ORDER BY p.created_at DESC, pi.id ASC
+                ");
+                $stmt->execute([$visit_id]);
+                $prescription_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                
+                // Build a map of medication_name -> prescription item details
+                foreach ($prescription_data as $rx) {
+                    if (!empty($rx['medication_name'])) {
+                        $key = trim($rx['medication_name']);
+                        // Store the first occurrence with the most details
+                        if (!isset($prescription_items_map[$key]) || 
+                            (empty($prescription_items_map[$key]['instructions']) && !empty($rx['instructions']))) {
+                            $prescription_items_map[$key] = $rx;
+                        }
+                        // Store prescription number
+                        if (!empty($rx['prescription_number']) && !in_array($rx['prescription_number'], $prescription_numbers)) {
+                            $prescription_numbers[] = $rx['prescription_number'];
+                        }
+                    }
+                }
+            }
+            
+            // ================================================================
+            // STEP 3: Merge bill items with prescription details
+            // ================================================================
+            $all_items = [];
+            foreach ($bill_items_data as $item) {
+                // Try to find matching prescription item by medication name
+                $item_name = trim($item['item_name'] ?? '');
+                // Remove batch info from item name for matching
+                $clean_name = preg_replace('/\s*\(Batch:.*\)/', '', $item_name);
+                $clean_name = trim($clean_name);
+                
+                $rx_details = null;
+                if (!empty($clean_name) && isset($prescription_items_map[$clean_name])) {
+                    $rx_details = $prescription_items_map[$clean_name];
+                } elseif (!empty($item_name) && isset($prescription_items_map[$item_name])) {
+                    $rx_details = $prescription_items_map[$item_name];
+                } else {
+                    // Try partial match
+                    foreach ($prescription_items_map as $rx_name => $rx_data) {
+                        if (stripos($item_name, $rx_name) !== false || stripos($rx_name, $item_name) !== false) {
+                            $rx_details = $rx_data;
+                            break;
+                        }
+                    }
+                }
+                
+                // Merge the data
+                $merged_item = $item;
+                if ($rx_details) {
+                    $merged_item['dosage'] = $rx_details['dosage'] ?? '';
+                    $merged_item['frequency'] = $rx_details['frequency'] ?? '';
+                    $merged_item['route'] = $rx_details['route'] ?? '';
+                    $merged_item['duration'] = $rx_details['duration'] ?? '';
+                    $merged_item['rx_quantity'] = $rx_details['rx_quantity'] ?? $item['quantity'] ?? 1;
+                    $merged_item['instructions'] = $rx_details['instructions'] ?? '';
+                    $merged_item['pharmacy_instructions'] = $rx_details['pharmacy_instructions'] ?? '';
+                    $merged_item['prescription_number'] = $rx_details['prescription_number'] ?? '';
+                    $merged_item['prescription_status'] = $rx_details['prescription_status'] ?? '';
+                    $merged_item['rx_total_price'] = $rx_details['rx_total_price'] ?? $item['total_price'] ?? 0;
+                } else {
+                    $merged_item['dosage'] = '';
+                    $merged_item['frequency'] = '';
+                    $merged_item['route'] = '';
+                    $merged_item['duration'] = '';
+                    $merged_item['rx_quantity'] = $item['quantity'] ?? 1;
+                    $merged_item['instructions'] = '';
+                    $merged_item['pharmacy_instructions'] = '';
+                    $merged_item['prescription_number'] = '';
+                    $merged_item['prescription_status'] = '';
+                    $merged_item['rx_total_price'] = $item['total_price'] ?? 0;
+                }
+                
+                $all_items[] = $merged_item;
+            }
+            
+            // Separate medications from other items
             $medication_items = [];
             $other_items = [];
             foreach ($all_items as $item) {
@@ -270,6 +379,7 @@ try {
                 }
             }
             
+            // Get payment info
             if ($payment_id > 0) {
                 $stmt = $db->prepare("SELECT * FROM payments WHERE id = ? AND bill_id = ?");
                 $stmt->execute([$payment_id, $bill_id]);
@@ -378,9 +488,6 @@ $show_receipt = !$has_error && $bill;
             margin: 0 auto;
         }
         
-        /* ================================================================
-           PAGE HEADER WITH PRINT BUTTONS
-           ================================================================ */
         .page-header {
             max-width: 450px;
             margin: 0 auto 16px auto;
@@ -449,22 +556,6 @@ $show_receipt = !$has_error && $bill;
             box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
         }
         
-        .page-header .btn-download {
-            background: #059669;
-            color: white;
-            border: 2px solid #059669;
-        }
-        
-        .page-header .btn-download:hover {
-            background: #047857;
-            border-color: #047857;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        /* ================================================================
-           RECEIPT
-           ================================================================ */
         .receipt {
             background: white;
             padding: 24px 28px;
@@ -578,7 +669,6 @@ $show_receipt = !$has_error && $bill;
         .receipt-row .value.paid-value { color: #059669; }
         .receipt-row .value.balance-value { color: #DC2626; }
         
-        /* SECTION HEADERS */
         .section-header {
             font-weight: 700;
             font-size: 0.75rem;
@@ -609,14 +699,13 @@ $show_receipt = !$has_error && $bill;
             font-size: 0.75rem;
         }
         
-        /* ITEMS */
         .receipt-items {
             margin: 4px 0;
             padding: 4px 0;
         }
         
         .receipt-item {
-            padding: 4px 0;
+            padding: 6px 0;
             border-bottom: 1px dotted #E2E8F0;
         }
         
@@ -656,28 +745,87 @@ $show_receipt = !$has_error && $bill;
             margin-top: 1px;
         }
         
-        .receipt-item .item-instruction {
+        /* ================================================================
+           MEDICATION DETAILS - DOSAGE, ROUTE, FREQUENCY, INSTRUCTIONS
+           ================================================================ */
+        .receipt-item .med-details {
+            display: block;
+            font-size: 0.55rem;
+            color: #64748B;
+            margin-top: 2px;
+            padding-left: 4px;
+        }
+        
+        .receipt-item .med-details .med-tag {
+            display: inline-block;
+            padding: 0 8px;
+            border-radius: 4px;
+            margin-right: 4px;
+            font-size: 0.5rem;
+            font-weight: 600;
+            color: #475569;
+            background: #F1F5F9;
+        }
+        
+        .receipt-item .med-details .med-tag.dosage-tag {
+            background: #DBEAFE;
+            color: #0B5ED7;
+        }
+        
+        .receipt-item .med-details .med-tag.route-tag {
+            background: #D1FAE5;
+            color: #059669;
+        }
+        
+        .receipt-item .med-details .med-tag.freq-tag {
+            background: #FEF3C7;
+            color: #D97706;
+        }
+        
+        .receipt-item .med-details .med-tag.duration-tag {
+            background: #EDE9FE;
+            color: #7C3AED;
+        }
+        
+        .receipt-item .med-instruction-box {
+            display: block;
             font-size: 0.6rem;
             color: #64748B;
             font-style: italic;
-            display: block;
-            padding: 3px 8px;
+            padding: 4px 10px;
             border-left: 3px solid #D97706;
             margin-top: 4px;
             background: #FFFBEB;
             border-radius: 4px;
         }
         
-        .receipt-item .item-instruction.otc-instruction {
+        .receipt-item .med-instruction-box i {
+            color: #D97706;
+            margin-right: 4px;
+        }
+        
+        .receipt-item .med-instruction-box.otc-instruction {
             border-left-color: #7C3AED;
             background: #EDE9FE;
         }
         
-        .receipt-item .item-dosage {
-            font-size: 0.55rem;
-            color: #64748B;
+        .receipt-item .med-instruction-box.otc-instruction i {
+            color: #7C3AED;
+        }
+        
+        .receipt-item .pharmacy-instruction {
             display: block;
-            margin-top: 1px;
+            font-size: 0.55rem;
+            color: #0B5ED7;
+            padding: 3px 10px;
+            border-left: 3px solid #0B5ED7;
+            margin-top: 3px;
+            background: #E8F0FE;
+            border-radius: 4px;
+        }
+        
+        .receipt-item .pharmacy-instruction i {
+            color: #0B5ED7;
         }
         
         /* TOTALS */
@@ -727,11 +875,6 @@ $show_receipt = !$has_error && $bill;
             color: #DC2626;
         }
         
-        .discount-value .currency {
-            color: #DC2626;
-        }
-        
-        /* CATEGORY TOTALS */
         .category-totals {
             display: flex;
             gap: 8px;
@@ -777,7 +920,6 @@ $show_receipt = !$has_error && $bill;
             margin-top: 2px;
         }
         
-        /* PAYMENT STATUS */
         .payment-status {
             display: inline-block;
             padding: 2px 12px;
@@ -794,7 +936,6 @@ $show_receipt = !$has_error && $bill;
         .payment-status.cancelled { background: #FEE2E2; color: #DC2626; }
         .payment-status.otc-paid { background: #EDE9FE; color: #7C3AED; }
         
-        /* PAYMENT METHOD */
         .payment-method-badge {
             display: inline-block;
             padding: 2px 10px;
@@ -805,7 +946,6 @@ $show_receipt = !$has_error && $bill;
             color: #475569;
         }
         
-        /* FOOTER */
         .receipt-footer {
             text-align: center;
             font-size: 0.6rem;
@@ -843,7 +983,6 @@ $show_receipt = !$has_error && $bill;
             opacity: 0.6;
         }
         
-        /* ADMIN CONTACT */
         .admin-contact-line {
             display: flex;
             justify-content: center;
@@ -866,7 +1005,6 @@ $show_receipt = !$has_error && $bill;
             color: #059669;
         }
         
-        /* BRANCH INFO */
         .branch-info {
             text-align: center;
             font-size: 0.55rem;
@@ -878,9 +1016,6 @@ $show_receipt = !$has_error && $bill;
             color: #0B5ED7;
         }
         
-        /* ================================================================
-           ERROR
-           ================================================================ */
         .error-box {
             max-width: 450px;
             margin: 0 auto;
@@ -924,9 +1059,6 @@ $show_receipt = !$has_error && $bill;
             color: white;
         }
         
-        /* ================================================================
-           PRINT
-           ================================================================ */
         @media print {
             body { background: white; padding: 0; margin: 0; }
             .receipt-wrapper { max-width: 100%; margin: 0; }
@@ -943,14 +1075,14 @@ $show_receipt = !$has_error && $bill;
                 print-color-adjust: exact !important;
             }
             
-            .receipt-item .item-instruction {
-                background: #FFFBEB !important;
+            .receipt-item .med-instruction-box {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
             
-            .receipt-item .item-instruction.otc-instruction {
-                background: #EDE9FE !important;
+            .receipt-item .pharmacy-instruction {
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
             }
             
             .payment-status.paid,
@@ -974,9 +1106,6 @@ $show_receipt = !$has_error && $bill;
             }
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 480px) {
             .receipt { padding: 16px 18px; border-radius: 12px; }
             .receipt-logo-text { font-size: 1.2rem; }
@@ -1171,8 +1300,8 @@ $show_receipt = !$has_error && $bill;
                                 </span>
                             </div>
                             <?php if (!empty($item['instructions'])): ?>
-                                <span class="item-instruction otc-instruction">
-                                    <i class="fas fa-prescription" style="font-size:0.45rem;"></i>
+                                <span class="med-instruction-box otc-instruction">
+                                    <i class="fas fa-prescription"></i>
                                     <?= htmlspecialchars($item['instructions']) ?>
                                 </span>
                             <?php endif; ?>
@@ -1215,7 +1344,7 @@ $show_receipt = !$has_error && $bill;
             <?php endif; ?>
             
             <!-- ================================================================ -->
-            <!-- MEDICATIONS SECTION - WITH INSTRUCTIONS -->
+            <!-- MEDICATIONS SECTION - WITH FULL INSTRUCTIONS -->
             <!-- ================================================================ -->
             <?php if (!$is_otc && count($medication_items) > 0): ?>
                 <div class="section-header medication">
@@ -1224,40 +1353,81 @@ $show_receipt = !$has_error && $bill;
                 </div>
                 <div class="receipt-items">
                     <?php foreach ($medication_items as $item): 
+                        // Get medication details from prescription_items
                         $dosage = $item['dosage'] ?? '';
                         $frequency = $item['frequency'] ?? '';
                         $route = $item['route'] ?? '';
                         $duration = $item['duration'] ?? '';
-                        $instructions = $item['medication_instructions'] ?? $item['instructions'] ?? '';
+                        $rx_quantity = $item['rx_quantity'] ?? $item['quantity'] ?? 1;
+                        $instructions = $item['instructions'] ?? '';
+                        $pharmacy_instructions = $item['pharmacy_instructions'] ?? '';
                         $prescription_number = $item['prescription_number'] ?? '';
+                        
+                        // Check if we have any medication details to show
+                        $has_med_details = !empty($dosage) || !empty($frequency) || !empty($route) || !empty($duration);
                     ?>
                         <div class="receipt-item">
                             <div class="item-top">
                                 <span class="item-name">
                                     <?= htmlspecialchars($item['item_name'] ?? 'N/A') ?>
-                                    <?php if (isset($item['quantity']) && $item['quantity'] > 1): ?>
-                                        <span class="item-qty">x<?= $item['quantity'] ?></span>
+                                    <?php if ($rx_quantity > 1): ?>
+                                        <span class="item-qty">x<?= $rx_quantity ?></span>
                                     <?php endif; ?>
                                     <span class="item-type">
                                         <?= !empty($prescription_number) ? 'RX: ' . htmlspecialchars($prescription_number) : '' ?>
                                     </span>
-                                    <?php if (!empty($dosage) || !empty($frequency) || !empty($route) || !empty($duration)): ?>
-                                        <span class="item-dosage">
-                                            <?= !empty($dosage) ? '💊 ' . htmlspecialchars($dosage) . ' mg' : '' ?>
-                                            <?= !empty($frequency) ? ' | ' . htmlspecialchars($frequency) : '' ?>
-                                            <?= !empty($route) ? ' | ' . htmlspecialchars($route) : '' ?>
-                                            <?= !empty($duration) ? ' | ' . htmlspecialchars($duration) . ' days' : '' ?>
-                                        </span>
-                                    <?php endif; ?>
                                 </span>
                                 <span class="item-price">
-                                    <?= $currency ?> <?= number_format($item['total_price'] ?? $item['unit_price'] ?? 0, 0) ?>
+                                    <?= $currency ?> <?= number_format($item['total_price'] ?? $item['rx_total_price'] ?? 0, 0) ?>
                                 </span>
                             </div>
+                            
+                            <!-- ================================================================ -->
+                            <!-- MEDICATION DETAILS: DOSAGE, ROUTE, FREQUENCY, DURATION -->
+                            <!-- ================================================================ -->
+                            <?php if ($has_med_details): ?>
+                                <span class="med-details">
+                                    <?php if (!empty($dosage)): ?>
+                                        <span class="med-tag dosage-tag">💊 <?= htmlspecialchars($dosage) ?> mg</span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($route)): ?>
+                                        <span class="med-tag route-tag">📌 <?= htmlspecialchars($route) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($frequency)): ?>
+                                        <span class="med-tag freq-tag">⏰ <?= htmlspecialchars($frequency) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($duration)): ?>
+                                        <span class="med-tag duration-tag">📅 <?= htmlspecialchars($duration) ?> days</span>
+                                    <?php endif; ?>
+                                </span>
+                            <?php endif; ?>
+                            
+                            <!-- ================================================================ -->
+                            <!-- INSTRUCTIONS (From prescription_items) -->
+                            <!-- ================================================================ -->
                             <?php if (!empty($instructions)): ?>
-                                <span class="item-instruction">
-                                    <i class="fas fa-prescription" style="font-size:0.45rem;"></i>
-                                    <?= htmlspecialchars($instructions) ?>
+                                <span class="med-instruction-box">
+                                    <i class="fas fa-prescription"></i>
+                                    <strong>Instructions:</strong> <?= htmlspecialchars($instructions) ?>
+                                </span>
+                            <?php endif; ?>
+                            
+                            <!-- ================================================================ -->
+                            <!-- PHARMACY INSTRUCTIONS (If any) -->
+                            <!-- ================================================================ -->
+                            <?php if (!empty($pharmacy_instructions)): ?>
+                                <span class="pharmacy-instruction">
+                                    <i class="fas fa-pharmacy"></i>
+                                    <strong>Pharmacy:</strong> <?= htmlspecialchars($pharmacy_instructions) ?>
+                                </span>
+                            <?php endif; ?>
+                            
+                            <!-- ================================================================ -->
+                            <!-- DEBUG: Show raw data if nothing else -->
+                            <!-- ================================================================ -->
+                            <?php if (!$has_med_details && empty($instructions) && empty($pharmacy_instructions)): ?>
+                                <span class="med-details" style="color:#94A3B8;font-size:0.5rem;">
+                                    <i class="fas fa-info-circle"></i> No additional instructions
                                 </span>
                             <?php endif; ?>
                         </div>
@@ -1383,7 +1553,7 @@ $show_receipt = !$has_error && $bill;
     console.log('%c✅ Supports Regular Bills (with visit_id) and OTC Sales', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Beautiful design with gradient header', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Print button available', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Medications show instructions', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Medications show dosage, route, frequency, instructions', 'font-size:13px; color:#D97706;');
     <?php if ($is_otc): ?>
         console.log('%c🛒 OTC Sale: <?= htmlspecialchars($bill['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
         console.log('%c👤 Customer: <?= htmlspecialchars($bill['patient_name'] ?? 'Walk-in') ?>', 'font-size:13px; color:#7C3AED;');
@@ -1394,8 +1564,25 @@ $show_receipt = !$has_error && $bill;
         console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
         console.log('%c💊 Medications: <?= count($medication_items) ?> items', 'font-size:13px; color:#D97706;');
         console.log('%c📄 Other Bills: <?= count($other_items) ?> items', 'font-size:13px; color:#0B5ED7;');
+        console.log('%c📋 Each medication shows: Dosage, Route, Frequency, Duration, Instructions', 'font-size:13px; color:#34D399;');
     <?php endif; ?>
     console.log('%c📞 Admin: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#0B5ED7;');
+    
+    // Debug - show medication items data
+    console.log('%c📋 Medication Items Data:', 'font-size:13px; color:#D97706;');
+    <?php 
+    if (!$is_otc && count($medication_items) > 0) {
+        foreach ($medication_items as $idx => $item) {
+            echo "console.log('  Item " . ($idx+1) . ": " . addslashes($item['item_name'] ?? 'N/A') . "');";
+            echo "console.log('    Dosage: " . addslashes($item['dosage'] ?? 'empty') . "');";
+            echo "console.log('    Frequency: " . addslashes($item['frequency'] ?? 'empty') . "');";
+            echo "console.log('    Route: " . addslashes($item['route'] ?? 'empty') . "');";
+            echo "console.log('    Duration: " . addslashes($item['duration'] ?? 'empty') . "');";
+            echo "console.log('    Instructions: " . addslashes($item['instructions'] ?? 'empty') . "');";
+            echo "console.log('    Pharmacy Instructions: " . addslashes($item['pharmacy_instructions'] ?? 'empty') . "');";
+        }
+    }
+    ?>
 </script>
 
 </body>

@@ -1,9 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// COMPLETE CONSULTATION - FIXED STATUS ISSUE
+// COMPLETE CONSULTATION - WITH ALL FIXES
 // BRAICK DISPENSARY
-// FIXED: Status changes to 'waiting' on save
+// FIXES: Medication grouping, Auto-complete (3 sec), Waiting filter,
+//        Complete consultation shows all sections, LAB CART FIXED
 // ================================================================
 
 // Start session
@@ -67,7 +68,7 @@ try {
 }
 
 // ================================================================
-// COMMON COMPLAINTS LIST (maps to 'symptoms' column)
+// COMMON COMPLAINTS LIST
 // ================================================================
 $common_complaints = [
     'Fever', 'Headache', 'Cough', 'Sore Throat', 'Runny Nose',
@@ -343,7 +344,7 @@ function autoCompleteVisit($db, $visit_id) {
 }
 
 // ================================================================
-// DIAGNOSIS SAVE FUNCTION (reusable)
+// DIAGNOSIS SAVE FUNCTION
 // ================================================================
 function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, $data) {
     $diagnosis_id = $data['diagnosis_id'] ?? '';
@@ -461,9 +462,11 @@ try {
     $lab_tests_catalog = []; 
 }
 
-// 3. Medications
+// 3. Medications - GROUPED BY NAME AND CATEGORY
 $medications_list = [];
+$medications_grouped = [];
 try {
+    // Get all active medications with stock
     $stmt = $db->prepare("
         SELECT id, medication_name, category, unit, selling_price, quantity, 
                batch_number, expiry_date
@@ -474,13 +477,38 @@ try {
         AND (expiry_date IS NULL OR expiry_date > CURDATE())
         ORDER BY 
             medication_name ASC,
+            category ASC,
             CASE WHEN expiry_date IS NULL THEN 1 ELSE 0 END,
             expiry_date ASC
     ");
     $stmt->execute([$doctor_branch_id]);
     $medications_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Group medications by name and category
+    foreach ($medications_list as $med) {
+        $key = $med['medication_name'] . '|' . $med['category'];
+        if (!isset($medications_grouped[$key])) {
+            $medications_grouped[$key] = [
+                'name' => $med['medication_name'],
+                'category' => $med['category'],
+                'unit' => $med['unit'],
+                'selling_price' => $med['selling_price'],
+                'total_quantity' => 0,
+                'batches' => []
+            ];
+        }
+        $medications_grouped[$key]['total_quantity'] += $med['quantity'];
+        $medications_grouped[$key]['batches'][] = [
+            'id' => $med['id'],
+            'quantity' => $med['quantity'],
+            'batch_number' => $med['batch_number'],
+            'expiry_date' => $med['expiry_date'],
+            'selling_price' => $med['selling_price']
+        ];
+    }
 } catch (Exception $e) { 
-    $medications_list = []; 
+    $medications_list = [];
+    $medications_grouped = [];
 }
 
 // 4. Procedures
@@ -591,17 +619,20 @@ try {
 $sections_frozen = ($has_active_lab && !$lab_results_available && !$is_completed && !$is_waiting);
 
 // ================================================================
-// GET PRESCRIPTIONS AND ITEMS
+// GET PRESCRIPTIONS AND ITEMS - GROUPED FOR DISPLAY
 // ================================================================
 $prescriptions = [];
+$prescriptions_grouped = [];
 $medications_total = 0;
+
 try {
     $stmt = $db->prepare("
         SELECT p.*, 
                pi.id as item_id, pi.medication_name, pi.dosage, pi.frequency, 
                pi.quantity, pi.duration, pi.route, pi.instructions,
                pi.unit_price, pi.total_price,
-               pi.dispensed_at, pi.dispensed_by
+               pi.dispensed_at, pi.dispensed_by,
+               pi.inventory_id
         FROM prescriptions p
         LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
         WHERE p.visit_id = ?
@@ -609,11 +640,40 @@ try {
     ");
     $stmt->execute([$visit_id]);
     $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // Group prescriptions by medication name and category for display
     foreach ($prescriptions as $presc) {
         $medications_total += $presc['total_price'] ?? 0;
+        $key = $presc['medication_name'] . '|' . ($presc['dosage'] ?? '');
+        if (!isset($prescriptions_grouped[$key])) {
+            $prescriptions_grouped[$key] = [
+                'prescription_id' => $presc['id'],
+                'medication_name' => $presc['medication_name'],
+                'dosage' => $presc['dosage'],
+                'frequency' => $presc['frequency'],
+                'duration' => $presc['duration'],
+                'route' => $presc['route'],
+                'instructions' => $presc['instructions'],
+                'total_quantity' => 0,
+                'unit_price' => $presc['unit_price'] ?? 0,
+                'total_price' => 0,
+                'status' => $presc['status'] ?? 'pending',
+                'items' => []
+            ];
+        }
+        $prescriptions_grouped[$key]['total_quantity'] += $presc['quantity'] ?? 0;
+        $prescriptions_grouped[$key]['total_price'] += $presc['total_price'] ?? 0;
+        $prescriptions_grouped[$key]['items'][] = [
+            'item_id' => $presc['item_id'],
+            'inventory_id' => $presc['inventory_id'],
+            'quantity' => $presc['quantity'],
+            'batch_number' => $presc['batch_number'] ?? '',
+            'dispensed_at' => $presc['dispensed_at'] ?? null
+        ];
     }
 } catch (Exception $e) { 
-    $prescriptions = []; 
+    $prescriptions = [];
+    $prescriptions_grouped = [];
 }
 
 // ================================================================
@@ -911,7 +971,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                    pi.id as item_id, pi.medication_name, pi.dosage, pi.frequency, 
                    pi.quantity, pi.duration, pi.route, pi.instructions,
                    pi.unit_price, pi.total_price,
-                   pi.dispensed_at, pi.dispensed_by
+                   pi.dispensed_at, pi.dispensed_by,
+                   pi.inventory_id
             FROM prescriptions p
             LEFT JOIN prescription_items pi ON p.id = pi.prescription_id
             WHERE p.visit_id = ?
@@ -1229,7 +1290,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD MEDICATION - WITH DIAGNOSIS SAVE
+    // AJAX: ADD MEDICATION - WITH DIAGNOSIS SAVE AND GROUPING
     // ================================================================
     if ($action === 'add_medication') {
         header('Content-Type: application/json');
@@ -1243,7 +1304,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $diagnosis_saved = false;
         $diagnosis_data = [];
         
-        // Get diagnosis data from POST
         $diagnosis_id = $_POST['diagnosis_id'] ?? '';
         $diagnosis_manual = trim($_POST['diagnosis_manual'] ?? '');
         $treatment = trim($_POST['treatment'] ?? '');
@@ -1273,7 +1333,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             }
         }
         
-        // Now add medication
+        // Now add medication - with grouping support
         $inventory_id = (int)($_POST['inventory_id'] ?? 0);
         $quantity = (int)($_POST['quantity'] ?? 1);
         $dosage = trim($_POST['dosage'] ?? '');
@@ -1288,7 +1348,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             try {
                 $stmt = $db->prepare("
                     SELECT id, medication_name, selling_price, unit, quantity as stock, 
-                           batch_number, expiry_date
+                           batch_number, expiry_date, category
                     FROM medications_inventory 
                     WHERE id = ? AND status = 'active' AND branch_id = ?
                 ");
@@ -1305,110 +1365,266 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                         }
                     }
                     
+                    // Check if we're using a grouped medication (with total stock across batches)
+                    // The doctor selects from grouped list, but we need to deduct from specific batch
+                    // Use the inventory_id from the batch the doctor selected
+                    
                     if ($med['stock'] < $quantity) {
-                        $response['message'] = '❌ Insufficient stock! Available: ' . $med['stock'];
-                        echo json_encode($response);
-                        exit;
+                        // Check if there's enough stock across all batches of this medication
+                        $stmt = $db->prepare("
+                            SELECT SUM(quantity) as total_stock
+                            FROM medications_inventory 
+                            WHERE medication_name = ? AND category = ? 
+                            AND status = 'active' AND branch_id = ?
+                            AND (expiry_date IS NULL OR expiry_date > CURDATE())
+                        ");
+                        $stmt->execute([$med['medication_name'], $med['category'], $doctor_branch_id]);
+                        $total_stock = $stmt->fetch(PDO::FETCH_ASSOC)['total_stock'] ?? 0;
+                        
+                        if ($total_stock < $quantity) {
+                            $response['message'] = '❌ Insufficient stock across all batches! Available: ' . $total_stock;
+                            echo json_encode($response);
+                            exit;
+                        }
+                        
+                        // Need to deduct from multiple batches
+                        // Get all batches with stock, ordered by expiry date (oldest first)
+                        $stmt = $db->prepare("
+                            SELECT id, quantity as stock, batch_number, selling_price
+                            FROM medications_inventory 
+                            WHERE medication_name = ? AND category = ? 
+                            AND status = 'active' AND branch_id = ?
+                            AND quantity > 0
+                            AND (expiry_date IS NULL OR expiry_date > CURDATE())
+                            ORDER BY expiry_date ASC, id ASC
+                        ");
+                        $stmt->execute([$med['medication_name'], $med['category'], $doctor_branch_id]);
+                        $batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                        
+                        $remaining = $quantity;
+                        $batch_deductions = [];
+                        $total_price = 0;
+                        
+                        $db->beginTransaction();
+                        
+                        foreach ($batches as $batch) {
+                            if ($remaining <= 0) break;
+                            
+                            $deduct = min($remaining, $batch['stock']);
+                            $new_stock = $batch['stock'] - $deduct;
+                            
+                            $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ?");
+                            $stmt->execute([$new_stock, $batch['id']]);
+                            
+                            $batch_deductions[] = [
+                                'batch_id' => $batch['id'],
+                                'batch_number' => $batch['batch_number'],
+                                'deducted' => $deduct,
+                                'unit_price' => $batch['selling_price']
+                            ];
+                            
+                            $total_price += $batch['selling_price'] * $deduct;
+                            $remaining -= $deduct;
+                        }
+                        
+                        // Create prescription and items for each batch deduction
+                        $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                        
+                        $stmt = $db->prepare("
+                            INSERT INTO prescriptions (
+                                prescription_number, visit_id, patient_id, doctor_id, 
+                                status, branch_id, created_at
+                            ) VALUES (?, ?, ?, ?, 'pending', ?, NOW())
+                        ");
+                        $stmt->execute([
+                            $prescription_number, $visit_id, $patient_id, $doctor_id,
+                            $doctor_branch_id
+                        ]);
+                        $prescription_id = $db->lastInsertId();
+                        
+                        // Insert prescription items for each batch
+                        foreach ($batch_deductions as $deduct) {
+                            $unit_price = $deduct['unit_price'];
+                            $batch_total = $unit_price * $deduct['deducted'];
+                            
+                            $stmt = $db->prepare("
+                                INSERT INTO prescription_items (
+                                    prescription_id, patient_id, inventory_id, medication_name, 
+                                    dosage, frequency, quantity, duration, route, instructions, 
+                                    unit_price, total_price, branch_id, created_at
+                                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                            ");
+                            $stmt->execute([
+                                $prescription_id, $patient_id, $deduct['batch_id'],
+                                $med['medication_name'], $dosage, $frequency, $deduct['deducted'],
+                                $duration, $route, $instructions,
+                                $unit_price, $batch_total, $doctor_branch_id
+                            ]);
+                            
+                            // Stock movement
+                            $stmt_movement = $db->prepare("
+                                INSERT INTO stock_movements (
+                                    inventory_id, equipment_id, patient_id, movement_type,
+                                    quantity, previous_stock, new_stock, reference_type,
+                                    reference_id, performed_by, branch_id, notes, created_at
+                                ) VALUES (
+                                    ?, NULL, ?, 'out',
+                                    ?, ?, ?, 'prescription',
+                                    ?, ?, ?, ?, NOW()
+                                )
+                            ");
+                            $stmt_movement->execute([
+                                $deduct['batch_id'],
+                                $patient_id,
+                                $deduct['deducted'],
+                                0, // We don't have previous stock here
+                                0, // We don't have new stock here
+                                $prescription_id,
+                                $doctor_id,
+                                $doctor_branch_id,
+                                'Prescription: ' . $med['medication_name'] . ' | Batch: ' . $deduct['batch_number']
+                            ]);
+                            
+                            // Bill item for this batch
+                            $stmt = $db->prepare("
+                                INSERT INTO bill_items (
+                                    bill_id, patient_id, branch_id, item_type, item_name,
+                                    quantity, unit_price, total_price, status, 
+                                    reference_id, reference_type, created_at
+                                ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())
+                            ");
+                            $stmt->execute([
+                                $bill_id, $patient_id, $doctor_branch_id,
+                                $med['medication_name'] . ' (Batch: ' . $deduct['batch_number'] . ')',
+                                $deduct['deducted'], $unit_price, $batch_total,
+                                $prescription_id
+                            ]);
+                        }
+                        
+                        $db->commit();
+                        $bill_data = updateBillTotal($db, $bill_id);
+                        
+                        $response['success'] = true;
+                        $response['message'] = '✅ Medication added from ' . count($batch_deductions) . ' batch(es)!';
+                        $response['prescription_id'] = $prescription_id;
+                        $response['medication'] = [
+                            'id' => $prescription_id,
+                            'name' => $med['medication_name'],
+                            'dosage' => $dosage,
+                            'frequency' => $frequency,
+                            'duration' => $duration,
+                            'quantity' => $quantity,
+                            'instructions' => $instructions,
+                            'unit_price' => $batch_deductions[0]['unit_price'],
+                            'total_price' => $total_price,
+                            'status' => 'pending',
+                            'batch_count' => count($batch_deductions)
+                        ];
+                        $response['bill_data'] = $bill_data;
+                        $response['diagnosis_saved'] = $diagnosis_saved;
+                        $response['diagnosis_data'] = $diagnosis_data;
+                        
+                    } else {
+                        // Single batch has enough stock - use original logic
+                        $db->beginTransaction();
+                        
+                        $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
+                        
+                        $stmt = $db->prepare("
+                            INSERT INTO prescriptions (
+                                prescription_number, visit_id, patient_id, doctor_id, 
+                                status, branch_id, created_at
+                            ) VALUES (?, ?, ?, ?, 'pending', ?, NOW())
+                        ");
+                        $stmt->execute([
+                            $prescription_number, $visit_id, $patient_id, $doctor_id,
+                            $doctor_branch_id
+                        ]);
+                        $prescription_id = $db->lastInsertId();
+                        
+                        $unit_price = $med['selling_price'];
+                        $total_price = $unit_price * $quantity;
+                        $new_stock = $med['stock'] - $quantity;
+                        
+                        $stmt = $db->prepare("
+                            INSERT INTO prescription_items (
+                                prescription_id, patient_id, inventory_id, medication_name, 
+                                dosage, frequency, quantity, duration, route, instructions, 
+                                unit_price, total_price, branch_id, created_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                        ");
+                        $stmt->execute([
+                            $prescription_id, $patient_id, $inventory_id,
+                            $med['medication_name'], $dosage, $frequency, $quantity, 
+                            $duration, $route, $instructions,
+                            $unit_price, $total_price, $doctor_branch_id
+                        ]);
+                        
+                        $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ?");
+                        $stmt->execute([$new_stock, $inventory_id]);
+                        
+                        $stmt_movement = $db->prepare("
+                            INSERT INTO stock_movements (
+                                inventory_id, equipment_id, patient_id, movement_type,
+                                quantity, previous_stock, new_stock, reference_type,
+                                reference_id, performed_by, branch_id, notes, created_at
+                            ) VALUES (
+                                ?, NULL, ?, 'out',
+                                ?, ?, ?, 'prescription',
+                                ?, ?, ?, ?, NOW()
+                            )
+                        ");
+                        $stmt_movement->execute([
+                            $inventory_id,
+                            $patient_id,
+                            $quantity,
+                            $med['stock'],
+                            $new_stock,
+                            $prescription_id,
+                            $doctor_id,
+                            $doctor_branch_id,
+                            'Prescription: ' . $med['medication_name'] . ' | Batch: ' . ($med['batch_number'] ?? 'N/A')
+                        ]);
+                        
+                        $stmt = $db->prepare("
+                            INSERT INTO bill_items (
+                                bill_id, patient_id, branch_id, item_type, item_name,
+                                quantity, unit_price, total_price, status, 
+                                reference_id, reference_type, created_at
+                            ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())
+                        ");
+                        $stmt->execute([
+                            $bill_id, $patient_id, $doctor_branch_id,
+                            $med['medication_name'] . ' (Batch: ' . ($med['batch_number'] ?? 'N/A') . ')',
+                            $quantity, $unit_price, $total_price,
+                            $prescription_id
+                        ]);
+                        
+                        $db->commit();
+                        $bill_data = updateBillTotal($db, $bill_id);
+                        
+                        $response['success'] = true;
+                        $response['message'] = '✅ Medication added! Remaining: ' . $new_stock;
+                        $response['prescription_id'] = $prescription_id;
+                        $response['medication'] = [
+                            'id' => $prescription_id,
+                            'name' => $med['medication_name'],
+                            'dosage' => $dosage,
+                            'frequency' => $frequency,
+                            'duration' => $duration,
+                            'quantity' => $quantity,
+                            'instructions' => $instructions,
+                            'unit_price' => $unit_price,
+                            'total_price' => $total_price,
+                            'batch_number' => $med['batch_number'] ?? '',
+                            'expiry_date' => $med['expiry_date'] ?? '',
+                            'new_stock' => $new_stock,
+                            'status' => 'pending'
+                        ];
+                        $response['bill_data'] = $bill_data;
+                        $response['diagnosis_saved'] = $diagnosis_saved;
+                        $response['diagnosis_data'] = $diagnosis_data;
                     }
-                    
-                    $prescription_number = 'PRES-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(100, 999);
-                    
-                    $db->beginTransaction();
-                    
-                    $stmt = $db->prepare("
-                        INSERT INTO prescriptions (
-                            prescription_number, visit_id, patient_id, doctor_id, 
-                            status, branch_id, created_at
-                        ) VALUES (?, ?, ?, ?, 'pending', ?, NOW())
-                    ");
-                    $stmt->execute([
-                        $prescription_number, $visit_id, $patient_id, $doctor_id,
-                        $doctor_branch_id
-                    ]);
-                    $prescription_id = $db->lastInsertId();
-                    
-                    $unit_price = $med['selling_price'];
-                    $total_price = $unit_price * $quantity;
-                    
-                    $stmt = $db->prepare("
-                        INSERT INTO prescription_items (
-                            prescription_id, patient_id, inventory_id, medication_name, 
-                            dosage, frequency, quantity, duration, route, instructions, 
-                            unit_price, total_price, branch_id, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-                    ");
-                    $stmt->execute([
-                        $prescription_id, $patient_id, $inventory_id,
-                        $med['medication_name'], $dosage, $frequency, $quantity, 
-                        $duration, $route, $instructions,
-                        $unit_price, $total_price, $doctor_branch_id
-                    ]);
-                    
-                    $new_stock = $med['stock'] - $quantity;
-                    $stmt = $db->prepare("UPDATE medications_inventory SET quantity = ? WHERE id = ?");
-                    $stmt->execute([$new_stock, $inventory_id]);
-                    
-                    $stmt_movement = $db->prepare("
-                        INSERT INTO stock_movements (
-                            inventory_id, equipment_id, patient_id, movement_type,
-                            quantity, previous_stock, new_stock, reference_type,
-                            reference_id, performed_by, branch_id, notes, created_at
-                        ) VALUES (
-                            ?, NULL, ?, 'out',
-                            ?, ?, ?, 'prescription',
-                            ?, ?, ?, ?, NOW()
-                        )
-                    ");
-                    $stmt_movement->execute([
-                        $inventory_id,
-                        $patient_id,
-                        $quantity,
-                        $med['stock'],
-                        $new_stock,
-                        $prescription_id,
-                        $doctor_id,
-                        $doctor_branch_id,
-                        'Prescription: ' . $med['medication_name'] . ' | Batch: ' . ($med['batch_number'] ?? 'N/A')
-                    ]);
-                    
-                    $stmt = $db->prepare("
-                        INSERT INTO bill_items (
-                            bill_id, patient_id, branch_id, item_type, item_name,
-                            quantity, unit_price, total_price, status, 
-                            reference_id, reference_type, created_at
-                        ) VALUES (?, ?, ?, 'medication', ?, ?, ?, ?, 'pending', ?, 'prescription', NOW())
-                    ");
-                    $stmt->execute([
-                        $bill_id, $patient_id, $doctor_branch_id,
-                        $med['medication_name'] . ' (Batch: ' . ($med['batch_number'] ?? 'N/A') . ')',
-                        $quantity, $unit_price, $total_price,
-                        $prescription_id
-                    ]);
-                    
-                    $db->commit();
-                    $bill_data = updateBillTotal($db, $bill_id);
-                    
-                    $response['success'] = true;
-                    $response['message'] = '✅ Medication added! Remaining: ' . $new_stock;
-                    $response['prescription_id'] = $prescription_id;
-                    $response['medication'] = [
-                        'id' => $prescription_id,
-                        'name' => $med['medication_name'],
-                        'dosage' => $dosage,
-                        'frequency' => $frequency,
-                        'duration' => $duration,
-                        'quantity' => $quantity,
-                        'instructions' => $instructions,
-                        'unit_price' => $unit_price,
-                        'total_price' => $total_price,
-                        'batch_number' => $med['batch_number'] ?? '',
-                        'expiry_date' => $med['expiry_date'] ?? '',
-                        'new_stock' => $new_stock,
-                        'status' => 'pending'
-                    ];
-                    $response['bill_data'] = $bill_data;
-                    $response['diagnosis_saved'] = $diagnosis_saved;
-                    $response['diagnosis_data'] = $diagnosis_data;
                 } else {
                     $response['message'] = '❌ Medication not found or inactive';
                 }
@@ -1451,21 +1667,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                        pi.total_price
                 FROM prescription_items pi
                 WHERE pi.prescription_id = ?
-                LIMIT 1
             ");
             $stmt->execute([$prescription_id]);
-            $med = $stmt->fetch(PDO::FETCH_ASSOC);
+            $med_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
             try {
                 $db->beginTransaction();
                 
-                if ($med && $med['inventory_id']) {
-                    $stmt = $db->prepare("
-                        UPDATE medications_inventory 
-                        SET quantity = quantity + ? 
-                        WHERE id = ? AND branch_id = ?
-                    ");
-                    $stmt->execute([$med['quantity'], $med['inventory_id'], $doctor_branch_id]);
+                foreach ($med_items as $med) {
+                    if ($med && $med['inventory_id']) {
+                        $stmt = $db->prepare("
+                            UPDATE medications_inventory 
+                            SET quantity = quantity + ? 
+                            WHERE id = ? AND branch_id = ?
+                        ");
+                        $stmt->execute([$med['quantity'], $med['inventory_id'], $doctor_branch_id]);
+                    }
                 }
                 
                 $stmt = $db->prepare("
@@ -1485,7 +1702,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 
                 $response['success'] = true;
                 $response['message'] = '✅ Medication removed! Stock returned.';
-                $response['medication_name'] = $med['medication_name'] ?? '';
                 $response['bill_data'] = $bill_data;
             } catch (Exception $e) {
                 if (isset($db) && $db->inTransaction()) {
@@ -1502,7 +1718,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD PROCEDURES BATCH - WITH DIAGNOSIS SAVE
+    // AJAX: ADD PROCEDURES BATCH
     // ================================================================
     if ($action === 'add_procedures_batch') {
         header('Content-Type: application/json');
@@ -1736,7 +1952,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: ADD EQUIPMENT BATCH - WITH DIAGNOSIS SAVE
+    // AJAX: ADD EQUIPMENT BATCH
     // ================================================================
     if ($action === 'add_equipment_batch') {
         header('Content-Type: application/json');
@@ -2078,7 +2294,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // 1. SEND LAB REQUESTS FROM CART
+    // 1. SEND LAB REQUESTS FROM CART - FIXED
     // ================================================================
     if (isset($_POST['send_lab'])) {
         $lab_cart = isset($_SESSION['lab_cart']) ? $_SESSION['lab_cart'] : [];
@@ -2364,7 +2580,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         }
         
         // IMPORTANT FIX: Update visit status to 'waiting' explicitly
-        // DO NOT use $_POST['status'] - it may contain symptoms or be empty
         $stmt = $db->prepare("
             UPDATE visits 
             SET status = 'waiting',
@@ -2457,9 +2672,6 @@ $lab_cart_count = count($lab_cart);
 include_once __DIR__ . '/../../components/doctor_header.php';
 include_once __DIR__ . '/../../components/doctor_sidebar.php';
 ?>
-
-<!-- THE REST OF THE HTML CONTENT GOES HERE -->
-<!-- (Same as before, with the corrected form field name="symptoms") -->
 
 <!DOCTYPE html>
 <html lang="en">
@@ -3529,6 +3741,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     <?php endif; ?>
 
+    <!-- ================================================================ -->
+    <!-- BILL SUMMARY - Always visible -->
+    <!-- ================================================================ -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-receipt title-green"></i> Bill Summary</h3>
         <div class="bill-summary-grid" id="billSummaryGrid">
@@ -3563,741 +3778,924 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <?php if (!$is_completed): ?>
-
-    <form method="POST" action="" id="consultationForm">
-
-        <!-- ================================================================ -->
-        <!-- PATIENT & VISIT INFO -->
-        <!-- ================================================================ -->
-        <div class="row-2col mb-6">
-            <div class="consultation-card">
-                <h3 class="card-title"><i class="fas fa-user title-blue"></i> Patient Information</h3>
-                <div class="patient-info-block">
-                    <div class="patient-avatar" style="background:<?= getUserColor($visit['patient_name'] ?? 'Unknown') ?>;">
-                        <?= strtoupper(substr($visit['patient_name'] ?? 'U', 0, 1)) ?>
-                    </div>
-                    <div class="patient-info-details">
-                        <h4><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></h4>
-                        <p>ID: <?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?></p>
-                        <p><?= htmlspecialchars($visit['gender'] ?? 'N/A') ?> • <?= calculateAge($visit['date_of_birth'] ?? '') ?> years</p>
-                    </div>
+    <!-- ================================================================ -->
+    <!-- PATIENT & VISIT INFO - Always visible -->
+    <!-- ================================================================ -->
+    <div class="row-2col mb-6">
+        <div class="consultation-card">
+            <h3 class="card-title"><i class="fas fa-user title-blue"></i> Patient Information</h3>
+            <div class="patient-info-block">
+                <div class="patient-avatar" style="background:<?= getUserColor($visit['patient_name'] ?? 'Unknown') ?>;">
+                    <?= strtoupper(substr($visit['patient_name'] ?? 'U', 0, 1)) ?>
                 </div>
-                <div class="patient-info-grid">
-                    <div class="info-item"><span>Date of Birth</span><span><?= !empty($visit['date_of_birth']) && $visit['date_of_birth'] !== '0000-00-00' ? date('M d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?></span></div>
-                    <div class="info-item"><span>Phone</span><span><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
-                    <div class="info-item"><span>Blood Group</span><span><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
-                    <div class="info-item"><span>Allergies</span><span><?= htmlspecialchars($visit['allergies'] ?? 'None') ?></span></div>
-                    <div class="col-span-2 info-item"><span>Address</span><span><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
+                <div class="patient-info-details">
+                    <h4><?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?></h4>
+                    <p>ID: <?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?></p>
+                    <p><?= htmlspecialchars($visit['gender'] ?? 'N/A') ?> • <?= calculateAge($visit['date_of_birth'] ?? '') ?> years</p>
                 </div>
             </div>
-
-            <div class="consultation-card">
-                <h3 class="card-title"><i class="fas fa-clinic-medical title-green"></i> Visit Information</h3>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;">
-                    <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Visit Number</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);font-family:monospace;"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span></div>
-                    <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Visit Type</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= ucfirst($visit['visit_type'] ?? 'New') ?></span></div>
-                    <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Date</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= date('M d, Y', strtotime($visit['created_at'] ?? 'now')) ?></span></div>
-                    <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Doctor</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);">Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'Not Assigned') ?></span></div>
-                    <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Specialty</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= htmlspecialchars($visit['doctor_specialty'] ?? 'N/A') ?></span></div>
-                    <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Branch</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= htmlspecialchars($visit['branch_name'] ?? $doctor_branch_name) ?></span></div>
-                    <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Status</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= ucfirst($visit['status'] ?? 'Pending') ?></span></div>
-                </div>
+            <div class="patient-info-grid">
+                <div class="info-item"><span>Date of Birth</span><span><?= !empty($visit['date_of_birth']) && $visit['date_of_birth'] !== '0000-00-00' ? date('M d, Y', strtotime($visit['date_of_birth'])) : 'N/A' ?></span></div>
+                <div class="info-item"><span>Phone</span><span><?= htmlspecialchars($visit['phone'] ?? 'N/A') ?></span></div>
+                <div class="info-item"><span>Blood Group</span><span><?= htmlspecialchars($visit['blood_group'] ?? 'N/A') ?></span></div>
+                <div class="info-item"><span>Allergies</span><span><?= htmlspecialchars($visit['allergies'] ?? 'None') ?></span></div>
+                <div class="col-span-2 info-item"><span>Address</span><span><?= htmlspecialchars($visit['address'] ?? 'N/A') ?></span></div>
             </div>
         </div>
 
-        <!-- ================================================================ -->
-        <!-- VITAL SIGNS -->
-        <!-- ================================================================ -->
-        <div class="consultation-card mb-6">
-            <h3 class="card-title"><i class="fas fa-heartbeat title-green"></i> Vital Signs</h3>
-            <?php if ($vital_signs): ?>
-                <div class="vital-signs-grid">
-                    <div class="vital-sign-item temp-item">
-                        <span class="vital-icon">🌡️</span>
-                        <span class="vital-label">Temperature</span>
-                        <span class="vital-value"><?= $vital_signs['temperature'] ?? '--' ?> <span class="vital-unit">°C</span></span>
-                    </div>
-                    <div class="vital-sign-item bp-item">
-                        <span class="vital-icon">💓</span>
-                        <span class="vital-label">Blood Pressure</span>
-                        <span class="vital-value"><?= ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') ?> <span class="vital-unit">mmHg</span></span>
-                    </div>
-                    <div class="vital-sign-item pulse-item">
-                        <span class="vital-icon">💓</span>
-                        <span class="vital-label">Pulse Rate</span>
-                        <span class="vital-value"><?= $vital_signs['pulse_rate'] ?? '--' ?> <span class="vital-unit">bpm</span></span>
-                    </div>
-                    <div class="vital-sign-item weight-item">
-                        <span class="vital-icon">⚖️</span>
-                        <span class="vital-label">Weight</span>
-                        <span class="vital-value"><?= $vital_signs['weight'] ?? '--' ?> <span class="vital-unit">kg</span></span>
-                    </div>
-                    <div class="vital-sign-item height-item">
-                        <span class="vital-icon">📏</span>
-                        <span class="vital-label">Height</span>
-                        <span class="vital-value"><?= $vital_signs['height'] ?? '--' ?> <span class="vital-unit">cm</span></span>
-                    </div>
-                    <div class="vital-sign-item bmi-item">
-                        <span class="vital-icon">📊</span>
-                        <span class="vital-label">BMI</span>
-                        <span class="vital-value"><?= $vital_signs['bmi'] ?? '--' ?> <span class="vital-unit">kg/m²</span></span>
-                    </div>
+        <div class="consultation-card">
+            <h3 class="card-title"><i class="fas fa-clinic-medical title-green"></i> Visit Information</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;">
+                <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Visit Number</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);font-family:monospace;"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span></div>
+                <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Visit Type</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= ucfirst($visit['visit_type'] ?? 'New') ?></span></div>
+                <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Date</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= date('M d, Y', strtotime($visit['created_at'] ?? 'now')) ?></span></div>
+                <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Doctor</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);">Dr. <?= htmlspecialchars($visit['doctor_name'] ?? 'Not Assigned') ?></span></div>
+                <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Specialty</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= htmlspecialchars($visit['doctor_specialty'] ?? 'N/A') ?></span></div>
+                <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Branch</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= htmlspecialchars($visit['branch_name'] ?? $doctor_branch_name) ?></span></div>
+                <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Status</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= ucfirst($visit['status'] ?? 'Pending') ?></span></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- VITAL SIGNS - Always visible -->
+    <!-- ================================================================ -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title"><i class="fas fa-heartbeat title-green"></i> Vital Signs</h3>
+        <?php if ($vital_signs): ?>
+            <div class="vital-signs-grid">
+                <div class="vital-sign-item temp-item">
+                    <span class="vital-icon">🌡️</span>
+                    <span class="vital-label">Temperature</span>
+                    <span class="vital-value"><?= $vital_signs['temperature'] ?? '--' ?> <span class="vital-unit">°C</span></span>
                 </div>
-            <?php else: ?>
-                <div class="empty-state"><i class="fas fa-heartbeat"></i><p>No vital signs recorded</p></div>
+                <div class="vital-sign-item bp-item">
+                    <span class="vital-icon">💓</span>
+                    <span class="vital-label">Blood Pressure</span>
+                    <span class="vital-value"><?= ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') ?> <span class="vital-unit">mmHg</span></span>
+                </div>
+                <div class="vital-sign-item pulse-item">
+                    <span class="vital-icon">💓</span>
+                    <span class="vital-label">Pulse Rate</span>
+                    <span class="vital-value"><?= $vital_signs['pulse_rate'] ?? '--' ?> <span class="vital-unit">bpm</span></span>
+                </div>
+                <div class="vital-sign-item weight-item">
+                    <span class="vital-icon">⚖️</span>
+                    <span class="vital-label">Weight</span>
+                    <span class="vital-value"><?= $vital_signs['weight'] ?? '--' ?> <span class="vital-unit">kg</span></span>
+                </div>
+                <div class="vital-sign-item height-item">
+                    <span class="vital-icon">📏</span>
+                    <span class="vital-label">Height</span>
+                    <span class="vital-value"><?= $vital_signs['height'] ?? '--' ?> <span class="vital-unit">cm</span></span>
+                </div>
+                <div class="vital-sign-item bmi-item">
+                    <span class="vital-icon">📊</span>
+                    <span class="vital-label">BMI</span>
+                    <span class="vital-value"><?= $vital_signs['bmi'] ?? '--' ?> <span class="vital-unit">kg/m²</span></span>
+                </div>
+            </div>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-heartbeat"></i><p>No vital signs recorded</p></div>
+        <?php endif; ?>
+    </div>
+
+    <?php if (!$is_completed): ?>
+    
+    <!-- ================================================================ -->
+    <!-- ALL OTHER SECTIONS - Only visible when NOT completed -->
+    <!-- ================================================================ -->
+    
+    <!-- Symptoms & History -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title">
+            <i class="fas fa-list-ul title-blue"></i> Chief Complaint & History
+            <?php if ($sections_frozen && !$is_waiting): ?>
+                <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
+            <?php elseif ($lab_results_available && !$is_waiting): ?>
+                <span class="frozen-badge success">✅ Results Available - Unlocked</span>
+            <?php endif; ?>
+        </h3>
+        
+        <!-- START OF THE FORM - FIXED -->
+        <form method="POST" action="consultation.php?visit_id=<?= $visit_id ?>" id="consultationForm">
+        
+        <div class="form-group">
+            <label class="form-label">Chief Complaint <span class="required">*</span></label>
+            <select class="form-control" id="complaintSelect" onchange="addComplaintOnSelect()">
+                <option value="">-- Select Common Complaint --</option>
+                <?php foreach ($common_complaints as $complaint): ?>
+                    <option value="<?= htmlspecialchars($complaint) ?>"><?= htmlspecialchars($complaint) ?></option>
+                <?php endforeach; ?>
+            </select>
+            <div class="mt-2">
+                <textarea name="symptoms" class="form-control" rows="3" 
+                          placeholder="Complaints will appear here when you select from dropdown. Or type manually..."
+                          id="symptomsTextarea"
+                          <?= $sections_frozen && !$is_waiting ? 'disabled' : '' ?>
+                          oninput="updateComplaints()"><?= htmlspecialchars($visit['symptoms'] ?? '') ?></textarea>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label class="form-label">History of Presenting Illness (HPI)</label>
+            <textarea name="hpi" class="form-control" rows="3" 
+                      placeholder="Describe the history of presenting illness..."
+                      <?= $sections_frozen && !$is_waiting ? 'disabled' : '' ?>
+                      id="hpiTextarea"><?= htmlspecialchars($visit['hpi'] ?? '') ?></textarea>
+        </div>
+        
+        <div class="form-group">
+            <label class="form-label">Physical Examination</label>
+            <textarea name="physical_exam" class="form-control" rows="3" 
+                      placeholder="Describe physical examination findings..."
+                      <?= $sections_frozen && !$is_waiting ? 'disabled' : '' ?>
+                      id="physicalExamTextarea"><?= htmlspecialchars($visit['physical_exam'] ?? '') ?></textarea>
+        </div>
+    </div>
+
+    <!-- Lab Tests -->
+    <div class="consultation-card mb-6" id="labTestsCard">
+        <h3 class="card-title">
+            <i class="fas fa-flask title-blue"></i> Laboratory Tests
+            <span class="frozen-badge" id="pendingLabBadge" style="<?= $has_active_lab && !$is_completed ? '' : 'display:none;' ?>">⏳ <span id="pendingLabCount"><?= count($lab_requests) ?></span> Active</span>
+            <span class="section-total" id="labSectionTotal">
+                <span class="label">🧪 Total:</span>
+                <span class="amount">TSh <span id="labTotalDisplay"><?= number_format($lab_total, 0) ?></span></span>
+            </span>
+            <span class="section-total orange" id="labCartTotalSection" style="<?= $lab_cart_count > 0 ? '' : 'display:none;' ?>">
+                <span class="label">🛒 Cart:</span>
+                <span class="amount">TSh <span id="labCartTotalDisplay"><?= number_format($lab_cart_total, 0) ?></span></span>
+                <span class="amount" style="font-size:0.6rem;opacity:0.8;">(<span id="labCartCountDisplay"><?= $lab_cart_count ?></span> items)</span>
+            </span>
+        </h3>
+        
+        <div class="alert alert-info" style="margin-bottom:16px;">
+            <i class="fas fa-info-circle"></i>
+            <strong>Flow:</strong> Select lab tests → Add to Cart → Send All to Laboratory
+        </div>
+        
+        <div style="display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
+            <select class="form-control" style="flex:1;min-width:200px;" id="labTestSelect">
+                <option value="">-- Select Lab Test --</option>
+                <?php foreach ($lab_tests_catalog as $test): ?>
+                    <option value="<?= $test['id'] ?>" 
+                            data-price="<?= $test['price'] ?>"
+                            data-equipment-id="<?= $test['required_equipment_id'] ?? '' ?>"
+                            data-equipment-used="<?= $test['equipment_quantity_used'] ?? 1 ?>">
+                        <?= htmlspecialchars($test['test_name']) ?>
+                        <?php if (!empty($test['category'])): ?>
+                            (<?= htmlspecialchars($test['category']) ?>)
+                        <?php endif; ?>
+                        - TSh <?= number_format($test['price'], 0) ?>
+                    </option>
+                <?php endforeach; ?>
+            </select>
+            <button type="button" class="btn btn-primary" onclick="addLabTestToCart()" id="addLabToCartBtn">
+                <i class="fas fa-cart-plus"></i> Add to Cart
+            </button>
+        </div>
+        
+        <div style="background:var(--gray-50);border-radius:var(--radius);padding:16px;border:1px solid var(--border-color);">
+            <div class="flex items-center justify-between mb-2">
+                <h4 class="text-sm font-semibold text-gray-600">
+                    <i class="fas fa-shopping-cart"></i> Lab Cart
+                    <span class="text-xs text-gray-400" id="labCartCount">(<?= $lab_cart_count ?> items)</span>
+                </h4>
+                <span class="text-sm font-bold text-orange-600">Total: TSh <span id="labCartTotal"><?= number_format($lab_cart_total, 0) ?></span></span>
+            </div>
+            <div class="lab-cart-items" id="labCartItems">
+                <?php if ($lab_cart_count > 0): ?>
+                    <?php foreach ($lab_cart as $item): ?>
+                        <div class="lab-cart-item" id="lab-cart-<?= $item['id'] ?>" data-test-id="<?= $item['id'] ?>">
+                            <span class="cart-item-name"><?= htmlspecialchars($item['name']) ?></span>
+                            <span class="cart-item-price">TSh <?= number_format($item['price'], 0) ?></span>
+                            <button type="button" class="btn-remove-cart" onclick="removeLabTestFromCart(<?= $item['id'] ?>)">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                    <?php endforeach; ?>
+                <?php else: ?>
+                    <div class="lab-cart-empty">No tests in cart. Add tests above.</div>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <div class="mt-3 flex flex-wrap gap-3">
+            <!-- FIXED: Use form submit for send_lab with proper name -->
+            <button type="submit" name="send_lab" class="btn btn-warning" id="sendLabBtn" <?= ($lab_cart_count == 0) ? 'disabled' : '' ?>>
+                <i class="fas fa-paper-plane"></i> Send All to Laboratory (<span id="sendLabCount"><?= $lab_cart_count ?></span> tests)
+            </button>
+            <button type="button" class="btn btn-outline btn-sm" onclick="clearLabCart()">
+                <i class="fas fa-times"></i> Clear Cart
+            </button>
+            <span class="text-xs text-gray-400 self-center" id="labCartStatus"><?= $lab_cart_count > 0 ? 'Ready to send ' . $lab_cart_count . ' test(s)' : 'Add tests to cart first' ?></span>
+        </div>
+        
+        <div class="mt-3" id="sentTestsContainer">
+            <?php if (count($lab_requests) > 0): ?>
+                <h5 class="text-sm font-semibold text-gray-600 mb-2"><i class="fas fa-history"></i> Sent Tests</h5>
+                <div id="sentTestsList">
+                    <?php foreach ($lab_requests as $lab): ?>
+                        <div style="display:flex;gap:10px;margin-bottom:6px;align-items:center;padding:6px 12px;background:var(--gray-50);border-radius:var(--radius);border:1px solid var(--border-color);" id="sent-test-<?= $lab['id'] ?>">
+                            <div style="flex:1;">
+                                <span style="font-weight:500;font-size:0.85rem;color:var(--text-primary);"><?= htmlspecialchars($lab['test_name']) ?></span>
+                                <span class="text-xs text-gray-400 ml-2">- TSh <?= number_format($lab['test_price'] ?? 0, 0) ?></span>
+                            </div>
+                            <span class="badge badge-warning" style="font-size:0.6rem;" id="sent-status-<?= $lab['id'] ?>">⏳ <?= ucfirst($lab['status'] ?? 'Pending') ?></span>
+                            <?php if ($lab['status'] !== 'completed'): ?>
+                                <button type="button" class="btn-remove-cart" onclick="removeLabTest(<?= $lab['id'] ?>)" title="Remove test">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
             <?php endif; ?>
         </div>
+    </div>
 
-        <!-- ================================================================ -->
-        <!-- SYMPTOMS (Chief Complaint) & HISTORY -->
-        <!-- ================================================================ -->
-        <div class="consultation-card mb-6">
+    <!-- Lab Results -->
+    <div class="consultation-card mb-6 <?= $lab_results_available ? 'border-green-500' : '' ?>" id="labResultsCard">
+        <h3 class="card-title">
+            <i class="fas fa-file-medical-alt title-green"></i> Laboratory Results
+            <span class="frozen-badge <?= $lab_results_available ? 'success' : '' ?>" id="resultsBadge" style="<?= ($lab_results_available || $has_active_lab) ? '' : 'display:none;' ?>">
+                <?php if ($lab_results_available): ?>
+                    ✅ Results Available
+                <?php elseif ($has_active_lab): ?>
+                    ⏳ Pending Results
+                <?php endif; ?>
+            </span>
+            <span class="text-sm font-normal text-gray-400 ml-2" id="resultsCount" style="<?= $lab_results_available ? '' : 'display:none;' ?>">(<?= count($lab_results) ?> results)</span>
+            <span class="text-xs text-gray-400" id="resultsUpdateTime">⏱ Auto-update</span>
+        </h3>
+        
+        <div id="labResultsContainer">
+            <?php if ($lab_results_available): ?>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                        <thead><tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Test Name</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Result</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
+                        </tr></thead>
+                        <tbody id="labResultsBody">
+                            <?php foreach ($lab_results as $result): ?>
+                                <tr>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);font-weight:600;color:var(--success);"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><span class="badge badge-success">✅ Completed</span></td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+                <div class="mt-3 text-sm text-green-600">
+                    <i class="fas fa-check-circle"></i> Lab results available. You can now proceed with Diagnosis, Medications & Procedures.
+                </div>
+            <?php elseif ($has_active_lab): ?>
+                <div class="text-center py-6 text-yellow-600" id="labPendingMessage">
+                    <i class="fas fa-clock text-3xl block mb-2"></i>
+                    <p id="pendingCountDisplay"><?= count($lab_requests) ?> lab request(s) in progress</p>
+                    <p class="text-xs text-gray-400 mt-1">⏳ Waiting for Laboratory to complete tests</p>
+                    <?php if ($sections_frozen && !$is_waiting): ?>
+                        <div class="mt-3 text-sm text-red-500">
+                            <i class="fas fa-lock"></i> Diagnosis, Medications & Procedures are <strong>FROZEN</strong> until results are available
+                        </div>
+                    <?php endif; ?>
+                </div>
+            <?php else: ?>
+                <div class="text-center py-6 text-gray-400" id="noLabResults">
+                    <i class="fas fa-flask text-3xl block mb-2"></i>
+                    <p>No lab results available</p>
+                    <p class="text-xs mt-1">Send lab requests to get results</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- FROZEN SECTIONS CONTAINER -->
+    <div id="frozenSectionsContainer" class="<?= ($sections_frozen && !$is_waiting) ? 'frozen-overlay-active' : ($lab_results_available ? 'results-available' : '') ?>">
+
+        <!-- DIAGNOSIS -->
+        <div class="consultation-card mb-6" id="diagnosisCard">
             <h3 class="card-title">
-                <i class="fas fa-list-ul title-blue"></i> Chief Complaint & History
+                <i class="fas fa-diagnoses title-blue"></i> Diagnosis
                 <?php if ($sections_frozen && !$is_waiting): ?>
                     <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
                 <?php elseif ($lab_results_available && !$is_waiting): ?>
                     <span class="frozen-badge success">✅ Results Available - Unlocked</span>
                 <?php endif; ?>
+                <span id="diagnosisStatus" style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);">
+                    <?php if (!empty($visit['diagnosis'])): ?>
+                        ✅ Saved: <?= htmlspecialchars($visit['diagnosis']) ?>
+                    <?php endif; ?>
+                </span>
             </h3>
             
             <div class="form-group">
-                <label class="form-label">Chief Complaint <span class="required">*</span></label>
-                <select class="form-control" id="complaintSelect" onchange="addComplaintOnSelect()">
-                    <option value="">-- Select Common Complaint --</option>
-                    <?php foreach ($common_complaints as $complaint): ?>
-                        <option value="<?= htmlspecialchars($complaint) ?>"><?= htmlspecialchars($complaint) ?></option>
+                <label class="form-label">Select Disease <span class="required">*</span></label>
+                <select name="diagnosis_id" class="form-control" id="diagnosisSelect" 
+                        onchange="autoSaveDiagnosis()"
+                        <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                    <option value="">-- Select Disease --</option>
+                    <?php foreach ($diseases_list as $disease): ?>
+                        <option value="<?= $disease['id'] ?>" 
+                                data-code="<?= htmlspecialchars($disease['disease_code'] ?? '') ?>"
+                                data-treatment="<?= htmlspecialchars($disease['treatment'] ?? '') ?>"
+                                data-name="<?= htmlspecialchars($disease['disease_name']) ?>"
+                                <?= ($disease['id'] == ($visit['disease_id'] ?? 0)) ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($disease['disease_name']) ?>
+                            <?php if (!empty($disease['disease_code'])): ?>
+                                (<?= htmlspecialchars($disease['disease_code']) ?>)
+                            <?php endif; ?>
+                        </option>
                     <?php endforeach; ?>
+                    <option value="__manual__">✏️ Manual Entry (Not in list)</option>
                 </select>
-                <div class="mt-2">
-                    <textarea name="symptoms" class="form-control" rows="3" 
-                              placeholder="Complaints will appear here when you select from dropdown. Or type manually..."
-                              id="symptomsTextarea"
-                              <?= $sections_frozen && !$is_waiting ? 'disabled' : '' ?>
-                              oninput="updateComplaints()"><?= htmlspecialchars($visit['symptoms'] ?? '') ?></textarea>
+            </div>
+            
+            <div class="diagnosis-manual-box" id="manualDiagnosisBox" style="display:none;">
+                <div class="form-group">
+                    <label class="form-label">Disease Name <span class="required">*</span></label>
+                    <input type="text" name="diagnosis_manual" class="form-control" 
+                           placeholder="Enter disease name..." 
+                           value="<?= htmlspecialchars($visit['diagnosis'] ?? '') ?>"
+                           <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
+                           id="diagnosisManualInput"
+                           onchange="autoSaveDiagnosis()">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Disease Code <span class="text-xs text-gray-400">(Optional - Auto-generated if left blank)</span></label>
+                    <input type="text" name="disease_code_manual" class="form-control" 
+                           placeholder="e.g. D-ABC-001" 
+                           value="<?= htmlspecialchars($visit['disease_code'] ?? '') ?>"
+                           <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
+                           id="diseaseCodeManual">
                 </div>
             </div>
             
             <div class="form-group">
-                <label class="form-label">History of Presenting Illness (HPI)</label>
-                <textarea name="hpi" class="form-control" rows="3" 
-                          placeholder="Describe the history of presenting illness..."
-                          <?= $sections_frozen && !$is_waiting ? 'disabled' : '' ?>
-                          id="hpiTextarea"><?= htmlspecialchars($visit['hpi'] ?? '') ?></textarea>
+                <label class="form-label">Treatment Plan</label>
+                <textarea name="treatment" class="form-control" rows="3" 
+                          placeholder="Describe treatment plan..."
+                          <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
+                          id="treatmentTextarea"><?= htmlspecialchars($visit['treatment'] ?? '') ?></textarea>
             </div>
             
             <div class="form-group">
-                <label class="form-label">Physical Examination</label>
-                <textarea name="physical_exam" class="form-control" rows="3" 
-                          placeholder="Describe physical examination findings..."
-                          <?= $sections_frozen && !$is_waiting ? 'disabled' : '' ?>
-                          id="physicalExamTextarea"><?= htmlspecialchars($visit['physical_exam'] ?? '') ?></textarea>
+                <label class="form-label">Additional Notes</label>
+                <textarea name="notes" class="form-control" rows="2" 
+                          placeholder="Additional notes..."
+                          <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
+                          id="notesTextarea"><?= htmlspecialchars($visit['notes'] ?? '') ?></textarea>
+            </div>
+            
+            <!-- Diagnosis Auto-Save Status -->
+            <div id="diagnosisAutoSaveStatus" style="font-size:0.7rem;color:var(--text-secondary);margin-top:8px;display:flex;align-items:center;gap:8px;">
+                <span id="diagnosisSaveIndicator" style="display:none;">
+                    <i class="fas fa-spinner fa-spin"></i> Saving diagnosis...
+                </span>
+                <span id="diagnosisSavedIndicator" style="display:none;color:var(--success);">
+                    <i class="fas fa-check-circle"></i> Diagnosis saved
+                </span>
             </div>
         </div>
 
-        <!-- ================================================================ -->
-        <!-- LAB TESTS -->
-        <!-- ================================================================ -->
-        <div class="consultation-card mb-6" id="labTestsCard">
+        <!-- MEDICATIONS -->
+        <div class="consultation-card mb-6" id="medicationsCard">
             <h3 class="card-title">
-                <i class="fas fa-flask title-blue"></i> Laboratory Tests
-                <span class="frozen-badge" id="pendingLabBadge" style="<?= $has_active_lab && !$is_completed ? '' : 'display:none;' ?>">⏳ <span id="pendingLabCount"><?= count($lab_requests) ?></span> Active</span>
-                <span class="section-total" id="labSectionTotal">
-                    <span class="label">🧪 Total:</span>
-                    <span class="amount">TSh <span id="labTotalDisplay"><?= number_format($lab_total, 0) ?></span></span>
-                </span>
-                <span class="section-total orange" id="labCartTotalSection" style="<?= $lab_cart_count > 0 ? '' : 'display:none;' ?>">
-                    <span class="label">🛒 Cart:</span>
-                    <span class="amount">TSh <span id="labCartTotalDisplay"><?= number_format($lab_cart_total, 0) ?></span></span>
-                    <span class="amount" style="font-size:0.6rem;opacity:0.8;">(<span id="labCartCountDisplay"><?= $lab_cart_count ?></span> items)</span>
+                <i class="fas fa-prescription title-blue"></i> Medications
+                <?php if ($sections_frozen && !$is_waiting): ?>
+                    <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
+                <?php elseif ($lab_results_available && !$is_waiting): ?>
+                    <span class="frozen-badge success">✅ Results Available - Unlocked</span>
+                <?php endif; ?>
+                <span class="section-total green">
+                    <span class="label">💊 Total:</span>
+                    <span class="amount">TSh <span id="medTotalDisplay"><?= number_format($medications_total, 0) ?></span></span>
                 </span>
             </h3>
             
-            <div class="alert alert-info" style="margin-bottom:16px;">
-                <i class="fas fa-info-circle"></i>
-                <strong>Flow:</strong> Select lab tests → Add to Cart → Send All to Laboratory
-            </div>
-            
-            <div style="display:flex;gap:10px;margin-bottom:12px;align-items:center;flex-wrap:wrap;">
-                <select class="form-control" style="flex:1;min-width:200px;" id="labTestSelect">
-                    <option value="">-- Select Lab Test --</option>
-                    <?php foreach ($lab_tests_catalog as $test): ?>
-                        <option value="<?= $test['id'] ?>" 
-                                data-price="<?= $test['price'] ?>"
-                                data-equipment-id="<?= $test['required_equipment_id'] ?? '' ?>"
-                                data-equipment-used="<?= $test['equipment_quantity_used'] ?? 1 ?>">
-                            <?= htmlspecialchars($test['test_name']) ?>
-                            <?php if (!empty($test['category'])): ?>
-                                (<?= htmlspecialchars($test['category']) ?>)
-                            <?php endif; ?>
-                            - TSh <?= number_format($test['price'], 0) ?>
-                        </option>
-                    <?php endforeach; ?>
-                </select>
-                <button type="button" class="btn btn-primary" onclick="addLabTestToCart()" id="addLabToCartBtn">
-                    <i class="fas fa-cart-plus"></i> Add to Cart
-                </button>
-            </div>
-            
-            <div style="background:var(--gray-50);border-radius:var(--radius);padding:16px;border:1px solid var(--border-color);">
-                <div class="flex items-center justify-between mb-2">
-                    <h4 class="text-sm font-semibold text-gray-600">
-                        <i class="fas fa-shopping-cart"></i> Lab Cart
-                        <span class="text-xs text-gray-400" id="labCartCount">(<?= $lab_cart_count ?> items)</span>
-                    </h4>
-                    <span class="text-sm font-bold text-orange-600">Total: TSh <span id="labCartTotal"><?= number_format($lab_cart_total, 0) ?></span></span>
+            <div style="background:var(--gray-50);border-radius:var(--radius);padding:20px;border:1px solid var(--border-color);">
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+                    <div class="form-group">
+                        <label class="form-label">Medication <span class="required">*</span></label>
+                        <select class="form-control" id="medicationSelect" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                            <option value="">Select Medication...</option>
+                            <?php 
+                            // Display grouped medications
+                            foreach ($medications_grouped as $key => $group): 
+                                $total_stock = $group['total_quantity'];
+                                $batch_count = count($group['batches']);
+                            ?>
+                                <option value="<?= $group['batches'][0]['id'] ?>" 
+                                        data-price="<?= $group['selling_price'] ?>" 
+                                        data-stock="<?= $total_stock ?>" 
+                                        data-batch-count="<?= $batch_count ?>"
+                                        data-medication-name="<?= htmlspecialchars($group['name']) ?>"
+                                        data-category="<?= htmlspecialchars($group['category']) ?>">
+                                    <?= htmlspecialchars($group['name']) ?> 
+                                    (<?= $total_stock ?> available across <?= $batch_count ?> batches) - TSh <?= number_format($group['selling_price'] ?? 0, 0) ?>
+                                    <?php if (!empty($group['category'])): ?>
+                                        [<?= htmlspecialchars($group['category']) ?>]
+                                    <?php endif; ?>
+                                </option>
+                            <?php endforeach; ?>
+                        </select>
+                        <div style="font-size:0.6rem;color:var(--text-secondary);margin-top:2px;">
+                            <i class="fas fa-info-circle"></i> Medications are grouped by name and category. Stock shows total across all batches.
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Quantity</label>
+                        <input type="number" id="medQuantity" class="form-control" value="1" min="1" max="999" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                    </div>
                 </div>
-                <div class="lab-cart-items" id="labCartItems">
-                    <?php if ($lab_cart_count > 0): ?>
-                        <?php foreach ($lab_cart as $item): ?>
-                            <div class="lab-cart-item" id="lab-cart-<?= $item['id'] ?>" data-test-id="<?= $item['id'] ?>">
-                                <span class="cart-item-name"><?= htmlspecialchars($item['name']) ?></span>
-                                <span class="cart-item-price">TSh <?= number_format($item['price'], 0) ?></span>
-                                <button type="button" class="btn-remove-cart" onclick="removeLabTestFromCart(<?= $item['id'] ?>)">
-                                    <i class="fas fa-times"></i>
-                                </button>
-                            </div>
-                        <?php endforeach; ?>
-                    <?php else: ?>
-                        <div class="lab-cart-empty">No tests in cart. Add tests above.</div>
+                
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+                    <div class="form-group">
+                        <label class="form-label">Dosage <span class="text-xs text-gray-400">(e.g. 500mg, 1 tablet)</span></label>
+                        <input type="text" id="medDosage" class="form-control" placeholder="e.g. 500mg" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Frequency</label>
+                        <select id="medFrequency" class="form-control" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                            <option value="">Select Frequency</option>
+                            <option value="Once Daily">Once Daily</option>
+                            <option value="Twice Daily">Twice Daily</option>
+                            <option value="Three Times Daily">Three Times Daily</option>
+                            <option value="Four Times Daily">Four Times Daily</option>
+                            <option value="Every 4 Hours">Every 4 Hours</option>
+                            <option value="Every 6 Hours">Every 6 Hours</option>
+                            <option value="Every 8 Hours">Every 8 Hours</option>
+                            <option value="Every 12 Hours">Every 12 Hours</option>
+                            <option value="As Needed (PRN)">As Needed (PRN)</option>
+                            <option value="Before Meals">Before Meals</option>
+                            <option value="After Meals">After Meals</option>
+                            <option value="With Meals">With Meals</option>
+                            <option value="At Bedtime">At Bedtime</option>
+                            <option value="On Empty Stomach">On Empty Stomach</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
+                    <div class="form-group">
+                        <label class="form-label">Duration (Days)</label>
+                        <input type="number" id="medDuration" class="form-control" value="7" min="1" max="90" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Route</label>
+                        <select id="medRoute" class="form-control" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                            <option value="">Select Route</option>
+                            <option value="Oral">Oral</option>
+                            <option value="Topical">Topical</option>
+                            <option value="Injection">Injection</option>
+                            <option value="IV">IV (Intravenous)</option>
+                            <option value="IM">IM (Intramuscular)</option>
+                            <option value="Sublingual">Sublingual</option>
+                            <option value="Inhalation">Inhalation</option>
+                            <option value="Rectal">Rectal</option>
+                            <option value="Ophthalmic">Ophthalmic (Eye)</option>
+                            <option value="Otic">Otic (Ear)</option>
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="form-group mt-3">
+                    <label class="form-label">Instructions</label>
+                    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take after meals')">After Meals</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take before meals')">Before Meals</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take with plenty of water')">With Water</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take at bedtime')">At Bedtime</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Do not crush or chew')">Do Not Crush</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take on empty stomach')">Empty Stomach</button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Avoid alcohol')">No Alcohol</button>
+                    </div>
+                    <textarea id="medInstructions" class="form-control" rows="2" 
+                              placeholder="e.g. Take after meals, with plenty of water..."
+                              <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>></textarea>
+                </div>
+                
+                <div class="mt-3">
+                    <button type="button" class="btn btn-primary" onclick="addMedicationAjax()" id="addMedicationBtn" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                        <i class="fas fa-plus"></i> Add Medication
+                    </button>
+                    <?php if ($sections_frozen && !$is_waiting): ?>
+                        <span class="text-xs text-red-500 ml-2"><i class="fas fa-lock"></i> Frozen until lab results</span>
                     <?php endif; ?>
                 </div>
             </div>
             
-            <div class="mt-3 flex flex-wrap gap-3">
-                <button type="submit" name="send_lab" class="btn btn-warning" id="sendLabBtn" <?= ($lab_cart_count == 0) ? 'disabled' : '' ?>>
-                    <i class="fas fa-paper-plane"></i> Send All to Laboratory (<span id="sendLabCount"><?= $lab_cart_count ?></span> tests)
-                </button>
-                <button type="button" class="btn btn-outline btn-sm" onclick="clearLabCart()">
-                    <i class="fas fa-times"></i> Clear Cart
-                </button>
-                <span class="text-xs text-gray-400 self-center" id="labCartStatus"><?= $lab_cart_count > 0 ? 'Ready to send ' . $lab_cart_count . ' test(s)' : 'Add tests to cart first' ?></span>
-            </div>
-            
-            <div class="mt-3" id="sentTestsContainer">
-                <?php if (count($lab_requests) > 0): ?>
-                    <h5 class="text-sm font-semibold text-gray-600 mb-2"><i class="fas fa-history"></i> Sent Tests</h5>
-                    <div id="sentTestsList">
-                        <?php foreach ($lab_requests as $lab): ?>
-                            <div style="display:flex;gap:10px;margin-bottom:6px;align-items:center;padding:6px 12px;background:var(--gray-50);border-radius:var(--radius);border:1px solid var(--border-color);" id="sent-test-<?= $lab['id'] ?>">
-                                <div style="flex:1;">
-                                    <span style="font-weight:500;font-size:0.85rem;color:var(--text-primary);"><?= htmlspecialchars($lab['test_name']) ?></span>
-                                    <span class="text-xs text-gray-400 ml-2">- TSh <?= number_format($lab['test_price'] ?? 0, 0) ?></span>
+            <div class="selected-medications mt-4" style="background:var(--gray-50);border-radius:var(--radius);padding:16px 20px;border:1px solid var(--border-color);">
+                <div class="flex items-center justify-between mb-2">
+                    <h4 class="text-sm font-semibold text-gray-600">
+                        <i class="fas fa-list"></i> Prescribed Medications
+                        <span class="text-xs text-gray-400" id="medCount">(<?= count($prescriptions) ?> items)</span>
+                    </h4>
+                    <span class="text-sm font-bold text-green-600">Total: TSh <span id="medListTotal"><?= number_format($medications_total, 0) ?></span></span>
+                </div>
+                <div id="medicationsList">
+                    <?php if (count($prescriptions) > 0): ?>
+                        <?php foreach ($prescriptions as $med): ?>
+                            <div class="medication-item" id="med-item-<?= $med['id'] ?>">
+                                <div class="medication-item-info">
+                                    <span class="med-name"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></span>
+                                    <span class="med-details">
+                                        <?= htmlspecialchars($med['dosage'] ?? '') ?> • 
+                                        <?= htmlspecialchars($med['frequency'] ?? '') ?> • 
+                                        <?= htmlspecialchars($med['duration'] ?? '') ?> days
+                                    </span>
+                                    <span class="med-qty">x<?= $med['quantity'] ?? 0 ?></span>
+                                    <span class="med-price">TSh <?= number_format($med['total_price'] ?? 0, 0) ?></span>
+                                    <?php if (!empty($med['instructions'])): ?>
+                                        <span class="med-instruction-tag"><?= htmlspecialchars($med['instructions']) ?></span>
+                                    <?php endif; ?>
+                                    <?php if (($med['status'] ?? '') === 'dispensed'): ?>
+                                        <span class="med-status-dispensed">✅ Dispensed</span>
+                                    <?php else: ?>
+                                        <span class="med-status-pending">⏳ Pending Dispense</span>
+                                    <?php endif; ?>
                                 </div>
-                                <span class="badge badge-warning" style="font-size:0.6rem;" id="sent-status-<?= $lab['id'] ?>">⏳ <?= ucfirst($lab['status'] ?? 'Pending') ?></span>
-                                <?php if ($lab['status'] !== 'completed'): ?>
-                                    <button type="button" class="btn-remove-cart" onclick="removeLabTest(<?= $lab['id'] ?>)" title="Remove test">
+                                <?php if (($med['status'] ?? '') !== 'dispensed'): ?>
+                                    <button type="button" class="btn-remove" onclick="removeMedication(<?= $med['id'] ?>)" title="Remove medication">
                                         <i class="fas fa-times"></i>
                                     </button>
                                 <?php endif; ?>
                             </div>
                         <?php endforeach; ?>
-                    </div>
-                <?php endif; ?>
+                    <?php else: ?>
+                        <div class="empty-state" id="emptyMedications">
+                            <i class="fas fa-prescription"></i>
+                            <p>No medications prescribed yet</p>
+                        </div>
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
 
-        <!-- ================================================================ -->
-        <!-- LAB RESULTS -->
-        <!-- ================================================================ -->
-        <div class="consultation-card mb-6 <?= $lab_results_available ? 'border-green-500' : '' ?>" id="labResultsCard">
+        <!-- PROCEDURES & EQUIPMENT -->
+        <div class="consultation-card mb-6" id="proceduresEquipmentCard">
             <h3 class="card-title">
-                <i class="fas fa-file-medical-alt title-green"></i> Laboratory Results
-                <span class="frozen-badge <?= $lab_results_available ? 'success' : '' ?>" id="resultsBadge" style="<?= ($lab_results_available || $has_active_lab) ? '' : 'display:none;' ?>">
-                    <?php if ($lab_results_available): ?>
-                        ✅ Results Available
-                    <?php elseif ($has_active_lab): ?>
-                        ⏳ Pending Results
-                    <?php endif; ?>
+                <i class="fas fa-syringe title-purple"></i> Procedures & Equipment
+                <?php if ($sections_frozen && !$is_waiting): ?>
+                    <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
+                <?php elseif ($lab_results_available && !$is_waiting): ?>
+                    <span class="frozen-badge success">✅ Results Available - Unlocked</span>
+                <?php endif; ?>
+                <span class="section-total purple">
+                    <span class="label">🛠️ Total:</span>
+                    <span class="amount">TSh <span id="procEquipTotalDisplay"><?= number_format($procedure_total + $equipment_total, 0) ?></span></span>
                 </span>
-                <span class="text-sm font-normal text-gray-400 ml-2" id="resultsCount" style="<?= $lab_results_available ? '' : 'display:none;' ?>">(<?= count($lab_results) ?> results)</span>
-                <span class="text-xs text-gray-400" id="resultsUpdateTime">⏱ Auto-update</span>
             </h3>
             
-            <div id="labResultsContainer">
-                <?php if ($lab_results_available): ?>
-                    <div style="overflow-x:auto;">
-                        <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-                            <thead><tr>
-                                <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Test Name</th>
-                                <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Result</th>
-                                <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
-                            </tr></thead>
-                            <tbody id="labResultsBody">
-                                <?php foreach ($lab_results as $result): ?>
-                                    <tr>
-                                        <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
-                                        <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);font-weight:600;color:var(--success);"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
-                                        <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><span class="badge badge-success">✅ Completed</span></td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    </div>
-                    <div class="mt-3 text-sm text-green-600">
-                        <i class="fas fa-check-circle"></i> Lab results available. You can now proceed with Diagnosis, Medications & Procedures.
-                    </div>
-                <?php elseif ($has_active_lab): ?>
-                    <div class="text-center py-6 text-yellow-600" id="labPendingMessage">
-                        <i class="fas fa-clock text-3xl block mb-2"></i>
-                        <p id="pendingCountDisplay"><?= count($lab_requests) ?> lab request(s) in progress</p>
-                        <p class="text-xs text-gray-400 mt-1">⏳ Waiting for Laboratory to complete tests</p>
-                        <?php if ($sections_frozen && !$is_waiting): ?>
-                            <div class="mt-3 text-sm text-red-500">
-                                <i class="fas fa-lock"></i> Diagnosis, Medications & Procedures are <strong>FROZEN</strong> until results are available
+            <div class="toggle-section">
+                <div class="toggle-header" onclick="toggleSection('proceduresToggle')">
+                    <span class="toggle-title">
+                        <i class="fas fa-syringe title-purple"></i> Procedures
+                        <span class="text-xs text-gray-400">(Select - Click Add Selected Procedures)</span>
+                    </span>
+                    <span class="toggle-icon"><i class="fas fa-chevron-down"></i></span>
+                </div>
+                <div class="toggle-body" id="proceduresToggle">
+                    <div class="items-grid" id="proceduresGrid">
+                        <?php foreach ($procedures_list as $proc): ?>
+                            <div class="procedure-item-select" 
+                                 data-procedure-id="<?= $proc['id'] ?>"
+                                 data-procedure-name="<?= htmlspecialchars($proc['procedure_name']) ?>"
+                                 data-price="<?= $proc['price'] ?>"
+                                 onclick="toggleProcedure(this)">
+                                <span class="item-check"><i class="fas fa-check"></i></span>
+                                <span><?= htmlspecialchars($proc['procedure_name']) ?></span>
+                                <small class="text-xs <?= ($proc['price'] ?? 0) > 0 ? 'text-gray-400' : 'text-green-600' ?>">
+                                    <?= ($proc['price'] ?? 0) > 0 ? 'TSh ' . number_format($proc['price'], 0) : 'FREE' ?>
+                                </small>
                             </div>
-                        <?php endif; ?>
-                    </div>
-                <?php else: ?>
-                    <div class="text-center py-6 text-gray-400" id="noLabResults">
-                        <i class="fas fa-flask text-3xl block mb-2"></i>
-                        <p>No lab results available</p>
-                        <p class="text-xs mt-1">Send lab requests to get results</p>
-                    </div>
-                <?php endif; ?>
-            </div>
-        </div>
-
-        <!-- ================================================================ -->
-        <!-- FROZEN SECTIONS CONTAINER -->
-        <!-- ================================================================ -->
-        <div id="frozenSectionsContainer" class="<?= ($sections_frozen && !$is_waiting) ? 'frozen-overlay-active' : ($lab_results_available ? 'results-available' : '') ?>">
-
-            <!-- ============================================================ -->
-            <!-- DIAGNOSIS -->
-            <!-- ============================================================ -->
-            <div class="consultation-card mb-6" id="diagnosisCard">
-                <h3 class="card-title">
-                    <i class="fas fa-diagnoses title-blue"></i> Diagnosis
-                    <?php if ($sections_frozen && !$is_waiting): ?>
-                        <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
-                    <?php elseif ($lab_results_available && !$is_waiting): ?>
-                        <span class="frozen-badge success">✅ Results Available - Unlocked</span>
-                    <?php endif; ?>
-                    <span id="diagnosisStatus" style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);">
-                        <?php if (!empty($visit['diagnosis'])): ?>
-                            ✅ Saved: <?= htmlspecialchars($visit['diagnosis']) ?>
-                        <?php endif; ?>
-                    </span>
-                </h3>
-                
-                <div class="form-group">
-                    <label class="form-label">Select Disease <span class="required">*</span></label>
-                    <select name="diagnosis_id" class="form-control" id="diagnosisSelect" 
-                            onchange="autoSaveDiagnosis()"
-                            <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                        <option value="">-- Select Disease --</option>
-                        <?php foreach ($diseases_list as $disease): ?>
-                            <option value="<?= $disease['id'] ?>" 
-                                    data-code="<?= htmlspecialchars($disease['disease_code'] ?? '') ?>"
-                                    data-treatment="<?= htmlspecialchars($disease['treatment'] ?? '') ?>"
-                                    data-name="<?= htmlspecialchars($disease['disease_name']) ?>"
-                                    <?= ($disease['id'] == ($visit['disease_id'] ?? 0)) ? 'selected' : '' ?>>
-                                <?= htmlspecialchars($disease['disease_name']) ?>
-                                <?php if (!empty($disease['disease_code'])): ?>
-                                    (<?= htmlspecialchars($disease['disease_code']) ?>)
-                                <?php endif; ?>
-                            </option>
                         <?php endforeach; ?>
-                        <option value="__manual__">✏️ Manual Entry (Not in list)</option>
-                    </select>
-                </div>
-                
-                <div class="diagnosis-manual-box" id="manualDiagnosisBox" style="display:none;">
-                    <div class="form-group">
-                        <label class="form-label">Disease Name <span class="required">*</span></label>
-                        <input type="text" name="diagnosis_manual" class="form-control" 
-                               placeholder="Enter disease name..." 
-                               value="<?= htmlspecialchars($visit['diagnosis'] ?? '') ?>"
-                               <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
-                               id="diagnosisManualInput"
-                               onchange="autoSaveDiagnosis()">
                     </div>
-                    <div class="form-group">
-                        <label class="form-label">Disease Code <span class="text-xs text-gray-400">(Optional - Auto-generated if left blank)</span></label>
-                        <input type="text" name="disease_code_manual" class="form-control" 
-                               placeholder="e.g. D-ABC-001" 
-                               value="<?= htmlspecialchars($visit['disease_code'] ?? '') ?>"
-                               <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
-                               id="diseaseCodeManual">
+                    <div class="mt-2 flex flex-wrap gap-2">
+                        <button type="button" class="btn btn-primary btn-sm" onclick="addSelectedProcedures()" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                            <i class="fas fa-plus"></i> Add Selected Procedures
+                        </button>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="clearProcedureSelections()">
+                            <i class="fas fa-times"></i> Clear Selection
+                        </button>
+                        <span class="text-xs text-gray-400 self-center" id="procSelectedCount">Selected: 0</span>
                     </div>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Treatment Plan</label>
-                    <textarea name="treatment" class="form-control" rows="3" 
-                              placeholder="Describe treatment plan..."
-                              <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
-                              id="treatmentTextarea"><?= htmlspecialchars($visit['treatment'] ?? '') ?></textarea>
-                </div>
-                
-                <div class="form-group">
-                    <label class="form-label">Additional Notes</label>
-                    <textarea name="notes" class="form-control" rows="2" 
-                              placeholder="Additional notes..."
-                              <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
-                              id="notesTextarea"><?= htmlspecialchars($visit['notes'] ?? '') ?></textarea>
-                </div>
-                
-                <!-- Diagnosis Auto-Save Status -->
-                <div id="diagnosisAutoSaveStatus" style="font-size:0.7rem;color:var(--text-secondary);margin-top:8px;display:flex;align-items:center;gap:8px;">
-                    <span id="diagnosisSaveIndicator" style="display:none;">
-                        <i class="fas fa-spinner fa-spin"></i> Saving diagnosis...
-                    </span>
-                    <span id="diagnosisSavedIndicator" style="display:none;color:var(--success);">
-                        <i class="fas fa-check-circle"></i> Diagnosis saved
-                    </span>
                 </div>
             </div>
-
-            <!-- ============================================================ -->
-            <!-- MEDICATIONS -->
-            <!-- ============================================================ -->
-            <div class="consultation-card mb-6" id="medicationsCard">
-                <h3 class="card-title">
-                    <i class="fas fa-prescription title-blue"></i> Medications
-                    <?php if ($sections_frozen && !$is_waiting): ?>
-                        <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
-                    <?php elseif ($lab_results_available && !$is_waiting): ?>
-                        <span class="frozen-badge success">✅ Results Available - Unlocked</span>
-                    <?php endif; ?>
-                    <span class="section-total green">
-                        <span class="label">💊 Total:</span>
-                        <span class="amount">TSh <span id="medTotalDisplay"><?= number_format($medications_total, 0) ?></span></span>
+            
+            <div class="toggle-section">
+                <div class="toggle-header" onclick="toggleSection('equipmentToggle')">
+                    <span class="toggle-title">
+                        <i class="fas fa-tools title-orange"></i> Medical Equipment
+                        <span class="text-xs text-gray-400">(Select - Set Quantity - Click Add Selected Equipment)</span>
                     </span>
-                </h3>
-                
-                <div style="background:var(--gray-50);border-radius:var(--radius);padding:20px;border:1px solid var(--border-color);">
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-                        <div class="form-group">
-                            <label class="form-label">Medication <span class="required">*</span></label>
-                            <select class="form-control" id="medicationSelect" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                                <option value="">Select Medication...</option>
-                                <?php foreach ($medications_list as $med): ?>
-                                    <option value="<?= $med['id'] ?>" 
-                                            data-price="<?= $med['selling_price'] ?>" 
-                                            data-stock="<?= $med['quantity'] ?>" 
-                                            data-batch="<?= htmlspecialchars($med['batch_number'] ?? '') ?>"
-                                            data-expiry="<?= $med['expiry_date'] ?? '' ?>">
-                                        <?= htmlspecialchars($med['medication_name']) ?> 
-                                        (<?= $med['quantity'] ?? 0 ?> available) - TSh <?= number_format($med['selling_price'] ?? 0, 0) ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">Quantity</label>
-                            <input type="number" id="medQuantity" class="form-control" value="1" min="1" max="99" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                        </div>
+                    <span class="toggle-icon"><i class="fas fa-chevron-down"></i></span>
+                </div>
+                <div class="toggle-body" id="equipmentToggle">
+                    <div class="items-grid" id="equipmentGrid">
+                        <?php foreach ($equipment_list as $eq): ?>
+                            <div class="equipment-item-select" 
+                                 data-equipment-id="<?= $eq['id'] ?>"
+                                 data-equipment-name="<?= htmlspecialchars($eq['equipment_name']) ?>"
+                                 data-price="<?= $eq['selling_price'] ?? 0 ?>"
+                                 data-stock="<?= $eq['quantity'] ?>"
+                                 data-batch="<?= htmlspecialchars($eq['batch_number'] ?? '') ?>"
+                                 data-expiry="<?= $eq['expiry_date'] ?? '' ?>"
+                                 onclick="toggleEquipment(this)">
+                                <span class="item-check"><i class="fas fa-check"></i></span>
+                                <span><?= htmlspecialchars($eq['equipment_name']) ?></span>
+                                <small class="text-xs <?= ($eq['selling_price'] ?? 0) > 0 ? 'text-gray-400' : 'text-green-600' ?>">
+                                    <?= ($eq['selling_price'] ?? 0) > 0 ? 'TSh ' . number_format($eq['selling_price'], 0) : 'FREE' ?>
+                                </small>
+                                <small class="text-xs text-gray-400">Stock: <?= $eq['quantity'] ?></small>
+                            </div>
+                        <?php endforeach; ?>
                     </div>
-                    
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
-                        <div class="form-group">
-                            <label class="form-label">Dosage <span class="text-xs text-gray-400">(e.g. 500mg, 1 tablet)</span></label>
-                            <input type="text" id="medDosage" class="form-control" placeholder="e.g. 500mg" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                    <div class="mt-2 flex flex-wrap gap-2 items-center">
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <label class="text-xs text-gray-500">Qty:</label>
+                            <input type="number" id="equipmentQuantity" class="form-control" value="1" min="1" style="width:80px;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
                         </div>
-                        <div class="form-group">
-                            <label class="form-label">Frequency</label>
-                            <select id="medFrequency" class="form-control" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                                <option value="">Select Frequency</option>
-                                <option value="Once Daily">Once Daily</option>
-                                <option value="Twice Daily">Twice Daily</option>
-                                <option value="Three Times Daily">Three Times Daily</option>
-                                <option value="Four Times Daily">Four Times Daily</option>
-                                <option value="Every 4 Hours">Every 4 Hours</option>
-                                <option value="Every 6 Hours">Every 6 Hours</option>
-                                <option value="Every 8 Hours">Every 8 Hours</option>
-                                <option value="Every 12 Hours">Every 12 Hours</option>
-                                <option value="As Needed (PRN)">As Needed (PRN)</option>
-                                <option value="Before Meals">Before Meals</option>
-                                <option value="After Meals">After Meals</option>
-                                <option value="With Meals">With Meals</option>
-                                <option value="At Bedtime">At Bedtime</option>
-                                <option value="On Empty Stomach">On Empty Stomach</option>
-                            </select>
-                        </div>
-                    </div>
-                    
-                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;">
-                        <div class="form-group">
-                            <label class="form-label">Duration (Days)</label>
-                            <input type="number" id="medDuration" class="form-control" value="7" min="1" max="90" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                        </div>
-                        <div class="form-group">
-                            <label class="form-label">Route</label>
-                            <select id="medRoute" class="form-control" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                                <option value="">Select Route</option>
-                                <option value="Oral">Oral</option>
-                                <option value="Topical">Topical</option>
-                                <option value="Injection">Injection</option>
-                                <option value="IV">IV (Intravenous)</option>
-                                <option value="IM">IM (Intramuscular)</option>
-                                <option value="Sublingual">Sublingual</option>
-                                <option value="Inhalation">Inhalation</option>
-                                <option value="Rectal">Rectal</option>
-                                <option value="Ophthalmic">Ophthalmic (Eye)</option>
-                                <option value="Otic">Otic (Ear)</option>
-                            </select>
-                        </div>
-                    </div>
-                    
-                    <div class="form-group mt-3">
-                        <label class="form-label">Instructions</label>
-                        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:6px;">
-                            <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take after meals')">After Meals</button>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take before meals')">Before Meals</button>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take with plenty of water')">With Water</button>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take at bedtime')">At Bedtime</button>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Do not crush or chew')">Do Not Crush</button>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Take on empty stomach')">Empty Stomach</button>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="addInstruction('Avoid alcohol')">No Alcohol</button>
-                        </div>
-                        <textarea id="medInstructions" class="form-control" rows="2" 
-                                  placeholder="e.g. Take after meals, with plenty of water..."
-                                  <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>></textarea>
-                    </div>
-                    
-                    <div class="mt-3">
-                        <button type="button" class="btn btn-primary" onclick="addMedicationAjax()" id="addMedicationBtn" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                            <i class="fas fa-plus"></i> Add Medication
+                        <button type="button" class="btn btn-primary btn-sm" onclick="addSelectedEquipment()" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                            <i class="fas fa-plus"></i> Add Selected Equipment
                         </button>
-                        <?php if ($sections_frozen && !$is_waiting): ?>
-                            <span class="text-xs text-red-500 ml-2"><i class="fas fa-lock"></i> Frozen until lab results</span>
-                        <?php endif; ?>
+                        <button type="button" class="btn btn-outline btn-sm" onclick="clearEquipmentSelections()">
+                            <i class="fas fa-times"></i> Clear Selection
+                        </button>
+                        <span class="text-xs text-gray-400 self-center" id="equipSelectedCount">Selected: 0</span>
                     </div>
                 </div>
-                
-                <div class="selected-medications mt-4" style="background:var(--gray-50);border-radius:var(--radius);padding:16px 20px;border:1px solid var(--border-color);">
-                    <div class="flex items-center justify-between mb-2">
-                        <h4 class="text-sm font-semibold text-gray-600">
-                            <i class="fas fa-list"></i> Prescribed Medications
-                            <span class="text-xs text-gray-400" id="medCount">(<?= count($prescriptions) ?> items)</span>
-                        </h4>
-                        <span class="text-sm font-bold text-green-600">Total: TSh <span id="medListTotal"><?= number_format($medications_total, 0) ?></span></span>
-                    </div>
-                    <div id="medicationsList">
-                        <?php if (count($prescriptions) > 0): ?>
-                            <?php foreach ($prescriptions as $med): ?>
-                                <div class="medication-item" id="med-item-<?= $med['id'] ?>">
-                                    <div class="medication-item-info">
-                                        <span class="med-name"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></span>
-                                        <span class="med-details">
-                                            <?= htmlspecialchars($med['dosage'] ?? '') ?> • 
-                                            <?= htmlspecialchars($med['frequency'] ?? '') ?> • 
-                                            <?= htmlspecialchars($med['duration'] ?? '') ?> days
-                                        </span>
-                                        <span class="med-qty">x<?= $med['quantity'] ?? 0 ?></span>
-                                        <span class="med-price">TSh <?= number_format($med['total_price'] ?? 0, 0) ?></span>
-                                        <?php if (!empty($med['instructions'])): ?>
-                                            <span class="med-instruction-tag"><?= htmlspecialchars($med['instructions']) ?></span>
-                                        <?php endif; ?>
-                                        <?php if (($med['status'] ?? '') === 'dispensed'): ?>
-                                            <span class="med-status-dispensed">✅ Dispensed</span>
-                                        <?php else: ?>
-                                            <span class="med-status-pending">⏳ Pending Dispense</span>
-                                        <?php endif; ?>
-                                    </div>
-                                    <?php if (($med['status'] ?? '') !== 'dispensed'): ?>
-                                        <button type="button" class="btn-remove" onclick="removeMedication(<?= $med['id'] ?>)" title="Remove medication">
-                                            <i class="fas fa-times"></i>
-                                        </button>
+            </div>
+            
+            <div class="selected-items mt-4" style="background:var(--gray-50);border-radius:var(--radius);padding:16px 20px;border:1px solid var(--border-color);">
+                <div class="flex items-center justify-between mb-2">
+                    <h4 class="text-sm font-semibold text-gray-600">
+                        <i class="fas fa-list"></i> Added Procedures & Equipment
+                        <span class="text-xs text-gray-400" id="addedCount">(<?= count($procedures) + count($equipment_items_display) ?> items)</span>
+                    </h4>
+                    <span class="text-sm font-bold text-purple-600">Total: TSh <span id="addedTotal"><?= number_format($procedure_total + $equipment_total, 0) ?></span></span>
+                </div>
+                <div id="addedItemsList">
+                    <?php if (count($procedures) > 0 || count($equipment_items_display) > 0): ?>
+                        <?php foreach ($procedures as $proc): ?>
+                            <div class="added-item-card" id="added-procedure-<?= $proc['id'] ?>">
+                                <div class="item-left">
+                                    <span class="item-name"><?= htmlspecialchars($proc['procedure_name']) ?></span>
+                                    <span class="item-details">| Qty: 1</span>
+                                    <?php if ($proc['procedure_price'] > 0): ?>
+                                        <span class="item-price">TSh <?= number_format($proc['procedure_price'], 0) ?></span>
+                                    <?php else: ?>
+                                        <span class="item-free">FREE</span>
                                     <?php endif; ?>
                                 </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <div class="empty-state" id="emptyMedications">
-                                <i class="fas fa-prescription"></i>
-                                <p>No medications prescribed yet</p>
+                                <div class="item-right">
+                                    <button type="button" class="btn-remove-item" onclick="removeAddedItem('procedure', <?= $proc['id'] ?>)" title="Remove item">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
                             </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            </div>
-
-            <!-- ============================================================ -->
-            <!-- PROCEDURES & EQUIPMENT -->
-            <!-- ============================================================ -->
-            <div class="consultation-card mb-6" id="proceduresEquipmentCard">
-                <h3 class="card-title">
-                    <i class="fas fa-syringe title-purple"></i> Procedures & Equipment
-                    <?php if ($sections_frozen && !$is_waiting): ?>
-                        <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
-                    <?php elseif ($lab_results_available && !$is_waiting): ?>
-                        <span class="frozen-badge success">✅ Results Available - Unlocked</span>
+                        <?php endforeach; ?>
+                        <?php foreach ($equipment_items_display as $eq_item): ?>
+                            <div class="added-item-card" id="added-equipment-<?= $eq_item['id'] ?>">
+                                <div class="item-left">
+                                    <span class="item-name"><?= htmlspecialchars($eq_item['item_name']) ?></span>
+                                    <span class="item-details">| Qty: <?= $eq_item['quantity'] ?></span>
+                                    <?php if ($eq_item['total_price'] > 0): ?>
+                                        <span class="item-price">TSh <?= number_format($eq_item['total_price'], 0) ?></span>
+                                    <?php else: ?>
+                                        <span class="item-free">FREE</span>
+                                    <?php endif; ?>
+                                </div>
+                                <div class="item-right">
+                                    <button type="button" class="btn-remove-item" onclick="removeAddedItem('equipment', <?= $eq_item['id'] ?>)" title="Remove item">
+                                        <i class="fas fa-times"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php else: ?>
+                        <div class="empty-state" id="emptyAdded">
+                            <i class="fas fa-syringe"></i>
+                            <p>No procedures or equipment added yet</p>
+                        </div>
                     <?php endif; ?>
-                    <span class="section-total purple">
-                        <span class="label">🛠️ Total:</span>
-                        <span class="amount">TSh <span id="procEquipTotalDisplay"><?= number_format($procedure_total + $equipment_total, 0) ?></span></span>
-                    </span>
-                </h3>
-                
-                <div class="toggle-section">
-                    <div class="toggle-header" onclick="toggleSection('proceduresToggle')">
-                        <span class="toggle-title">
-                            <i class="fas fa-syringe title-purple"></i> Procedures
-                            <span class="text-xs text-gray-400">(Select - Click Add Selected Procedures)</span>
-                        </span>
-                        <span class="toggle-icon"><i class="fas fa-chevron-down"></i></span>
-                    </div>
-                    <div class="toggle-body" id="proceduresToggle">
-                        <div class="items-grid" id="proceduresGrid">
-                            <?php foreach ($procedures_list as $proc): ?>
-                                <div class="procedure-item-select" 
-                                     data-procedure-id="<?= $proc['id'] ?>"
-                                     data-procedure-name="<?= htmlspecialchars($proc['procedure_name']) ?>"
-                                     data-price="<?= $proc['price'] ?>"
-                                     onclick="toggleProcedure(this)">
-                                    <span class="item-check"><i class="fas fa-check"></i></span>
-                                    <span><?= htmlspecialchars($proc['procedure_name']) ?></span>
-                                    <small class="text-xs <?= ($proc['price'] ?? 0) > 0 ? 'text-gray-400' : 'text-green-600' ?>">
-                                        <?= ($proc['price'] ?? 0) > 0 ? 'TSh ' . number_format($proc['price'], 0) : 'FREE' ?>
-                                    </small>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                        <div class="mt-2 flex flex-wrap gap-2">
-                            <button type="button" class="btn btn-primary btn-sm" onclick="addSelectedProcedures()" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                                <i class="fas fa-plus"></i> Add Selected Procedures
-                            </button>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="clearProcedureSelections()">
-                                <i class="fas fa-times"></i> Clear Selection
-                            </button>
-                            <span class="text-xs text-gray-400 self-center" id="procSelectedCount">Selected: 0</span>
-                        </div>
-                    </div>
                 </div>
-                
-                <div class="toggle-section">
-                    <div class="toggle-header" onclick="toggleSection('equipmentToggle')">
-                        <span class="toggle-title">
-                            <i class="fas fa-tools title-orange"></i> Medical Equipment
-                            <span class="text-xs text-gray-400">(Select - Set Quantity - Click Add Selected Equipment)</span>
-                        </span>
-                        <span class="toggle-icon"><i class="fas fa-chevron-down"></i></span>
-                    </div>
-                    <div class="toggle-body" id="equipmentToggle">
-                        <div class="items-grid" id="equipmentGrid">
-                            <?php foreach ($equipment_list as $eq): ?>
-                                <div class="equipment-item-select" 
-                                     data-equipment-id="<?= $eq['id'] ?>"
-                                     data-equipment-name="<?= htmlspecialchars($eq['equipment_name']) ?>"
-                                     data-price="<?= $eq['selling_price'] ?? 0 ?>"
-                                     data-stock="<?= $eq['quantity'] ?>"
-                                     data-batch="<?= htmlspecialchars($eq['batch_number'] ?? '') ?>"
-                                     data-expiry="<?= $eq['expiry_date'] ?? '' ?>"
-                                     onclick="toggleEquipment(this)">
-                                    <span class="item-check"><i class="fas fa-check"></i></span>
-                                    <span><?= htmlspecialchars($eq['equipment_name']) ?></span>
-                                    <small class="text-xs <?= ($eq['selling_price'] ?? 0) > 0 ? 'text-gray-400' : 'text-green-600' ?>">
-                                        <?= ($eq['selling_price'] ?? 0) > 0 ? 'TSh ' . number_format($eq['selling_price'], 0) : 'FREE' ?>
-                                    </small>
-                                    <small class="text-xs text-gray-400">Stock: <?= $eq['quantity'] ?></small>
-                                </div>
-                            <?php endforeach; ?>
-                        </div>
-                        <div class="mt-2 flex flex-wrap gap-2 items-center">
-                            <div style="display:flex;gap:8px;align-items:center;">
-                                <label class="text-xs text-gray-500">Qty:</label>
-                                <input type="number" id="equipmentQuantity" class="form-control" value="1" min="1" style="width:80px;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                            </div>
-                            <button type="button" class="btn btn-primary btn-sm" onclick="addSelectedEquipment()" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                                <i class="fas fa-plus"></i> Add Selected Equipment
-                            </button>
-                            <button type="button" class="btn btn-outline btn-sm" onclick="clearEquipmentSelections()">
-                                <i class="fas fa-times"></i> Clear Selection
-                            </button>
-                            <span class="text-xs text-gray-400 self-center" id="equipSelectedCount">Selected: 0</span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="selected-items mt-4" style="background:var(--gray-50);border-radius:var(--radius);padding:16px 20px;border:1px solid var(--border-color);">
-                    <div class="flex items-center justify-between mb-2">
-                        <h4 class="text-sm font-semibold text-gray-600">
-                            <i class="fas fa-list"></i> Added Procedures & Equipment
-                            <span class="text-xs text-gray-400" id="addedCount">(<?= count($procedures) + count($equipment_items_display) ?> items)</span>
-                        </h4>
-                        <span class="text-sm font-bold text-purple-600">Total: TSh <span id="addedTotal"><?= number_format($procedure_total + $equipment_total, 0) ?></span></span>
-                    </div>
-                    <div id="addedItemsList">
-                        <?php if (count($procedures) > 0 || count($equipment_items_display) > 0): ?>
-                            <?php foreach ($procedures as $proc): ?>
-                                <div class="added-item-card" id="added-procedure-<?= $proc['id'] ?>">
-                                    <div class="item-left">
-                                        <span class="item-name"><?= htmlspecialchars($proc['procedure_name']) ?></span>
-                                        <span class="item-details">| Qty: 1</span>
-                                        <?php if ($proc['procedure_price'] > 0): ?>
-                                            <span class="item-price">TSh <?= number_format($proc['procedure_price'], 0) ?></span>
-                                        <?php else: ?>
-                                            <span class="item-free">FREE</span>
-                                        <?php endif; ?>
-                                    </div>
-                                    <div class="item-right">
-                                        <button type="button" class="btn-remove-item" onclick="removeAddedItem('procedure', <?= $proc['id'] ?>)" title="Remove item">
-                                            <i class="fas fa-times"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-                            <?php foreach ($equipment_items_display as $eq_item): ?>
-                                <div class="added-item-card" id="added-equipment-<?= $eq_item['id'] ?>">
-                                    <div class="item-left">
-                                        <span class="item-name"><?= htmlspecialchars($eq_item['item_name']) ?></span>
-                                        <span class="item-details">| Qty: <?= $eq_item['quantity'] ?></span>
-                                        <?php if ($eq_item['total_price'] > 0): ?>
-                                            <span class="item-price">TSh <?= number_format($eq_item['total_price'], 0) ?></span>
-                                        <?php else: ?>
-                                            <span class="item-free">FREE</span>
-                                        <?php endif; ?>
-                                    </div>
-                                    <div class="item-right">
-                                        <button type="button" class="btn-remove-item" onclick="removeAddedItem('equipment', <?= $eq_item['id'] ?>)" title="Remove item">
-                                            <i class="fas fa-times"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <div class="empty-state" id="emptyAdded">
-                                <i class="fas fa-syringe"></i>
-                                <p>No procedures or equipment added yet</p>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            </div>
-
-        </div>
-
-        <!-- ================================================================ -->
-        <!-- FORM ACTIONS -->
-        <!-- ================================================================ -->
-        <div class="consultation-card">
-            <div class="form-actions">
-                <button type="submit" name="save_consultation" class="btn btn-success" id="saveConsultationBtn" 
-                        <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                    <i class="fas fa-save"></i> Save Consultation
-                </button>
-                <?php if ($sections_frozen && !$is_waiting): ?>
-                    <span class="text-xs text-red-500 self-center" id="frozenActionsMessage">
-                        <i class="fas fa-lock"></i> Actions frozen - Lab tests pending
-                    </span>
-                <?php elseif ($lab_results_available || $is_waiting): ?>
-                    <span class="text-xs text-green-600 self-center" id="frozenActionsMessage">
-                        <i class="fas fa-check-circle"></i> <?= $is_waiting ? 'Consultation saved - Waiting for payment to complete' : 'Lab results available - All actions unlocked' ?>
-                    </span>
-                <?php endif; ?>
-                <a href="my_patients.php" class="btn btn-outline">
-                    <i class="fas fa-times"></i> Cancel
-                </a>
             </div>
         </div>
 
+    </div>
+
+    <!-- FORM ACTIONS -->
+    <div class="consultation-card">
+        <div class="form-actions">
+            <button type="submit" name="save_consultation" class="btn btn-success" id="saveConsultationBtn" 
+                    <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                <i class="fas fa-save"></i> Save Consultation
+            </button>
+            <?php if ($sections_frozen && !$is_waiting): ?>
+                <span class="text-xs text-red-500 self-center" id="frozenActionsMessage">
+                    <i class="fas fa-lock"></i> Actions frozen - Lab tests pending
+                </span>
+            <?php elseif ($lab_results_available || $is_waiting): ?>
+                <span class="text-xs text-green-600 self-center" id="frozenActionsMessage">
+                    <i class="fas fa-check-circle"></i> <?= $is_waiting ? 'Consultation saved - Waiting for payment to complete' : 'Lab results available - All actions unlocked' ?>
+                </span>
+            <?php endif; ?>
+            <a href="my_patients.php" class="btn btn-outline">
+                <i class="fas fa-times"></i> Cancel
+            </a>
+        </div>
+    </div>
+
+    <!-- CLOSE THE FORM HERE - FIXED -->
     </form>
+
+    <?php else: ?>
+    
+    <!-- ================================================================ -->
+    <!-- COMPLETED CONSULTATION - SHOW ALL SECTIONS -->
+    <!-- ================================================================ -->
+    
+    <!-- Symptoms & History - Read Only -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title"><i class="fas fa-list-ul title-blue"></i> Chief Complaint & History</h3>
+        <div class="form-group">
+            <label class="form-label">Chief Complaint</label>
+            <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['symptoms'] ?? 'No complaint recorded')) ?></div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">History of Presenting Illness (HPI)</label>
+            <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['hpi'] ?? 'No HPI recorded')) ?></div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Physical Examination</label>
+            <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['physical_exam'] ?? 'No physical exam recorded')) ?></div>
+        </div>
+    </div>
+
+    <!-- Lab Results - Read Only -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title"><i class="fas fa-flask title-blue"></i> Laboratory Tests & Results</h3>
+        <?php if ($lab_results_available): ?>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                    <thead><tr>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Test Name</th>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Result</th>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
+                    </tr></thead>
+                    <tbody>
+                        <?php foreach ($lab_results as $result): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);font-weight:600;color:var(--success);"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><span class="badge badge-success">✅ Completed</span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-flask"></i><p>No lab tests found</p></div>
+        <?php endif; ?>
+    </div>
+
+    <!-- Diagnosis - Read Only -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title"><i class="fas fa-diagnoses title-blue"></i> Diagnosis</h3>
+        <?php if (!empty($visit['diagnosis']) || !empty($visit['disease_name'])): ?>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+                <div>
+                    <label class="form-label">Diagnosis</label>
+                    <div class="form-control" style="background:var(--gray-50);font-weight:600;color:var(--success);">
+                        <?= htmlspecialchars($visit['diagnosis'] ?? $visit['disease_name'] ?? 'N/A') ?>
+                    </div>
+                </div>
+                <div>
+                    <label class="form-label">Disease Code</label>
+                    <div class="form-control" style="background:var(--gray-50);font-family:monospace;">
+                        <?= htmlspecialchars($visit['disease_code'] ?? 'N/A') ?>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group mt-3">
+                <label class="form-label">Treatment</label>
+                <div class="form-control" style="min-height:60px;background:var(--gray-50);">
+                    <?= nl2br(htmlspecialchars($visit['treatment'] ?? 'No treatment recorded')) ?>
+                </div>
+            </div>
+            <div class="form-group mt-3">
+                <label class="form-label">Notes</label>
+                <div class="form-control" style="min-height:60px;background:var(--gray-50);">
+                    <?= nl2br(htmlspecialchars($visit['notes'] ?? 'No notes recorded')) ?>
+                </div>
+            </div>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-diagnoses"></i><p>No diagnosis recorded</p></div>
+        <?php endif; ?>
+    </div>
+
+    <!-- Medications - Read Only -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title"><i class="fas fa-prescription title-blue"></i> Prescriptions & Medications</h3>
+        <?php if (count($prescriptions) > 0): ?>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                    <thead><tr>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Medication</th>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Dosage</th>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Frequency</th>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Qty</th>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Instructions</th>
+                        <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
+                    </tr></thead>
+                    <tbody>
+                        <?php foreach ($prescriptions as $med): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($med['medication_name'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($med['dosage'] ?? '') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($med['frequency'] ?? '') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= $med['quantity'] ?? 0 ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($med['instructions'] ?? '') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);">
+                                    <?php if (($med['status'] ?? '') === 'dispensed'): ?>
+                                        <span class="badge badge-success">✅ Dispensed</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-warning">⏳ Pending</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-prescription"></i><p>No prescriptions found</p></div>
+        <?php endif; ?>
+    </div>
+
+    <!-- Procedures & Equipment - Read Only -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title"><i class="fas fa-syringe title-purple"></i> Procedures & Medical Equipment</h3>
+        <?php if (count($procedures) > 0 || count($equipment_items_display) > 0): ?>
+            <?php if (count($procedures) > 0): ?>
+                <h4 style="font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin-bottom:8px;">Procedures</h4>
+                <div style="overflow-x:auto;margin-bottom:16px;">
+                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                        <thead><tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Procedure</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Price</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
+                        </tr></thead>
+                        <tbody>
+                            <?php foreach ($procedures as $proc): ?>
+                                <tr>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($proc['procedure_name']) ?></td>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);">TSh <?= number_format($proc['procedure_price'] ?? 0, 0) ?></td>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);">✅ Completed</td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+            <?php if (count($equipment_items_display) > 0): ?>
+                <h4 style="font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin-bottom:8px;">Medical Equipment</h4>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                        <thead><tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Equipment</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Qty</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Price</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
+                        </tr></thead>
+                        <tbody>
+                            <?php foreach ($equipment_items_display as $eq): ?>
+                                <tr>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= htmlspecialchars($eq['item_name']) ?></td>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);"><?= $eq['quantity'] ?></td>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);">TSh <?= number_format($eq['total_price'] ?? 0, 0) ?></td>
+                                    <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);color:var(--text-primary);">✅ Completed</td>
+                                </tr>
+                            <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                </div>
+            <?php endif; ?>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-syringe"></i><p>No procedures or equipment used</p></div>
+        <?php endif; ?>
+    </div>
 
     <?php endif; ?>
 
+    <!-- ================================================================ -->
+    <!-- FOOTER -->
+    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -4312,6 +4710,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
 </main>
 
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <div class="toast-icon"><i class="fas fa-info-circle"></i></div>
     <div class="toast-content">
@@ -4321,6 +4722,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <button class="toast-close" onclick="closeToast()">&times;</button>
 </div>
 
+<!-- ================================================================ -->
+<!-- JAVASCRIPT -->
+<!-- ================================================================ -->
 <script>
 // ================================================================
 // JAVASCRIPT - CONSULTATION WITH UPDATED AUTO-COMPLETE
@@ -4393,7 +4797,7 @@ function initDarkMode() {
 }
 
 // ================================================================
-// COMPLAINT FUNCTIONS (using 'symptoms' textarea)
+// COMPLAINT FUNCTIONS
 // ================================================================
 function addInstruction(text) {
     var textarea = document.getElementById('medInstructions');
@@ -4484,7 +4888,7 @@ function getDiagnosisData() {
 }
 
 // ================================================================
-// AUTO-SAVE DIAGNOSIS - WITH DUPLICATE PREVENTION
+// AUTO-SAVE DIAGNOSIS
 // ================================================================
 function autoSaveDiagnosis() {
     if (isCompleted || diagnosisSaving || isWaiting) return;
@@ -4536,7 +4940,6 @@ function autoSaveDiagnosis() {
             
             console.log('✅ Diagnosis auto-saved:', result.data);
             
-            // Check if auto-complete can happen (only if waiting)
             if (isWaiting) {
                 checkAndAutoComplete();
             }
@@ -4571,7 +4974,10 @@ function checkAndAutoComplete() {
             var bill = data.bill;
             if (bill.status === 'paid' && bill.balance === 0) {
                 console.log('✅ Bill fully paid and visit waiting. Auto-completing...');
-                autoCompleteVisit();
+                // Wait 3 seconds before auto-complete
+                setTimeout(function() {
+                    autoCompleteVisit();
+                }, 3000);
             } else {
                 console.log('⏳ Bill not fully paid. Balance: ' + bill.balance);
             }
@@ -4830,7 +5236,6 @@ function addLabTestToCart() {
     var testId = select.value;
     if (!testId) { showToast('Error', 'Please select a lab test', 'error'); return; }
     
-    // Auto-save diagnosis first
     autoSaveDiagnosis();
     
     var formData = new FormData();
@@ -4988,7 +5393,6 @@ function addSelectedProcedures() {
         return;
     }
     
-    // Auto-save diagnosis first
     autoSaveDiagnosis();
     
     var procedureIds = selectedProcedures.map(function(p) { return p.id; });
@@ -4998,7 +5402,6 @@ function addSelectedProcedures() {
     formData.append('action', 'add_procedures_batch');
     formData.append('procedure_ids', JSON.stringify(procedureIds));
     
-    // Include diagnosis data
     if (diagnosisData) {
         formData.append('diagnosis_id', diagnosisData.diagnosis_id || '');
         formData.append('diagnosis_manual', diagnosisData.diagnosis_manual || '');
@@ -5022,7 +5425,6 @@ function addSelectedProcedures() {
         btn.innerHTML = originalHtml;
         if (data.success) {
             showToast('✅ Success', data.message, 'success');
-            // If diagnosis was saved, update the UI
             if (data.diagnosis_saved && data.diagnosis_data) {
                 var statusEl = document.getElementById('diagnosisStatus');
                 if (statusEl && data.diagnosis_data.diagnosis) {
@@ -5083,7 +5485,6 @@ function addSelectedEquipment() {
         return;
     }
     
-    // Auto-save diagnosis first
     autoSaveDiagnosis();
     
     var quantity = parseInt(document.getElementById('equipmentQuantity').value) || 1;
@@ -5098,7 +5499,6 @@ function addSelectedEquipment() {
     formData.append('action', 'add_equipment_batch');
     formData.append('equipment_data', JSON.stringify(equipmentData));
     
-    // Include diagnosis data
     if (diagnosisData) {
         formData.append('diagnosis_id', diagnosisData.diagnosis_id || '');
         formData.append('diagnosis_manual', diagnosisData.diagnosis_manual || '');
@@ -5156,7 +5556,6 @@ function clearEquipmentSelections() {
 // MEDICATION FUNCTIONS
 // ================================================================
 function addMedicationAjax() {
-    // Auto-save diagnosis first
     autoSaveDiagnosis();
     
     var medSelect = document.getElementById('medicationSelect');
@@ -5171,16 +5570,7 @@ function addMedicationAjax() {
     if (qty < 1) { showToast('❌ Error', 'Quantity must be at least 1', 'error'); return; }
     
     var stock = parseInt(medSelect.options[medSelect.selectedIndex]?.dataset?.stock) || 0;
-    if (qty > stock) { showToast('⚠️ Warning', 'Not enough stock! Available: ' + stock, 'warning'); return; }
-    
-    var expiry = medSelect.options[medSelect.selectedIndex]?.dataset?.expiry || '';
-    if (expiry) {
-        var expDate = new Date(expiry);
-        if (expDate < new Date()) {
-            showToast('❌ Error', 'This medication has EXPIRED! Please select another batch.', 'error');
-            return;
-        }
-    }
+    if (qty > stock) { showToast('⚠️ Warning', 'Not enough stock across all batches! Available: ' + stock, 'warning'); return; }
     
     var diagnosisData = getDiagnosisData();
     
@@ -5194,7 +5584,6 @@ function addMedicationAjax() {
     formData.append('route', route);
     formData.append('instructions', instructions);
     
-    // Include diagnosis data
     if (diagnosisData) {
         formData.append('diagnosis_id', diagnosisData.diagnosis_id || '');
         formData.append('diagnosis_manual', diagnosisData.diagnosis_manual || '');
@@ -5541,11 +5930,9 @@ document.addEventListener('DOMContentLoaded', function() {
         if (diagSelect) {
             diagSelect.addEventListener('change', function() {
                 loadDiseaseDetails(this.value);
-                // Don't auto-save on change - wait for user action
             });
         }
         
-        // Check if diagnosis is already saved on page load
         var diagnosisStatus = document.getElementById('diagnosisStatus');
         if (diagnosisStatus && diagnosisStatus.textContent.includes('✅ Saved')) {
             diagnosisAlreadySaved = true;
@@ -5574,10 +5961,10 @@ document.addEventListener('DOMContentLoaded', function() {
         
         console.log('👨‍⚕️ BRAICK DISPENSARY - CONSULTATION WITH UPDATED FLOW');
         console.log('✅ Diagnosis auto-saves when adding medications, procedures, or equipment');
-        console.log('✅ Auto-complete triggers ONLY when:');
-        console.log('   1. Visit status is WAITING (doctor has saved consultation)');
-        console.log('   2. All bills are fully PAID (balance = 0)');
-        console.log('✅ Diagnosis stays saved after adding items');
+        console.log('✅ Auto-complete triggers after 3 seconds when bill is fully paid');
+        console.log('✅ Medications grouped by name and category');
+        console.log('✅ Completed consultation shows all sections');
+        console.log('✅ Lab cart button fixed - uses form submit with name="send_lab"');
     }
 });
 
