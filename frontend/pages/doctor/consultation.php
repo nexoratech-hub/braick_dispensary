@@ -4,11 +4,10 @@
 // COMPLETE CONSULTATION - FULLY FIXED
 // BRAICK DISPENSARY
 // 
-// ✅ FLOW: assigned → lab_test → prescribed → waiting → completed
-// ✅ ONLY "Save Consultation" button triggers auto-complete
-// ✅ Lab results → 'prescribed' (NOT 'waiting' or 'completed')
-// ✅ Auto-complete ONLY after Save Consultation button is clicked
-// ✅ NO auto-complete on Ajax refresh
+// ✅ Lab results → 'prescribed' ONLY
+// ✅ NO auto-complete without diagnosis
+// ✅ Save Consultation → only way to change to 'waiting'
+// ✅ Auto-complete → only after Save Consultation + balance=0
 // ================================================================
 
 // Start session
@@ -69,6 +68,22 @@ try {
 } catch (Exception $e) {
     die('Database connection error: ' . $e->getMessage());
 }
+
+// ================================================================
+// COMMON COMPLAINTS LIST
+// ================================================================
+$common_complaints = [
+    'Fever', 'Headache', 'Cough', 'Sore Throat', 'Runny Nose',
+    'Shortness of Breath', 'Chest Pain', 'Abdominal Pain', 'Nausea',
+    'Vomiting', 'Diarrhea', 'Constipation', 'Fatigue', 'Dizziness',
+    'Joint Pain', 'Muscle Ache', 'Back Pain', 'Rash', 'Itching',
+    'Swelling', 'Loss of Appetite', 'Weight Loss', 'Weight Gain',
+    'Night Sweats', 'Palpitations', 'Difficulty Sleeping', 'Anxiety',
+    'Depression', 'Memory Loss', 'Seizures', 'Blurred Vision',
+    'Fainting', 'Cough with Phlegm', 'Dry Cough', 'Loss of Smell',
+    'Loss of Taste', 'Sneezing', 'Congestion', 'Weakness',
+    'Confusion', 'Dehydration', 'Jaundice'
+];
 
 // ================================================================
 // GET OR CREATE VISIT
@@ -344,7 +359,17 @@ function canAutoCompleteVisit($db, $visit_id, $bill_id) {
         return false;
     }
     
-    // Step 2: Balance must be 0
+    // Step 2: MUST have diagnosis filled
+    $stmt = $db->prepare("SELECT diagnosis FROM visits WHERE id = ?");
+    $stmt->execute([$visit_id]);
+    $diagnosis = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$diagnosis || empty($diagnosis['diagnosis'])) {
+        error_log("❌ AUTO-COMPLETE SKIPPED: No diagnosis recorded");
+        return false;
+    }
+    
+    // Step 3: Balance must be 0
     $stmt = $db->prepare("SELECT balance FROM bills WHERE id = ?");
     $stmt->execute([$bill_id]);
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -354,14 +379,14 @@ function canAutoCompleteVisit($db, $visit_id, $bill_id) {
         return false;
     }
     
-    error_log("✅ AUTO-COMPLETE READY: Visit #$visit_id is 'waiting' and balance is 0");
+    error_log("✅ AUTO-COMPLETE READY: Visit #$visit_id is 'waiting', has diagnosis, and balance is 0");
     return true;
 }
 
 function autoCompleteVisit($db, $visit_id) {
     // Double-check before updating
     $stmt = $db->prepare("
-        SELECT v.status, b.balance 
+        SELECT v.status, v.diagnosis, b.balance 
         FROM visits v 
         LEFT JOIN bills b ON v.id = b.visit_id 
         WHERE v.id = ?
@@ -369,8 +394,8 @@ function autoCompleteVisit($db, $visit_id) {
     $stmt->execute([$visit_id]);
     $data = $stmt->fetch(PDO::FETCH_ASSOC);
     
-    if (!$data || $data['status'] !== 'waiting' || ($data['balance'] ?? 0) > 0) {
-        error_log("❌ AUTO-COMPLETE FAILED: Pre-check failed - status=" . ($data['status'] ?? 'null') . ", balance=" . ($data['balance'] ?? 'null'));
+    if (!$data || $data['status'] !== 'waiting' || empty($data['diagnosis']) || ($data['balance'] ?? 0) > 0) {
+        error_log("❌ AUTO-COMPLETE FAILED: Pre-check failed");
         return false;
     }
     
@@ -397,7 +422,7 @@ function autoCompleteVisit($db, $visit_id) {
 }
 
 // ================================================================
-// ✅ CHECK LAB RESULTS - ONLY UPDATES TO 'prescribed' (NOT 'waiting')
+// ✅ CHECK LAB RESULTS - ONLY UPDATES TO 'prescribed'
 // ================================================================
 function checkLabResultsAndUpdateStatus($db, $visit_id) {
     $stmt = $db->prepare("
@@ -429,7 +454,7 @@ function checkLabResultsAndUpdateStatus($db, $visit_id) {
             $stmt->execute([$visit_id]);
             
             if ($stmt->rowCount() > 0) {
-                error_log("✅ Visit #$visit_id updated to 'prescribed' (NOT waiting)");
+                error_log("✅ Visit #$visit_id updated to 'prescribed' ONLY");
                 return true;
             }
         }
@@ -438,7 +463,7 @@ function checkLabResultsAndUpdateStatus($db, $visit_id) {
 }
 
 // ================================================================
-// SAVE DIAGNOSIS
+// SAVE DIAGNOSIS - DATA ONLY, NO STATUS CHANGE
 // ================================================================
 function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, $data) {
     $diagnosis_id = $data['diagnosis_id'] ?? '';
@@ -482,8 +507,6 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
             $disease_name = $disease['disease_name'];
             $disease_code = $disease['disease_code'] ?? 'D-' . strtoupper(substr(str_replace(' ', '', $disease_name), 0, 6)) . '-' . rand(100, 999);
         }
-    } else {
-        $disease_id_val = null;
     }
     
     $stmt = $db->prepare("
@@ -901,7 +924,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: SAVE DIAGNOSIS
+    // ✅ AJAX: SAVE DIAGNOSIS - DATA ONLY, NO STATUS CHANGE
     // ================================================================
     if ($action === 'save_diagnosis') {
         header('Content-Type: application/json');
@@ -916,15 +939,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         }
         
         try {
+            // ✅ SAVE DATA ONLY - NO STATUS CHANGE!
             $result = saveDiagnosisToDatabase($db, $visit_id_input, $doctor_id, $doctor_branch_id, $input);
             $response['success'] = true;
-            $response['message'] = '✅ Diagnosis saved successfully';
+            $response['message'] = '✅ Data saved successfully';
             $response['data'] = [
                 'diagnosis' => $result['disease_name'],
                 'disease_code' => $result['disease_code'],
                 'treatment' => $result['treatment'],
                 'disease_id' => $result['disease_id']
             ];
+            // ❌ DO NOT CHANGE STATUS HERE!
         } catch (Exception $e) {
             $response['message'] = '❌ Error: ' . $e->getMessage();
         }
@@ -1007,7 +1032,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // AJAX: GET FULL STATE - NO AUTO-COMPLETE HERE!
+    // AJAX: GET FULL STATE - NO AUTO-COMPLETE
     // ================================================================
     if ($action === 'get_full_state') {
         header('Content-Type: application/json');
@@ -1140,8 +1165,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             'status' => $bill['status'] ?? 'pending'
         ];
         
-        // ✅ NO AUTO-COMPLETE HERE! Only return bill data.
-        // Auto-complete only triggered by Save Consultation button.
+        // ✅ NO AUTO-COMPLETE HERE! Only return data for UI update.
         
         $added_procedures = [];
         try {
@@ -2107,6 +2131,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 exit;
             }
             
+            // Check diagnosis
+            $stmt = $db->prepare("SELECT diagnosis FROM visits WHERE id = ?");
+            $stmt->execute([$visit_id_auto]);
+            $diagnosis_check = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$diagnosis_check || empty($diagnosis_check['diagnosis'])) {
+                $response['message'] = '❌ Diagnosis is required before auto-complete. Please enter a diagnosis first.';
+                echo json_encode($response);
+                exit;
+            }
+            
             $stmt = $db->prepare("SELECT id, balance FROM bills WHERE visit_id = ?");
             $stmt->execute([$visit_id_auto]);
             $bill_check = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -2319,7 +2354,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // ✅ SAVE CONSULTATION - ONLY THIS TRIGGERS AUTO-COMPLETE
+    // ✅ SAVE CONSULTATION - ONLY THIS CHANGES STATUS TO 'waiting'
     // ================================================================
     if (isset($_POST['save_consultation'])) {
         $diagnosis_id = $_POST['diagnosis_id'] ?? '';
@@ -2373,7 +2408,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
-        // ✅ Change status to 'waiting'
+        // ✅ ONLY HERE - CHANGE STATUS TO 'waiting'
         $stmt = $db->prepare("
             UPDATE visits 
             SET status = 'waiting',
@@ -2389,10 +2424,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         if ($new_status && $new_status['status'] === 'waiting') {
             error_log("✅ Visit #$visit_id status changed to 'waiting' by Save Consultation button");
             
-            // ✅ NOW CHECK IF AUTO-COMPLETE SHOULD RUN (BALANCE = 0)
+            // ✅ NOW CHECK IF AUTO-COMPLETE SHOULD RUN (status='waiting', diagnosis exists, balance=0)
             $can_auto = canAutoCompleteVisit($db, $visit_id, $bill_id);
             if ($can_auto) {
-                error_log("✅ AUTO-COMPLETE triggered after Save Consultation (status=waiting, balance=0)");
+                error_log("✅ AUTO-COMPLETE triggered after Save Consultation (status=waiting, diagnosis exists, balance=0)");
                 $auto_completed = autoCompleteVisit($db, $visit_id);
                 if ($auto_completed) {
                     $_SESSION['flash_message'] = "✅ Consultation saved AND auto-completed! All bills paid. Status: COMPLETED";
@@ -2402,7 +2437,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 }
             }
             
-            $_SESSION['flash_message'] = "✅ Consultation saved! Status changed to WAITING. Auto-complete will run when balance is 0.";
+            $_SESSION['flash_message'] = "✅ Consultation saved! Status changed to WAITING. Auto-complete will run when diagnosis is filled and balance is 0.";
             $_SESSION['flash_type'] = 'success';
         } else {
             error_log("❌ Failed to update visit #$visit_id status");
@@ -2442,7 +2477,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     
     <style>
         /* ================================================================ */
-        /* COMPLETE CSS - ALL STYLES */
+        /* ROOT VARIABLES - LIGHT & DARK MODE */
         /* ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -2458,8 +2493,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --warning-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
-            --cyan: #0891B2;
-            --cyan-bg: #CFFAFE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -2506,7 +2539,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --danger-bg: #7F1D1D;
             --warning-bg: #78350F;
             --purple-bg: #4C1D95;
-            --cyan-bg: #164E63;
         }
         
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2527,6 +2559,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transition: background 0.3s ease, color 0.3s ease; 
         }
         
+        /* ================================================================ */
+        /* PAGE HEADER */
+        /* ================================================================ */
         .page-header {
             display: flex;
             justify-content: space-between;
@@ -2575,6 +2610,57 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .page-subtitle strong { color: #ffffff !important; font-weight: 700; }
         
+        .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            backdrop-filter: blur(4px);
+        }
+        
+        .btn-outline-light {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 16px;
+            border-radius: 10px;
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
+        }
+        .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+        }
+        
+        .status-badge-lg {
+            display: inline-block;
+            padding: 4px 16px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
+        .badge-info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
+        .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
+        .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
+        .badge-purple { background: var(--purple-bg); color: var(--purple); border: 1px solid var(--purple); }
+        
+        /* ================================================================ */
+        /* CONSULTATION CARDS */
+        /* ================================================================ */
         .consultation-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -2615,7 +2701,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .card-title i { color: var(--primary); font-size: 1.2rem; }
         
+        /* ================================================================ */
         /* 4 BILL SUMMARY CARDS */
+        /* ================================================================ */
         .bill-summary-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -2697,160 +2785,45 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .bill-summary-card.discount-card .bill-summary-icon { background: var(--purple-bg); color: var(--purple); }
         .bill-summary-card.discount-card .bill-summary-value { color: var(--purple); }
         
-        .status-badge {
-            display: inline-block;
-            font-size: 0.7rem;
-            font-weight: 600;
-            padding: 4px 16px;
-            border-radius: 20px;
-            text-transform: capitalize;
-            color: #ffffff !important;
-        }
-        .badge-warning { background: var(--warning); color: #ffffff !important; }
-        .badge-info { background: var(--primary); color: #ffffff !important; }
-        .badge-success { background: var(--success); color: #ffffff !important; }
-        .badge-danger { background: var(--danger); color: #ffffff !important; }
-        .badge-purple { background: var(--purple); color: #ffffff !important; }
-        
-        .section-total {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            padding: 4px 16px;
-            border-radius: 20px;
-            background: var(--primary-gradient);
-            color: #ffffff !important;
-            border: none;
-            box-shadow: 0 2px 8px rgba(11,94,215,0.2);
-        }
-        .section-total * { color: #ffffff !important; }
-        .section-total .amount { color: #ffffff !important; }
-        .section-total .label { opacity: 0.8; font-weight: 400; color: rgba(255,255,255,0.8) !important; }
-        .section-total.green { background: linear-gradient(135deg, #059669, #10B981); }
-        .section-total.purple { background: linear-gradient(135deg, #7C3AED, #8B5CF6); }
-        .section-total.orange { background: linear-gradient(135deg, #D97706, #F59E0B); }
-        
-        .frozen-badge {
-            background: rgba(255,255,255,0.2);
-            color: #ffffff !important;
-            padding: 2px 12px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            border: 1px solid rgba(255,255,255,0.2);
-            display: inline-flex;
+        /* ================================================================ */
+        /* STATUS FLOW */
+        /* ================================================================ */
+        .status-flow {
+            display: flex;
             align-items: center;
             gap: 4px;
-        }
-        .frozen-badge.success { background: rgba(5,150,105,0.4); border-color: var(--success); }
-        
-        .frozen-overlay-active { position: relative; }
-        .frozen-overlay-active::after {
-            content: '🔒 Lab tests pending - Sections Frozen';
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: rgba(0,0,0,0.75);
-            color: #ffffff;
-            padding: 12px 24px;
-            border-radius: 12px;
-            font-size: 1rem;
-            font-weight: 600;
-            z-index: 100;
-            pointer-events: none;
-            border: 2px solid var(--warning);
-        }
-        .frozen-overlay-active > * { opacity: 0.4; pointer-events: none; }
-        .frozen-overlay-active .frozen-badge { opacity: 1; pointer-events: auto; }
-        .frozen-overlay-active .bill-summary-grid { opacity: 1; pointer-events: auto; }
-        
-        .form-group { margin-bottom: 16px; }
-        .form-group:last-child { margin-bottom: 0; }
-        .form-label {
-            display: block;
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            margin-bottom: 5px;
-            letter-spacing: 0.02em;
-        }
-        .required { color: var(--danger); margin-left: 2px; }
-        .form-control {
-            width: 100%;
-            padding: 10px 14px;
-            border: 2px solid var(--border-color);
+            padding: 8px 12px;
+            background: var(--gray-50);
             border-radius: var(--radius);
-            font-size: 0.85rem;
-            background: var(--bg-card);
-            color: var(--text-primary);
-            outline: none;
-            transition: var(--transition);
-            font-family: inherit;
-        }
-        .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11,94,215,0.12);
-        }
-        .form-control:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            background: var(--gray-100);
-        }
-        
-        .btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            padding: 8px 18px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            cursor: pointer;
-            border: none;
-            text-decoration: none;
-            min-height: 38px;
-        }
-        .btn-primary { background: var(--primary); color: #ffffff; }
-        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11,94,215,0.3); }
-        .btn-success { background: var(--success); color: #ffffff; }
-        .btn-success:hover { background: #047857; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5,150,105,0.3); }
-        .btn-warning { background: var(--warning); color: #ffffff; }
-        .btn-warning:hover { background: #B45309; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(217,119,6,0.3); }
-        .btn-outline { background: transparent; color: var(--text-primary); border: 2px solid var(--border-color); }
-        .btn-outline:hover { background: var(--gray-100); border-color: var(--gray-400); transform: translateY(-2px); }
-        .btn-sm { padding: 4px 12px; font-size: 0.7rem; min-height: 30px; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
-        
-        .form-actions {
-            display: flex;
+            border: 1px solid var(--border-color);
             flex-wrap: wrap;
-            gap: 14px;
-            padding-top: 20px;
-            margin-top: 20px;
-            border-top: 2px solid var(--border-color);
         }
-        
-        .alert {
-            padding: 14px 20px;
-            border-radius: var(--radius);
-            margin-bottom: 24px;
+        .status-step {
             display: flex;
             align-items: center;
-            gap: 12px;
-            font-size: 0.9rem;
-            border: 1px solid transparent;
-            animation: slideDown 0.3s ease;
+            gap: 4px;
+            font-size: 0.65rem;
+            padding: 2px 10px;
+            border-radius: 12px;
+            background: var(--gray-200);
+            color: var(--text-secondary);
         }
-        .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
-        .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
-        .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
-        .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
+        .status-step.active {
+            background: var(--primary);
+            color: #ffffff;
+        }
+        .status-step.completed {
+            background: var(--success);
+            color: #ffffff;
+        }
+        .status-arrow {
+            color: var(--text-secondary);
+            font-size: 0.6rem;
+        }
         
+        /* ================================================================ */
+        /* VITAL SIGNS */
+        /* ================================================================ */
         .vital-signs-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -2918,6 +2891,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .vital-sign-item.bmi-item::before { background: #2563EB; }
         .vital-sign-item.bmi-item .vital-value { color: #2563EB; }
         
+        /* ================================================================ */
+        /* PATIENT INFO */
+        /* ================================================================ */
         .patient-info-block {
             display: flex;
             align-items: center;
@@ -2971,6 +2947,244 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .col-span-2 { grid-column: span 2; }
         
+        /* ================================================================ */
+        /* FORM ELEMENTS */
+        /* ================================================================ */
+        .form-group { margin-bottom: 16px; }
+        .form-group:last-child { margin-bottom: 0; }
+        .form-label {
+            display: block;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 5px;
+            letter-spacing: 0.02em;
+        }
+        .required { color: var(--danger); margin-left: 2px; }
+        .form-control {
+            width: 100%;
+            padding: 10px 14px;
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            font-size: 0.85rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            outline: none;
+            transition: var(--transition);
+            font-family: inherit;
+        }
+        .form-control:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11,94,215,0.12);
+        }
+        .form-control:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            background: var(--gray-100);
+        }
+        
+        /* ================================================================ */
+        /* BUTTONS */
+        /* ================================================================ */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 18px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            min-height: 38px;
+        }
+        .btn-primary { background: var(--primary); color: #ffffff; }
+        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(11,94,215,0.3); }
+        .btn-success { background: var(--success); color: #ffffff; }
+        .btn-success:hover { background: #047857; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(5,150,105,0.3); }
+        .btn-warning { background: var(--warning); color: #ffffff; }
+        .btn-warning:hover { background: #B45309; transform: translateY(-2px); box-shadow: 0 4px 12px rgba(217,119,6,0.3); }
+        .btn-outline { background: transparent; color: var(--text-primary); border: 2px solid var(--border-color); }
+        .btn-outline:hover { background: var(--gray-100); border-color: var(--gray-400); transform: translateY(-2px); }
+        .btn-sm { padding: 4px 12px; font-size: 0.7rem; min-height: 30px; }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
+        
+        /* ================================================================ */
+        /* FORM ACTIONS */
+        /* ================================================================ */
+        .form-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px;
+            padding-top: 20px;
+            margin-top: 20px;
+            border-top: 2px solid var(--border-color);
+        }
+        
+        /* ================================================================ */
+        /* ALERT */
+        /* ================================================================ */
+        .alert {
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 0.9rem;
+            border: 1px solid transparent;
+            animation: slideDown 0.3s ease;
+        }
+        .alert-success { background: var(--success-bg); color: var(--success); border-color: var(--success); }
+        .alert-error { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
+        .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
+        .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
+        
+        /* ================================================================ */
+        /* TOAST */
+        /* ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: var(--success) !important;
+            border-radius: 12px;
+            padding: 16px 24px;
+            box-shadow: 0 8px 32px rgba(5,150,105,0.35);
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            z-index: 9999;
+            min-width: 320px;
+            max-width: 450px;
+            transform: translateY(120px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        .toast-custom * { color: #ffffff !important; }
+        .toast-custom .toast-icon { font-size: 1.5rem; flex-shrink: 0; color: #ffffff !important; }
+        .toast-custom .toast-content { flex: 1; }
+        .toast-custom .toast-content .toast-title { 
+            font-weight: 600; 
+            font-size: 0.85rem; 
+            color: #ffffff !important; 
+            margin: 0; 
+        }
+        .toast-custom .toast-content .toast-message { 
+            font-size: 0.8rem; 
+            color: rgba(255,255,255,0.9) !important; 
+            margin: 0; 
+        }
+        .toast-custom .toast-close {
+            background: none;
+            border: none;
+            font-size: 1.2rem;
+            color: rgba(255,255,255,0.7) !important;
+            cursor: pointer;
+            padding: 0 4px;
+            transition: var(--transition);
+        }
+        .toast-custom .toast-close:hover {
+            color: #ffffff !important;
+            transform: scale(1.1);
+        }
+        
+        /* ================================================================ */
+        /* FOOTER */
+        /* ================================================================ */
+        .footer {
+            padding: 16px 0;
+            border-top: 2px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
+        
+        /* ================================================================ */
+        /* UTILITY CLASSES */
+        /* ================================================================ */
+        .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+        .mb-6 { margin-bottom: 24px; }
+        .mt-2 { margin-top: 8px; }
+        .mt-3 { margin-top: 12px; }
+        .mt-4 { margin-top: 16px; }
+        .flex { display: flex; }
+        .flex-wrap { flex-wrap: wrap; }
+        .gap-2 { gap: 8px; }
+        .gap-3 { gap: 12px; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
+        .text-sm { font-size: 0.875rem; }
+        .text-xs { font-size: 0.75rem; }
+        .text-gray-400 { color: var(--text-secondary); }
+        .text-green-600 { color: var(--success); }
+        .text-yellow-600 { color: var(--warning); }
+        .text-red-500 { color: var(--danger); }
+        .text-purple-600 { color: var(--purple); }
+        .font-mono { font-family: monospace; }
+        .font-medium { font-weight: 500; }
+        .font-semibold { font-weight: 600; }
+        .font-bold { font-weight: 700; }
+        .ml-2 { margin-left: 8px; }
+        .self-center { align-self: center; }
+        .empty-state { text-align: center; padding: 16px; color: var(--text-secondary); }
+        .empty-state i { font-size: 1.5rem; color: var(--border-color); display: block; margin-bottom: 8px; }
+        .frozen-badge {
+            background: rgba(255,255,255,0.2);
+            color: #ffffff !important;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            border: 1px solid rgba(255,255,255,0.2);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .frozen-badge.success { background: rgba(5,150,105,0.4); border-color: var(--success); }
+        
+        .frozen-overlay-active { position: relative; }
+        .frozen-overlay-active::after {
+            content: '🔒 Lab tests pending - Sections Frozen';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.75);
+            color: #ffffff;
+            padding: 12px 24px;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            z-index: 100;
+            pointer-events: none;
+            border: 2px solid var(--warning);
+        }
+        .frozen-overlay-active > * { opacity: 0.4; pointer-events: none; }
+        .frozen-overlay-active .frozen-badge { opacity: 1; pointer-events: auto; }
+        .frozen-overlay-active .bill-summary-grid { opacity: 1; pointer-events: auto; }
+        
+        .diagnosis-manual-box {
+            margin-top: 12px;
+            padding: 16px;
+            background: var(--gray-50);
+            border-radius: var(--radius);
+            border: 1px dashed var(--border-color);
+        }
+        
+        /* ================================================================ */
+        /* LAB CART ITEMS */
+        /* ================================================================ */
         .lab-cart-items { max-height: 200px; overflow-y: auto; }
         .lab-cart-item {
             display: flex;
@@ -2996,91 +3210,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .lab-cart-item .btn-remove-cart:hover { background: var(--danger); color: #ffffff; }
         .lab-cart-empty { text-align: center; padding: 16px; color: var(--text-secondary); font-size: 0.85rem; }
         
-        .toggle-section {
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius);
-            margin-bottom: 12px;
-            overflow: hidden;
-            transition: var(--transition);
-        }
-        .toggle-section:hover { border-color: var(--primary-light); }
-        .toggle-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 12px 18px;
-            background: var(--gray-50);
-            cursor: pointer;
-            user-select: none;
-            transition: var(--transition);
-        }
-        .toggle-header:hover { background: var(--primary-bg); }
-        .toggle-header .toggle-title { font-weight: 600; font-size: 0.85rem; color: var(--text-primary); display: flex; align-items: center; gap: 10px; }
-        .toggle-header .toggle-icon { color: var(--text-secondary); font-size: 0.8rem; transition: var(--transition); }
-        .toggle-header.active .toggle-icon { transform: rotate(180deg); }
-        .toggle-body { padding: 0 18px 18px 18px; display: none; background: var(--bg-card); }
-        .toggle-body.open { display: block; }
-        
-        .procedure-item-select, .equipment-item-select {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            padding: 8px 12px;
-            border-radius: var(--radius);
-            font-size: 0.8rem;
-            background: var(--bg-card);
-            border: 2px solid var(--border-color);
-            cursor: pointer;
-            transition: var(--transition);
-            user-select: none;
-            color: var(--text-primary);
-        }
-        .procedure-item-select:hover, .equipment-item-select:hover {
-            background: var(--primary-bg);
-            border-color: var(--primary);
-            transform: translateY(-1px);
-        }
-        .procedure-item-select.selected, .equipment-item-select.selected {
-            background: var(--primary-bg);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        .procedure-item-select .item-check, .equipment-item-select .item-check {
-            width: 18px;
-            height: 18px;
-            border: 2px solid var(--border-color);
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-            transition: var(--transition);
-            color: var(--text-secondary);
-        }
-        .procedure-item-select.selected .item-check, .equipment-item-select.selected .item-check {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: #ffffff;
-        }
-        .procedure-item-select .item-check i, .equipment-item-select .item-check i {
-            font-size: 0.6rem;
-            opacity: 0;
-            transition: var(--transition);
-        }
-        .procedure-item-select.selected .item-check i, .equipment-item-select.selected .item-check i { opacity: 1; }
-        
-        .items-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-            gap: 8px;
-            margin-top: 8px;
-            padding: 12px;
-            background: var(--gray-100);
-            border-radius: var(--radius);
-            max-height: 250px;
-            overflow-y: auto;
-        }
-        
+        /* ================================================================ */
+        /* MEDICATION ITEMS */
+        /* ================================================================ */
         .medication-item {
             display: flex;
             align-items: center;
@@ -3141,6 +3273,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .btn-remove:hover { background: var(--danger); color: #ffffff; transform: scale(1.1); }
         
+        /* ================================================================ */
+        /* ADDED ITEMS */
+        /* ================================================================ */
         .added-item-card {
             background: var(--bg-card);
             border-radius: 10px;
@@ -3221,143 +3356,129 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex-shrink: 0;
         }
         
-        .empty-state { text-align: center; padding: 16px; color: var(--text-secondary); }
-        .empty-state i { font-size: 1.5rem; color: var(--border-color); display: block; margin-bottom: 8px; }
-        
-        .toast-custom {
-            position: fixed;
-            bottom: 30px;
-            right: 30px;
-            background: var(--success) !important;
-            border-radius: 12px;
-            padding: 16px 24px;
-            box-shadow: 0 8px 32px rgba(5,150,105,0.35);
-            display: flex;
+        /* ================================================================ */
+        /* SECTION TOTALS */
+        /* ================================================================ */
+        .section-total {
+            display: inline-flex;
             align-items: center;
-            gap: 16px;
-            z-index: 9999;
-            min-width: 320px;
-            max-width: 450px;
-            transform: translateY(120px);
-            opacity: 0;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-            border: 1px solid rgba(255,255,255,0.2);
-        }
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        .toast-custom * { color: #ffffff !important; }
-        .toast-custom .toast-icon { font-size: 1.5rem; flex-shrink: 0; color: #ffffff !important; }
-        .toast-custom .toast-content { flex: 1; }
-        .toast-custom .toast-content .toast-title { 
-            font-weight: 600; 
-            font-size: 0.85rem; 
-            color: #ffffff !important; 
-            margin: 0; 
-        }
-        .toast-custom .toast-content .toast-message { 
-            font-size: 0.8rem; 
-            color: rgba(255,255,255,0.9) !important; 
-            margin: 0; 
-        }
-        .toast-custom .toast-close {
-            background: none;
+            gap: 8px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 4px 16px;
+            border-radius: 20px;
+            background: var(--primary-gradient);
+            color: #ffffff !important;
             border: none;
-            font-size: 1.2rem;
-            color: rgba(255,255,255,0.7) !important;
-            cursor: pointer;
-            padding: 0 4px;
+            box-shadow: 0 2px 8px rgba(11,94,215,0.2);
+        }
+        .section-total * { color: #ffffff !important; }
+        .section-total .amount { color: #ffffff !important; }
+        .section-total .label { opacity: 0.8; font-weight: 400; color: rgba(255,255,255,0.8) !important; }
+        .section-total.green { background: linear-gradient(135deg, #059669, #10B981); }
+        .section-total.purple { background: linear-gradient(135deg, #7C3AED, #8B5CF6); }
+        .section-total.orange { background: linear-gradient(135deg, #D97706, #F59E0B); }
+        
+        /* ================================================================ */
+        /* TOGGLE SECTIONS */
+        /* ================================================================ */
+        .toggle-section {
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius);
+            margin-bottom: 12px;
+            overflow: hidden;
             transition: var(--transition);
         }
-        .toast-custom .toast-close:hover {
-            color: #ffffff !important;
-            transform: scale(1.1);
-        }
-        
-        .footer {
-            padding: 16px 0;
-            border-top: 2px solid var(--border-color);
-            margin-top: 24px;
-            text-align: center;
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-        .mb-6 { margin-bottom: 24px; }
-        .mt-2 { margin-top: 8px; }
-        .mt-3 { margin-top: 12px; }
-        .mt-4 { margin-top: 16px; }
-        .flex { display: flex; }
-        .flex-wrap { flex-wrap: wrap; }
-        .gap-2 { gap: 8px; }
-        .gap-3 { gap: 12px; }
-        .items-center { align-items: center; }
-        .justify-between { justify-content: space-between; }
-        .text-sm { font-size: 0.875rem; }
-        .text-xs { font-size: 0.75rem; }
-        .text-gray-400 { color: var(--text-secondary); }
-        .text-green-600 { color: var(--success); }
-        .text-yellow-600 { color: var(--warning); }
-        .text-red-500 { color: var(--danger); }
-        .text-purple-600 { color: var(--purple); }
-        .font-mono { font-family: monospace; }
-        .font-medium { font-weight: 500; }
-        .font-semibold { font-weight: 600; }
-        .font-bold { font-weight: 700; }
-        .ml-2 { margin-left: 8px; }
-        .self-center { align-self: center; }
-        
-        .diagnosis-manual-box {
-            margin-top: 12px;
-            padding: 16px;
-            background: var(--gray-50);
-            border-radius: var(--radius);
-            border: 1px dashed var(--border-color);
-        }
-        
-        .status-flow {
+        .toggle-section:hover { border-color: var(--primary-light); }
+        .toggle-header {
             display: flex;
             align-items: center;
-            gap: 4px;
+            justify-content: space-between;
+            padding: 12px 18px;
+            background: var(--gray-50);
+            cursor: pointer;
+            user-select: none;
+            transition: var(--transition);
+        }
+        .toggle-header:hover { background: var(--primary-bg); }
+        .toggle-header .toggle-title { font-weight: 600; font-size: 0.85rem; color: var(--text-primary); display: flex; align-items: center; gap: 10px; }
+        .toggle-header .toggle-icon { color: var(--text-secondary); font-size: 0.8rem; transition: var(--transition); }
+        .toggle-header.active .toggle-icon { transform: rotate(180deg); }
+        .toggle-body { padding: 0 18px 18px 18px; display: none; background: var(--bg-card); }
+        .toggle-body.open { display: block; }
+        
+        /* ================================================================ */
+        /* ITEMS GRID */
+        /* ================================================================ */
+        .items-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 8px;
+            margin-top: 8px;
+            padding: 12px;
+            background: var(--gray-100);
+            border-radius: var(--radius);
+            max-height: 250px;
+            overflow-y: auto;
+        }
+        .procedure-item-select, .equipment-item-select {
+            display: flex;
+            align-items: center;
+            gap: 8px;
             padding: 8px 12px;
-            background: var(--gray-50);
             border-radius: var(--radius);
-            border: 1px solid var(--border-color);
-            flex-wrap: wrap;
+            font-size: 0.8rem;
+            background: var(--bg-card);
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+            transition: var(--transition);
+            user-select: none;
+            color: var(--text-primary);
         }
-        .status-step {
+        .procedure-item-select:hover, .equipment-item-select:hover {
+            background: var(--primary-bg);
+            border-color: var(--primary);
+            transform: translateY(-1px);
+        }
+        .procedure-item-select.selected, .equipment-item-select.selected {
+            background: var(--primary-bg);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        .procedure-item-select .item-check, .equipment-item-select .item-check {
+            width: 18px;
+            height: 18px;
+            border: 2px solid var(--border-color);
+            border-radius: 4px;
             display: flex;
             align-items: center;
-            gap: 4px;
-            font-size: 0.65rem;
-            padding: 2px 10px;
-            border-radius: 12px;
-            background: var(--gray-200);
+            justify-content: center;
+            flex-shrink: 0;
+            transition: var(--transition);
             color: var(--text-secondary);
         }
-        .status-step.active {
+        .procedure-item-select.selected .item-check, .equipment-item-select.selected .item-check {
             background: var(--primary);
+            border-color: var(--primary);
             color: #ffffff;
         }
-        .status-step.completed {
-            background: var(--success);
-            color: #ffffff;
-        }
-        .status-arrow {
-            color: var(--text-secondary);
+        .procedure-item-select .item-check i, .equipment-item-select .item-check i {
             font-size: 0.6rem;
+            opacity: 0;
+            transition: var(--transition);
         }
+        .procedure-item-select.selected .item-check i, .equipment-item-select.selected .item-check i { opacity: 1; }
         
+        /* ================================================================ */
+        /* RESPONSIVE */
+        /* ================================================================ */
         @media (max-width: 1024px) {
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
             .vital-signs-grid { grid-template-columns: repeat(2, 1fr); }
+            .row-2col { grid-template-columns: 1fr; }
         }
         @media (max-width: 768px) {
             .main-content { margin-left: 0; padding: 16px; }
-            .row-2col { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; }
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; justify-content: center; }
@@ -3405,7 +3526,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- PAGE HEADER -->
     <!-- ================================================================ -->
     <div class="page-header">
-        <div class="page-header-left">
+        <div>
             <h1 class="page-title">
                 <?php if ($is_completed): ?>
                     <i class="fas fa-check-circle"></i> Consultation Completed
@@ -3510,7 +3631,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- BILL SUMMARY - 4 CARDS -->
     <!-- ================================================================ -->
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-receipt title-green"></i> Bill Summary</h3>
+        <h3 class="card-title"><i class="fas fa-receipt"></i> Bill Summary</h3>
         <div class="bill-summary-grid" id="billSummaryGrid">
             <div class="bill-summary-card total-card">
                 <div class="bill-summary-icon"><i class="fas fa-file-invoice"></i></div>
@@ -3565,8 +3686,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <i class="far fa-clock"></i> Last updated: <span id="billLastUpdated"><?= date('H:i:s') ?></span>
             </span>
             <span style="font-size:0.7rem;color:var(--text-secondary);" id="autoCompleteStatus">
-                <?php if ($is_waiting && $bill_balance <= 0): ?>
-                    <span style="color:var(--success);">⏳ Status is WAITING and balance is 0. Auto-complete in 3 seconds...</span>
+                <?php if ($is_waiting && $bill_balance <= 0 && !empty($visit['diagnosis'])): ?>
+                    <span style="color:var(--success);">⏳ Status is WAITING, diagnosis exists, and balance is 0. Auto-complete in 3 seconds...</span>
+                <?php elseif ($is_waiting && $bill_balance <= 0 && empty($visit['diagnosis'])): ?>
+                    <span style="color:var(--danger);">❌ Status is WAITING and balance is 0, but NO diagnosis! Please enter diagnosis first.</span>
                 <?php elseif ($is_waiting && $bill_balance > 0): ?>
                     <span style="color:var(--warning);">⏳ Status is WAITING. Waiting for payment. Balance: TSh <?= number_format($bill_balance, 0) ?></span>
                 <?php elseif ($visit_status === 'prescribed'): ?>
@@ -3587,7 +3710,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- ================================================================ -->
     <div class="row-2col mb-6">
         <div class="consultation-card">
-            <h3 class="card-title"><i class="fas fa-user title-blue"></i> Patient Information</h3>
+            <h3 class="card-title"><i class="fas fa-user"></i> Patient Information</h3>
             <div class="patient-info-block">
                 <div class="patient-avatar" style="background:<?= getUserColor($visit['patient_name'] ?? 'Unknown') ?>;">
                     <?= strtoupper(substr($visit['patient_name'] ?? 'U', 0, 1)) ?>
@@ -3608,7 +3731,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
 
         <div class="consultation-card">
-            <h3 class="card-title"><i class="fas fa-clinic-medical title-green"></i> Visit Information</h3>
+            <h3 class="card-title"><i class="fas fa-clinic-medical"></i> Visit Information</h3>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 20px;">
                 <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Visit Number</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);font-family:monospace;"><?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?></span></div>
                 <div><span style="display:block;font-size:0.65rem;color:var(--text-secondary);font-weight:500;text-transform:uppercase;letter-spacing:0.05em;">Visit Type</span><span style="display:block;font-size:0.9rem;font-weight:500;color:var(--text-primary);"><?= ucfirst($visit['visit_type'] ?? 'New') ?></span></div>
@@ -3624,7 +3747,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- VITAL SIGNS -->
     <!-- ================================================================ -->
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-heartbeat title-green"></i> Vital Signs</h3>
+        <h3 class="card-title"><i class="fas fa-heartbeat"></i> Vital Signs</h3>
         <?php if ($vital_signs): ?>
             <div class="vital-signs-grid">
                 <div class="vital-sign-item temp-item">
@@ -3673,7 +3796,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- Symptoms & History -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
-            <i class="fas fa-list-ul title-blue"></i> Chief Complaint & History
+            <i class="fas fa-list-ul"></i> Chief Complaint & History
             <?php if ($sections_frozen && !$is_waiting): ?>
                 <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
             <?php elseif ($lab_results_available && !$is_waiting): ?>
@@ -3715,10 +3838,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- Lab Tests -->
+    <!-- ================================================================ -->
+    <!-- LAB TESTS SECTION -->
+    <!-- ================================================================ -->
     <div class="consultation-card mb-6" id="labTestsCard">
         <h3 class="card-title">
-            <i class="fas fa-flask title-blue"></i> Laboratory Tests
+            <i class="fas fa-flask"></i> Laboratory Tests
             <span class="frozen-badge" id="pendingLabBadge" style="<?= $has_active_lab && !$is_completed ? '' : 'display:none;' ?>">⏳ <span id="pendingLabCount"><?= count($lab_requests) ?></span> Active</span>
             <span class="section-total" id="labSectionTotal">
                 <span class="label">🧪 Total:</span>
@@ -3827,10 +3952,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- Lab Results -->
+    <!-- ================================================================ -->
+    <!-- LAB RESULTS -->
+    <!-- ================================================================ -->
     <div class="consultation-card mb-6 <?= $lab_results_available ? 'border-green-500' : '' ?>" id="labResultsCard">
         <h3 class="card-title">
-            <i class="fas fa-file-medical-alt title-green"></i> Laboratory Results
+            <i class="fas fa-file-medical-alt"></i> Laboratory Results
             <span class="frozen-badge <?= $lab_results_available ? 'success' : '' ?>" id="resultsBadge" style="<?= ($lab_results_available || $has_active_lab) ? '' : 'display:none;' ?>">
                 <?php if ($lab_results_available): ?>
                     ✅ Results Available
@@ -3886,13 +4013,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
+    <!-- ================================================================ -->
     <!-- FROZEN SECTIONS CONTAINER -->
+    <!-- ================================================================ -->
     <div id="frozenSectionsContainer" class="<?= ($sections_frozen && !$is_waiting) ? 'frozen-overlay-active' : ($lab_results_available ? 'results-available' : '') ?>">
 
         <!-- DIAGNOSIS -->
         <div class="consultation-card mb-6" id="diagnosisCard">
             <h3 class="card-title">
-                <i class="fas fa-diagnoses title-blue"></i> Diagnosis
+                <i class="fas fa-diagnoses"></i> Diagnosis
                 <?php if ($sections_frozen && !$is_waiting): ?>
                     <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
                 <?php elseif ($lab_results_available && !$is_waiting): ?>
@@ -3901,6 +4030,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <span id="diagnosisStatus" style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);">
                     <?php if (!empty($visit['diagnosis'])): ?>
                         ✅ Saved: <?= htmlspecialchars($visit['diagnosis']) ?>
+                    <?php else: ?>
+                        ⚠️ Diagnosis required
                     <?php endif; ?>
                 </span>
             </h3>
@@ -3908,7 +4039,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="form-group">
                 <label class="form-label">Select Disease <span class="required">*</span></label>
                 <select name="diagnosis_id" class="form-control" id="diagnosisSelect" 
-                        onchange="autoSaveDiagnosis()"
                         <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
                     <option value="">-- Select Disease --</option>
                     <?php foreach ($diseases_list as $disease): ?>
@@ -3934,8 +4064,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                            placeholder="Enter disease name..." 
                            value="<?= htmlspecialchars($visit['diagnosis'] ?? '') ?>"
                            <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
-                           id="diagnosisManualInput"
-                           onchange="autoSaveDiagnosis()">
+                           id="diagnosisManualInput">
                 </div>
                 <div class="form-group">
                     <label class="form-label">Disease Code <span style="font-size:0.75rem;color:var(--text-secondary);">(Optional - Auto-generated if left blank)</span></label>
@@ -3965,10 +4094,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             
             <div id="diagnosisAutoSaveStatus" style="font-size:0.7rem;color:var(--text-secondary);margin-top:8px;display:flex;align-items:center;gap:8px;">
                 <span id="diagnosisSaveIndicator" style="display:none;">
-                    <i class="fas fa-spinner fa-spin"></i> Saving diagnosis...
+                    <i class="fas fa-spinner fa-spin"></i> Saving data...
                 </span>
                 <span id="diagnosisSavedIndicator" style="display:none;color:var(--success);">
-                    <i class="fas fa-check-circle"></i> Diagnosis saved
+                    <i class="fas fa-check-circle"></i> Data saved
                 </span>
             </div>
         </div>
@@ -3976,7 +4105,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <!-- MEDICATIONS -->
         <div class="consultation-card mb-6" id="medicationsCard">
             <h3 class="card-title">
-                <i class="fas fa-prescription title-blue"></i> Medications
+                <i class="fas fa-prescription"></i> Medications
                 <?php if ($sections_frozen && !$is_waiting): ?>
                     <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
                 <?php elseif ($lab_results_available && !$is_waiting): ?>
@@ -4143,7 +4272,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <!-- PROCEDURES & EQUIPMENT -->
         <div class="consultation-card mb-6" id="proceduresEquipmentCard">
             <h3 class="card-title">
-                <i class="fas fa-syringe title-purple"></i> Procedures & Equipment
+                <i class="fas fa-syringe"></i> Procedures & Equipment
                 <?php if ($sections_frozen && !$is_waiting): ?>
                     <span class="frozen-badge">🔒 Frozen - Lab Pending</span>
                 <?php elseif ($lab_results_available && !$is_waiting): ?>
@@ -4159,7 +4288,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="toggle-section">
                 <div class="toggle-header" onclick="toggleSection('proceduresToggle')">
                     <span class="toggle-title">
-                        <i class="fas fa-syringe title-purple"></i> Procedures
+                        <i class="fas fa-syringe"></i> Procedures
                         <span style="font-size:0.75rem;color:var(--text-secondary);">(Independent - Equipment not included)</span>
                     </span>
                     <span class="toggle-icon"><i class="fas fa-chevron-down"></i></span>
@@ -4196,7 +4325,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <div class="toggle-section">
                 <div class="toggle-header" onclick="toggleSection('equipmentToggle')">
                     <span class="toggle-title">
-                        <i class="fas fa-tools title-orange"></i> Medical Equipment
+                        <i class="fas fa-tools"></i> Medical Equipment
                         <span style="font-size:0.75rem;color:var(--text-secondary);">(Charged separately)</span>
                     </span>
                     <span class="toggle-icon"><i class="fas fa-chevron-down"></i></span>
@@ -4295,6 +4424,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
 
     </div>
+    <!-- END FROZEN SECTIONS CONTAINER -->
 
     <!-- ================================================================ -->
     <!-- FORM ACTIONS -->
@@ -4328,7 +4458,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- COMPLETED CONSULTATION - READ ONLY -->
     <!-- ================================================================ -->
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-list-ul title-blue"></i> Chief Complaint & History</h3>
+        <h3 class="card-title"><i class="fas fa-list-ul"></i> Chief Complaint & History</h3>
         <div class="form-group">
             <label class="form-label">Chief Complaint</label>
             <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['symptoms'] ?? 'No complaint recorded')) ?></div>
@@ -4344,7 +4474,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-flask title-blue"></i> Laboratory Tests & Results</h3>
+        <h3 class="card-title"><i class="fas fa-flask"></i> Laboratory Tests & Results</h3>
         <?php if ($lab_results_available): ?>
             <div style="overflow-x:auto;">
                 <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
@@ -4370,7 +4500,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-diagnoses title-blue"></i> Diagnosis</h3>
+        <h3 class="card-title"><i class="fas fa-diagnoses"></i> Diagnosis</h3>
         <?php if (!empty($visit['diagnosis']) || !empty($visit['disease_name'])): ?>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                 <div>
@@ -4404,7 +4534,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-prescription title-blue"></i> Prescriptions & Medications</h3>
+        <h3 class="card-title"><i class="fas fa-prescription"></i> Prescriptions & Medications</h3>
         <?php if (count($prescriptions) > 0): ?>
             <div style="overflow-x:auto;">
                 <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
@@ -4438,7 +4568,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-syringe title-purple"></i> Procedures & Medical Equipment</h3>
+        <h3 class="card-title"><i class="fas fa-syringe"></i> Procedures & Medical Equipment</h3>
         <?php if (count($procedures) > 0 || count($equipment_items_display) > 0): ?>
             <?php if (count($procedures) > 0): ?>
                 <h4 style="font-size:0.85rem;font-weight:600;color:var(--text-secondary);margin-bottom:8px;">Procedures</h4>
@@ -4521,19 +4651,21 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - FULLY WORKING -->
+<!-- JAVASCRIPT - WITH AUTO-SAVE (DATA ONLY) -->
 <!-- ================================================================ -->
 <script>
 // ================================================================
-// CONSULTATION JAVASCRIPT - FULLY FIXED
+// CONSULTATION JAVASCRIPT - WITH AUTO-SAVE (DATA ONLY)
 // ================================================================
 
 var AUTO_UPDATE_INTERVAL = 3000;
 var FULL_UPDATE_INTERVAL = 5000;
 var LAB_CHECK_INTERVAL = 2000;
+var AUTO_SAVE_INTERVAL = 30000; // 30 seconds
 var updateInterval = null;
 var fullUpdateInterval = null;
 var labCheckInterval = null;
+var autoSaveInterval = null;
 var isUpdating = false;
 var visitId = <?= $visit_id ?>;
 var isCompleted = <?= $is_completed ? 'true' : 'false' ?>;
@@ -4541,6 +4673,7 @@ var isWaiting = <?= $is_waiting ? 'true' : 'false' ?>;
 var isPrescribed = <?= $is_prescribed ? 'true' : 'false' ?>;
 var isLabTest = <?= $is_lab_test ? 'true' : 'false' ?>;
 var autoRefreshNeeded = <?= $auto_refresh_needed ? 'true' : 'false' ?>;
+var hasDiagnosis = <?= !empty($visit['diagnosis']) ? 'true' : 'false' ?>;
 
 var selectedProcedures = [];
 var selectedEquipment = [];
@@ -4636,7 +4769,7 @@ function updateComplaints() {
 }
 
 // ================================================================
-// GET DIAGNOSIS DATA
+// GET DIAGNOSIS DATA - FOR AUTO-SAVE
 // ================================================================
 function getDiagnosisData() {
     var select = document.getElementById('diagnosisSelect');
@@ -4671,17 +4804,22 @@ function getDiagnosisData() {
 }
 
 // ================================================================
-// AUTO-SAVE DIAGNOSIS
+// ✅ AUTO-SAVE DIAGNOSIS - SAVES DATA ONLY, NO STATUS CHANGE!
 // ================================================================
 function autoSaveDiagnosis() {
-    if (isCompleted || diagnosisSaving || isWaiting) return;
-    if (diagnosisAlreadySaved) {
-        console.log('ℹ️ Diagnosis already saved, skipping auto-save');
-        return;
-    }
+    // Don't auto-save if completed, waiting, or currently saving
+    if (isCompleted || isWaiting || diagnosisSaving) return;
     
     var diagnosisData = getDiagnosisData();
     if (!diagnosisData) return;
+    
+    // Check if data has actually changed (avoid unnecessary saves)
+    var diagnosisManual = diagnosisData.diagnosis_manual || '';
+    var treatment = diagnosisData.treatment || '';
+    var symptoms = diagnosisData.symptoms || '';
+    
+    // If empty data, don't save
+    if (!diagnosisManual && !treatment && !symptoms) return;
     
     var saveIndicator = document.getElementById('diagnosisSaveIndicator');
     var savedIndicator = document.getElementById('diagnosisSavedIndicator');
@@ -4689,7 +4827,7 @@ function autoSaveDiagnosis() {
     if (savedIndicator) savedIndicator.style.display = 'none';
     
     diagnosisSaving = true;
-    console.log('🔄 Auto-saving diagnosis:', diagnosisData);
+    console.log('🔄 Auto-saving data (NO status change):', diagnosisData);
     
     var dataToSend = {
         action: 'save_diagnosis',
@@ -4709,6 +4847,7 @@ function autoSaveDiagnosis() {
         
         if (result.success) {
             diagnosisAlreadySaved = true;
+            hasDiagnosis = true;
             if (savedIndicator) savedIndicator.style.display = 'inline';
             setTimeout(function() {
                 if (savedIndicator) savedIndicator.style.display = 'none';
@@ -4720,7 +4859,7 @@ function autoSaveDiagnosis() {
                 statusEl.style.color = 'var(--success)';
             }
             
-            console.log('✅ Diagnosis auto-saved:', result.data);
+            console.log('✅ Data auto-saved (NO status change):', result.data);
         } else {
             console.error('❌ Auto-save failed:', result.message);
         }
@@ -4733,7 +4872,7 @@ function autoSaveDiagnosis() {
 }
 
 // ================================================================
-// ✅ CHECK LAB RESULTS - ONLY TO 'prescribed' (NOT 'waiting')
+// CHECK LAB RESULTS - ONLY UPDATES TO 'prescribed'
 // ================================================================
 function checkLabResultsAndUpdateStatus() {
     if (isCompleted || isWaiting || isPrescribed) return;
@@ -4757,9 +4896,7 @@ function checkLabResultsAndUpdateStatus() {
             
             updateStatusFlow('prescribed');
             
-            setTimeout(function() {
-                window.location.reload();
-            }, 1000);
+            // ✅ NO AUTO-COMPLETE HERE! Just update UI.
         }
     })
     .catch(function(err) {
@@ -4786,12 +4923,11 @@ function updateStatusFlow(newStatus) {
 }
 
 // ================================================================
-// ✅ CHECK AND AUTO-COMPLETE - ONLY IF STATUS IS 'waiting'
+// CHECK AND AUTO-COMPLETE - ONLY IF STATUS IS 'waiting'
 // ================================================================
 function checkAndAutoComplete() {
     if (isCompleted) return;
     
-    // First check the status from server
     var formData = new FormData();
     formData.append('action', 'get_visit_status');
     formData.append('visit_id', visitId);
@@ -4802,7 +4938,6 @@ function checkAndAutoComplete() {
         if (data.success) {
             var currentStatus = data.status || 'unknown';
             
-            // ✅ CRITICAL: ONLY auto-complete if status is 'waiting'
             if (currentStatus !== 'waiting') {
                 console.log('ℹ️ Auto-complete skipped: Status is "' + currentStatus + '", must be "waiting"');
                 var statusEl = document.getElementById('autoCompleteStatus');
@@ -4812,7 +4947,16 @@ function checkAndAutoComplete() {
                 return;
             }
             
-            // Now check balance
+            // Check if diagnosis exists
+            if (!hasDiagnosis) {
+                console.log('ℹ️ Auto-complete skipped: No diagnosis exists');
+                var statusEl = document.getElementById('autoCompleteStatus');
+                if (statusEl) {
+                    statusEl.innerHTML = '<span style="color:var(--danger);">❌ Auto-complete requires diagnosis. Please enter diagnosis first.</span>';
+                }
+                return;
+            }
+            
             var formData2 = new FormData();
             formData2.append('action', 'get_bill_totals');
             
@@ -4820,10 +4964,10 @@ function checkAndAutoComplete() {
             .then(response => response.json())
             .then(billData => {
                 if (billData.success && billData.bill_balance <= 0) {
-                    console.log('✅ Status is "waiting" and balance is 0. Auto-completing in 3 seconds...');
+                    console.log('✅ Status is "waiting", diagnosis exists, and balance is 0. Auto-completing in 3 seconds...');
                     var statusEl = document.getElementById('autoCompleteStatus');
                     if (statusEl) {
-                        statusEl.innerHTML = '<span style="color:var(--success);">⏳ Status is WAITING and balance is 0. Auto-complete in 3 seconds...</span>';
+                        statusEl.innerHTML = '<span style="color:var(--success);">⏳ Status is WAITING, diagnosis exists, and balance is 0. Auto-complete in 3 seconds...</span>';
                     }
                     setTimeout(function() {
                         autoCompleteVisit();
@@ -4844,10 +4988,9 @@ function checkAndAutoComplete() {
 }
 
 // ================================================================
-// ✅ AUTO-COMPLETE VISIT - ONLY TRIGGERED MANUALLY OR AFTER SAVE
+// AUTO-COMPLETE VISIT - ONLY TRIGGERED AFTER SAVE CONSULTATION
 // ================================================================
 function autoCompleteVisit() {
-    // First, verify status is 'waiting' from server
     var formData = new FormData();
     formData.append('action', 'get_visit_status');
     formData.append('visit_id', visitId);
@@ -4856,7 +4999,12 @@ function autoCompleteVisit() {
     .then(response => response.json())
     .then(data => {
         if (data.success && data.status === 'waiting') {
-            // Proceed with auto-complete
+            // Check diagnosis again
+            if (!hasDiagnosis) {
+                showToast('❌ Error', 'Auto-complete requires diagnosis. Please enter diagnosis first.', 'error');
+                return;
+            }
+            
             var formData2 = new FormData();
             formData2.append('action', 'auto_complete_visit');
             formData2.append('visit_id', visitId);
@@ -4865,7 +5013,7 @@ function autoCompleteVisit() {
             .then(response => response.json())
             .then(result => {
                 if (result.success) {
-                    showToast('✅ Auto-Completed!', 'Consultation completed automatically! Status is WAITING and balance is 0.', 'success');
+                    showToast('✅ Auto-Completed!', 'Consultation completed automatically! Status is WAITING, diagnosis exists, and balance is 0.', 'success');
                     console.log('✅ Auto-complete successful:', result.message);
                     setTimeout(function() { window.location.reload(); }, 2000);
                 } else {
@@ -4949,10 +5097,6 @@ function updateBillTotals(billData) {
         var now = new Date();
         lastUpdated.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
-    
-    // ✅ AUTO-COMPLETE ONLY CHECKED IF STATUS IS 'waiting'
-    // This is called from checkAndAutoComplete() which already verifies status
-    // We just update the UI
 }
 
 // ================================================================
@@ -4992,7 +5136,7 @@ function fetchBillTotals() {
 }
 
 // ================================================================
-// FULL STATE UPDATE - NO AUTO-COMPLETE HERE
+// FULL STATE UPDATE - NO AUTO-COMPLETE
 // ================================================================
 function fetchFullState() {
     if (isUpdating || isCompleted) return;
@@ -5004,7 +5148,6 @@ function fetchFullState() {
     .then(data => {
         if (data.success) {
             updateFullUI(data);
-            // ✅ NO AUTO-COMPLETE HERE! Only UI update.
         }
         isUpdating = false;
     })
@@ -5078,8 +5221,6 @@ function addLabTestToCart() {
     var select = document.getElementById('labTestSelect');
     var testId = select.value;
     if (!testId) { showToast('Error', 'Please select a lab test', 'error'); return; }
-    
-    autoSaveDiagnosis();
     
     var formData = new FormData();
     formData.append('action', 'add_lab_test_cart');
@@ -5218,8 +5359,6 @@ function addSelectedProcedures() {
         return;
     }
     
-    autoSaveDiagnosis();
-    
     var procedureIds = selectedProcedures.map(function(p) { return p.id; });
     var diagnosisData = getDiagnosisData();
     
@@ -5250,14 +5389,6 @@ function addSelectedProcedures() {
         btn.innerHTML = originalHtml;
         if (data.success) {
             showToast('✅ Success', data.message, 'success');
-            if (data.diagnosis_saved && data.diagnosis_data) {
-                var statusEl = document.getElementById('diagnosisStatus');
-                if (statusEl && data.diagnosis_data.diagnosis) {
-                    statusEl.innerHTML = '✅ Saved: ' + data.diagnosis_data.diagnosis;
-                    statusEl.style.color = 'var(--success)';
-                    diagnosisAlreadySaved = true;
-                }
-            }
             clearProcedureSelections();
             setTimeout(function() { window.location.reload(); }, 1000);
         } else {
@@ -5310,8 +5441,6 @@ function addSelectedEquipment() {
         return;
     }
     
-    autoSaveDiagnosis();
-    
     var quantity = parseInt(document.getElementById('equipmentQuantity').value) || 1;
     if (quantity < 1) quantity = 1;
     var equipmentData = selectedEquipment.map(function(eq) {
@@ -5347,14 +5476,6 @@ function addSelectedEquipment() {
         btn.innerHTML = originalHtml;
         if (data.success) {
             showToast('✅ Success', data.message, 'success');
-            if (data.diagnosis_saved && data.diagnosis_data) {
-                var statusEl = document.getElementById('diagnosisStatus');
-                if (statusEl && data.diagnosis_data.diagnosis) {
-                    statusEl.innerHTML = '✅ Saved: ' + data.diagnosis_data.diagnosis;
-                    statusEl.style.color = 'var(--success)';
-                    diagnosisAlreadySaved = true;
-                }
-            }
             clearEquipmentSelections();
             setTimeout(function() { window.location.reload(); }, 1000);
         } else {
@@ -5381,8 +5502,6 @@ function clearEquipmentSelections() {
 // MEDICATION FUNCTIONS
 // ================================================================
 function addMedicationAjax() {
-    autoSaveDiagnosis();
-    
     var medSelect = document.getElementById('medicationSelect');
     var qty = parseInt(document.getElementById('medQuantity').value) || 0;
     var dosage = document.getElementById('medDosage').value;
@@ -5434,15 +5553,6 @@ function addMedicationAjax() {
             showToast('✅ Success', data.message, 'success');
             if (data.medication) addMedicationToList(data.medication);
             if (data.bill_data) updateBillTotals(data.bill_data);
-            
-            if (data.diagnosis_saved && data.diagnosis_data) {
-                var statusEl = document.getElementById('diagnosisStatus');
-                if (statusEl && data.diagnosis_data.diagnosis) {
-                    statusEl.innerHTML = '✅ Saved: ' + data.diagnosis_data.diagnosis;
-                    statusEl.style.color = 'var(--success)';
-                    diagnosisAlreadySaved = true;
-                }
-            }
             
             document.getElementById('medicationSelect').value = '';
             document.getElementById('medQuantity').value = '1';
@@ -5694,6 +5804,7 @@ function startAutoUpdate() {
     if (updateInterval) clearInterval(updateInterval);
     if (fullUpdateInterval) clearInterval(fullUpdateInterval);
     if (labCheckInterval) clearInterval(labCheckInterval);
+    if (autoSaveInterval) clearInterval(autoSaveInterval);
     
     checkLabStatus();
     updateInterval = setInterval(function() {
@@ -5711,7 +5822,14 @@ function startAutoUpdate() {
         checkLabResultsAndUpdateStatus();
     }, LAB_CHECK_INTERVAL);
     
-    console.log('🔄 Auto-update started');
+    // ✅ AUTO-SAVE EVERY 30 SECONDS - DATA ONLY
+    autoSaveInterval = setInterval(function() {
+        if (!isCompleted && !isWaiting && !isLabTest) {
+            autoSaveDiagnosis();
+        }
+    }, AUTO_SAVE_INTERVAL);
+    
+    console.log('🔄 Auto-update started (Auto-save every 30s - data only)');
 }
 
 function stopAutoUpdate() {
@@ -5726,6 +5844,10 @@ function stopAutoUpdate() {
     if (labCheckInterval) {
         clearInterval(labCheckInterval);
         labCheckInterval = null;
+    }
+    if (autoSaveInterval) {
+        clearInterval(autoSaveInterval);
+        autoSaveInterval = null;
     }
 }
 
@@ -5744,20 +5866,39 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     document.getElementById('manualDiagnosisBox').style.display = 'none';
                 }
+                // ✅ AUTO-SAVE on change (data only)
+                autoSaveDiagnosis();
             });
         }
         
-        var diagnosisStatus = document.getElementById('diagnosisStatus');
-        if (diagnosisStatus && diagnosisStatus.textContent.includes('✅ Saved')) {
-            diagnosisAlreadySaved = true;
-            console.log('✅ Diagnosis already saved on page load');
-        }
+        // ✅ AUTO-SAVE on input changes
+        var inputs = [
+            'diagnosisManualInput', 'treatmentTextarea', 'symptomsTextarea',
+            'hpiTextarea', 'physicalExamTextarea', 'notesTextarea'
+        ];
+        inputs.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) {
+                el.addEventListener('change', function() {
+                    autoSaveDiagnosis();
+                });
+                el.addEventListener('blur', function() {
+                    autoSaveDiagnosis();
+                });
+            }
+        });
         
-        setTimeout(function() {
-            if (document.getElementById('diagnosisSelect')?.value) {
+        // ✅ AUTO-SAVE on page unload (before navigating away)
+        window.addEventListener('beforeunload', function() {
+            if (!isCompleted && !isWaiting) {
                 autoSaveDiagnosis();
             }
-        }, 500);
+        });
+        
+        console.log('✅ Auto-save ENABLED - saves data only (NO status change)');
+        console.log('ℹ️ Save Consultation button = changes status to "waiting"');
+        console.log('ℹ️ Auto-complete = only after Save Consultation + diagnosis exists + balance=0');
+        console.log('ℹ️ Auto-save does NOT change status!');
         
         // ✅ Only check auto-complete if status is 'waiting'
         if (isWaiting) {
@@ -5780,14 +5921,15 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 500);
         }
         
-        console.log('💰 Braick - Consultation (FULLY FIXED)');
+        console.log('💰 Braick - Consultation (AUTO-SAVE DATA ONLY)');
         console.log('✅ 4 Cards: Total Amount, Paid Amount, Remaining, Total Discount');
         console.log('✅ Status Flow: assigned → lab_test → prescribed → waiting → completed');
-        console.log('✅ Lab results → PRESCRIBED (NOT waiting)');
-        console.log('✅ Auto-complete ONLY when status = "waiting" AND balance = 0');
-        console.log('✅ Save Consultation changes status to "waiting"');
-        console.log('✅ NO auto-complete on Ajax refresh');
-        console.log('✅ Auto-complete ONLY triggered by Save Consultation button');
+        console.log('✅ Lab results → PRESCRIBED ONLY');
+        console.log('✅ Auto-save: Saves DATA only (NO status change)');
+        console.log('✅ Save Consultation: Changes status to "waiting"');
+        console.log('✅ Auto-complete: Only after Save Consultation + diagnosis exists + balance=0');
+        console.log('✅ NO auto-complete on Ajax refresh or sidebar navigation');
+        console.log('✅ Diagnosis required for auto-complete!');
     }
 });
 

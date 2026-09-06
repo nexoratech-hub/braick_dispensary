@@ -4,6 +4,7 @@
 // ADMIN - COMPLETE MEDICINE INVENTORY (GROUPED BY NAME WITH BATCHES)
 // WITH VIEW, EDIT, DELETE FUNCTIONALITY
 // WITH CUSTOM HEADER (MATCHES ADMIN DESIGN)
+// FIXED: Branch filter works correctly
 // ================================================================
 
 // ================================================================
@@ -47,6 +48,17 @@ $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $user_username = $_SESSION['username'] ?? 'admin';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
+
+// ================================================================
+// GET SELECTED BRANCH FROM URL
+// ================================================================
+$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+if ($selected_branch_id === 'all') {
+    $selected_branch_id = 'all';
+    $branch_id_for_query = $user_branch_id;
+} else {
+    $branch_id_for_query = (int)$selected_branch_id;
+}
 
 // ================================================================
 // MONEY FORMAT FUNCTIONS
@@ -130,7 +142,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     // ================================================================
-    // ADD MEDICINE - Auto-search, new batch if name exists
+    // ADD MEDICINE
     // ================================================================
     if ($action === 'add_medicine') {
         $medication_name = trim($_POST['medication_name'] ?? '');
@@ -172,14 +184,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([
                     $medication_name, $category, $unit, $quantity, $reorder_level,
                     $unit_cost, $selling_price, $supplier, $expiry_date, $batch_number,
-                    $user_branch_id, $status
+                    $branch_id_for_query, $status
                 ]);
                 
                 $message = "✅ Medicine added successfully! Batch: <strong>$batch_number</strong>";
                 $message_type = 'success';
                 $_SESSION['inventory_message'] = $message;
                 $_SESSION['inventory_message_type'] = $message_type;
-                header('Location: inventory.php?tab=medicines&added=1');
+                header('Location: inventory.php?tab=medicines&added=1&branch=' . $selected_branch_id);
                 exit;
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
@@ -240,14 +252,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([
                     $medication_name, $category, $unit, $quantity, $reorder_level,
                     $unit_cost, $selling_price, $supplier, $expiry_date, $batch_number,
-                    $status, $id, $user_branch_id
+                    $status, $id, $branch_id_for_query
                 ]);
                 
                 $message = "✅ Medicine batch updated successfully!";
                 $message_type = 'success';
                 $_SESSION['inventory_message'] = $message;
                 $_SESSION['inventory_message_type'] = $message_type;
-                header('Location: inventory.php?tab=medicines&updated=1');
+                header('Location: inventory.php?tab=medicines&updated=1&branch=' . $selected_branch_id);
                 exit;
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
@@ -269,13 +281,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($confirmed && $id > 0) {
             try {
                 $stmt = $db->prepare("DELETE FROM medications_inventory WHERE id = ? AND branch_id = ?");
-                $stmt->execute([$id, $user_branch_id]);
+                $stmt->execute([$id, $branch_id_for_query]);
                 
                 $message = "✅ Medicine batch deleted successfully!";
                 $message_type = 'success';
                 $_SESSION['inventory_message'] = $message;
                 $_SESSION['inventory_message_type'] = $message_type;
-                header('Location: inventory.php?tab=medicines&deleted=1');
+                header('Location: inventory.php?tab=medicines&deleted=1&branch=' . $selected_branch_id);
                 exit;
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
@@ -316,7 +328,18 @@ $stock_filter = isset($_GET['stock']) ? trim($_GET['stock']) : '';
 $expiry_filter = isset($_GET['expiry']) ? trim($_GET['expiry']) : '';
 
 // ================================================================
-// BUILD MEDICINE QUERY - FIXED
+// GET BRANCHES FOR FILTER
+// ================================================================
+$branches = [];
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches = [];
+}
+
+// ================================================================
+// BUILD MEDICINE QUERY - FIXED WITH BRANCH FILTER
 // ================================================================
 $med_query = "
     SELECT 
@@ -347,10 +370,20 @@ $med_query = "
             ELSE 0 
         END) as active_quantity
     FROM medications_inventory 
-    WHERE branch_id = ?
+    WHERE 1=1
 ";
 
-$med_params = [$user_branch_id];
+$med_params = [];
+
+// Branch filter
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $med_query .= " AND branch_id = ?";
+    $med_params[] = (int)$selected_branch_id;
+} else {
+    // If all, use user's branch for stats but show all
+    $med_query .= " AND branch_id = ?";
+    $med_params[] = $user_branch_id;
+}
 
 // Search filter
 if (!empty($search)) {
@@ -403,7 +436,7 @@ $stmt->execute($med_params);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
-// GET STATISTICS - MEDICINES
+// GET STATISTICS - MEDICINES (for selected branch)
 // ================================================================
 
 // Total Medicines (active items with quantity > 0)
@@ -414,7 +447,7 @@ $stmt = $db->prepare("
     AND status = 'active' 
     AND (expiry_date IS NULL OR expiry_date >= CURDATE())
 ");
-$stmt->execute([$user_branch_id]);
+$stmt->execute([$branch_id_for_query]);
 $total_medicines = $stmt->fetch()['count'] ?? 0;
 
 // Medicine In Stock (active quantity > 0)
@@ -426,7 +459,7 @@ $stmt = $db->prepare("
     AND (expiry_date IS NULL OR expiry_date >= CURDATE())
     AND quantity > 0
 ");
-$stmt->execute([$user_branch_id]);
+$stmt->execute([$branch_id_for_query]);
 $med_in_stock = $stmt->fetch()['count'] ?? 0;
 
 // Medicine Out of Stock (total active quantity = 0)
@@ -437,7 +470,7 @@ $stmt = $db->prepare("
     AND status = 'active'
     AND quantity = 0
 ");
-$stmt->execute([$user_branch_id]);
+$stmt->execute([$branch_id_for_query]);
 $med_out_of_stock = $stmt->fetch()['count'] ?? 0;
 
 // Medicine Low Stock
@@ -450,7 +483,7 @@ $stmt = $db->prepare("
     AND quantity > 0 
     AND quantity <= reorder_level
 ");
-$stmt->execute([$user_branch_id]);
+$stmt->execute([$branch_id_for_query]);
 $med_low_stock = $stmt->fetch()['count'] ?? 0;
 
 // Medicine Expiring Soon
@@ -462,7 +495,7 @@ $stmt = $db->prepare("
     AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     AND status = 'active'
 ");
-$stmt->execute([$user_branch_id]);
+$stmt->execute([$branch_id_for_query]);
 $med_expiring = $stmt->fetch()['count'] ?? 0;
 
 // Medicine Expired (but still have active batches)
@@ -473,7 +506,7 @@ $stmt = $db->prepare("
     AND expiry_date IS NOT NULL 
     AND expiry_date < CURDATE()
 ");
-$stmt->execute([$user_branch_id]);
+$stmt->execute([$branch_id_for_query]);
 $med_expired = $stmt->fetch()['count'] ?? 0;
 
 // Medicine Inactive (no active quantity)
@@ -483,7 +516,7 @@ $stmt = $db->prepare("
     WHERE branch_id = ? 
     AND status = 'inactive'
 ");
-$stmt->execute([$user_branch_id]);
+$stmt->execute([$branch_id_for_query]);
 $med_inactive = $stmt->fetch()['count'] ?? 0;
 
 // Medicine Total Value (active quantity only)
@@ -494,7 +527,7 @@ $stmt = $db->prepare("
     AND status = 'active' 
     AND (expiry_date IS NULL OR expiry_date >= CURDATE())
 ");
-$stmt->execute([$user_branch_id]);
+$stmt->execute([$branch_id_for_query]);
 $med_value = $stmt->fetch(PDO::FETCH_ASSOC)['total_value'] ?? 0;
 
 // ================================================================
@@ -506,7 +539,7 @@ $view_name = '';
 
 if ($view_id > 0) {
     $stmt = $db->prepare("SELECT medication_name FROM medications_inventory WHERE id = ? AND branch_id = ?");
-    $stmt->execute([$view_id, $user_branch_id]);
+    $stmt->execute([$view_id, $branch_id_for_query]);
     $name_row = $stmt->fetch();
     if ($name_row) {
         $view_name = $name_row['medication_name'];
@@ -515,7 +548,7 @@ if ($view_id > 0) {
             WHERE medication_name = ? AND branch_id = ?
             ORDER BY id ASC
         ");
-        $stmt->execute([$view_name, $user_branch_id]);
+        $stmt->execute([$view_name, $branch_id_for_query]);
         $view_batches = $stmt->fetchAll();
         $view_data = $view_batches[0] ?? null;
     }
@@ -527,7 +560,7 @@ if ($view_id > 0) {
 $edit_data = null;
 if ($edit_id > 0) {
     $stmt = $db->prepare("SELECT * FROM medications_inventory WHERE id = ? AND branch_id = ?");
-    $stmt->execute([$edit_id, $user_branch_id]);
+    $stmt->execute([$edit_id, $branch_id_for_query]);
     $edit_data = $stmt->fetch();
 }
 
@@ -542,7 +575,7 @@ try {
         WHERE branch_id = ? 
         ORDER BY medication_name
     ");
-    $stmt->execute([$user_branch_id]);
+    $stmt->execute([$branch_id_for_query]);
     $all_medicine_names = $stmt->fetchAll();
 } catch (Exception $e) {
     $all_medicine_names = [];
@@ -564,25 +597,24 @@ try {
 // PROFILE & LOGO
 // ================================================================
 $profile_pic_url = !empty($profile_pic) 
-    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
-    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
-$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+    ? '/assets/uploads/profiles/' . $profile_pic 
+    : '/assets/uploads/profiles/default_avatar.png';
+$logo_path = '/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// GET BRANCHES FOR FILTER
-// ================================================================
-$branches = [];
-try {
-    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-    $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
+// Display branch name
+$display_branch_name = 'All Branches';
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    foreach ($branches as $b) {
+        if ($b['id'] == $selected_branch_id) {
+            $display_branch_name = $b['name'];
+            break;
+        }
+    }
 }
 
 // ================================================================
 // SIDEBAR - INLINE FOR THIS PAGE ONLY
 // ================================================================
-// We'll include sidebar separately
 $total_employees_sidebar = 0;
 $total_doctors_sidebar = 0;
 $total_branches_sidebar = 0;
@@ -968,7 +1000,7 @@ try {
         }
         
         /* ================================================================
-           PAGE HEADER BOX - LIKE PHARMACIES
+           PAGE HEADER BOX
            ================================================================ */
         .page-header-box {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
@@ -1053,10 +1085,6 @@ try {
             box-shadow: 0 6px 20px rgba(5, 150, 105, 0.5);
         }
         
-        .page-header-box .page-title .btn-back-green i {
-            font-size: 0.9rem;
-        }
-        
         .page-header-box .page-subtitle {
             color: rgba(255,255,255,0.85);
             font-size: 0.85rem;
@@ -1069,10 +1097,7 @@ try {
             margin-top: 4px;
         }
         
-        .page-header-box .page-subtitle strong {
-            color: white;
-            font-weight: 600;
-        }
+        .page-header-box .page-subtitle strong { color: white; font-weight: 600; }
         
         .page-header-box .header-badge {
             background: rgba(255,255,255,0.12);
@@ -1194,11 +1219,6 @@ try {
             margin-top: 2px;
         }
         
-        .stat-card .stat-sub {
-            font-size: 0.55rem;
-            color: rgba(255,255,255,0.5);
-        }
-        
         .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
         .stat-card.orange { background: linear-gradient(135deg, #D97706, #B45309); }
@@ -1246,9 +1266,7 @@ try {
             color: var(--text-secondary);
         }
         
-        .result-count strong {
-            color: var(--primary);
-        }
+        .result-count strong { color: var(--primary); }
         
         /* ================================================================
            FILTERS
@@ -1358,7 +1376,7 @@ try {
         }
         
         /* ================================================================
-           TABLE WITH SCROLLING ARROWS
+           DATA TABLE
            ================================================================ */
         .table-wrapper {
             position: relative;
@@ -1385,10 +1403,6 @@ try {
         .table-scroll-container::-webkit-scrollbar-thumb {
             background: var(--primary);
             border-radius: 4px;
-        }
-        
-        .table-scroll-container::-webkit-scrollbar-thumb:hover {
-            background: var(--primary-dark);
         }
         
         .scroll-arrows {
@@ -1419,13 +1433,6 @@ try {
             transform: scale(1.05);
         }
         
-        .scroll-arrow-btn:active {
-            transform: scale(0.95);
-        }
-        
-        /* ================================================================
-           DATA TABLE
-           ================================================================ */
         .data-table {
             width: 100%;
             min-width: 1200px;
@@ -1822,10 +1829,7 @@ try {
             display: block;
         }
         
-        .form-label .required {
-            color: var(--danger);
-            margin-left: 2px;
-        }
+        .form-label .required { color: var(--danger); margin-left: 2px; }
         
         .form-control {
             width: 100%;
@@ -1978,9 +1982,7 @@ try {
             box-shadow: var(--shadow-md);
         }
         
-        .autocomplete-list.show {
-            display: block;
-        }
+        .autocomplete-list.show { display: block; }
         
         .autocomplete-item {
             padding: 8px 14px;
@@ -1994,11 +1996,6 @@ try {
         .autocomplete-item:hover {
             background: var(--primary-light);
             color: var(--primary);
-        }
-        
-        .autocomplete-item.active {
-            background: var(--primary);
-            color: white;
         }
         
         .autocomplete-item .item-detail {
@@ -2038,9 +2035,7 @@ try {
         
         .view-item.full-width { grid-column: 1 / -1; }
         
-        [data-theme="dark"] .view-item {
-            background: #1E293B;
-        }
+        [data-theme="dark"] .view-item { background: #1E293B; }
         
         .batches-table-wrap {
             overflow-x: auto;
@@ -2129,14 +2124,6 @@ try {
             opacity: 0;
         }
         
-        .animate-fade-in-up:nth-child(1) { animation-delay: 0.05s; }
-        .animate-fade-in-up:nth-child(2) { animation-delay: 0.1s; }
-        .animate-fade-in-up:nth-child(3) { animation-delay: 0.15s; }
-        .animate-fade-in-up:nth-child(4) { animation-delay: 0.2s; }
-        .animate-fade-in-up:nth-child(5) { animation-delay: 0.25s; }
-        .animate-fade-in-up:nth-child(6) { animation-delay: 0.3s; }
-        .animate-fade-in-up:nth-child(7) { animation-delay: 0.35s; }
-        
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -2181,8 +2168,7 @@ try {
             .header-actions .btn-add-medicine { width: 100%; justify-content: center; }
             .view-grid { grid-template-columns: 1fr; }
             .form-actions { flex-direction: column; }
-            .form-actions .btn-save,
-            .form-actions .btn-cancel { width: 100%; justify-content: center; }
+            .form-actions .btn-save, .form-actions .btn-cancel { width: 100%; justify-content: center; }
             .page-header-box { flex-direction: column; align-items: stretch !important; }
             .top-nav .datetime { display: none; }
         }
@@ -2223,25 +2209,25 @@ try {
     
     <nav class="sidebar-nav">
         <div class="nav-label">Main Menu</div>
-        <a href="/dispensary_system/frontend/pages/admin/dashboard.php" class="sidebar-link"><i class="fas fa-home"></i> Dashboard</a>
-        <a href="/dispensary_system/frontend/pages/admin/employees.php" class="sidebar-link"><i class="fas fa-users"></i> Employees</a>
-        <a href="/dispensary_system/frontend/pages/admin/patients.php" class="sidebar-link"><i class="fas fa-user-injured"></i> Patients</a>
+        <a href="/pages/admin/dashboard.php" class="sidebar-link"><i class="fas fa-home"></i> Dashboard</a>
+        <a href="/pages/admin/employees.php" class="sidebar-link"><i class="fas fa-users"></i> Employees</a>
+        <a href="/pages/admin/patients.php" class="sidebar-link"><i class="fas fa-user-injured"></i> Patients</a>
         
         <div class="nav-label">Modules</div>
-        <a href="/dispensary_system/frontend/pages/admin/doctors_list.php" class="sidebar-link"><i class="fas fa-user-md"></i> Doctors</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php" class="sidebar-link"><i class="fas fa-prescription"></i> Pharmacy</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_reception.php" class="sidebar-link"><i class="fas fa-headset"></i> Reception</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php" class="sidebar-link"><i class="fas fa-flask"></i> Laboratory</a>
-        <a href="/dispensary_system/frontend/pages/admin/view_cashier.php" class="sidebar-link"><i class="fas fa-cash-register"></i> Cashier</a>
+        <a href="/pages/admin/doctors_list.php" class="sidebar-link"><i class="fas fa-user-md"></i> Doctors</a>
+        <a href="/pages/admin/view_pharmacy.php" class="sidebar-link"><i class="fas fa-prescription"></i> Pharmacy</a>
+        <a href="/pages/admin/view_reception.php" class="sidebar-link"><i class="fas fa-headset"></i> Reception</a>
+        <a href="/pages/admin/view_laboratory.php" class="sidebar-link"><i class="fas fa-flask"></i> Laboratory</a>
+        <a href="/pages/admin/view_cashier.php" class="sidebar-link"><i class="fas fa-cash-register"></i> Cashier</a>
         
         <div class="nav-label">Management</div>
-        <a href="/dispensary_system/frontend/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
-        <a href="/dispensary_system/frontend/pages/admin/departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
-        <a href="/dispensary_system/frontend/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
+        <a href="/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
+        <a href="/pages/admin/departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
+        <a href="/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
         
         <div class="nav-label">Account</div>
-        <a href="/dispensary_system/frontend/pages/admin/profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> Profile</a>
-        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <a href="/pages/admin/profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> Profile</a>
+        <a href="/pages/logout.php" class="sidebar-link logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
     </nav>
 </aside>
 
@@ -2265,9 +2251,9 @@ try {
     
     <div class="flex items-center gap-3">
         <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
-            <option value="all">🌐 All Branches</option>
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>">
+                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
                     🏥 <?= htmlspecialchars($b['name']) ?>
                 </option>
             <?php endforeach; ?>
@@ -2303,7 +2289,7 @@ try {
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER - LIKE PHARMACIES -->
+    <!-- PAGE HEADER -->
     <!-- ================================================================ -->
     <div class="page-header-box animate-fade-in-up">
         <div>
@@ -2312,9 +2298,9 @@ try {
                 Inventory
                 <span class="role-badge-display">ADMIN</span>
                 <span class="branch-name-display">
-                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
                 </span>
-                <a href="dashboard.php?branch=<?= $user_branch_id ?>" class="btn-back-green">
+                <a href="dashboard.php" class="btn-back-green">
                     <i class="fas fa-arrow-left"></i> Back to Dashboard
                 </a>
             </h1>
@@ -2355,43 +2341,43 @@ try {
     <!-- STATS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
-        <a href="inventory.php?tab=medicines" class="stat-card blue">
+        <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="stat-card blue">
             <span class="stat-icon"><i class="fas fa-pills"></i></span>
             <div class="stat-number"><?= $total_medicines ?></div>
             <div class="stat-label">Total Medicines</div>
             <div class="stat-value">💊 <?= formatMoneyShort($med_value) ?></div>
         </a>
-        <a href="inventory.php?tab=medicines&stock=low" class="stat-card orange">
+        <a href="inventory.php?tab=medicines&stock=low&branch=<?= $selected_branch_id ?>" class="stat-card orange">
             <span class="stat-icon"><i class="fas fa-exclamation-triangle"></i></span>
             <div class="stat-number"><?= $med_low_stock ?></div>
             <div class="stat-label">Low Stock</div>
             <div class="stat-sub">Below reorder level</div>
         </a>
-        <a href="inventory.php?tab=medicines&stock=out" class="stat-card red">
+        <a href="inventory.php?tab=medicines&stock=out&branch=<?= $selected_branch_id ?>" class="stat-card red">
             <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
             <div class="stat-number"><?= $med_out_of_stock ?></div>
             <div class="stat-label">Out of Stock</div>
             <div class="stat-sub">Quantity = 0</div>
         </a>
-        <a href="inventory.php?tab=medicines&expiry=expiring" class="stat-card teal">
+        <a href="inventory.php?tab=medicines&expiry=expiring&branch=<?= $selected_branch_id ?>" class="stat-card teal">
             <span class="stat-icon"><i class="fas fa-clock"></i></span>
             <div class="stat-number"><?= $med_expiring ?></div>
             <div class="stat-label">Expiring Soon</div>
             <div class="stat-sub">Within 30 days</div>
         </a>
-        <a href="inventory.php?tab=medicines&expiry=expired" class="stat-card red">
+        <a href="inventory.php?tab=medicines&expiry=expired&branch=<?= $selected_branch_id ?>" class="stat-card red">
             <span class="stat-icon"><i class="fas fa-skull"></i></span>
             <div class="stat-number"><?= $med_expired ?></div>
             <div class="stat-label">Has Expired Batches</div>
             <div class="stat-sub">Some batches expired</div>
         </a>
-        <a href="inventory.php?tab=medicines&status=active" class="stat-card green">
+        <a href="inventory.php?tab=medicines&status=active&branch=<?= $selected_branch_id ?>" class="stat-card green">
             <span class="stat-icon"><i class="fas fa-check-circle"></i></span>
             <div class="stat-number"><?= $med_in_stock ?></div>
             <div class="stat-label">In Stock</div>
             <div class="stat-sub">Available</div>
         </a>
-        <a href="inventory.php?tab=medicines&status=inactive" class="stat-card purple">
+        <a href="inventory.php?tab=medicines&status=inactive&branch=<?= $selected_branch_id ?>" class="stat-card purple">
             <span class="stat-icon"><i class="fas fa-archive"></i></span>
             <div class="stat-number"><?= $med_inactive ?></div>
             <div class="stat-label">Inactive</div>
@@ -2404,17 +2390,17 @@ try {
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="filter-group">
-            <a href="inventory.php?tab=medicines" class="filter-btn <?= empty($status_filter) && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
-            <a href="inventory.php?tab=medicines&status=active" class="filter-btn <?= $status_filter === 'active' ? 'active' : '' ?>">Active</a>
-            <a href="inventory.php?tab=medicines&status=inactive" class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">Inactive</a>
-            <a href="inventory.php?tab=medicines&stock=low" class="filter-btn <?= $stock_filter === 'low' ? 'active' : '' ?>">Low Stock</a>
-            <a href="inventory.php?tab=medicines&stock=out" class="filter-btn <?= $stock_filter === 'out' ? 'active' : '' ?>">Out of Stock</a>
-            <a href="inventory.php?tab=medicines&expiry=expiring" class="filter-btn <?= $expiry_filter === 'expiring' ? 'active' : '' ?>">Expiring Soon</a>
-            <a href="inventory.php?tab=medicines&expiry=expired" class="filter-btn <?= $expiry_filter === 'expired' ? 'active' : '' ?>" style="border-color:#7F1D1D;color:#7F1D1D;">
+            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="filter-btn <?= empty($status_filter) && empty($stock_filter) && empty($expiry_filter) ? 'active' : '' ?>">All</a>
+            <a href="inventory.php?tab=medicines&status=active&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $status_filter === 'active' ? 'active' : '' ?>">Active</a>
+            <a href="inventory.php?tab=medicines&status=inactive&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $status_filter === 'inactive' ? 'active' : '' ?>">Inactive</a>
+            <a href="inventory.php?tab=medicines&stock=low&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $stock_filter === 'low' ? 'active' : '' ?>">Low Stock</a>
+            <a href="inventory.php?tab=medicines&stock=out&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $stock_filter === 'out' ? 'active' : '' ?>">Out of Stock</a>
+            <a href="inventory.php?tab=medicines&expiry=expiring&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $expiry_filter === 'expiring' ? 'active' : '' ?>">Expiring Soon</a>
+            <a href="inventory.php?tab=medicines&expiry=expired&branch=<?= $selected_branch_id ?>" class="filter-btn <?= $expiry_filter === 'expired' ? 'active' : '' ?>" style="border-color:#7F1D1D;color:#7F1D1D;">
                 <i class="fas fa-skull"></i> Has Expired
             </a>
             <?php if (!empty($stock_filter) || !empty($expiry_filter) || !empty($status_filter)): ?>
-                <a href="inventory.php?tab=medicines" class="filter-btn clear-filter">
+                <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="filter-btn clear-filter">
                     <i class="fas fa-times"></i> Clear
                 </a>
             <?php endif; ?>
@@ -2422,6 +2408,7 @@ try {
         
         <form method="GET" class="search-form">
             <input type="hidden" name="tab" value="medicines">
+            <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
             <input type="text" name="search" placeholder="🔍 Search medicine..." value="<?= htmlspecialchars($search) ?>">
             <select name="category">
                 <option value="">All Categories</option>
@@ -2432,12 +2419,12 @@ try {
                 <?php endforeach; ?>
             </select>
             <button type="submit" class="btn-search"><i class="fas fa-search"></i> Filter</button>
-            <a href="inventory.php?tab=medicines" class="btn-reset"><i class="fas fa-times"></i> Reset</a>
+            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="btn-reset"><i class="fas fa-times"></i> Reset</a>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- MEDICINE TABLE WITH SLIDING ARROWS & ACTIVE COLUMN -->
+    <!-- MEDICINE TABLE -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="card-header">
@@ -2547,9 +2534,7 @@ try {
                                             <?= $stock_label ?>
                                         </span>
                                     </td>
-                                    <td class="col-price">
-                                        <?= $price_display ?>
-                                    </td>
+                                    <td class="col-price"><?= $price_display ?></td>
                                     <td class="col-expiry">
                                         <?php if (!empty($expiry_date) && $expiry_date !== '0000-00-00'): ?>
                                             <span class="expiry-badge <?= $expiry_status ?>">
@@ -2601,13 +2586,13 @@ try {
                                     </td>
                                     <td class="col-actions">
                                         <div style="display:flex;gap:4px;justify-content:center;flex-wrap:wrap;">
-                                            <a href="inventory.php?tab=medicines&view=<?= $item['id'] ?>" class="action-btn view" title="View Batches">
+                                            <a href="inventory.php?tab=medicines&view=<?= $item['id'] ?>&branch=<?= $selected_branch_id ?>" class="action-btn view" title="View Batches">
                                                 <i class="fas fa-eye"></i>
                                             </a>
-                                            <a href="inventory.php?tab=medicines&edit=<?= $first_batch_id ?>" class="action-btn edit" title="Edit Batch">
+                                            <a href="inventory.php?tab=medicines&edit=<?= $first_batch_id ?>&branch=<?= $selected_branch_id ?>" class="action-btn edit" title="Edit Batch">
                                                 <i class="fas fa-edit"></i>
                                             </a>
-                                            <a href="inventory.php?tab=medicines&delete=<?= $first_batch_id ?>" class="action-btn delete" title="Delete Batch" onclick="return confirmDelete(<?= $first_batch_id ?>, '<?= addslashes($item['medication_name']) ?>')">
+                                            <a href="inventory.php?tab=medicines&delete=<?= $first_batch_id ?>&branch=<?= $selected_branch_id ?>" class="action-btn delete" title="Delete Batch" onclick="return confirmDelete(<?= $first_batch_id ?>, '<?= addslashes($item['medication_name']) ?>')">
                                                 <i class="fas fa-trash"></i>
                                             </a>
                                         </div>
@@ -2658,6 +2643,7 @@ try {
         
         <form method="POST" action="" id="addMedicineForm">
             <input type="hidden" name="action" value="add_medicine">
+            <input type="hidden" name="branch_id" value="<?= $branch_id_for_query ?>">
             
             <div class="form-grid">
                 <div class="full-width form-row">
@@ -2778,7 +2764,7 @@ try {
             <div class="modal-title">
                 <i class="fas fa-edit"></i> Edit Medicine Batch
             </div>
-            <a href="inventory.php?tab=medicines" class="modal-close">&times;</a>
+            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="modal-close">&times;</a>
         </div>
         
         <form method="POST" action="" id="editMedicineForm">
@@ -2882,7 +2868,7 @@ try {
             
             <div class="form-actions">
                 <button type="submit" class="btn-save"><i class="fas fa-save"></i> Update Batch</button>
-                <a href="inventory.php?tab=medicines" class="btn-cancel"><i class="fas fa-times"></i> Cancel</a>
+                <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="btn-cancel"><i class="fas fa-times"></i> Cancel</a>
             </div>
         </form>
     </div>
@@ -2899,7 +2885,7 @@ try {
             <div class="modal-title" style="color:var(--danger);">
                 <i class="fas fa-exclamation-triangle"></i> Confirm Delete
             </div>
-            <a href="inventory.php?tab=medicines" class="modal-close">&times;</a>
+            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="modal-close">&times;</a>
         </div>
         
         <form method="POST" action="">
@@ -2917,7 +2903,7 @@ try {
                 <button type="submit" class="btn-save" style="background:var(--danger);">
                     <i class="fas fa-trash"></i> Yes, Delete
                 </button>
-                <a href="inventory.php?tab=medicines" class="btn-cancel">
+                <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="btn-cancel">
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
@@ -2936,7 +2922,7 @@ try {
             <div class="modal-title">
                 <i class="fas fa-eye"></i> Medicine Details - <?= htmlspecialchars($view_name) ?>
             </div>
-            <a href="inventory.php?tab=medicines" class="modal-close">&times;</a>
+            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="modal-close">&times;</a>
         </div>
         
         <div class="view-grid">
@@ -3100,7 +3086,7 @@ try {
         </div>
         
         <div class="form-actions">
-            <a href="inventory.php?tab=medicines" class="btn-cancel">
+            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="btn-cancel">
                 <i class="fas fa-times"></i> Close
             </a>
         </div>
@@ -3277,23 +3263,6 @@ function scrollTable(direction) {
         container.scrollLeft += scrollAmount;
     }
 }
-
-// Keyboard shortcuts for table scrolling
-document.addEventListener('keydown', function(e) {
-    var container = document.getElementById('tableScrollContainer');
-    if (!container) return;
-    
-    var rect = container.getBoundingClientRect();
-    if (rect.top < window.innerHeight && rect.bottom > 0) {
-        if (e.key === 'ArrowLeft' && e.shiftKey) {
-            e.preventDefault();
-            container.scrollLeft -= 300;
-        } else if (e.key === 'ArrowRight' && e.shiftKey) {
-            e.preventDefault();
-            container.scrollLeft += 300;
-        }
-    }
-});
 
 // ================================================================
 // AUTO-SEARCH - Medicine Name
@@ -3560,13 +3529,10 @@ function confirmDelete(id, name) {
 // CONSOLE LOG
 // ================================================================
 console.log('%c💊 Admin - Medicine Inventory (Grouped by Name)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Branch Filter: <?= $selected_branch_id ?>', 'font-size:13px; color:#059669;');
 console.log('%c✅ Medicines: <?= $total_medicines ?>', 'font-size:13px; color:#059669;');
 console.log('%c💰 Total Value: TSh <?= formatMoney($med_value) ?>', 'font-size:13px; color:#D97706;');
-console.log('%c✅ View, Edit, Delete functionality available', 'font-size:13px; color:#34D399;');
-console.log('%c✅ No Expiry = Active Forever', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Scroll arrows working', 'font-size:13px; color:#0B5ED7;');
-console.log('%c✅ Active column added', 'font-size:13px; color:#059669;');
-console.log('%c✅ Custom header with favicon and profile picture', 'font-size:13px; color:#7C3AED;');
+console.log('%c✅ Branch filter works correctly!', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
