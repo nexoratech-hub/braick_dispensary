@@ -1,8 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/process_otc_payment.php
-// CASHIER - PROCESS OTC PAYMENT (NO DISCOUNT)
-// FIXED: Simple payment with no discount
+// CASHIER - PROCESS OTC PAYMENT
+// FIXED: Updates sold_by to Cashier ID (not pharmacist)
+// FIXED: Dark Purple theme (OTC branding)
+// FIXED: Shows discount from otc_sales table before payment
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -71,16 +73,17 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
 
     // ================================================================
-    // GET OTC SALE DETAILS
+    // GET OTC SALE DETAILS - Include discount
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
             o.*,
-            u.full_name as sold_by_name,
-            u2.full_name as received_by_name
+            o.discount_amount,
+            o.subtotal,
+            o.total_amount,
+            u.full_name as pharmacist_name
         FROM otc_sales o
         LEFT JOIN users u ON o.sold_by = u.id
-        LEFT JOIN users u2 ON o.sold_by = u2.id
         WHERE o.id = ? AND o.branch_id = ? AND o.payment_status = 'pending'
     ");
     $stmt->execute([$sale_id, $user_branch_id]);
@@ -107,6 +110,8 @@ try {
 
     // ================================================================
     // HANDLE PAYMENT SUBMISSION
+    // ✅ FIXED: Updates sold_by to Cashier ID
+    // ✅ FIXED: Includes discount in payment notes
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'process_payment') {
         $payment_method = $_POST['payment_method'] ?? 'cash';
@@ -116,7 +121,7 @@ try {
             $message = "Please enter a valid amount!";
             $message_type = 'error';
         } elseif ($amount != $sale['total_amount']) {
-            $message = "Amount must be exactly " . $currency . " " . number_format($sale['total_amount'], 2);
+            $message = "Amount must be exactly " . $currency . " " . number_format($sale['total_amount'], 0);
             $message_type = 'error';
         } else {
             try {
@@ -125,17 +130,28 @@ try {
                 // Generate receipt number
                 $receipt_number = 'RCP-OTC-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
                 
-                // Update OTC sale payment status
+                // ✅ FIXED: Update OTC sale - set sold_by to Cashier ID
                 $stmt = $db->prepare("
                     UPDATE otc_sales 
                     SET payment_status = 'paid',
                         payment_method = ?,
+                        sold_by = ?,
                         updated_at = NOW()
                     WHERE id = ? AND branch_id = ? AND payment_status = 'pending'
                 ");
-                $stmt->execute([$payment_method, $sale_id, $user_branch_id]);
+                $stmt->execute([
+                    $payment_method, 
+                    $user_id,  // ✅ Cashier ID
+                    $sale_id, 
+                    $user_branch_id
+                ]);
                 
-                // Insert payment record
+                // ✅ Insert payment record with discount info
+                $discount_note = '';
+                if (($sale['discount_amount'] ?? 0) > 0) {
+                    $discount_note = ' | Discount Applied: ' . $currency . ' ' . number_format($sale['discount_amount'], 0);
+                }
+                
                 $stmt = $db->prepare("
                     INSERT INTO payments (
                         receipt_number, 
@@ -157,7 +173,7 @@ try {
                     $payment_method,
                     $user_id,
                     $user_branch_id,
-                    'OTC Sale #' . $sale['sale_number'] . ' payment'
+                    'OTC Sale #' . $sale['sale_number'] . ' payment processed by ' . $user_full_name . $discount_note
                 ]);
                 $payment_id = $db->lastInsertId();
                 
@@ -185,11 +201,11 @@ try {
                 
                 $db->commit();
                 
-                // Redirect to receipt
+                // Redirect to receipt with cashier info
                 if (!empty($payment_id)) {
                     header('Location: receipt.php?payment_id=' . $payment_id);
                 } else {
-                    header('Location: pending_bills.php?success=OTC payment processed successfully');
+                    header('Location: pending_bills.php?success=OTC payment processed successfully by ' . $user_full_name);
                 }
                 exit;
                 
@@ -233,10 +249,11 @@ include_once '../../components/cashier_sidebar.php';
     
     <style>
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
+            /* ✅ DARK PURPLE THEME - OTC Branding */
+            --primary: #6D28D9;
+            --primary-dark: #4C1D95;
+            --primary-light: #A78BFA;
+            --primary-bg: #2A1A3A;
             --success: #059669;
             --success-dark: #047857;
             --success-light: #34D399;
@@ -250,7 +267,10 @@ include_once '../../components/cashier_sidebar.php';
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
             --otc-color: #8B5CF6;
-            --otc-bg: #EDE9FE;
+            --otc-bg: #2A1A3A;
+            --otc-header-bg-from: #4C1D95;
+            --otc-header-bg-to: #6D28D9;
+            --otc-table-header: linear-gradient(135deg, #4C1D95, #6D28D9, #8B5CF6);
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -288,12 +308,14 @@ include_once '../../components/cashier_sidebar.php';
             --gray-500: #A0AEC0;
             --gray-600: #CBD5E1;
             --gray-700: #E2E8F0;
-            --primary-bg: #1E3A5F;
+            --primary-bg: #1A1A2E;
             --success-bg: #1A3A2A;
             --danger-bg: #3A1A1A;
             --warning-bg: #3A2A1A;
-            --purple-bg: #2A1A3A;
-            --otc-bg: #2A1A3A;
+            --purple-bg: #1A1A3A;
+            --otc-bg: #1A1A3A;
+            --otc-header-bg-from: #3B1A6A;
+            --otc-header-bg-to: #5B2A8A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -316,8 +338,9 @@ include_once '../../components/cashier_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        /* ✅ DARK PURPLE PAGE HEADER */
         .page-header {
-            background: linear-gradient(135deg, #8B5CF6, #6D28D9);
+            background: linear-gradient(135deg, #4C1D95, #6D28D9, #8B5CF6);
             border-radius: var(--radius-lg);
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -326,13 +349,13 @@ include_once '../../components/cashier_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(139, 92, 246, 0.25);
+            box-shadow: 0 4px 20px rgba(76, 29, 149, 0.35);
             position: relative;
             overflow: hidden;
         }
         
         [data-theme="dark"] .page-header {
-            box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
         }
         
         .page-header::before {
@@ -342,7 +365,7 @@ include_once '../../components/cashier_sidebar.php';
             right: -20%;
             width: 300px;
             height: 300px;
-            background: rgba(255,255,255,0.05);
+            background: rgba(139, 92, 246, 0.08);
             border-radius: 50%;
         }
         
@@ -428,15 +451,18 @@ include_once '../../components/cashier_sidebar.php';
             max-width: 800px;
             margin: 0 auto;
             box-shadow: var(--shadow);
+            transition: all 0.3s ease;
         }
         
         .sale-card:hover {
             border-color: var(--otc-color);
             box-shadow: var(--shadow-md);
+            transform: translateY(-2px);
         }
         
+        /* ✅ DARK PURPLE SALE HEADER */
         .sale-header {
-            background: var(--otc-bg);
+            background: linear-gradient(135deg, #4C1D95, #6D28D9);
             padding: 16px 24px;
             border-bottom: 2px solid var(--border-color);
             display: flex;
@@ -444,12 +470,13 @@ include_once '../../components/cashier_sidebar.php';
             align-items: center;
             flex-wrap: wrap;
             gap: 8px;
+            color: white;
         }
         
         .sale-header .sale-number {
             font-weight: 700;
             font-size: 1.1rem;
-            color: var(--otc-color);
+            color: #C4B5FD;
             font-family: monospace;
         }
         
@@ -458,8 +485,9 @@ include_once '../../components/cashier_sidebar.php';
             font-weight: 600;
             padding: 4px 14px;
             border-radius: 20px;
-            background: var(--warning-bg);
-            color: var(--warning);
+            background: rgba(251, 191, 36, 0.2);
+            color: #FCD34D;
+            border: 1px solid rgba(251, 191, 36, 0.2);
         }
         
         .sale-body {
@@ -494,6 +522,7 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
         }
         
+        /* ✅ DARK PURPLE TABLE HEADER */
         .items-table-wrap {
             overflow-x: auto;
             border-radius: var(--radius);
@@ -509,14 +538,14 @@ include_once '../../components/cashier_sidebar.php';
         
         .items-table thead th {
             text-align: left;
-            padding: 8px 14px;
+            padding: 12px 14px;
             font-weight: 700;
-            font-size: 0.65rem;
+            font-size: 0.7rem;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.06em;
             color: white;
-            background: var(--otc-color);
-            border-bottom: 3px solid #6D28D9;
+            background: linear-gradient(135deg, #4C1D95, #6D28D9, #8B5CF6);
+            border-bottom: 3px solid #A78BFA;
             white-space: nowrap;
         }
         
@@ -524,14 +553,14 @@ include_once '../../components/cashier_sidebar.php';
         .items-table thead th:last-child { border-radius: 0 6px 0 0; }
         
         .items-table td {
-            padding: 8px 14px;
+            padding: 10px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
         }
         
         .items-table tbody tr:hover td {
-            background: var(--primary-bg);
+            background: var(--purple-bg);
         }
         
         .items-table tbody tr:last-child td {
@@ -549,6 +578,7 @@ include_once '../../components/cashier_sidebar.php';
             margin-top: 2px;
         }
         
+        /* ✅ TOTALS WITH DISCOUNT */
         .totals-section {
             display: flex;
             justify-content: flex-end;
@@ -557,13 +587,14 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .totals-box {
-            width: 300px;
+            width: 100%;
+            max-width: 350px;
         }
         
         .totals-box .total-row {
             display: flex;
             justify-content: space-between;
-            padding: 4px 0;
+            padding: 6px 0;
             font-size: 0.85rem;
             align-items: center;
         }
@@ -579,9 +610,20 @@ include_once '../../components/cashier_sidebar.php';
             font-family: 'Courier New', monospace;
         }
         
+        .totals-box .total-row.discount-row {
+            color: var(--warning);
+            border-bottom: 1px dashed var(--border-color);
+            padding-bottom: 8px;
+            margin-bottom: 4px;
+        }
+        
+        .totals-box .total-row.discount-row .value {
+            color: var(--warning);
+        }
+        
         .totals-box .total-row.grand-total {
             border-top: 2px solid var(--border-color);
-            padding-top: 8px;
+            padding-top: 10px;
             margin-top: 4px;
             font-size: 1rem;
         }
@@ -595,9 +637,10 @@ include_once '../../components/cashier_sidebar.php';
         .totals-box .total-row.grand-total .value {
             color: var(--otc-color);
             font-weight: 700;
-            font-size: 1.1rem;
+            font-size: 1.2rem;
         }
         
+        /* ✅ PAYMENT SECTION */
         .payment-section {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -606,6 +649,7 @@ include_once '../../components/cashier_sidebar.php';
             max-width: 800px;
             margin: 20px auto 0;
             box-shadow: var(--shadow);
+            transition: all 0.3s ease;
         }
         
         .payment-section:hover {
@@ -664,7 +708,7 @@ include_once '../../components/cashier_sidebar.php';
         
         .payment-section .form-control:focus {
             border-color: var(--otc-color);
-            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.1);
+            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
         }
         
         .payment-section .form-control:disabled {
@@ -678,7 +722,7 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--otc-color);
             font-family: monospace;
             padding: 6px 14px;
-            background: var(--otc-bg);
+            background: var(--purple-bg);
             border-radius: var(--radius);
             border: 2px solid var(--otc-color);
             display: inline-block;
@@ -701,13 +745,14 @@ include_once '../../components/cashier_sidebar.php';
         }
         
         .btn-otc {
-            background: var(--otc-color);
+            background: linear-gradient(135deg, #6D28D9, #8B5CF6);
             color: white;
+            box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3);
         }
         .btn-otc:hover {
-            background: #6D28D9;
+            background: linear-gradient(135deg, #5B21B6, #7C3AED);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
+            box-shadow: 0 4px 16px rgba(139, 92, 246, 0.4);
         }
         
         .btn-outline {
@@ -719,20 +764,44 @@ include_once '../../components/cashier_sidebar.php';
             background: var(--bg-body);
             border-color: var(--otc-color);
             color: var(--otc-color);
-        }
-        
-        .btn-success {
-            background: var(--success);
-            color: white;
-        }
-        .btn-success:hover {
-            background: var(--success-dark);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
         }
         
         .btn-sm { padding: 4px 12px; font-size: 0.75rem; }
         .btn-block { width: 100%; justify-content: center; }
+        
+        .cashier-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            padding: 2px 12px;
+            border-radius: 20px;
+            background: rgba(139, 92, 246, 0.25);
+            color: #C4B5FD;
+            border: 1px solid rgba(139, 92, 246, 0.2);
+        }
+        
+        /* ✅ DISCOUNT BADGE */
+        .discount-badge-display {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 12px;
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid #D97706;
+        }
+        
+        [data-theme="dark"] .discount-badge-display {
+            background: #3A2A1A;
+            color: #F59E0B;
+            border-color: #D97706;
+        }
         
         .message-box {
             padding: 12px 20px;
@@ -787,6 +856,19 @@ include_once '../../components/cashier_sidebar.php';
         .empty-state h3 { font-size: 1.2rem; color: var(--text-primary); margin-bottom: 8px; }
         .empty-state p { color: var(--text-secondary); font-size: 0.9rem; }
         
+        .pharmacist-info {
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.7);
+            background: rgba(255,255,255,0.08);
+            padding: 4px 12px;
+            border-radius: 12px;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        
+        [data-theme="dark"] .pharmacist-info {
+            background: rgba(255,255,255,0.05);
+        }
+        
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -808,7 +890,7 @@ include_once '../../components/cashier_sidebar.php';
             .payment-section .form-group { width: 100%; }
             .sale-body { padding: 14px 16px; }
             .payment-section { padding: 14px 16px; }
-            .totals-box { width: 100%; }
+            .totals-box { max-width: 100%; }
         }
     </style>
 </head>
@@ -816,7 +898,7 @@ include_once '../../components/cashier_sidebar.php';
 
 <main class="main-content">
 
-    <!-- PAGE HEADER -->
+    <!-- PAGE HEADER - DARK PURPLE -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -824,7 +906,7 @@ include_once '../../components/cashier_sidebar.php';
                 Process OTC Payment
                 <span class="role-badge-display"><?= strtoupper($user_role) ?></span>
                 <?php if ($is_admin): ?>
-                    <span class="header-badge" style="background:rgba(124,58,237,0.3);border-color:rgba(124,58,237,0.3);color:#C4B5FD;">
+                    <span class="header-badge" style="background:rgba(139,92,246,0.3);border-color:rgba(139,92,246,0.3);color:#C4B5FD;">
                         <i class="fas fa-user-shield"></i> ADMIN
                     </span>
                 <?php endif; ?>
@@ -833,6 +915,9 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-eye"></i> RECEPTION
                     </span>
                 <?php endif; ?>
+                <span class="cashier-badge">
+                    <i class="fas fa-user-tie"></i> Cashier: <?= htmlspecialchars($user_full_name) ?>
+                </span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-cash-register"></i>
@@ -843,6 +928,11 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="header-badge" style="background:rgba(139,92,246,0.2);border-color:rgba(139,92,246,0.2);">
                     <i class="fas fa-shopping-cart"></i> OTC Payment
                 </span>
+                <?php if (($sale['discount_amount'] ?? 0) > 0): ?>
+                    <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);color:#FCD34D;">
+                        <i class="fas fa-tag"></i> Discount: <?= $currency ?> <?= number_format($sale['discount_amount'] ?? 0, 0) ?>
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -867,14 +957,15 @@ include_once '../../components/cashier_sidebar.php';
         <div class="sale-header">
             <div>
                 <span class="sale-number"><?= htmlspecialchars($sale['sale_number']) ?></span>
-                <span style="font-size:0.7rem;color:var(--text-secondary);margin-left:10px;">
+                <span style="font-size:0.7rem;color:rgba(255,255,255,0.6);margin-left:10px;">
                     <i class="fas fa-calendar-alt"></i> <?= date('d/m/Y h:i A', strtotime($sale['created_at'])) ?>
                 </span>
             </div>
             <div>
                 <span class="sale-status"><i class="fas fa-clock"></i> Pending</span>
-                <span style="font-size:0.6rem;color:var(--text-secondary);margin-left:8px;">
-                    <i class="fas fa-user"></i> <?= htmlspecialchars($sale['sold_by_name'] ?? 'N/A') ?>
+                <!-- ✅ Shows pharmacist who created sale -->
+                <span class="pharmacist-info" style="margin-left:8px;">
+                    <i class="fas fa-user-md"></i> Created by: <?= htmlspecialchars($sale['pharmacist_name'] ?? 'N/A') ?>
                 </span>
             </div>
         </div>
@@ -902,7 +993,7 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- Items Table -->
+            <!-- Items Table - DARK PURPLE HEADER -->
             <?php if (count($items) > 0): ?>
             <div class="items-table-wrap">
                 <table class="items-table">
@@ -941,21 +1032,33 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             <?php endif; ?>
             
-            <!-- Totals -->
+            <!-- ✅ TOTALS WITH DISCOUNT -->
             <div class="totals-section">
                 <div class="totals-box">
+                    <div class="total-row">
+                        <span class="label"><i class="fas fa-calculator"></i> Subtotal</span>
+                        <span class="value"><?= $currency ?> <?= number_format($sale['subtotal'] ?? 0, 0) ?></span>
+                    </div>
+                    
                     <?php if (($sale['discount_amount'] ?? 0) > 0): ?>
-                        <div class="total-row">
-                            <span class="label">Subtotal</span>
-                            <span class="value"><?= $currency ?> <?= number_format($sale['subtotal'] ?? 0, 0) ?></span>
+                        <div class="total-row discount-row">
+                            <span class="label">
+                                <i class="fas fa-tag"></i> Discount 
+                                <span class="discount-badge-display">-<?= $currency ?> <?= number_format($sale['discount_amount'], 0) ?></span>
+                            </span>
+                            <span class="value" style="color:var(--warning);">
+                                -<?= $currency ?> <?= number_format($sale['discount_amount'], 0) ?>
+                            </span>
                         </div>
-                        <div class="total-row" style="color:var(--warning);">
-                            <span class="label">Discount</span>
-                            <span class="value">-<?= $currency ?> <?= number_format($sale['discount_amount'] ?? 0, 0) ?></span>
+                    <?php else: ?>
+                        <div class="total-row" style="color:var(--text-secondary);">
+                            <span class="label"><i class="fas fa-tag"></i> Discount</span>
+                            <span class="value" style="color:var(--text-secondary);">None</span>
                         </div>
                     <?php endif; ?>
+                    
                     <div class="total-row grand-total">
-                        <span class="label">Total Amount</span>
+                        <span class="label"><i class="fas fa-money-bill-wave"></i> Total Amount</span>
                         <span class="value"><?= $currency ?> <?= number_format($sale['total_amount'] ?? 0, 0) ?></span>
                     </div>
                 </div>
@@ -963,13 +1066,16 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     </div>
 
-    <!-- PAYMENT SECTION - NO DISCOUNT -->
+    <!-- PAYMENT SECTION -->
     <div class="payment-section animate-fade-in-up">
         <div class="payment-title">
             <i class="fas fa-cash-register"></i>
             Complete Payment
             <span style="font-size:0.7rem;font-weight:400;color:var(--text-secondary);margin-left:4px;">
                 (No additional discount)
+            </span>
+            <span style="font-size:0.6rem;font-weight:600;color:var(--otc-color);margin-left:auto;background:var(--purple-bg);padding:2px 12px;border-radius:12px;border:1px solid var(--otc-color);">
+                <i class="fas fa-user-tie"></i> Cashier: <?= htmlspecialchars($user_full_name) ?>
             </span>
         </div>
         
@@ -999,6 +1105,11 @@ include_once '../../components/cashier_sidebar.php';
                     <input type="hidden" name="amount" value="<?= $sale['total_amount'] ?>">
                     <span style="font-size:0.6rem;color:var(--text-secondary);">
                         <i class="fas fa-info-circle"></i> Full amount required
+                        <?php if (($sale['discount_amount'] ?? 0) > 0): ?>
+                            <span style="color:var(--warning);margin-left:4px;">
+                                (Discount: <?= $currency ?> <?= number_format($sale['discount_amount'], 0) ?> applied)
+                            </span>
+                        <?php endif; ?>
                     </span>
                 </div>
                 
@@ -1009,7 +1120,7 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-color);display:flex;gap:10px;flex-wrap:wrap;">
+            <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-color);display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
                 <a href="pending_bills.php" class="btn btn-outline btn-sm">
                     <i class="fas fa-times"></i> Cancel
                 </a>
@@ -1021,6 +1132,9 @@ include_once '../../components/cashier_sidebar.php';
                             (Discount: <?= $currency ?> <?= number_format($sale['discount_amount'], 0) ?> applied)
                         </span>
                     <?php endif; ?>
+                </span>
+                <span style="font-size:0.55rem;color:var(--text-secondary);background:var(--gray-50);padding:2px 10px;border-radius:10px;border:1px solid var(--border-color);">
+                    <i class="fas fa-user-tie"></i> Processing by: <?= htmlspecialchars($user_full_name) ?>
                 </span>
             </div>
         </form>
@@ -1047,6 +1161,9 @@ include_once '../../components/cashier_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             <span style="color:<?= $is_reception ? '#FCD34D' : '#FFD700' ?>;font-weight:600;">
                 👤 <?= htmlspecialchars($user_full_name) ?>
+                <?php if ($is_reception): ?>
+                    <span style="color:#FCD34D;font-weight:500;font-size:0.6rem;background:rgba(251,191,36,0.15);padding:2px 10px;border-radius:10px;margin-left:4px;">👀 Reception</span>
+                <?php endif; ?>
             </span>
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
@@ -1155,13 +1272,17 @@ include_once '../../components/cashier_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c🛒 Braick - Process OTC Payment (No Discount)', 'font-size:18px; font-weight:bold; color:#8B5CF6;');
-    console.log('%c✅ No discount section - simple payment', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Full amount required for payment', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Redirects to receipt after payment', 'font-size:13px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🛒 Sale: <?= htmlspecialchars($sale['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Amount: <?= $currency ?> <?= number_format($sale['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c🛒 Braick - Process OTC Payment (DARK PURPLE + DISCOUNT)', 'font-size:18px; font-weight:bold; color:#8B5CF6;');
+    console.log('%c✅ FIXED: Updates sold_by to Cashier ID (not pharmacist)', 'font-size:13px; color:#A78BFA;');
+    console.log('%c✅ FIXED: Shows discount from otc_sales table', 'font-size:13px; color:#FCD34D;');
+    console.log('%c✅ Cashier: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#FBBF24;');
+    console.log('%c✅ Pharmacist: <?= htmlspecialchars($sale['pharmacist_name'] ?? 'N/A') ?> (created sale)', 'font-size:13px; color:#64748B;');
+    <?php if (($sale['discount_amount'] ?? 0) > 0): ?>
+        console.log('%c✅ Discount: <?= $currency ?> <?= number_format($sale['discount_amount'], 0) ?> applied', 'font-size:13px; color:#FCD34D;');
+    <?php else: ?>
+        console.log('%c✅ No discount applied', 'font-size:13px; color:#64748B;');
+    <?php endif; ?>
+    console.log('%c💰 Total: <?= $currency ?> <?= number_format($sale['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#8B5CF6;');
 </script>
 
 </body>

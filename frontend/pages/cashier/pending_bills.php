@@ -6,6 +6,8 @@
 // FIXED: Shows ONLY bills with balance > 0
 // FIXED: Prescription bills show as LOCKED until confirmed
 // FIXED: Added Subtotal column with Dark Green Header
+// FIXED: Discount correctly shows total from bill_items (not double counted)
+// FIXED: OTC discount shows from otc_sales.discount_amount
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -215,10 +217,11 @@ try {
             'regular' as bill_type,
             NULL as customer_name,
             NULL as otc_sale_id,
+            NULL as otc_discount,
             (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as item_count,
             (SELECT COUNT(*) FROM payments WHERE bill_id = b.id) as payment_count,
             (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = b.id) as total_paid,
-            (SELECT COALESCE(SUM(discount_amount), 0) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication') as pharmacy_discount,
+            (SELECT COALESCE(SUM(discount_amount), 0) FROM bill_items WHERE bill_id = b.id AND status != 'cancelled') as pharmacy_discount,
             (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication' AND discount_amount > 0) as med_discount_items,
             (SELECT COUNT(*) 
              FROM bill_items bi2 
@@ -259,6 +262,7 @@ try {
     
     // ================================================================
     // GET OTC SALES WITH PENDING PAYMENT
+    // ✅ FIXED: Include discount_amount from otc_sales table
     // ================================================================
     $otc_sql = "
         SELECT 
@@ -268,7 +272,7 @@ try {
             o.customer_phone,
             o.patient_id,
             o.subtotal,
-            o.discount_amount,
+            o.discount_amount as otc_discount,
             o.total_amount,
             o.bill_id,
             o.payment_method,
@@ -294,7 +298,8 @@ try {
             0 as pharmacy_discount,
             0 as med_discount_items,
             o.id as otc_sale_id,
-            'OTC Sale' as bill_number
+            'OTC Sale' as bill_number,
+            o.discount_amount as discount_amount
         FROM otc_sales o
         LEFT JOIN users u ON o.sold_by = u.id
         WHERE o.branch_id = ? 
@@ -434,7 +439,21 @@ try {
         $patient_bills[$patient_key]['total_subtotal'] += ($bill['subtotal'] ?? $bill['total_amount'] ?? 0);
         $patient_bills[$patient_key]['total_balance'] += ($bill['total_amount'] - ($bill['total_paid'] ?? 0));
         $patient_bills[$patient_key]['total_paid'] += ($bill['total_paid'] ?? 0);
-        $patient_bills[$patient_key]['total_discount'] += ($bill['pharmacy_discount'] ?? 0) + ($bill['discount_amount'] ?? 0) + ($bill['cashier_discount'] ?? 0);
+        
+        // ✅ FIXED: Get discount based on bill type
+        if ($bill['bill_type'] === 'otc') {
+            // ✅ OTC: Use discount_amount from otc_sales table
+            $bill_discount = $bill['otc_discount'] ?? $bill['discount_amount'] ?? 0;
+        } else {
+            // ✅ Regular: Use total_discount from bills table (aggregated from bill_items)
+            $bill_discount = $bill['total_discount'] ?? 0;
+            // If total_discount is 0 but pharmacy_discount has value, use pharmacy_discount
+            if ($bill_discount == 0 && ($bill['pharmacy_discount'] ?? 0) > 0) {
+                $bill_discount = $bill['pharmacy_discount'];
+            }
+        }
+        $patient_bills[$patient_key]['total_discount'] += $bill_discount;
+        
         $patient_bills[$patient_key]['bill_count']++;
         $patient_bills[$patient_key]['total_pending_prescriptions'] += ($bill['pending_prescriptions'] ?? 0);
         $patient_bills[$patient_key]['total_confirmed_prescriptions'] += ($bill['confirmed_prescriptions'] ?? 0);
@@ -578,7 +597,6 @@ include_once '../../components/cashier_sidebar.php';
             --danger-light: #F87171;
             --danger-bg: #FEE2E2;
             --warning: #D97706;
-            --warning-dark: #B45309;
             --warning-bg: #FEF3C7;
             --info: #0B5ED7;
             --info-bg: #E8F0FE;
@@ -1305,7 +1323,7 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-check"></i> Balance &gt; 0 Only
                 </span>
                 <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);">
-                    <i class="fas fa-tag"></i> Pharmacy Discounts Shown
+                    <i class="fas fa-tag"></i> Total Discount from bill_items
                 </span>
             </p>
         </div>
@@ -1505,7 +1523,19 @@ include_once '../../components/cashier_sidebar.php';
                                     $is_otc_bill = ($bill['bill_type'] ?? '') === 'otc';
                                     $has_payments = ($bill['payment_count'] ?? 0) > 0;
                                     $can_cancel = !$is_otc_bill && in_array($bill['status'], ['pending', 'partial']) && !$has_payments;
-                                    $discount = ($bill['pharmacy_discount'] ?? 0) + ($bill['discount_amount'] ?? 0) + ($bill['cashier_discount'] ?? 0);
+                                    
+                                    // ✅ FIXED: Get discount based on bill type
+                                    if ($is_otc_bill) {
+                                        // ✅ OTC: Use discount_amount from otc_sales table
+                                        $discount = $bill['otc_discount'] ?? $bill['discount_amount'] ?? 0;
+                                    } else {
+                                        // ✅ Regular: Use total_discount from bills table (aggregated from bill_items)
+                                        $discount = $bill['total_discount'] ?? 0;
+                                        if ($discount == 0 && ($bill['pharmacy_discount'] ?? 0) > 0) {
+                                            $discount = $bill['pharmacy_discount'];
+                                        }
+                                    }
+                                    
                                     $has_discount = $discount > 0;
                                     $status = $bill['status'] ?? ($is_otc_bill ? 'pending' : 'pending');
                                     $status_class = $is_otc_bill ? 'otc-pending' : $status;
@@ -1569,9 +1599,15 @@ include_once '../../components/cashier_sidebar.php';
                                             <?php if ($has_discount): ?>
                                                 <span style="color:var(--warning);font-weight:600;">
                                                     <?= $currency ?> <?= number_format($discount, 0) ?>
-                                                    <span class="discount-badge" style="display:block;margin-top:2px;">
-                                                        <i class="fas fa-tag"></i> <?= $is_otc_bill ? 'OTC' : 'Total' ?>
-                                                    </span>
+                                                    <?php if ($is_otc_bill): ?>
+                                                        <span class="discount-badge" style="display:block;margin-top:2px;">
+                                                            <i class="fas fa-tag"></i> OTC Disc
+                                                        </span>
+                                                    <?php else: ?>
+                                                        <span class="discount-badge" style="display:block;margin-top:2px;">
+                                                            <i class="fas fa-tag"></i> Total
+                                                        </span>
+                                                    <?php endif; ?>
                                                 </span>
                                             <?php else: ?>
                                                 <span class="text-xs text-gray-400">None</span>
@@ -1673,6 +1709,11 @@ include_once '../../components/cashier_sidebar.php';
                                         <?php if ($patient['total_discount'] > 0): ?>
                                             <span style="color:var(--warning);font-weight:600;">
                                                 <?= $currency ?> <?= number_format($patient['total_discount'], 0) ?>
+                                                <?php if ($is_otc): ?>
+                                                    <span style="font-size:0.5rem;display:block;color:var(--text-secondary);">
+                                                        (OTC Discount)
+                                                    </span>
+                                                <?php endif; ?>
                                             </span>
                                         <?php else: ?>
                                             <span class="text-xs text-gray-400">None</span>
@@ -1852,6 +1893,8 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c✅ ADDED: Subtotal column with Dark Green Header', 'font-size:13px;color:#0D9488;');
     console.log('%c🔒 Prescription bills show as LOCKED until confirmed', 'font-size:13px;color:#DC2626;');
     console.log('%c✅ Confirmed prescriptions ready for payment', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ FIXED: Discount uses total_discount from bills table (no double counting)', 'font-size:13px;color:#F59E0B;');
+    console.log('%c✅ FIXED: OTC discount uses otc_sales.discount_amount', 'font-size:13px;color:#8B5CF6;');
     console.log('%c📊 Total Bills: <?= $total_bills_count ?>', 'font-size:13px;color:#64748B;');
 </script>
 

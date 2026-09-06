@@ -2,10 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/cashier/paid_bills.php
 // CASHIER - PAID BILLS LIST WITH PDF EXPORT
-// ✅ FIXED: Shows regular bills (with visit_id) AND OTC sales
-// ✅ FIXED: View buttons for BOTH Regular and OTC (vertical layout)
-// ✅ FIXED: Direct links to print_receipt.php
-// ✅ ADDED: 4 Summary Cards (Subtotal, Paid, Discount, Remaining)
+// ✅ FIXED: Regular bills MUST have visit_id IS NOT NULL
+// ✅ FIXED: OTC sales from otc_sales table (no visit_id required)
+// ✅ FIXED: Discount from discount_amount column
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -113,26 +112,26 @@ $params = [$user_branch_id];
 
 switch ($filter) {
     case 'today':
-        $date_condition = "AND DATE(updated_at) = CURDATE()";
+        $date_condition = "AND DATE(b.updated_at) = CURDATE()";
         break;
     case 'week':
-        $date_condition = "AND updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
         break;
     case 'month':
-        $date_condition = "AND updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
         break;
     case '3months':
-        $date_condition = "AND updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
         break;
     case '6months':
-        $date_condition = "AND updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
         break;
     case 'year':
-        $date_condition = "AND updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
+        $date_condition = "AND b.updated_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
         break;
     case 'custom':
         if (!empty($start_date) && !empty($end_date)) {
-            $date_condition = "AND DATE(updated_at) BETWEEN ? AND ?";
+            $date_condition = "AND DATE(b.updated_at) BETWEEN ? AND ?";
             $params[] = $start_date;
             $params[] = $end_date;
         }
@@ -165,6 +164,8 @@ try {
     
     // ================================================================
     // 1. GET REGULAR PAID BILLS FROM bills TABLE
+    // ✅ FIXED: ONLY bills with visit_id IS NOT NULL (regular consultations)
+    // ✅ FIXED: Use discount_amount for regular bills
     // ================================================================
     $sql_bills = "
         SELECT 
@@ -172,6 +173,7 @@ try {
             b.bill_number,
             b.patient_id,
             b.subtotal,
+            b.discount_amount as discount,
             b.total_discount,
             b.total_amount,
             b.paid_amount,
@@ -198,6 +200,7 @@ try {
         LEFT JOIN visits v ON b.visit_id = v.id
         WHERE b.branch_id = ? 
         AND b.status = 'paid'
+        AND b.visit_id IS NOT NULL  -- ✅ FIXED: ONLY bills with visit_id (regular consultations)
         $date_condition
         $search_condition
     ";
@@ -209,16 +212,18 @@ try {
     foreach ($regular_bills as $bill) {
         $all_paid[] = $bill;
         $all_subtotal += (float)($bill['subtotal'] ?? 0);
-        $all_total_discount += (float)($bill['total_discount'] ?? 0);
+        $discount = (float)($bill['discount'] ?? 0);
+        $all_total_discount += $discount;
         $all_total_paid += (float)($bill['paid_amount'] ?? 0);
         $all_total_balance += (float)($bill['balance'] ?? 0);
     }
     
     // ================================================================
     // 2. GET OTC PAID SALES FROM otc_sales TABLE
+    // ✅ OTC sales: no visit_id required, always valid
     // ================================================================
     $otc_params = [$user_branch_id];
-    $otc_date_condition = str_replace('updated_at', 'o.updated_at', $date_condition);
+    $otc_date_condition = str_replace('b.updated_at', 'o.updated_at', $date_condition);
     $otc_search_condition = "";
     
     if (!empty($search)) {
@@ -234,6 +239,7 @@ try {
             o.sale_number as bill_number,
             o.patient_id,
             o.subtotal,
+            o.discount_amount as discount,
             0 as total_discount,
             o.total_amount,
             o.total_amount as paid_amount,
@@ -269,7 +275,7 @@ try {
     foreach ($otc_bills as $bill) {
         $all_paid[] = $bill;
         $all_subtotal += (float)($bill['subtotal'] ?? 0);
-        $all_total_discount += (float)($bill['total_discount'] ?? 0);
+        $all_total_discount += (float)($bill['discount'] ?? 0);
         $all_total_paid += (float)($bill['paid_amount'] ?? 0);
         $all_total_balance += (float)($bill['balance'] ?? 0);
     }
@@ -781,6 +787,7 @@ include_once '../../components/cashier_sidebar.php';
         .data-table .col-patient { width: 17%; min-width: 140px; }
         .data-table .col-visit { width: 7%; min-width: 70px; }
         .data-table .col-amount { width: 9%; min-width: 80px; text-align: right; }
+        .data-table .col-discount { width: 9%; min-width: 80px; text-align: right; }
         .data-table .col-paid { width: 9%; min-width: 80px; text-align: right; }
         .data-table .col-cashier { width: 9%; min-width: 80px; }
         .data-table .col-status { width: 6%; min-width: 60px; }
@@ -824,9 +831,9 @@ include_once '../../components/cashier_sidebar.php';
             color: #6D28D9;
         }
         
-        /* ================================================================
-           VERTICAL BUTTONS - View on top, Print below
-           ================================================================ */
+        /* ================================================================ */
+        /* VERTICAL BUTTONS - View on top, Print below */
+        /* ================================================================ */
         .btn-group-vertical {
             display: flex;
             flex-direction: column;
@@ -1360,6 +1367,10 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-shopping-cart"></i>
                     Including OTC Sales
                 </span>
+                <span class="header-badge" style="background:rgba(5,150,105,0.15);border-color:rgba(5,150,105,0.2);color:#34D399;">
+                    <i class="fas fa-check"></i>
+                    Regular: Only with Visit ID
+                </span>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1384,8 +1395,7 @@ include_once '../../components/cashier_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- ✅ 4 SUMMARY CARDS - Subtotal, Paid, Discount, Remaining -->
-    <!-- FORMULA: REMAINING = SUBTOTAL - PAID - DISCOUNT -->
+    <!-- ✅ 4 SUMMARY CARDS -->
     <!-- ================================================================ -->
     <div class="summary-cards" id="summaryCards">
         <!-- Card 1: Subtotal -->
@@ -1512,6 +1522,12 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="text-xs text-gray-400">
                     <i class="fas fa-clock"></i> Updated: <?= date('h:i:s A') ?>
                 </span>
+                <span class="text-xs text-gray-400" style="background:var(--primary-bg);padding:2px 8px;border-radius:8px;">
+                    <i class="fas fa-file-invoice"></i> Regular: Visit ID Only
+                </span>
+                <span class="text-xs text-gray-400" style="background:var(--otc-bg);padding:2px 8px;border-radius:8px;color:var(--otc-color);">
+                    <i class="fas fa-shopping-cart"></i> OTC: All
+                </span>
             </div>
         </div>
         
@@ -1524,7 +1540,7 @@ include_once '../../components/cashier_sidebar.php';
                         <th class="col-patient">Patient</th>
                         <th class="col-visit">Visit</th>
                         <th class="col-amount">Subtotal</th>
-                        <th class="col-amount">Discount</th>
+                        <th class="col-discount">Discount</th>
                         <th class="col-paid">Paid</th>
                         <th class="col-items">Items</th>
                         <th class="col-cashier">Received By</th>
@@ -1538,7 +1554,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?php foreach ($paid_bills as $bill): 
                             $is_otc = ($bill['bill_type'] ?? '') === 'OTC';
                             $bill_subtotal = (float)($bill['subtotal'] ?? 0);
-                            $bill_discount = (float)($bill['total_discount'] ?? 0);
+                            $bill_discount = (float)($bill['discount'] ?? 0);
                             $bill_paid = (float)($bill['paid_amount'] ?? 0);
                         ?>
                             <tr>
@@ -1577,9 +1593,13 @@ include_once '../../components/cashier_sidebar.php';
                                     </span>
                                 </td>
                                 <td class="text-right">
-                                    <span class="font-semibold text-yellow-600">
-                                        <?= $currency ?> <?= number_format($bill_discount, 0) ?>
-                                    </span>
+                                    <?php if ($bill_discount > 0): ?>
+                                        <span class="font-semibold text-yellow-600">
+                                            <?= $currency ?> <?= number_format($bill_discount, 0) ?>
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="text-xs text-gray-400">None</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td class="text-right">
                                     <span class="font-semibold <?= $is_otc ? 'text-purple-600' : 'text-green-600' ?>">
@@ -1871,7 +1891,7 @@ include_once '../../components/cashier_sidebar.php';
             $is_otc = ($bill['bill_type'] ?? '') === 'OTC';
             $typeLabel = $is_otc ? 'OTC' : 'Reg';
             $bill_subtotal = (float)($bill['subtotal'] ?? 0);
-            $bill_discount = (float)($bill['total_discount'] ?? 0);
+            $bill_discount = (float)($bill['discount'] ?? 0);
             $bill_paid = (float)($bill['paid_amount'] ?? 0);
         ?>
             billsHtml += `
@@ -2040,14 +2060,13 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c✅ Braick - Paid Bills & OTC Sales (WITH 4 CARDS)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Braick - Paid Bills (FIXED: Visit ID Only)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c✅ 4 Cards: Subtotal | Paid | Discount | Remaining', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FORMULA: REMAINING = SUBTOTAL - PAID - DISCOUNT', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Shows BOTH regular bills AND OTC paid sales', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ FIXED: Regular bills ONLY with visit_id IS NOT NULL', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ OTC: All OTC sales from otc_sales table', 'font-size:13px; color:#8B5CF6;');
+    console.log('%c✅ FIXED: Regular bill discount from discount_amount column', 'font-size:13px; color:#F59E0B;');
     console.log('%c📋 Total Records: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Total Paid: <?= $currency ?> <?= number_format($total_paid_amount, 0) ?>', 'font-size:13px; color:#34D399;');
-    console.log('%c🏷️ Total Discount: <?= $currency ?> <?= number_format($total_discount, 0) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c📊 Remaining Balance: <?= $currency ?> <?= number_format($total_balance, 0) ?>', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

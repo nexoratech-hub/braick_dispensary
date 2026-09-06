@@ -2,12 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/new_otc_sale.php
 // PHARMACY - NEW OTC SALE
-// ✅ Auto-format money with commas (1,000,000,000)
-// ✅ Discount input auto-format with commas
-// ✅ Auto-dismiss messages after 5 seconds
-// ✅ INSTRUCTIONS: Large text area with suggestions
-// ✅ Can pick and continue typing
-// BRAICK DISPENSARY
+// ✅ FIXED: Stock deduction for BOTH payment options
+// ✅ "Send to Cashier" = Reserve stock (quantity held)
+// ✅ "Pay Now (Self)" = Deduct stock immediately
+// ✅ Auto-format money with commas
+// ✅ Instructions with suggestions
 // ================================================================
 
 session_start();
@@ -45,59 +44,19 @@ try {
 // PRE-DEFINED INSTRUCTIONS (for suggestions)
 // ================================================================
 $predefined_instructions = [
-    '1x daily',
-    '2x daily',
-    '3x daily',
-    '4x daily',
-    'After meals',
-    'Before meals',
-    'With food',
-    'Empty stomach',
-    'Before sleep',
-    'After breakfast',
-    'After lunch',
-    'After dinner',
-    'Morning dose',
-    'Evening dose',
-    'As needed',
-    'With water',
-    'Chew well',
-    'Swallow whole',
-    'Dissolve in water',
-    'Apply externally',
-    'Injection only',
-    'IV infusion',
-    'Oral drops',
-    'Eye drops',
-    'Ear drops',
-    'Nasal spray',
-    'Inhale',
-    'Topical cream',
-    'Massage gently',
-    'Wash hands before',
-    'Shake well',
-    'Refrigerate',
-    'Store cool',
-    'Avoid sunlight',
-    'Not for children',
-    'Pregnant caution',
-    'Take with meal',
-    'Take after exercise',
-    'Take at bedtime',
-    'Take upon waking',
-    'Take before food',
-    'Take after food',
-    'With milk',
-    'Without food',
-    'At night',
-    'In the morning',
-    'Twice a day',
-    'Thrice a day',
-    'Every 4 hours',
-    'Every 6 hours',
-    'Every 8 hours',
-    'Every 12 hours',
-    'Every 24 hours'
+    '1x daily', '2x daily', '3x daily', '4x daily',
+    'After meals', 'Before meals', 'With food', 'Empty stomach',
+    'Before sleep', 'After breakfast', 'After lunch', 'After dinner',
+    'Morning dose', 'Evening dose', 'As needed', 'With water',
+    'Chew well', 'Swallow whole', 'Dissolve in water', 'Apply externally',
+    'Injection only', 'IV infusion', 'Oral drops', 'Eye drops',
+    'Ear drops', 'Nasal spray', 'Inhale', 'Topical cream',
+    'Massage gently', 'Wash hands before', 'Shake well', 'Refrigerate',
+    'Store cool', 'Avoid sunlight', 'Not for children', 'Pregnant caution',
+    'Take with meal', 'Take at bedtime', 'Take upon waking',
+    'Take before food', 'Take after food', 'With milk', 'Without food',
+    'At night', 'In the morning', 'Twice a day', 'Thrice a day',
+    'Every 4 hours', 'Every 6 hours', 'Every 8 hours', 'Every 12 hours'
 ];
 
 // ================================================================
@@ -165,7 +124,7 @@ try {
 }
 
 // ================================================================
-// PROCESS OTC SALE
+// PROCESS OTC SALE - WITH STOCK DEDUCTION
 // ================================================================
 $message = '';
 $message_type = '';
@@ -197,7 +156,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         $errors[] = 'Please add at least one medicine';
     }
     
-    // Check stock for each item
+    // Check stock for each item - GET TOTAL AVAILABLE STOCK
     $stock_errors = [];
     foreach ($items as $item) {
         $stmt = $db->prepare("
@@ -261,7 +220,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             // CREATE BILL ITEMS
             foreach ($items as $item) {
-                $is_paid = ($payment_option === 'self') ? 1 : 0;
                 $item_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
                 
                 $stmt = $db->prepare("
@@ -335,11 +293,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ]);
             }
             
-            // INVENTORY DEDUCTION WITH FIFO
+            // ================================================================
+            // ✅ FIXED: STOCK DEDUCTION FOR BOTH PAYMENT OPTIONS
+            // ================================================================
+            
+            // ✅ OPTION 1: "Pay Now (Self)" - DEDUCT STOCK IMMEDIATELY
             if ($payment_option === 'self') {
                 foreach ($items as $item) {
                     $remaining_qty = $item['quantity'];
                     
+                    // Get batches with FIFO (earliest expiry first)
                     $stmt = $db->prepare("
                         SELECT id, medication_name, quantity, batch_number, expiry_date
                         FROM medications_inventory 
@@ -354,6 +317,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         
                         $deduct_qty = min($remaining_qty, $batch['quantity']);
                         
+                        // Deduct stock
                         $stmt_update = $db->prepare("
                             UPDATE medications_inventory 
                             SET quantity = quantity - ?, updated_at = NOW()
@@ -361,6 +325,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                         ");
                         $stmt_update->execute([$deduct_qty, $batch['id'], $user_branch_id]);
                         
+                        // Log stock movement
                         $stmt_log = $db->prepare("
                             INSERT INTO stock_movements (
                                 inventory_id, patient_id,
@@ -376,17 +341,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             $sale_id,
                             $user_id,
                             $user_branch_id,
-                            'OTC Sale - Paid: ' . $sale_number . ' - Customer: ' . $customer_name
+                            'OTC Sale - PAID: ' . $sale_number . ' - Customer: ' . $customer_name
                         ]);
                         
                         $remaining_qty -= $deduct_qty;
                     }
+                    
+                    // If not fully deducted, log error
+                    if ($remaining_qty > 0) {
+                        error_log("⚠️ OTC Sale #$sale_id: Not enough stock for {$item['name']}. Remaining: $remaining_qty");
+                    }
                 }
-            } else {
-                // Send to Cashier - Reserve stock only
+            }
+            
+            // ✅ OPTION 2: "Send to Cashier" - RESERVE STOCK (HOLD UNTIL PAYMENT)
+            // Stock is held/reserved - quantity is reduced but marked as reserved
+            if ($payment_option === 'cashier') {
                 foreach ($items as $item) {
+                    $remaining_qty = $item['quantity'];
+                    
+                    // Get batches with FIFO
                     $stmt = $db->prepare("
-                        SELECT id, quantity, batch_number
+                        SELECT id, medication_name, quantity, batch_number, expiry_date
                         FROM medications_inventory 
                         WHERE medication_name = ? AND branch_id = ? AND status = 'active' AND quantity > 0
                         ORDER BY expiry_date ASC
@@ -394,12 +370,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $stmt->execute([$item['name'], $user_branch_id]);
                     $batches = $stmt->fetchAll(PDO::FETCH_ASSOC);
                     
-                    $remaining_qty = $item['quantity'];
                     foreach ($batches as $batch) {
                         if ($remaining_qty <= 0) break;
                         
                         $reserve_qty = min($remaining_qty, $batch['quantity']);
                         
+                        // ✅ DEDUCT stock from inventory (reserve it)
+                        $stmt_update = $db->prepare("
+                            UPDATE medications_inventory 
+                            SET quantity = quantity - ?, updated_at = NOW()
+                            WHERE id = ? AND branch_id = ?
+                        ");
+                        $stmt_update->execute([$reserve_qty, $batch['id'], $user_branch_id]);
+                        
+                        // ✅ Log as RESERVED (not sold yet)
                         $stmt_log = $db->prepare("
                             INSERT INTO stock_movements (
                                 inventory_id, patient_id,
@@ -415,10 +399,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             $sale_id,
                             $user_id,
                             $user_branch_id,
-                            'OTC Sale - Pending Payment: ' . $sale_number . ' - Customer: ' . $customer_name
+                            'OTC Sale - PENDING: ' . $sale_number . ' - Customer: ' . $customer_name
                         ]);
                         
                         $remaining_qty -= $reserve_qty;
+                    }
+                    
+                    // Log if any quantity couldn't be reserved
+                    if ($remaining_qty > 0) {
+                        error_log("⚠️ OTC Sale #$sale_id: Not enough stock for {$item['name']}. Remaining: $remaining_qty");
                     }
                 }
             }
@@ -463,10 +452,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             
             // MESSAGES
             if ($payment_option === 'self') {
-                $message = "✅ OTC Sale completed successfully! Bill Paid.";
+                $message = "✅ OTC Sale completed successfully! Stock deducted. Bill Paid.";
                 $message_type = 'success';
             } else {
-                $message = "✅ OTC Sale completed successfully! Bill sent to Cashier.";
+                $message = "✅ OTC Sale completed successfully! Stock reserved. Bill sent to Cashier.";
                 $message_type = 'success';
             }
             
@@ -481,6 +470,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $db->rollBack();
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
+            error_log("OTC Sale Error: " . $e->getMessage());
         }
     } else {
         $message = implode('<br>', $errors);
@@ -1686,6 +1676,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
         .toast-custom.warning { background: var(--warning); }
+        
+        /* ✅ Stock status badges */
+        .stock-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.55rem;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-weight: 600;
+        }
+        .stock-badge.success { background: var(--success-light); color: var(--success); }
+        .stock-badge.warning { background: var(--warning-light); color: var(--warning); }
+        .stock-badge.danger { background: var(--danger-light); color: var(--danger); }
     </style>
 </head>
 <body>
@@ -1715,6 +1719,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </span>
                 <span class="stat-chip" style="background:rgba(255,255,255,0.2);">
                     <i class="fas fa-user-slash"></i> No Patient Registration
+                </span>
+                <span class="stat-chip" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);color:#FCD34D;">
+                    <i class="fas fa-boxes"></i> Stock Deduction: <span id="stockModeDisplay">Reserve/Held</span>
                 </span>
             </p>
         </div>
@@ -1899,7 +1906,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
                 
                 <div class="payment-options">
-                    <!-- Option 1: Send to Cashier -->
+                    <!-- Option 1: Send to Cashier - RESERVES STOCK -->
                     <div class="payment-option-card active" data-option="cashier" onclick="selectPaymentOption('cashier')">
                         <div class="option-icon cashier">
                             <i class="fas fa-cash-register"></i>
@@ -1908,13 +1915,13 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             <h4>Send to Cashier</h4>
                             <p>Bill sent to Cashier for payment</p>
                             <p style="font-size:0.6rem;color:var(--warning);margin-top:2px;">
-                                <i class="fas fa-info-circle"></i> Inventory held until payment
+                                <i class="fas fa-info-circle"></i> Stock reserved until payment
                             </p>
                         </div>
                         <div class="option-radio"></div>
                     </div>
                     
-                    <!-- Option 2: Pay Now (Self) -->
+                    <!-- Option 2: Pay Now (Self) - DEDUCTS STOCK -->
                     <div class="payment-option-card" data-option="self" onclick="selectPaymentOption('self')">
                         <div class="option-icon self">
                             <i class="fas fa-hand-holding-usd"></i>
@@ -1923,7 +1930,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                             <h4>Pay Now (Self)</h4>
                             <p>Pharmacy collects payment immediately</p>
                             <p style="font-size:0.6rem;color:var(--success);margin-top:2px;">
-                                <i class="fas fa-check-circle"></i> Inventory deducted instantly
+                                <i class="fas fa-check-circle"></i> Stock deducted instantly
                             </p>
                         </div>
                         <div class="option-radio"></div>
@@ -1971,7 +1978,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <!-- Action Buttons -->
             <div class="action-buttons">
                 <button type="submit" class="btn-complete-sale cashier-mode" id="completeSaleBtn" disabled>
-                    <i class="fas fa-receipt"></i> Send to Cashier
+                    <i class="fas fa-receipt"></i> Send to Cashier (Reserve Stock)
                 </button>
                 <button type="button" class="btn-clear-cart" onclick="clearCart()">
                     <i class="fas fa-trash"></i> Clear Cart
@@ -1990,6 +1997,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
             New OTC Sale
+            <span class="text-gray-300 mx-2">|</span>
+            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:var(--warning);font-size:0.6rem;">
+                <i class="fas fa-boxes"></i> Stock: 
+                <span id="stockStatusDisplay">Reserve/Hold</span>
+            </span>
             <span class="text-gray-300 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -2013,7 +2026,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // MONEY FORMAT - Auto format with commas
+    // MONEY FORMAT
     // ================================================================
     function formatMoneyInput(input) {
         var raw = input.value.replace(/,/g, '');
@@ -2043,7 +2056,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // AUTO-DISMISS MESSAGES AFTER 5 SECONDS
+    // AUTO-DISMISS MESSAGES
     // ================================================================
     function dismissMessage() {
         var messageBox = document.getElementById('messageBox');
@@ -2117,12 +2130,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         document.querySelector('[data-option="' + option + '"]').classList.add('active');
         
         var btn = document.getElementById('completeSaleBtn');
+        var stockDisplay = document.getElementById('stockStatusDisplay');
+        var stockModeDisplay = document.getElementById('stockModeDisplay');
+        
         if (option === 'self') {
-            btn.innerHTML = '<i class="fas fa-hand-holding-usd"></i> Pay Now & Complete Sale';
+            btn.innerHTML = '<i class="fas fa-hand-holding-usd"></i> Pay Now & Deduct Stock';
             btn.className = 'btn-complete-sale self-mode';
+            if (stockDisplay) stockDisplay.textContent = 'Deduct';
+            if (stockModeDisplay) stockModeDisplay.textContent = 'Deduct Instantly';
         } else {
-            btn.innerHTML = '<i class="fas fa-receipt"></i> Send to Cashier';
+            btn.innerHTML = '<i class="fas fa-receipt"></i> Send to Cashier (Reserve Stock)';
             btn.className = 'btn-complete-sale cashier-mode';
+            if (stockDisplay) stockDisplay.textContent = 'Reserve/Hold';
+            if (stockModeDisplay) stockModeDisplay.textContent = 'Reserve/Held';
         }
     }
 
@@ -2139,7 +2159,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // INSTRUCTION FUNCTIONS - TEXTAREA WITH SUGGESTIONS
+    // INSTRUCTION FUNCTIONS
     // ================================================================
     function getInstructionText(id) {
         var textarea = document.getElementById('instr_textarea_' + id);
@@ -2150,7 +2170,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var textarea = document.getElementById('instr_textarea_' + id);
         if (textarea) {
             textarea.value = value;
-            // Update the item in cart
             var item = cart.find(function(i) { return i.id === id; });
             if (item) {
                 item.instructions = value;
@@ -2166,13 +2185,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var item = cart.find(function(i) { return i.id === id; });
         if (!item) return;
         
-        // Check if suggestion already exists in the text
         if (currentValue.toLowerCase().includes(suggestion.toLowerCase())) {
             showToast('Info', 'Instruction already added: ' + suggestion, 'info');
             return;
         }
         
-        // Add with comma separator
         if (currentValue.length > 0 && !currentValue.endsWith(' ')) {
             textarea.value = currentValue + ', ' + suggestion;
         } else if (currentValue.length > 0) {
@@ -2181,15 +2198,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             textarea.value = suggestion;
         }
         
-        // Update the item
         item.instructions = textarea.value;
-        
-        // Update the instruction display
         updateInstructionDisplay(id);
-        
-        // Auto-resize the textarea
         autoResizeTextarea(textarea);
-        
         showToast('Success', 'Added instruction: ' + suggestion, 'success');
     }
     
@@ -2200,25 +2211,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var currentValue = textarea.value;
         var parts = currentValue.split(',').map(function(s) { return s.trim(); });
         
-        // Filter out the part to remove
         var newParts = parts.filter(function(p) { 
             return p.toLowerCase() !== partToRemove.toLowerCase().trim();
         });
         
         textarea.value = newParts.join(', ');
         
-        // Update the item
         var item = cart.find(function(i) { return i.id === id; });
         if (item) {
             item.instructions = textarea.value;
         }
         
-        // Update the instruction display
         updateInstructionDisplay(id);
-        
-        // Auto-resize
         autoResizeTextarea(textarea);
-        
         showToast('Info', 'Removed instruction: ' + partToRemove, 'info');
     }
     
@@ -2307,7 +2312,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         renderCart();
         updateTotals();
-        
         showToast('Success', name + ' added to cart', 'success');
     }
 
@@ -2336,7 +2340,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // RENDER CART - WITH LARGE TEXTAREA + SUGGESTIONS
+    // RENDER CART
     // ================================================================
     function renderCart() {
         var itemsDiv = document.getElementById('cartItems');
@@ -2362,7 +2366,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         cart.forEach(function(item) {
             var instrText = item.instructions || '';
             
-            // Build suggestion buttons (limit to 15 for cleanliness)
             var suggestionHtml = '';
             var displaySuggestions = suggestions.slice(0, 15);
             displaySuggestions.forEach(function(sug) {
@@ -2386,12 +2389,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         </div>
                     </div>
                     
-                    <!-- INSTRUCTIONS SECTION - LARGE TEXTAREA WITH SUGGESTIONS -->
                     <div class="instructions-section">
                         <div class="instr-label">
                             <i class="fas fa-sticky-note"></i> Instructions
                             <span class="instr-count" id="instr_count_${item.id}">0</span>
-                            <span style="font-size:0.6rem;color:var(--text-muted);margin-left:4px;">(Click suggestions or type manually, separated by commas)</span>
+                            <span style="font-size:0.6rem;color:var(--text-muted);margin-left:4px;">(Click suggestions or type manually)</span>
                         </div>
                         
                         <div class="instr-textarea-wrapper">
@@ -2433,7 +2435,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         var item = cart.find(function(i) { return i.id === id; });
         if (!item) return;
         
-        // Limit total characters to prevent abuse
         if (value.length > 500) {
             value = value.substring(0, 500);
             var textarea = document.getElementById('instr_textarea_' + id);
@@ -2442,19 +2443,17 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         item.instructions = value;
         
-        // Update count
         var parts = value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
         var countEl = document.getElementById('instr_count_' + id);
         if (countEl) {
             countEl.textContent = parts.length;
         }
         
-        // Update display
         updateInstructionDisplay(id);
     }
 
     // ================================================================
-    // UPDATE TOTALS - WITH MONEY FORMAT
+    // UPDATE TOTALS
     // ================================================================
     function updateTotals() {
         subtotal = 0;
@@ -2580,14 +2579,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick - New OTC Sale (Improved Instructions)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c💊 Braick - New OTC Sale (STOCK DEDUCTION FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c✅ FIXED: "Send to Cashier" = Stock RESERVED (deducted from inventory)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: "Pay Now (Self)" = Stock DEDUCTED immediately', 'font-size:13px; color:#34D399;');
     console.log('%c📝 Instructions: Large text area with suggestions', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Click suggestion → adds to text area (can continue typing)', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Type manually with commas to add multiple', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Remove individual instructions with × button', 'font-size:13px; color:#34D399;');
-    console.log('%c💰 Auto-format money with commas: 1000 → 1,000', 'font-size:13px; color:#34D399;');
+    console.log('%c💰 Auto-format money with commas', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Messages auto-dismiss after 5 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Hover to pause auto-dismiss', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

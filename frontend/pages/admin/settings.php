@@ -673,21 +673,23 @@ include_once '../../components/admin_sidebar.php';
             background: #0B5ED7 !important;
             background-color: #0B5ED7 !important;
             background-image: none !important;
+            background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%) !important;
             border-radius: 16px;
-            padding: 28px 36px;
+            padding: 28px 36px !important;
             margin-bottom: 28px;
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: space-between;
-            align-items: center;
-            gap: 16px;
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35);
+            display: flex !important;
+            flex-wrap: wrap !important;
+            justify-content: space-between !important;
+            align-items: center !important;
+            gap: 16px !important;
+            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.35) !important;
             position: relative;
             overflow: hidden;
             border: none !important;
+            min-height: 80px !important;
         }
 
-        /* ONDOA DECORATIVE CIRCLE - INAWEZA KUONEKANA KAMA WHITE */
+        /* ONDOA DECORATIVE CIRCLE */
         .page-header::before {
             display: none !important;
             content: none !important;
@@ -709,65 +711,84 @@ include_once '../../components/admin_sidebar.php';
         .page-header .page-title span,
         .page-header div,
         .page-header .flex,
-        .page-header .flex * {
+        .page-header .flex *,
+        .page-header .flex.items-center,
+        .page-header .flex.items-center *,
+        .page-header .gap-4,
+        .page-header .gap-4 *,
+        .page-header .ml-2,
+        .page-header .ml-2 * {
             background: transparent !important;
             background-color: transparent !important;
             background-image: none !important;
+            background: none !important;
         }
 
-        /* All texts WHITE */
-        .page-header .page-title {
-            font-size: 1.8rem;
-            font-weight: 700;
+        /* All text inside page header should be WHITE */
+        .page-header,
+        .page-header *,
+        .page-header .page-title,
+        .page-header .page-title *,
+        .page-header .page-subtitle,
+        .page-header .page-subtitle *,
+        .page-header .role-badge-display,
+        .page-header .header-badge,
+        .page-header .btn-outline-light,
+        .page-header .btn-outline-light * {
             color: #FFFFFF !important;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            flex-wrap: wrap;
-            margin: 0;
-            position: relative;
-            z-index: 1;
+        }
+
+        .page-header .page-title {
+            font-size: 1.8rem !important;
+            font-weight: 700 !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 12px !important;
+            flex-wrap: wrap !important;
+            margin: 0 !important;
+            position: relative !important;
+            z-index: 1 !important;
         }
         .page-header .page-title i {
-            opacity: 0.9;
+            opacity: 0.9 !important;
             color: #FFFFFF !important;
         }
         .page-header .page-title .role-badge-display {
             background: rgba(255,255,255,0.15) !important;
             color: #FFFFFF !important;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-            border: 1px solid rgba(255,255,255,0.1);
+            padding: 4px 14px !important;
+            border-radius: 20px !important;
+            font-size: 0.65rem !important;
+            font-weight: 600 !important;
+            text-transform: uppercase !important;
+            letter-spacing: 0.05em !important;
+            backdrop-filter: blur(4px) !important;
+            border: 1px solid rgba(255,255,255,0.1) !important;
         }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.9) !important;
-            font-size: 0.95rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin: 0;
-            position: relative;
-            z-index: 1;
+            font-size: 0.95rem !important;
+            display: flex !important;
+            align-items: center !important;
+            gap: 10px !important;
+            flex-wrap: wrap !important;
+            margin: 0 !important;
+            position: relative !important;
+            z-index: 1 !important;
         }
         .page-header .page-subtitle .header-badge {
             background: rgba(255,255,255,0.10) !important;
             color: #FFFFFF !important;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            border: 1px solid rgba(255,255,255,0.15);
+            padding: 4px 14px !important;
+            border-radius: 20px !important;
+            font-size: 0.7rem !important;
+            font-weight: 500 !important;
+            backdrop-filter: blur(4px) !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 6px !important;
+            border: 1px solid rgba(255,255,255,0.15) !important;
         }
         .page-header .page-subtitle .header-badge i {
             color: #FFFFFF !important;
@@ -777,33 +798,47 @@ include_once '../../components/admin_sidebar.php';
             background: rgba(255,255,255,0.12) !important;
             background-color: rgba(255,255,255,0.12) !important;
             color: #FFFFFF !important;
-            border: 1px solid rgba(255,255,255,0.25);
-            padding: 8px 18px;
-            border-radius: 10px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
+            border: 1px solid rgba(255,255,255,0.25) !important;
+            padding: 8px 18px !important;
+            border-radius: 10px !important;
+            font-weight: 500 !important;
+            font-size: 0.82rem !important;
+            transition: all 0.3s !important;
+            text-decoration: none !important;
+            display: inline-flex !important;
+            align-items: center !important;
+            gap: 8px !important;
+            backdrop-filter: blur(4px) !important;
+            position: relative !important;
+            z-index: 1 !important;
         }
         .page-header .btn-outline-light:hover {
             background: rgba(255,255,255,0.25) !important;
-            transform: translateY(-2px);
+            transform: translateY(-2px) !important;
         }
         .page-header .btn-outline-light i {
             color: #FFFFFF !important;
+        }
+
+        /* Override any Tailwind bg classes inside page-header */
+        .page-header .bg-white,
+        .page-header .bg-gray-100,
+        .page-header .bg-gray-200,
+        .page-header .bg-gray-50,
+        .page-header .bg-slate-100,
+        .page-header .bg-slate-200,
+        .page-header .bg-blue-50,
+        .page-header .bg-blue-100 {
+            background: transparent !important;
+            background-color: transparent !important;
         }
 
         /* Dark mode support */
         [data-theme="dark"] .page-header {
             background: #0A3D7A !important;
             background-color: #0A3D7A !important;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            background: linear-gradient(135deg, #0A3D7A 0%, #072A55 100%) !important;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.4) !important;
         }
         [data-theme="dark"] .page-header .role-badge-display {
             background: rgba(255,255,255,0.10) !important;
@@ -1168,21 +1203,21 @@ include_once '../../components/admin_sidebar.php';
                 align-items: flex-start;
             }
             .page-header {
-                padding: 20px 24px;
+                padding: 20px 24px !important;
                 flex-direction: column;
-                align-items: flex-start;
+                align-items: flex-start !important;
             }
             .page-header .page-title {
-                font-size: 1.4rem;
+                font-size: 1.4rem !important;
             }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .settings-content { padding: 12px; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.1rem; flex-direction: column; align-items: flex-start; }
-            .page-header .page-subtitle { font-size: 0.75rem; flex-direction: column; align-items: flex-start; gap: 4px; }
+            .page-header { padding: 16px 18px !important; }
+            .page-header .page-title { font-size: 1.1rem !important; flex-direction: column; align-items: flex-start !important; }
+            .page-header .page-subtitle { font-size: 0.75rem !important; flex-direction: column; align-items: flex-start !important; gap: 4px !important; }
             .top-nav { flex-wrap: wrap; height: auto; padding: 8px 12px; gap: 8px; }
             .top-nav .search-wrapper { max-width: 100%; flex: 1 1 100%; }
             .top-nav .branch-selector { min-width: 100px; font-size: 0.65rem; }
@@ -1265,22 +1300,41 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- PAGE HEADER - 100% BLUE, NO WHITE BACKGROUND -->
     <!-- ================================================================ -->
-    <div class="page-header animate-fade-in-up">
-        <div>
-            <h1 class="page-title">
-                <i class="fas fa-cog"></i> System Settings
-                <span class="role-badge-display">ADMIN</span>
+    <div class="page-header animate-fade-in-up" 
+         style="background: #0B5ED7 !important; 
+                background-color: #0B5ED7 !important; 
+                background-image: none !important; 
+                background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%) !important; 
+                border: none !important; 
+                box-shadow: 0 8px 32px rgba(11,94,215,0.35) !important;
+                min-height: 80px !important;
+                border-radius: 16px !important;
+                padding: 28px 36px !important;
+                margin-bottom: 28px !important;
+                display: flex !important;
+                flex-wrap: wrap !important;
+                justify-content: space-between !important;
+                align-items: center !important;
+                gap: 16px !important;
+                position: relative !important;
+                overflow: hidden !important;">
+        
+        <div style="background: transparent !important; position: relative !important; z-index: 1 !important;">
+            <h1 class="page-title" style="background: transparent !important; color: #FFFFFF !important; font-size: 1.8rem !important; font-weight: 700 !important; display: flex !important; align-items: center !important; gap: 12px !important; flex-wrap: wrap !important; margin: 0 !important;">
+                <i class="fas fa-cog" style="color: #FFFFFF !important; opacity: 0.9 !important;"></i> 
+                System Settings
+                <span class="role-badge-display" style="background: rgba(255,255,255,0.15) !important; color: #FFFFFF !important; padding: 4px 14px !important; border-radius: 20px !important; font-size: 0.65rem !important; font-weight: 600 !important; text-transform: uppercase !important; letter-spacing: 0.05em !important; backdrop-filter: blur(4px) !important; border: 1px solid rgba(255,255,255,0.1) !important;">ADMIN</span>
             </h1>
-            <p class="page-subtitle">
+            <p class="page-subtitle" style="background: transparent !important; color: rgba(255,255,255,0.9) !important; font-size: 0.95rem !important; display: flex !important; align-items: center !important; gap: 10px !important; flex-wrap: wrap !important; margin: 0 !important; position: relative !important; z-index: 1 !important;">
                 Manage system configurations
-                <span class="header-badge">
-                    <i class="fas fa-store-alt"></i> <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($user_branch_name) ?>
+                <span class="header-badge" style="background: rgba(255,255,255,0.10) !important; color: #FFFFFF !important; padding: 4px 14px !important; border-radius: 20px !important; font-size: 0.7rem !important; font-weight: 500 !important; backdrop-filter: blur(4px) !important; display: inline-flex !important; align-items: center !important; gap: 6px !important; border: 1px solid rgba(255,255,255,0.15) !important;">
+                    <i class="fas fa-store-alt" style="color: #FFFFFF !important;"></i> <?= $selected_branch_id === 'all' ? 'All Branches' : htmlspecialchars($user_branch_name) ?>
                 </span>
             </p>
         </div>
-        <div>
-            <a href="dashboard.php" class="btn-outline-light">
-                <i class="fas fa-arrow-left"></i> Dashboard
+        <div style="background: transparent !important; position: relative !important; z-index: 1 !important;">
+            <a href="dashboard.php" class="btn-outline-light" style="background: rgba(255,255,255,0.12) !important; background-color: rgba(255,255,255,0.12) !important; color: #FFFFFF !important; border: 1px solid rgba(255,255,255,0.25) !important; padding: 8px 18px !important; border-radius: 10px !important; font-weight: 500 !important; font-size: 0.82rem !important; text-decoration: none !important; display: inline-flex !important; align-items: center !important; gap: 8px !important; backdrop-filter: blur(4px) !important; transition: all 0.3s !important;">
+                <i class="fas fa-arrow-left" style="color: #FFFFFF !important;"></i> Dashboard
             </a>
         </div>
     </div>

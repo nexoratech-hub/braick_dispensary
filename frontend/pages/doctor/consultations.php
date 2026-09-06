@@ -3,8 +3,9 @@
 // FILE: frontend/pages/doctor/consultations.php
 // DOCTOR - CONSULTATIONS LIST WITH AUTO-UPDATE
 // FIXED: Waiting filter now shows correct consultations
-// FIXED: Empty state shows correct filter name
-// FIXED: Auto-refresh preserves selected filter
+// FIXED: Auto-complete ONLY for WAITING status
+// FIXED: Auto-complete runs automatically when all bills paid
+// FIXED: NO auto-complete on page load
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -71,84 +72,140 @@ try {
 }
 
 // ================================================================
-// AUTO-COMPLETE LOGIC
+// ✅ SECURE AUTO-COMPLETE - ONLY FOR WAITING STATUS
 // ================================================================
-try {
-    if ($is_admin) {
-        $stmt = $db->prepare("
-            SELECT v.id, v.visit_number, v.patient_id
-            FROM visits v
-            WHERE v.status = 'prescribed'
-            AND v.is_completed = 0
-        ");
-        $stmt->execute();
-    } else {
-        $stmt = $db->prepare("
-            SELECT v.id, v.visit_number, v.patient_id
-            FROM visits v
-            WHERE (v.doctor_id = ? OR v.referred_to_doctor_id = ?)
-            AND v.status = 'prescribed'
-            AND v.is_completed = 0
-        ");
-        $stmt->execute([$doctor_id, $doctor_id]);
-    }
-    $prescribed_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
+function autoCompleteWaitingVisits($db, $doctor_id, $is_admin) {
+    $completed_count = 0;
+    $error_count = 0;
     
-    foreach ($prescribed_visits as $visit) {
-        $stmt = $db->prepare("
-            SELECT 
-                COUNT(*) as total_bills,
-                SUM(CASE WHEN status IN ('pending', 'partial') THEN 1 ELSE 0 END) as pending_count,
-                SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid_count,
-                SUM(total_amount) as total_amount,
-                SUM(paid_amount) as total_paid
-            FROM bills 
-            WHERE visit_id = ?
-        ");
-        $stmt->execute([$visit['id']]);
-        $result = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        $total_bills = (int)($result['total_bills'] ?? 0);
-        $pending_count = (int)($result['pending_count'] ?? 0);
-        $paid_count = (int)($result['paid_count'] ?? 0);
-        
-        if ($total_bills > 0 && $pending_count == 0 && $paid_count > 0) {
-            $db->beginTransaction();
-            
+    try {
+        // Get all visits with status 'waiting' that are not completed
+        if ($is_admin) {
             $stmt = $db->prepare("
-                UPDATE visits 
-                SET status = 'completed', 
-                    is_completed = 1, 
-                    completed_at = NOW(), 
-                    updated_at = NOW()
-                WHERE id = ?
+                SELECT v.id, v.visit_number, v.patient_id, v.diagnosis
+                FROM visits v
+                WHERE v.status = 'waiting'
+                AND v.is_completed = 0
             ");
-            $stmt->execute([$visit['id']]);
-            
+            $stmt->execute();
+        } else {
             $stmt = $db->prepare("
-                UPDATE bills 
-                SET status = 'paid', updated_at = NOW()
-                WHERE visit_id = ? AND status IN ('pending', 'partial')
+                SELECT v.id, v.visit_number, v.patient_id, v.diagnosis
+                FROM visits v
+                WHERE (v.doctor_id = ? OR v.referred_to_doctor_id = ?)
+                AND v.status = 'waiting'
+                AND v.is_completed = 0
             ");
-            $stmt->execute([$visit['id']]);
-            
-            try {
-                $stmt = $db->prepare("
-                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                    VALUES (?, ?, 'consultation_auto_completed', ?, NOW())
-                ");
-                $stmt->execute([
-                    $doctor_id,
-                    $doctor_branch_id,
-                    "Consultation #" . $visit['visit_number'] . " auto-completed"
-                ]);
-            } catch (Exception $e) {}
-            
-            $db->commit();
+            $stmt->execute([$doctor_id, $doctor_id]);
         }
+        $waiting_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        foreach ($waiting_visits as $visit) {
+            // Check if diagnosis exists
+            if (empty($visit['diagnosis'])) {
+                error_log("❌ Auto-complete SKIPPED: Visit #{$visit['visit_number']} has no diagnosis");
+                continue;
+            }
+            
+            // Check bills - ALL bills must be paid
+            $stmt = $db->prepare("
+                SELECT 
+                    COUNT(*) as total_bills,
+                    SUM(CASE WHEN status IN ('pending', 'partial') THEN 1 ELSE 0 END) as pending_count,
+                    SUM(CASE WHEN status = 'paid' THEN 1 ELSE 0 END) as paid_count
+                FROM bills 
+                WHERE visit_id = ?
+            ");
+            $stmt->execute([$visit['id']]);
+            $result = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            $total_bills = (int)($result['total_bills'] ?? 0);
+            $pending_count = (int)($result['pending_count'] ?? 0);
+            $paid_count = (int)($result['paid_count'] ?? 0);
+            
+            // ✅ AUTO-COMPLETE: ALL bills must be paid (no pending bills)
+            if ($total_bills > 0 && $pending_count == 0 && $paid_count > 0) {
+                // DOUBLE CHECK: Verify balance is 0
+                $stmt = $db->prepare("
+                    SELECT COALESCE(SUM(balance), 0) as total_balance
+                    FROM bills 
+                    WHERE visit_id = ? AND status != 'cancelled'
+                ");
+                $stmt->execute([$visit['id']]);
+                $balance_check = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ((float)$balance_check['total_balance'] > 0) {
+                    error_log("❌ Auto-complete SKIPPED: Visit #{$visit['visit_number']} has balance of " . $balance_check['total_balance']);
+                    continue;
+                }
+                
+                // ✅ ALL CHECKS PASSED - AUTO-COMPLETE!
+                $db->beginTransaction();
+                
+                try {
+                    // Update visit to completed
+                    $stmt = $db->prepare("
+                        UPDATE visits 
+                        SET status = 'completed', 
+                            is_completed = 1, 
+                            completed_at = NOW(), 
+                            updated_at = NOW()
+                        WHERE id = ? AND status = 'waiting'
+                    ");
+                    $stmt->execute([$visit['id']]);
+                    
+                    if ($stmt->rowCount() > 0) {
+                        // Update bills to paid
+                        $stmt = $db->prepare("
+                            UPDATE bills 
+                            SET status = 'paid', updated_at = NOW()
+                            WHERE visit_id = ? AND status IN ('pending', 'partial')
+                        ");
+                        $stmt->execute([$visit['id']]);
+                        
+                        // Log auto-completion
+                        try {
+                            $stmt = $db->prepare("
+                                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                                VALUES (?, ?, 'consultation_auto_completed', ?, NOW())
+                            ");
+                            $stmt->execute([
+                                $doctor_id,
+                                $doctor_branch_id,
+                                "Consultation #{$visit['visit_number']} auto-completed (all bills paid, diagnosis exists)"
+                            ]);
+                        } catch (Exception $e) {
+                            // Log error but don't rollback
+                            error_log("Activity log error: " . $e->getMessage());
+                        }
+                        
+                        $db->commit();
+                        $completed_count++;
+                        error_log("✅ AUTO-COMPLETE SUCCESS: Visit #{$visit['visit_number']} auto-completed");
+                    } else {
+                        $db->rollBack();
+                        error_log("❌ Auto-complete FAILED: Visit #{$visit['visit_number']} - update failed");
+                    }
+                } catch (Exception $e) {
+                    $db->rollBack();
+                    $error_count++;
+                    error_log("❌ Auto-complete ERROR for visit #{$visit['visit_number']}: " . $e->getMessage());
+                }
+            } else {
+                error_log("ℹ️ Auto-complete check: Visit #{$visit['visit_number']} - Pending: {$pending_count}, Total: {$total_bills}");
+            }
+        }
+    } catch (Exception $e) {
+        error_log("❌ Auto-complete error: " . $e->getMessage());
     }
-} catch (Exception $e) {
-    error_log("Auto-complete error: " . $e->getMessage());
+    
+    return ['completed' => $completed_count, 'errors' => $error_count];
+}
+
+// ✅ Run auto-complete ONLY for waiting status - runs automatically
+$auto_complete_result = autoCompleteWaitingVisits($db, $doctor_id, $is_admin);
+if ($auto_complete_result['completed'] > 0) {
+    error_log("✅ Auto-complete: {$auto_complete_result['completed']} consultation(s) auto-completed");
 }
 
 // ================================================================
@@ -360,7 +417,8 @@ $sql = "
         (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status = 'paid') as paid_bills_count,
         (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as total_bills_count,
         (SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE visit_id = v.id) as total_bill_amount,
-        (SELECT COALESCE(SUM(paid_amount), 0) FROM bills WHERE visit_id = v.id) as total_paid_amount
+        (SELECT COALESCE(SUM(paid_amount), 0) FROM bills WHERE visit_id = v.id) as total_paid_amount,
+        (SELECT COALESCE(SUM(balance), 0) FROM bills WHERE visit_id = v.id AND status != 'cancelled') as total_balance
     FROM visits v
     JOIN patients p ON v.patient_id = p.id
     LEFT JOIN users u ON v.doctor_id = u.id
@@ -396,6 +454,9 @@ $total_consultations = count($consultations);
 // ================================================================
 if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
     header('Content-Type: application/json');
+    
+    // ✅ Run auto-complete on AJAX refresh too (for waiting status)
+    $auto_complete_result = autoCompleteWaitingVisits($db, $doctor_id, $is_admin);
     
     // Get fresh counts
     if ($is_admin) {
@@ -532,7 +593,8 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
             (SELECT COUNT(*) FROM bills WHERE visit_id = v.id AND status = 'paid') as paid_bills_count,
             (SELECT COUNT(*) FROM bills WHERE visit_id = v.id) as total_bills_count,
             (SELECT COALESCE(SUM(total_amount), 0) FROM bills WHERE visit_id = v.id) as total_bill_amount,
-            (SELECT COALESCE(SUM(paid_amount), 0) FROM bills WHERE visit_id = v.id) as total_paid_amount
+            (SELECT COALESCE(SUM(paid_amount), 0) FROM bills WHERE visit_id = v.id) as total_paid_amount,
+            (SELECT COALESCE(SUM(balance), 0) FROM bills WHERE visit_id = v.id AND status != 'cancelled') as total_balance
         FROM visits v
         JOIN patients p ON v.patient_id = p.id
         LEFT JOIN users u ON v.doctor_id = u.id
@@ -580,6 +642,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
             $total_bills = (int)($consultation['total_bills_count'] ?? 0);
             $total_amount = (float)($consultation['total_bill_amount'] ?? 0);
             $total_paid = (float)($consultation['total_paid_amount'] ?? 0);
+            $total_balance = (float)($consultation['total_balance'] ?? 0);
             
             $is_referred = $consultation['is_referred'] == 1;
             $referred_by = $consultation['referred_by_doctor_name'] ?? '';
@@ -588,6 +651,10 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
             $referral_type = $consultation['referral_type'] ?? '';
             $to_hospital = $consultation['to_hospital_name'] ?? '';
             $is_referred_to_me = ($consultation['referred_to_doctor_id'] == $doctor_id);
+            
+            // Check if this is a waiting visit that should auto-complete soon
+            $is_waiting = ($consultation['status'] === 'waiting');
+            $can_auto_complete = ($is_waiting && $total_balance <= 0 && !empty($consultation['diagnosis']));
             ?>
             <div class="consultation-card animate-fade-in-up" data-visit-id="<?= $consultation['id'] ?>" data-status="<?= $consultation['status'] ?>">
                 <div class="card-header">
@@ -612,6 +679,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                         <span class="status-badge <?= $consultation['status'] ?? 'pending' ?>">
                             <?= ucfirst(str_replace('_', ' ', $consultation['status'] ?? 'Pending')) ?>
                         </span>
+                        <?php if ($can_auto_complete): ?>
+                            <span style="background:#D1FAE5;color:#059669;padding:2px 10px;border-radius:12px;font-size:0.55rem;font-weight:600;border:1px solid #059669;">
+                                <i class="fas fa-sync-alt fa-spin"></i> Auto-completing...
+                            </span>
+                        <?php endif; ?>
                     </div>
                 </div>
                 
@@ -674,6 +746,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                     <?php if ($paid_bills > 0): ?>
                         <span class="bill-indicator"><i class="fas fa-check-circle paid"></i> <?= $paid_bills ?> bill(s) paid <span class="bill-amount">(TSh <?= number_format($total_paid) ?>)</span></span>
                     <?php endif; ?>
+                    <?php if ($is_waiting && $total_balance <= 0 && !empty($consultation['diagnosis'])): ?>
+                        <span class="bill-indicator" style="color:#059669;">
+                            <i class="fas fa-check-circle"></i> Balance: TSh 0 ✅ Auto-completing...
+                        </span>
+                    <?php endif; ?>
                 </div>
                 
                 <div class="card-footer">
@@ -689,6 +766,12 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                             <span class="mx-1">•</span>
                             <i class="fas fa-receipt"></i> Bills: <?= $paid_bills ?>/<?= $total_bills ?>
                         <?php endif; ?>
+                        <?php if ($is_waiting && $total_balance <= 0): ?>
+                            <span class="mx-1">•</span>
+                            <span style="color:#059669;font-weight:600;">
+                                <i class="fas fa-check-circle"></i> Balance: TSh 0
+                            </span>
+                        <?php endif; ?>
                     </div>
                     <div style="display:flex;gap:6px;flex-wrap:wrap;">
                         <?php if (in_array($filter, ['pending', 'lab_test', 'prescribed', 'waiting']) || $is_referred_to_me): ?>
@@ -703,6 +786,11 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
                         <?php if ($filter === 'prescribed' && $pending_bills > 0): ?>
                             <span class="text-xs text-gray-400 self-center">
                                 <i class="fas fa-clock"></i> Waiting for payment...
+                            </span>
+                        <?php endif; ?>
+                        <?php if ($is_waiting && $total_balance <= 0 && !empty($consultation['diagnosis'])): ?>
+                            <span style="font-size:0.65rem;color:#059669;font-weight:600;align-self:center;">
+                                <i class="fas fa-sync-alt fa-spin"></i> Auto-completing...
                             </span>
                         <?php endif; ?>
                     </div>
@@ -756,6 +844,7 @@ if (isset($_GET['ajax']) && $_GET['ajax'] == 1) {
         'total' => $total2,
         'hash' => $hash,
         'timestamp' => date('H:i:s'),
+        'auto_completed' => $auto_complete_result['completed'],
         'counts' => [
             'pending' => $pending_count,
             'lab_test' => $lab_test_count,
@@ -1386,6 +1475,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <i class="fas fa-sync-alt fa-fw"></i>
                     <span id="updateCount">0</span> updates
                 </span>
+                
+                <?php if ($auto_complete_result['completed'] > 0): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.3);border-color:#34D399;color:#34D399;">
+                        <i class="fas fa-check-circle"></i>
+                        <?= $auto_complete_result['completed'] ?> auto-completed
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1464,6 +1560,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 $total_bills = (int)($consultation['total_bills_count'] ?? 0);
                 $total_amount = (float)($consultation['total_bill_amount'] ?? 0);
                 $total_paid = (float)($consultation['total_paid_amount'] ?? 0);
+                $total_balance = (float)($consultation['total_balance'] ?? 0);
                 
                 $is_referred = $consultation['is_referred'] == 1;
                 $referred_by = $consultation['referred_by_doctor_name'] ?? '';
@@ -1509,6 +1606,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <?php if ($is_admin): ?>
                                 <span class="status-badge" style="background:#FEE2E2;color:#DC2626;font-size:0.5rem;border:1px solid #DC2626;">
                                     <i class="fas fa-user-shield"></i> Admin
+                                </span>
+                            <?php endif; ?>
+                            <?php if ($consultation['status'] === 'waiting' && $total_balance <= 0 && !empty($consultation['diagnosis'])): ?>
+                                <span style="background:#D1FAE5;color:#059669;padding:2px 10px;border-radius:12px;font-size:0.55rem;font-weight:600;border:1px solid #059669;">
+                                    <i class="fas fa-sync-alt fa-spin"></i> Auto-completing...
                                 </span>
                             <?php endif; ?>
                         </div>
@@ -1573,6 +1675,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <?php if ($paid_bills > 0): ?>
                             <span class="bill-indicator"><i class="fas fa-check-circle paid"></i> <?= $paid_bills ?> bill(s) paid <span class="bill-amount">(TSh <?= number_format($total_paid) ?>)</span></span>
                         <?php endif; ?>
+                        <?php if ($consultation['status'] === 'waiting' && $total_balance <= 0 && !empty($consultation['diagnosis'])): ?>
+                            <span class="bill-indicator" style="color:#059669;">
+                                <i class="fas fa-check-circle"></i> Balance: TSh 0 ✅ Auto-completing...
+                            </span>
+                        <?php endif; ?>
                     </div>
                     
                     <div class="card-footer">
@@ -1588,6 +1695,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <span class="mx-1">•</span>
                                 <i class="fas fa-receipt"></i> Bills: <?= $paid_bills ?>/<?= $total_bills ?>
                             <?php endif; ?>
+                            <?php if ($consultation['status'] === 'waiting' && $total_balance <= 0): ?>
+                                <span class="mx-1">•</span>
+                                <span style="color:#059669;font-weight:600;">
+                                    <i class="fas fa-check-circle"></i> Balance: TSh 0
+                                </span>
+                            <?php endif; ?>
                         </div>
                         <div style="display:flex;gap:6px;flex-wrap:wrap;">
                             <?php if (in_array($filter, ['pending', 'lab_test', 'prescribed', 'waiting']) || $is_referred_to_me): ?>
@@ -1602,6 +1715,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             <?php if ($filter === 'prescribed' && $pending_bills > 0): ?>
                                 <span class="text-xs text-gray-400 self-center">
                                     <i class="fas fa-clock"></i> Waiting for payment...
+                                </span>
+                            <?php endif; ?>
+                            <?php if ($consultation['status'] === 'waiting' && $total_balance <= 0 && !empty($consultation['diagnosis'])): ?>
+                                <span style="font-size:0.65rem;color:#059669;font-weight:600;align-self:center;">
+                                    <i class="fas fa-sync-alt fa-spin"></i> Auto-completing...
                                 </span>
                             <?php endif; ?>
                         </div>
@@ -1739,7 +1857,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     var lastHash = null;
     var updateCount = 0;
     
-    // ✅ FIXED: Get filter and search from URL parameters
+    // Get filter and search from URL parameters
     var urlParams = new URLSearchParams(window.location.search);
     var filter = urlParams.get('filter') || 'pending';
     var search = urlParams.get('search') || '';
@@ -1748,7 +1866,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         if (isUpdating) return;
         isUpdating = true;
         
-        // ✅ FIXED: Always use the current filter from URL parameters
         var url = 'consultations.php?ajax=1&filter=' + encodeURIComponent(filter) + 
                   '&search=' + encodeURIComponent(search) + 
                   '&t=' + Date.now();
@@ -1762,7 +1879,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             })
             .then(function(data) {
                 if (data.success) {
-                    // ✅ FIXED: Check hash to prevent unnecessary updates
                     if (lastHash !== data.hash) {
                         lastHash = data.hash;
                         updateCount++;
@@ -1774,9 +1890,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             updateCountEl.textContent = updateCount;
                         }
                         
-                        // Show toast only on significant updates (not first load)
-                        if (updateCount > 2) {
-                            showToast('🔄 Updated', 'Consultations auto-updated at ' + data.timestamp, 'info');
+                        // Show toast on auto-complete
+                        if (data.auto_completed && data.auto_completed > 0) {
+                            showToast('✅ Auto-Completed!', data.auto_completed + ' consultation(s) auto-completed (all bills paid)', 'success');
                         }
                     }
                 }
@@ -1792,7 +1908,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var container = document.getElementById('consultationsContainer');
         if (!container) return;
         
-        // ✅ FIXED: Update badge counts
+        // Update badge counts
         var badgeMap = {
             'pending': 'badgePending',
             'lab_test': 'badgeLabTest',
@@ -1814,17 +1930,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             totalBadge.textContent = data.total;
         }
         
-        // ✅ FIXED: Update the container with new HTML
         container.innerHTML = data.html;
         
-        // Add animation to new cards
         var cards = container.querySelectorAll('.consultation-card');
         cards.forEach(function(card, index) {
             card.style.animationDelay = (index * 0.05) + 's';
             card.classList.add('animate-fade-in-up');
         });
         
-        // Update timestamp
         var liveTime = document.getElementById('liveTime');
         if (liveTime) liveTime.textContent = data.timestamp;
     }
@@ -1837,6 +1950,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         updateInterval = setInterval(fetchAndUpdateConsultations, 3000);
         console.log('%c🔄 Auto-update started (every 3s) via AJAX', 'font-size:12px; color:#34D399;');
         console.log('%c📋 Current filter: ' + filter, 'font-size:13px; color:#2563EB;');
+        console.log('%c✅ Auto-complete runs on WAITING status only (all bills paid)', 'font-size:13px; color:#059669;');
     }
     
     function stopAutoUpdate() {
@@ -1886,19 +2000,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     });
 
     document.addEventListener('DOMContentLoaded', function() {
-        // ✅ FIXED: Log current filter on page load
         console.log('%c📋 Current filter: ' + filter, 'font-size:13px; color:#2563EB;');
+        console.log('%c✅ Auto-complete ONLY for WAITING status', 'font-size:13px; color:#059669;');
+        console.log('%c✅ Auto-complete runs automatically when all bills are paid', 'font-size:13px; color:#059669;');
         
         setTimeout(function() {
             startAutoUpdate();
         }, 2000);
     });
 
-    console.log('%c👨‍⚕️ Braick - Consultations (With Waiting Filter FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👨‍⚕️ Braick - Consultations (Auto-Complete for WAITING only)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Order: Pending | Lab Test | Prescribed | Waiting | Completed | Cancelled', 'font-size:13px; color:#34D399;');
-    console.log('%c📌 Click a filter to toggle and view consultations', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Auto-complete: status=waiting + diagnosis exists + all bills paid = auto-complete', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Auto-refresh preserves the selected filter', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

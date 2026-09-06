@@ -1,11 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/view_consultation_pdf.php
-// VIEW CONSULTATION AS PDF - A4 SIZE WITH LOGO, BRANCH & PHONE
+// VIEW CONSULTATION AS PDF - A4 SIZE WITH LOGO
 // BRAICK DISPENSARY - TUNAJALI AFYA YAKO
-// FIXED: Shows diagnosis directly from visits table
-// FIXED: Shows admin phone numbers ONLY (without names)
-// FIXED: 4 BILL SUMMARY CARDS: Total, Paid, Balance, Discount
+// FIXED: Bill Summary - Subtotal, Paid, Discount, Remaining
+// FIXED: All undefined variables initialized properly
+// FIXED: Discount = discount_amount + pharmacy_discount + cashier_discount
+// FIXED: Subtotal shows total before discount (410,000)
 // ================================================================
 
 // Start session
@@ -60,7 +61,7 @@ try {
 }
 
 // ================================================================
-// ✅ GET ALL ADMINS PHONE NUMBERS (Without names)
+// ✅ GET ALL ADMINS PHONE NUMBERS FROM users TABLE (role='admin')
 // ================================================================
 $admin_phones = [];
 try {
@@ -78,27 +79,6 @@ try {
 } catch (Exception $e) {
     $admin_phones = [];
     error_log("Error fetching admin phones: " . $e->getMessage());
-}
-
-// If no admin phones found, try branch-specific
-if (empty($admin_phones)) {
-    try {
-        $stmt = $db->prepare("
-            SELECT phone 
-            FROM users 
-            WHERE role = 'admin' 
-            AND status = 'active'
-            AND (branch_id = ? OR branch_id IS NULL)
-            AND phone IS NOT NULL 
-            AND phone != ''
-            ORDER BY id ASC
-            LIMIT 1
-        ");
-        $stmt->execute([$doctor_branch_id]);
-        $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
-    } catch (Exception $e) {
-        $admin_phones = [];
-    }
 }
 
 // ================================================================
@@ -217,11 +197,12 @@ function calculateAge($dob) {
 function getStatusBadgeClass($status) {
     $map = [
         'pending' => 'badge-warning',
-        'assigned' => 'badge-info',
+        'assigned' => 'badge-purple',
         'with_doctor' => 'badge-warning',
         'lab_test' => 'badge-purple',
         'in_progress' => 'badge-info',
         'prescribed' => 'badge-purple',
+        'waiting' => 'badge-purple',
         'completed' => 'badge-success',
         'cancelled' => 'badge-danger'
     ];
@@ -349,24 +330,38 @@ $stmt = $db->prepare("
 $stmt->execute([$visit_id]);
 $equipment_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 7. Bill Summary - 4 Cards: Total, Paid, Balance, Discount
+// 7. Bill Summary - FIXED: Subtotal, Paid, Discount, Remaining
+// ✅ ALL VARIABLES INITIALIZED PROPERLY
 $bill_items = [];
-$total_bill_amount = 0;
+$bill_subtotal = 0;
 $paid_total = 0;
 $bill_balance = 0;
 $bill_total_discount = 0;
+$bill_discount_amount = 0;
+$bill_pharmacy_discount = 0;
+$bill_cashier_discount = 0;
 $bill_status = 'pending';
+$bill_total_amount = 0;
 
-$stmt = $db->prepare("SELECT id, status, total_amount, paid_amount, balance, total_discount FROM bills WHERE visit_id = ?");
+$stmt = $db->prepare("
+    SELECT id, status, subtotal, total_amount, paid_amount, balance, 
+           discount_amount, pharmacy_discount, cashier_discount, total_discount 
+    FROM bills WHERE visit_id = ?
+");
 $stmt->execute([$visit_id]);
 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
 if ($bill) {
     $bill_id = $bill['id'];
     $bill_status = $bill['status'];
-    $total_bill_amount = $bill['total_amount'] ?? 0;
-    $paid_total = $bill['paid_amount'] ?? 0;
-    $bill_balance = $bill['balance'] ?? 0;
-    $bill_total_discount = $bill['total_discount'] ?? 0;
+    $bill_subtotal = (float)($bill['subtotal'] ?? 0);
+    $bill_total_amount = (float)($bill['total_amount'] ?? 0);
+    $paid_total = (float)($bill['paid_amount'] ?? 0);
+    $bill_balance = (float)($bill['balance'] ?? 0);
+    $bill_discount_amount = (float)($bill['discount_amount'] ?? 0);
+    $bill_pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0);
+    $bill_cashier_discount = (float)($bill['cashier_discount'] ?? 0);
+    // ✅ TOTAL DISCOUNT = discount_amount + pharmacy_discount + cashier_discount
+    $bill_total_discount = $bill_discount_amount + $bill_pharmacy_discount + $bill_cashier_discount;
     
     $stmt = $db->prepare("
         SELECT id, item_name, item_type, quantity, unit_price, total_price, status 
@@ -438,7 +433,7 @@ foreach ($logo_paths as $path) {
 // ================================================================
 // BUILD PDF CONTENT FUNCTION
 // ================================================================
-function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $prescriptions, $prescription_items, $procedures, $equipment_items, $bill_items, $total_bill_amount, $paid_total, $bill_balance, $bill_total_discount, $bill_status, $branch_location, $branch_phone, $doctor_branch_name, $doctor_name, $logo_base64, $admin_phones, $diagnosis_display, $disease_code_display, $treatment_display) {
+function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $prescriptions, $prescription_items, $procedures, $equipment_items, $bill_items, $bill_subtotal, $paid_total, $bill_balance, $bill_total_discount, $bill_status, $branch_location, $branch_phone, $doctor_branch_name, $doctor_name, $logo_base64, $diagnosis_display, $disease_code_display, $treatment_display, $admin_phones, $bill_discount_amount, $bill_pharmacy_discount, $bill_cashier_discount) {
     
     // Build admin phones string (numbers only, comma separated)
     $admin_phones_string = '';
@@ -450,7 +445,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     ?>
     
     <!-- ================================================================ -->
-    <!-- PDF CONTENT - A4 SIZE WITH LOGO, BRANCH & PHONE -->
+    <!-- PDF CONTENT - A4 SIZE WITH LOGO -->
     <!-- ================================================================ -->
     
     <!-- HEADER WITH LOGO -->
@@ -463,7 +458,9 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             <?php endif; ?>
             <div>
                 <div class="clinic-name">BRAICK DISPENSARY</div>
-                <div class="clinic-sub">TUNAJALI AFYA YAKO</div>
+                <div class="clinic-sub">
+                    <span style="color:#B87333;">🩺</span> TUNAJALI AFYA YAKO
+                </div>
             </div>
         </div>
         <div class="header-contact">
@@ -472,23 +469,17 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
                 <span><?= htmlspecialchars($branch_location ?: $doctor_branch_name) ?></span>
             </div>
             <div class="contact-row">
-                <i class="fas fa-phone"></i> 
-                <span><?= htmlspecialchars($branch_phone ?: (!empty($admin_phones) ? $admin_phones[0] : '')) ?></span>
-            </div>
-            <div class="contact-row">
                 <i class="fas fa-calendar-alt"></i> 
                 <span><?= date('F d, Y') ?></span>
             </div>
         </div>
     </div>
     
-    <!-- ================================================================ -->
-    <!-- ✅ ADMINS SECTION - PHONE NUMBERS ONLY (NO NAMES) -->
-    <!-- ================================================================ -->
+    <!-- ✅ ADMIN PHONE NUMBERS - FROM users TABLE -->
     <?php if (!empty($admin_phones_string)): ?>
     <div class="admins-section">
         <div class="admins-title">
-            <i class="fas fa-phone"></i> Admin Contact Numbers
+            <i class="fas fa-phone" style="color:#0B5ED7;"></i> Admin Contact Numbers
         </div>
         <div class="admins-list">
             <?= $admin_phones_string ?>
@@ -652,42 +643,44 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- 4. SYMPTOMS -->
+    <!-- 4. SYMPTOMS & COMPLAINT -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">📝</span>
-        SYMPTOMS
+        SYMPTOMS & COMPLAINT
     </div>
-    <?php if (!empty($visit['symptoms'])): ?>
-        <div class="symptom-tags">
-            <?php 
-                $symptoms_array = array_map('trim', explode(',', $visit['symptoms']));
-                foreach ($symptoms_array as $sym):
-                    if (!empty($sym)):
-            ?>
-                <span class="symptom-tag-pdf"><?= htmlspecialchars($sym) ?></span>
-            <?php 
-                    endif;
-                endforeach; 
-            ?>
-        </div>
+    <?php if (!empty($visit['symptoms']) || !empty($visit['complaint'])): ?>
+        <?php if (!empty($visit['symptoms'])): ?>
+            <div style="margin-bottom: 6px;">
+                <div style="font-weight:600;font-size:8pt;color:#64748B;margin-bottom:2px;">Symptoms:</div>
+                <div class="symptom-tags">
+                    <?php 
+                        $symptoms_array = array_map('trim', explode(',', $visit['symptoms']));
+                        foreach ($symptoms_array as $sym):
+                            if (!empty($sym)):
+                    ?>
+                        <span class="symptom-tag-pdf"><?= htmlspecialchars($sym) ?></span>
+                    <?php 
+                            endif;
+                        endforeach; 
+                    ?>
+                </div>
+            </div>
+        <?php endif; ?>
+        <?php if (!empty($visit['complaint'])): ?>
+            <div>
+                <div style="font-weight:600;font-size:8pt;color:#64748B;margin-bottom:2px;">Chief Complaint:</div>
+                <div class="text-box-pdf" style="font-style:italic;">
+                    <?= nl2br(htmlspecialchars($visit['complaint'])) ?>
+                </div>
+            </div>
+        <?php endif; ?>
     <?php else: ?>
-        <div class="empty-state-pdf">No symptoms recorded</div>
+        <div class="empty-state-pdf">No symptoms or complaint recorded</div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- 5. COMPLAINT -->
-    <!-- ================================================================ -->
-    <div class="section-title">
-        <span class="section-icon">🗣️</span>
-        CHIEF COMPLAINT
-    </div>
-    <div class="text-box-pdf">
-        <?= nl2br(htmlspecialchars($visit['complaint'] ?? 'No complaint recorded')) ?>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- 6. HPI -->
+    <!-- 5. HPI -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">📝</span>
@@ -698,7 +691,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     </div>
 
     <!-- ================================================================ -->
-    <!-- 7. PHYSICAL EXAMINATION -->
+    <!-- 6. PHYSICAL EXAMINATION -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">🩺</span>
@@ -709,7 +702,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     </div>
 
     <!-- ================================================================ -->
-    <!-- 8. LAB TESTS & RESULTS -->
+    <!-- 7. LAB TESTS & RESULTS -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">🧪</span>
@@ -750,7 +743,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- 9. DIAGNOSIS - FIXED: DIRECTLY FROM VISITS TABLE -->
+    <!-- 8. DIAGNOSIS - NO NOTES SECTION -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">🩺</span>
@@ -791,12 +784,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
                 <div class="treatment-text"><strong>💊 Treatment:</strong> <?= nl2br(htmlspecialchars($visit['disease_treatment'])) ?></div>
             <?php endif; ?>
             
-            <!-- ADDITIONAL NOTES -->
-            <?php if (!empty($visit['notes'])): ?>
-                <div class="treatment-text" style="border-top-color:#CBD5E1;margin-top:4px;padding-top:4px;border-top:1px dashed #CBD5E1;">
-                    <strong>📝 Notes:</strong> <?= nl2br(htmlspecialchars($visit['notes'])) ?>
-                </div>
-            <?php endif; ?>
+            <!-- ❌ NOTES REMOVED - PDF ONLY SHOWS DIAGNOSIS AND TREATMENT -->
             
             <!-- SHOW SOURCE OF DATA -->
             <div style="font-size:6pt;color:#94A3B8;margin-top:6px;border-top:1px dashed #E2E8F0;padding-top:4px;">
@@ -815,7 +803,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- 10. PRESCRIPTIONS -->
+    <!-- 9. PRESCRIPTIONS -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">💊</span>
@@ -867,7 +855,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- 11. PROCEDURES & EQUIPMENT -->
+    <!-- 10. PROCEDURES & EQUIPMENT -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">💉</span>
@@ -911,7 +899,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- 12. BILL SUMMARY - 4 CARDS: Total, Paid, Balance, Discount -->
+    <!-- 11. BILL SUMMARY - FIXED: Subtotal, Paid, Discount, Remaining -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">💰</span>
@@ -919,46 +907,54 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         <span class="section-count"><?= count($bill_items) ?> items</span>
     </div>
     
-    <!-- 4 Cards: Total, Paid, Balance, Discount -->
+    <!-- 4 Cards: Subtotal, Paid, Discount, Remaining -->
     <div class="bill-grid-4">
-        <div class="bill-card-pdf total">
-            <div class="amount">TSh <?= number_format($total_bill_amount, 0) ?></div>
-            <div class="label">Total Amount</div>
+        <!-- 1. Subtotal - Blue (Total before discount) -->
+        <div class="bill-card-pdf subtotal">
+            <div class="amount">TSh <?= number_format($bill_subtotal, 0) ?></div>
+            <div class="label">Subtotal</div>
         </div>
+        
+        <!-- 2. Paid Amount - Green -->
         <div class="bill-card-pdf paid">
             <div class="amount">TSh <?= number_format($paid_total, 0) ?></div>
             <div class="label">Paid Amount</div>
         </div>
-        <div class="bill-card-pdf balance <?= $bill_balance <= 0 ? 'zero' : '' ?>">
-            <div class="amount">TSh <?= number_format($bill_balance, 0) ?></div>
-            <div class="label">Remaining Balance</div>
-        </div>
+        
+        <!-- 3. Total Discount - Purple (discount_amount + pharmacy_discount + cashier_discount) -->
         <div class="bill-card-pdf discount">
             <div class="amount">TSh <?= number_format($bill_total_discount, 0) ?></div>
             <div class="label">Total Discount</div>
         </div>
+        
+        <!-- 4. Remaining Balance - Orange/Green -->
+        <div class="bill-card-pdf balance <?= $bill_balance <= 0 ? 'zero' : '' ?>">
+            <div class="amount">TSh <?= number_format($bill_balance, 0) ?></div>
+            <div class="label">Remaining Balance</div>
+        </div>
     </div>
+    
+    <!-- Discount Breakdown (if multiple discounts) -->
+    <?php if ($bill_discount_amount > 0 || $bill_pharmacy_discount > 0 || $bill_cashier_discount > 0): ?>
+    <div style="display:flex;flex-wrap:wrap;gap:8px 20px;padding:4px 12px;background:#F8FAFC;border-radius:4px;margin:2px 0 4px 0;font-size:6.5pt;color:#64748B;border:1px solid #E2E8F0;">
+        <?php if ($bill_discount_amount > 0): ?>
+            <span><strong>Discount:</strong> TSh <?= number_format($bill_discount_amount, 0) ?></span>
+        <?php endif; ?>
+        <?php if ($bill_pharmacy_discount > 0): ?>
+            <span><strong>Pharmacy Discount:</strong> TSh <?= number_format($bill_pharmacy_discount, 0) ?></span>
+        <?php endif; ?>
+        <?php if ($bill_cashier_discount > 0): ?>
+            <span><strong>Cashier Discount:</strong> TSh <?= number_format($bill_cashier_discount, 0) ?></span>
+        <?php endif; ?>
+        <span style="font-weight:600;color:#7C3AED;"><strong>Total Discount:</strong> TSh <?= number_format($bill_total_discount, 0) ?></span>
+    </div>
+    <?php endif; ?>
     
     <div class="bill-status-bar">
         <span class="status-label">Status:</span>
         <span class="badge-pdf <?= $bill_balance <= 0 ? 'success' : 'warning' ?>"><?= $bill_balance <= 0 ? '✅ Paid' : '⏳ ' . ucfirst($bill_status) ?></span>
         <span class="item-count">Total Items: <?= count($bill_items) ?></span>
     </div>
-    
-    <?php 
-        $consultation_total_display = 0;
-        foreach ($bill_items as $item) {
-            if ($item['item_type'] === 'consultation') {
-                $consultation_total_display += $item['total_price'];
-            }
-        }
-    ?>
-    <?php if ($consultation_total_display > 0): ?>
-        <div class="consultation-fee-bar">
-            <span class="label">Consultation Fee</span>
-            <span class="value">TSh <?= number_format($consultation_total_display, 0) ?></span>
-        </div>
-    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- FOOTER WITH OFFICIAL STAMP & MOTTO -->
@@ -982,26 +978,12 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             </div>
         </div>
         
-        <!-- ✅ ADMIN PHONES ONLY IN FOOTER - No names -->
-        <?php if (!empty($admin_phones_string)): ?>
-            <div style="text-align:center;margin-top:8px;padding:4px 0;border-top:1px solid #E2E8F0;font-size:7pt;color:#64748B;">
-                <i class="fas fa-phone" style="color:#0B5ED7;"></i> 
-                <strong>Admin Contacts:</strong> 
-                <?= $admin_phones_string ?>
-            </div>
-        <?php endif; ?>
-        
         <div class="footer-motto">
             <span class="brand">💙 BRAICK DISPENSARY</span> 
             <span class="motto-text">- TUNAJALI AFYA YAKO</span>
         </div>
         <div class="footer-bottom">
             <?= htmlspecialchars($branch_location ?: $doctor_branch_name) ?> • 
-            <?php if (!empty($admin_phones_string)): ?>
-                <?= $admin_phones_string ?>
-            <?php elseif (!empty($branch_phone)): ?>
-                <?= htmlspecialchars($branch_phone) ?>
-            <?php endif; ?> • 
             Generated on <?= date('F d, Y h:i A') ?> • 
             All rights reserved
         </div>
@@ -1022,7 +1004,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
     <style>
         /* ================================================================ */
-        /* PDF STYLES - A4 SIZE WITH LOGO, BRANCH & PHONE */
+        /* PDF STYLES - A4 SIZE WITH LOGO */
         /* ================================================================ */
         @page {
             size: A4;
@@ -1055,7 +1037,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         }
         
         /* ================================================================ */
-        /* HEADER WITH LOGO, BRANCH & PHONE */
+        /* HEADER WITH LOGO */
         /* ================================================================ */
         .pdf-header {
             display: flex;
@@ -1101,10 +1083,13 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         }
         .clinic-sub {
             font-size: 8.5pt;
-            color: #059669;
-            letter-spacing: 3px;
             font-weight: 600;
             text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .clinic-sub span {
+            color: #B87333;
+            font-size: 9pt;
         }
         
         .header-contact {
@@ -1127,7 +1112,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         }
         
         /* ================================================================ */
-        /* ✅ ADMINS SECTION - PHONE NUMBERS ONLY */
+        /* ADMIN PHONES SECTION */
         /* ================================================================ */
         .admins-section {
             background: #E8F0FE;
@@ -1158,14 +1143,6 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             display: flex;
             flex-wrap: wrap;
             gap: 4px 12px;
-        }
-        .admins-section .admins-list .admin-phone {
-            background: #ffffff;
-            padding: 1px 8px;
-            border-radius: 4px;
-            border: 1px solid #93C5FD;
-            font-family: monospace;
-            font-size: 8pt;
         }
         
         /* ================================================================ */
@@ -1199,7 +1176,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             color: #0B5ED7;
             border-bottom: 2px solid #0B5ED7;
             padding: 4px 10px 4px 10px;
-            margin: 14px 0 8px 0;
+            margin: 16px 0 10px 0;
             display: flex;
             align-items: center;
             gap: 10px;
@@ -1256,16 +1233,16 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .vital-grid-cards {
             display: grid;
             grid-template-columns: repeat(6, 1fr);
-            gap: 8px;
-            margin: 4px 0 6px 0;
+            gap: 10px;
+            margin: 6px 0 8px 0;
         }
         .vital-card-pdf {
             background: #FFFFFF;
-            border-radius: 8px;
-            padding: 8px 6px 6px 6px;
+            border-radius: 10px;
+            padding: 10px 8px 8px 8px;
             text-align: center;
             border: 2px solid #E2E8F0;
-            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
             position: relative;
             overflow: hidden;
         }
@@ -1275,7 +1252,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             top: 0;
             left: 0;
             right: 0;
-            height: 3px;
+            height: 4px;
         }
         .vital-card-pdf.temp::before { background: linear-gradient(90deg, #DC2626, #F87171); }
         .vital-card-pdf.temp { border-color: #FCA5A5; }
@@ -1290,9 +1267,9 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .vital-card-pdf.bmi::before { background: linear-gradient(90deg, #2563EB, #60A5FA); }
         .vital-card-pdf.bmi { border-color: #93C5FD; }
         
-        .vital-card-pdf .vital-icon { font-size: 1rem; display: block; margin-bottom: 1px; }
+        .vital-card-pdf .vital-icon { font-size: 1.1rem; display: block; margin-bottom: 2px; }
         .vital-card-pdf .vital-value {
-            font-size: 11pt;
+            font-size: 11.5pt;
             font-weight: 700;
             display: block;
             line-height: 1.2;
@@ -1304,16 +1281,16 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             letter-spacing: 0.5px;
             display: block;
             font-weight: 600;
-            margin-top: 1px;
+            margin-top: 2px;
         }
         .vital-card-pdf .vital-unit { font-size: 6pt; font-weight: 400; color: #94A3B8; }
         .vital-card-pdf .vital-status {
-            font-size: 5pt;
+            font-size: 5.5pt;
             font-weight: 700;
-            padding: 1px 6px;
-            border-radius: 8px;
+            padding: 2px 8px;
+            border-radius: 10px;
             display: inline-block;
-            margin-top: 2px;
+            margin-top: 3px;
             letter-spacing: 0.3px;
         }
         .vital-card-pdf .vital-status.normal {
@@ -1347,8 +1324,8 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .vital-recorded-by {
             font-size: 6.5pt;
             color: #94A3B8;
-            margin-top: 4px;
-            padding: 2px 10px;
+            margin-top: 6px;
+            padding: 3px 12px;
             background: #F8FAFC;
             border-radius: 4px;
             display: inline-block;
@@ -1356,8 +1333,8 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .vital-notes {
             font-size: 7pt;
             color: #475569;
-            margin-top: 4px;
-            padding: 3px 10px;
+            margin-top: 6px;
+            padding: 4px 12px;
             background: #F8FAFC;
             border-radius: 4px;
             border-left: 3px solid #0B5ED7;
@@ -1371,10 +1348,10 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             display: inline-block;
             background: #EBF4FF;
             color: #0B5ED7;
-            padding: 2px 12px;
-            border-radius: 14px;
+            padding: 3px 14px;
+            border-radius: 16px;
             font-size: 7.5pt;
-            margin: 2px 4px 2px 0;
+            margin: 2px 5px 2px 0;
             border: 1px solid #6EA8FE;
             font-weight: 500;
         }
@@ -1383,44 +1360,40 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         /* TEXT BOX */
         /* ================================================================ */
         .text-box-pdf {
-            padding: 6px 12px;
+            padding: 8px 14px;
             font-size: 8.5pt;
             background: #F8FAFC;
             border-radius: 6px;
             border: 1px solid #E2E8F0;
             min-height: 30px;
+            line-height: 1.6;
         }
         
         /* ================================================================ */
-        /* DIAGNOSIS BOX - IMPROVED */
+        /* DIAGNOSIS BOX - NO NOTES */
         /* ================================================================ */
         .diagnosis-box-pdf {
-            padding: 10px 14px;
+            padding: 12px 16px;
             background: linear-gradient(135deg, #EBF4FF, #F8FAFC);
-            border-radius: 6px;
-            border-left: 4px solid #0B5ED7;
-            box-shadow: 0 1px 4px rgba(11,94,215,0.06);
+            border-radius: 8px;
+            border-left: 5px solid #0B5ED7;
+            box-shadow: 0 2px 8px rgba(11,94,215,0.08);
         }
         .diagnosis-box-pdf .diag-text {
-            font-size: 10pt;
+            font-size: 10.5pt;
             font-weight: 700;
             color: #0B5ED7;
         }
         .diagnosis-box-pdf .diag-code {
             font-size: 8pt;
             color: #64748B;
-            margin-top: 1px;
-        }
-        .diagnosis-box-pdf .diag-desc {
-            font-size: 8.5pt;
-            color: #475569;
-            margin-top: 3px;
+            margin-top: 2px;
         }
         .diagnosis-box-pdf .treatment-text {
             font-size: 8.5pt;
             color: #475569;
-            margin-top: 4px;
-            padding-top: 4px;
+            margin-top: 6px;
+            padding-top: 6px;
             border-top: 1px dashed #CBD5E1;
         }
         .diagnosis-box-pdf .treatment-text strong { color: #059669; }
@@ -1432,13 +1405,13 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             width: 100%;
             border-collapse: collapse;
             font-size: 7.5pt;
-            margin: 4px 0;
+            margin: 6px 0;
             border-radius: 6px;
             overflow: hidden;
         }
         .pdf-table thead th {
             text-align: left;
-            padding: 4px 8px;
+            padding: 5px 10px;
             background: linear-gradient(135deg, #0B5ED7, #1A7FE8);
             color: white;
             font-size: 6pt;
@@ -1448,7 +1421,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             border: none;
         }
         .pdf-table tbody td {
-            padding: 4px 8px;
+            padding: 5px 10px;
             border-bottom: 1px solid #F1F5F9;
             font-size: 7.5pt;
         }
@@ -1462,8 +1435,8 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .badge-pdf {
             font-size: 6pt;
             font-weight: 600;
-            padding: 1px 8px;
-            border-radius: 8px;
+            padding: 2px 10px;
+            border-radius: 10px;
             display: inline-block;
             letter-spacing: 0.2px;
         }
@@ -1498,21 +1471,21 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         /* PRESCRIPTION BOX */
         /* ================================================================ */
         .prescription-box {
-            margin-bottom: 6px;
-            padding: 6px 10px;
+            margin-bottom: 8px;
+            padding: 8px 12px;
             background: #FFFFFF;
-            border-radius: 4px;
+            border-radius: 6px;
             border: 1px solid #E2E8F0;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.04);
         }
         .prescription-box .pres-header {
             display: flex;
             justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
-            padding-bottom: 3px;
+            padding-bottom: 4px;
             border-bottom: 1px solid #F1F5F9;
-            margin-bottom: 3px;
+            margin-bottom: 4px;
         }
         .prescription-box .pres-number {
             font-size: 8pt;
@@ -1525,61 +1498,74 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         }
         
         /* ================================================================ */
-        /* BILL SUMMARY - 4 CARDS */
+        /* BILL SUMMARY - 4 CARDS: Subtotal, Paid, Discount, Remaining */
         /* ================================================================ */
         .bill-grid-4 {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 8px;
-            margin: 4px 0;
+            gap: 14px;
+            margin: 8px 0 10px 0;
         }
         .bill-card-pdf {
             background: #FFFFFF;
-            padding: 8px 12px;
-            border-radius: 6px;
+            padding: 12px 16px;
+            border-radius: 10px;
             text-align: center;
             border: 2px solid #E2E8F0;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            min-height: 65px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
-        .bill-card-pdf .amount { font-size: 11pt; font-weight: 700; }
+        .bill-card-pdf .amount { font-size: 12pt; font-weight: 700; }
         .bill-card-pdf .label {
-            font-size: 5.5pt;
+            font-size: 6pt;
             color: #64748B;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.8px;
             font-weight: 600;
-            margin-top: 1px;
+            margin-top: 2px;
         }
-        .bill-card-pdf.total { border-color: #93C5FD; background: #EBF4FF; }
-        .bill-card-pdf.total .amount { color: #0B5ED7; }
+        
+        /* Subtotal - Blue */
+        .bill-card-pdf.subtotal { border-color: #93C5FD; background: #EBF4FF; }
+        .bill-card-pdf.subtotal .amount { color: #0B5ED7; }
+        
+        /* Paid - Green */
         .bill-card-pdf.paid { border-color: #6EE7B7; background: #D1FAE5; }
         .bill-card-pdf.paid .amount { color: #059669; }
+        
+        /* Discount - Purple */
+        .bill-card-pdf.discount { border-color: #C4B5FD; background: #EDE9FE; }
+        .bill-card-pdf.discount .amount { color: #7C3AED; }
+        
+        /* Remaining - Orange/Green */
         .bill-card-pdf.balance { border-color: #FCA5A5; background: #FEE2E2; }
         .bill-card-pdf.balance .amount { color: #DC2626; }
         .bill-card-pdf.balance.zero { border-color: #6EE7B7; background: #D1FAE5; }
         .bill-card-pdf.balance.zero .amount { color: #059669; }
-        .bill-card-pdf.discount { border-color: #FCD34D; background: #FEF3C7; }
-        .bill-card-pdf.discount .amount { color: #D97706; }
         
         .bill-status-bar {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 14px;
             flex-wrap: wrap;
-            padding: 4px 10px;
+            padding: 6px 14px;
             background: #F8FAFC;
-            border-radius: 4px;
-            margin: 2px 0;
+            border-radius: 6px;
+            margin: 4px 0 6px 0;
             font-size: 7.5pt;
+            border: 1px solid #E2E8F0;
         }
         .bill-status-bar .status-label { font-weight: 600; color: #64748B; }
         .bill-status-bar .item-count { color: #94A3B8; margin-left: auto; }
         
         .consultation-fee-bar {
-            margin-top: 4px;
-            padding: 4px 12px;
+            margin-top: 6px;
+            padding: 6px 14px;
             background: linear-gradient(135deg, #EBF4FF, #F8FAFC);
-            border-radius: 4px;
+            border-radius: 6px;
             display: flex;
             justify-content: space-between;
             font-size: 8pt;
@@ -1593,11 +1579,11 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         /* ================================================================ */
         .empty-state-pdf {
             text-align: center;
-            padding: 8px;
+            padding: 10px;
             color: #94A3B8;
             font-size: 8pt;
             background: #F8FAFC;
-            border-radius: 4px;
+            border-radius: 6px;
             border: 1px dashed #E2E8F0;
         }
         
@@ -1605,8 +1591,8 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         /* FOOTER WITH MOTTO */
         /* ================================================================ */
         .pdf-footer {
-            margin-top: 18px;
-            padding-top: 14px;
+            margin-top: 20px;
+            padding-top: 16px;
             border-top: 3px solid #E2E8F0;
             position: relative;
         }
@@ -1624,7 +1610,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             justify-content: space-between;
             align-items: flex-start;
             flex-wrap: wrap;
-            gap: 12px;
+            gap: 14px;
         }
         .pdf-footer .footer-left {
             font-size: 7.5pt;
@@ -1632,7 +1618,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             line-height: 1.8;
         }
         .pdf-footer .signature-line-area {
-            margin-top: 4px;
+            margin-top: 6px;
         }
         .pdf-footer .signature-line {
             display: inline-block;
@@ -1646,12 +1632,12 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         }
         .pdf-footer .stamp-box {
             text-align: center;
-            padding: 6px 16px;
+            padding: 8px 18px;
             border: 3px solid #0B5ED7;
-            border-radius: 8px;
+            border-radius: 10px;
             background: linear-gradient(135deg, #EBF4FF, #F8FAFC);
-            min-width: 140px;
-            box-shadow: 0 2px 8px rgba(11,94,215,0.06);
+            min-width: 150px;
+            box-shadow: 0 2px 10px rgba(11,94,215,0.08);
         }
         .pdf-footer .stamp-box .stamp-title {
             font-size: 5.5pt;
@@ -1669,18 +1655,18 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .pdf-footer .stamp-box .stamp-line {
             font-size: 6.5pt;
             color: #475569;
-            margin-top: 2px;
+            margin-top: 3px;
         }
         .pdf-footer .stamp-box .stamp-date {
             font-size: 5.5pt;
             color: #94A3B8;
-            margin-top: 2px;
+            margin-top: 3px;
         }
         
         .pdf-footer .footer-motto {
             text-align: center;
-            margin-top: 10px;
-            padding: 6px 0;
+            margin-top: 12px;
+            padding: 8px 0;
             font-size: 9pt;
             font-weight: 600;
             border-top: 2px solid #E2E8F0;
@@ -1820,7 +1806,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             $procedures, 
             $equipment_items, 
             $bill_items, 
-            $total_bill_amount, 
+            $bill_subtotal, 
             $paid_total, 
             $bill_balance, 
             $bill_total_discount,
@@ -1830,10 +1816,13 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             $doctor_branch_name, 
             $doctor_name, 
             $logo_base64, 
-            $admin_phones,
             $diagnosis_display,
             $disease_code_display,
-            $treatment_display
+            $treatment_display,
+            $admin_phones,
+            $bill_discount_amount,
+            $bill_pharmacy_discount,
+            $bill_cashier_discount
         ); ?>
     </div>
 </div>
@@ -1870,10 +1859,9 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     console.log('🔑 Disease Code (from visits): <?= htmlspecialchars($disease_code_display ?: 'Not recorded') ?>');
     console.log('💊 Treatment (from visits): <?= htmlspecialchars($treatment_display ?: 'Not recorded') ?>');
     console.log('🏢 Branch: <?= htmlspecialchars($branch_location ?: $doctor_branch_name) ?>');
-    console.log('📞 Admin Phones: <?= implode(', ', $admin_phones) ?>');
+    console.log('📞 Admin Phones (from users table): <?= implode(', ', $admin_phones) ?>');
+    console.log('💰 Bill: Subtotal=TSh <?= number_format($bill_subtotal, 0) ?>, Paid=TSh <?= number_format($paid_total, 0) ?>, Discount=TSh <?= number_format($bill_total_discount, 0) ?>, Balance=TSh <?= number_format($bill_balance, 0) ?>');
     console.log('💙 Motto: BRAICK DISPENSARY - TUNAJALI AFYA YAKO');
-    console.log('✅ FIXED: 4 Bill Cards: Total, Paid, Balance, Discount');
-    console.log('✅ FIXED: Admin phone numbers shown without names');
 </script>
 
 </body>

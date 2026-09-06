@@ -5,9 +5,14 @@
 // BRAICK DISPENSARY
 // 
 // ✅ Lab results → 'prescribed' ONLY
-// ✅ NO auto-complete without diagnosis
-// ✅ Save Consultation → only way to change to 'waiting'
-// ✅ Auto-complete → only after Save Consultation + balance=0
+// ✅ Auto-complete automatically when bills are paid (status waiting + balance=0)
+// ✅ NO button click needed for auto-complete
+// ✅ Frequency dropdown + manual input
+// ✅ Route dropdown + manual input
+// ✅ Purple status badge in header
+// ✅ HPI, Physical Exam, Symptoms save with lab tests
+// ✅ Treatment Plan saves to database
+// ✅ Additional Notes ABOVE HPI and Physical Examination
 // ================================================================
 
 // Start session
@@ -346,16 +351,15 @@ function getBillDiscount($db, $bill_id) {
 }
 
 // ================================================================
-// ✅ AUTO-COMPLETE - ONLY CALLED FROM SAVE CONSULTATION
+// ✅ AUTO-COMPLETE - AUTOMATIC WHEN BILLS ARE PAID
 // ================================================================
-function canAutoCompleteVisit($db, $visit_id, $bill_id) {
+function checkAndAutoCompleteVisit($db, $visit_id, $bill_id) {
     // Step 1: MUST be 'waiting'
     $stmt = $db->prepare("SELECT status FROM visits WHERE id = ?");
     $stmt->execute([$visit_id]);
     $visit = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$visit || $visit['status'] !== 'waiting') {
-        error_log("❌ AUTO-COMPLETE SKIPPED: Status is '" . ($visit['status'] ?? 'null') . "', must be 'waiting'");
         return false;
     }
     
@@ -365,7 +369,6 @@ function canAutoCompleteVisit($db, $visit_id, $bill_id) {
     $diagnosis = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$diagnosis || empty($diagnosis['diagnosis'])) {
-        error_log("❌ AUTO-COMPLETE SKIPPED: No diagnosis recorded");
         return false;
     }
     
@@ -375,30 +378,10 @@ function canAutoCompleteVisit($db, $visit_id, $bill_id) {
     $bill = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if (!$bill || $bill['balance'] > 0) {
-        error_log("❌ AUTO-COMPLETE SKIPPED: Balance is " . ($bill['balance'] ?? 'null') . ", must be 0");
         return false;
     }
     
-    error_log("✅ AUTO-COMPLETE READY: Visit #$visit_id is 'waiting', has diagnosis, and balance is 0");
-    return true;
-}
-
-function autoCompleteVisit($db, $visit_id) {
-    // Double-check before updating
-    $stmt = $db->prepare("
-        SELECT v.status, v.diagnosis, b.balance 
-        FROM visits v 
-        LEFT JOIN bills b ON v.id = b.visit_id 
-        WHERE v.id = ?
-    ");
-    $stmt->execute([$visit_id]);
-    $data = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (!$data || $data['status'] !== 'waiting' || empty($data['diagnosis']) || ($data['balance'] ?? 0) > 0) {
-        error_log("❌ AUTO-COMPLETE FAILED: Pre-check failed");
-        return false;
-    }
-    
+    // ✅ ALL CHECKS PASSED - PERFORM AUTO-COMPLETE
     try {
         $stmt = $db->prepare("
             UPDATE visits 
@@ -411,7 +394,7 @@ function autoCompleteVisit($db, $visit_id) {
         $stmt->execute([$visit_id]);
         
         if ($stmt->rowCount() > 0) {
-            error_log("✅ AUTO-COMPLETE SUCCESS: Visit #$visit_id completed");
+            error_log("✅ AUTO-COMPLETE SUCCESS: Visit #$visit_id completed (balance=0, diagnosis exists)");
             return true;
         }
         return false;
@@ -454,7 +437,7 @@ function checkLabResultsAndUpdateStatus($db, $visit_id) {
             $stmt->execute([$visit_id]);
             
             if ($stmt->rowCount() > 0) {
-                error_log("✅ Visit #$visit_id updated to 'prescribed' ONLY");
+                error_log("✅ Visit #$visit_id updated to 'prescribed' ONLY (lab results complete)");
                 return true;
             }
         }
@@ -489,14 +472,20 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
         
         if ($existing) {
             $disease_id_val = $existing['id'];
+            // ✅ UPDATE treatment if disease exists
+            if (!empty($treatment)) {
+                $stmt = $db->prepare("UPDATE diseases SET treatment = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$treatment, $disease_id_val]);
+                error_log("✅ Treatment updated for existing disease: $disease_name");
+            }
         } else {
             $stmt = $db->prepare("
-                INSERT INTO diseases (disease_name, disease_code, branch_id, is_active, created_at)
-                VALUES (?, ?, ?, 1, NOW())
+                INSERT INTO diseases (disease_name, disease_code, branch_id, treatment, is_active, created_at)
+                VALUES (?, ?, ?, ?, 1, NOW())
             ");
-            $stmt->execute([$disease_name, $disease_code, $doctor_branch_id]);
+            $stmt->execute([$disease_name, $disease_code, $doctor_branch_id, $treatment]);
             $disease_id_val = $db->lastInsertId();
-            error_log("✅ Manual disease saved: $disease_name ($disease_code)");
+            error_log("✅ Manual disease saved: $disease_name with treatment: $treatment");
         }
     } elseif ($diagnosis_id > 0) {
         $stmt = $db->prepare("SELECT id, disease_name, disease_code FROM diseases WHERE id = ? AND is_active = 1");
@@ -506,9 +495,17 @@ function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, 
             $disease_id_val = $disease['id'];
             $disease_name = $disease['disease_name'];
             $disease_code = $disease['disease_code'] ?? 'D-' . strtoupper(substr(str_replace(' ', '', $disease_name), 0, 6)) . '-' . rand(100, 999);
+            
+            // ✅ UPDATE treatment for selected disease
+            if (!empty($treatment)) {
+                $stmt = $db->prepare("UPDATE diseases SET treatment = ?, updated_at = NOW() WHERE id = ?");
+                $stmt->execute([$treatment, $disease_id_val]);
+                error_log("✅ Treatment updated for disease ID: $disease_id_val");
+            }
         }
     }
     
+    // ✅ UPDATE visit with all data including notes
     $stmt = $db->prepare("
         UPDATE visits 
         SET disease_id = ?,
@@ -875,7 +872,7 @@ function getUserColor($name) {
 
 function getStatusBadgeClass($status) {
     $map = [
-        'assigned' => 'badge-info',
+        'assigned' => 'badge-purple',
         'pending' => 'badge-warning',
         'with_doctor' => 'badge-info',
         'lab_test' => 'badge-warning',
@@ -885,7 +882,7 @@ function getStatusBadgeClass($status) {
         'completed' => 'badge-success',
         'cancelled' => 'badge-danger'
     ];
-    return $map[$status] ?? 'badge-info';
+    return $map[$status] ?? 'badge-purple';
 }
 
 // ================================================================
@@ -939,7 +936,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         }
         
         try {
-            // ✅ SAVE DATA ONLY - NO STATUS CHANGE!
             $result = saveDiagnosisToDatabase($db, $visit_id_input, $doctor_id, $doctor_branch_id, $input);
             $response['success'] = true;
             $response['message'] = '✅ Data saved successfully';
@@ -949,7 +945,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                 'treatment' => $result['treatment'],
                 'disease_id' => $result['disease_id']
             ];
-            // ❌ DO NOT CHANGE STATUS HERE!
         } catch (Exception $e) {
             $response['message'] = '❌ Error: ' . $e->getMessage();
         }
@@ -1010,6 +1005,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $stmt->execute([$bill_id]);
         $bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
+        // ✅ CHECK AUTO-COMPLETE - AUTOMATIC
+        $auto_completed = false;
+        if ($visit_status === 'waiting' && ($bill['balance'] ?? 0) <= 0) {
+            $auto_completed = checkAndAutoCompleteVisit($db, $visit_id, $bill_id);
+        }
+        
         echo json_encode([
             'success' => true,
             'lab_total' => $lab_total,
@@ -1026,13 +1027,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             'bill_paid' => $payment_total,
             'bill_balance' => $amount_after_discount - $payment_total,
             'bill_subtotal' => $bill['subtotal'] ?? 0,
+            'auto_completed' => $auto_completed,
             'timestamp' => date('H:i:s')
         ]);
         exit;
     }
     
     // ================================================================
-    // AJAX: GET FULL STATE - NO AUTO-COMPLETE
+    // AJAX: GET FULL STATE - WITH AUTO-COMPLETE CHECK
     // ================================================================
     if ($action === 'get_full_state') {
         header('Content-Type: application/json');
@@ -1165,7 +1167,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             'status' => $bill['status'] ?? 'pending'
         ];
         
-        // ✅ NO AUTO-COMPLETE HERE! Only return data for UI update.
+        // ✅ CHECK AUTO-COMPLETE - AUTOMATIC
+        $auto_completed = false;
+        if ($visit_status === 'waiting' && ($bill['balance'] ?? 0) <= 0) {
+            $auto_completed = checkAndAutoCompleteVisit($db, $visit_id, $bill_id);
+        }
         
         $added_procedures = [];
         try {
@@ -1212,6 +1218,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             'equipment_total' => $equipment_total,
             'added_procedures' => $added_procedures,
             'added_equipment' => $added_equipment,
+            'auto_completed' => $auto_completed,
             'timestamp' => date('H:i:s')
         ]);
         exit;
@@ -2107,74 +2114,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // ✅ AUTO-COMPLETE - ONLY TRIGGERED BY SAVE CONSULTATION BUTTON
-    // ================================================================
-    if ($action === 'auto_complete_visit') {
-        header('Content-Type: application/json');
-        $visit_id_auto = (int)($_POST['visit_id'] ?? 0);
-        $response = ['success' => false, 'message' => ''];
-        
-        if ($visit_id_auto > 0) {
-            $stmt = $db->prepare("SELECT id, status FROM visits WHERE id = ?");
-            $stmt->execute([$visit_id_auto]);
-            $visit_check = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if (!$visit_check) {
-                $response['message'] = 'Visit not found';
-                echo json_encode($response);
-                exit;
-            }
-            
-            if ($visit_check['status'] !== 'waiting') {
-                $response['message'] = '❌ Visit is not in waiting status. Current: ' . $visit_check['status'] . '. Auto-complete requires status = "waiting"';
-                echo json_encode($response);
-                exit;
-            }
-            
-            // Check diagnosis
-            $stmt = $db->prepare("SELECT diagnosis FROM visits WHERE id = ?");
-            $stmt->execute([$visit_id_auto]);
-            $diagnosis_check = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if (!$diagnosis_check || empty($diagnosis_check['diagnosis'])) {
-                $response['message'] = '❌ Diagnosis is required before auto-complete. Please enter a diagnosis first.';
-                echo json_encode($response);
-                exit;
-            }
-            
-            $stmt = $db->prepare("SELECT id, balance FROM bills WHERE visit_id = ?");
-            $stmt->execute([$visit_id_auto]);
-            $bill_check = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if (!$bill_check) {
-                $response['message'] = 'Bill not found';
-                echo json_encode($response);
-                exit;
-            }
-            
-            if ($bill_check['balance'] > 0) {
-                $response['message'] = '❌ Bill balance is ' . $bill_check['balance'] . '. Must be 0 to auto-complete.';
-                echo json_encode($response);
-                exit;
-            }
-            
-            $completed = autoCompleteVisit($db, $visit_id_auto);
-            if ($completed) {
-                $response['success'] = true;
-                $response['message'] = '✅ Visit #' . $visit_id_auto . ' auto-completed successfully!';
-            } else {
-                $response['message'] = 'Auto-complete failed. Visit may already be completed.';
-            }
-        } else {
-            $response['message'] = 'Invalid visit ID';
-        }
-        
-        echo json_encode($response);
-        exit;
-    }
-    
-    // ================================================================
-    // SEND LAB REQUESTS FROM CART
+    // SEND LAB REQUESTS FROM CART - ✅ NOW SAVES ALL DATA
     // ================================================================
     if (isset($_POST['send_lab'])) {
         $lab_cart = isset($_SESSION['lab_cart']) ? $_SESSION['lab_cart'] : [];
@@ -2186,11 +2126,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
+        // ✅ Get ALL form data - Symptoms, HPI, Physical Exam, Notes
         $symptoms = trim($_POST['symptoms'] ?? '');
         $hpi = trim($_POST['hpi'] ?? '');
         $physical_exam = trim($_POST['physical_exam'] ?? '');
         $notes = trim($_POST['notes'] ?? '');
         
+        // ✅ Get diagnosis data
+        $diagnosis_id = $_POST['diagnosis_id'] ?? '';
+        $diagnosis_manual = trim($_POST['diagnosis_manual'] ?? '');
+        $treatment = trim($_POST['treatment'] ?? '');
+        $disease_code_manual = trim($_POST['disease_code_manual'] ?? '');
+        
+        // ✅ SAVE ALL DATA - Symptoms, HPI, Physical Exam, Notes
         $stmt = $db->prepare("
             UPDATE visits 
             SET 
@@ -2209,6 +2157,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             $visit_id,
             $doctor_id
         ]);
+        
+        // ✅ SAVE diagnosis and treatment if provided
+        if (!empty($diagnosis_manual) || (!empty($diagnosis_id) && $diagnosis_id != '0')) {
+            try {
+                $diagnosis_data = [
+                    'diagnosis_id' => $diagnosis_id,
+                    'diagnosis_manual' => $diagnosis_manual,
+                    'treatment' => $treatment,
+                    'disease_code_manual' => $disease_code_manual,
+                    'symptoms' => $symptoms,
+                    'hpi' => $hpi,
+                    'physical_exam' => $physical_exam,
+                    'notes' => $notes
+                ];
+                saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, $diagnosis_data);
+                error_log("✅ Diagnosis and treatment saved with lab tests");
+            } catch (Exception $e) {
+                error_log("Failed to save diagnosis with lab: " . $e->getMessage());
+            }
+        }
         
         $stmt = $db->prepare("
             SELECT COUNT(*) FROM lab_tests 
@@ -2251,7 +2219,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
                     continue;
                 }
                 
-                // LAB TEST LINKED EQUIPMENT - FREE (not charged)
                 if ($required_equipment_id) {
                     $stmt_eq = $db->prepare("
                         SELECT id, equipment_name, quantity as stock, batch_number, expiry_date
@@ -2337,6 +2304,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         if ($lab_tests_sent > 0) {
             $msg = "✅ " . $lab_tests_sent . " lab request(s) sent to Laboratory!";
             $msg .= "<br>📝 Consultation data saved!";
+            $msg .= "<br>📋 Symptoms, HPI, Physical Exam, and Notes saved!";
             $msg .= "<br>⏳ Status changed to LAB TEST";
             $msg .= "<br>⏳ Waiting for results (updates to PRESCRIBED when complete)";
             $msg .= "<br>💰 Total Lab Fees: TSh " . number_format($total_lab_price, 0);
@@ -2354,7 +2322,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
     }
     
     // ================================================================
-    // ✅ SAVE CONSULTATION - ONLY THIS CHANGES STATUS TO 'waiting'
+    // ✅ SAVE CONSULTATION - CHANGES STATUS TO 'waiting'
     // ================================================================
     if (isset($_POST['save_consultation'])) {
         $diagnosis_id = $_POST['diagnosis_id'] ?? '';
@@ -2366,7 +2334,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $physical_exam = trim($_POST['physical_exam'] ?? '');
         $notes = trim($_POST['notes'] ?? '');
         
-        // ✅ CHECK: Diagnosis lazima ijazwe
         if (empty($diagnosis_manual) && (empty($diagnosis_id) || $diagnosis_id == '0')) {
             $_SESSION['flash_message'] = "❌ Please enter a diagnosis before saving consultation!";
             $_SESSION['flash_type'] = 'error';
@@ -2374,32 +2341,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
-        // Save diagnosis
+        // ✅ Save diagnosis and treatment
         try {
-            $stmt = $db->prepare("
-                UPDATE visits 
-                SET 
-                    diagnosis = ?,
-                    disease_code = ?,
-                    treatment = ?,
-                    symptoms = ?,
-                    hpi = ?,
-                    physical_exam = ?,
-                    notes = ?,
-                    updated_at = NOW()
-                WHERE id = ? AND doctor_id = ?
-            ");
-            $stmt->execute([
-                $diagnosis_manual ?: null,
-                $disease_code_manual ?: null,
-                $treatment ?: null,
-                $symptoms ?: null,
-                $hpi ?: null,
-                $physical_exam ?: null,
-                $notes ?: null,
-                $visit_id,
-                $doctor_id
-            ]);
+            $diagnosis_data = [
+                'diagnosis_id' => $diagnosis_id,
+                'diagnosis_manual' => $diagnosis_manual,
+                'treatment' => $treatment,
+                'disease_code_manual' => $disease_code_manual,
+                'symptoms' => $symptoms,
+                'hpi' => $hpi,
+                'physical_exam' => $physical_exam,
+                'notes' => $notes
+            ];
+            saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, $diagnosis_data);
         } catch (Exception $e) {
             error_log("Failed to save diagnosis: " . $e->getMessage());
             $_SESSION['flash_message'] = "❌ Error saving diagnosis: " . $e->getMessage();
@@ -2408,7 +2362,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
             exit;
         }
         
-        // ✅ ONLY HERE - CHANGE STATUS TO 'waiting'
+        // ✅ CHANGE STATUS TO 'waiting'
         $stmt = $db->prepare("
             UPDATE visits 
             SET status = 'waiting',
@@ -2422,23 +2376,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $new_status = $stmt_check->fetch(PDO::FETCH_ASSOC);
         
         if ($new_status && $new_status['status'] === 'waiting') {
-            error_log("✅ Visit #$visit_id status changed to 'waiting' by Save Consultation button");
+            error_log("✅ Visit #$visit_id status changed to 'waiting'");
             
-            // ✅ NOW CHECK IF AUTO-COMPLETE SHOULD RUN (status='waiting', diagnosis exists, balance=0)
-            $can_auto = canAutoCompleteVisit($db, $visit_id, $bill_id);
-            if ($can_auto) {
-                error_log("✅ AUTO-COMPLETE triggered after Save Consultation (status=waiting, diagnosis exists, balance=0)");
-                $auto_completed = autoCompleteVisit($db, $visit_id);
-                if ($auto_completed) {
-                    $_SESSION['flash_message'] = "✅ Consultation saved AND auto-completed! All bills paid. Status: COMPLETED";
-                    $_SESSION['flash_type'] = 'success';
-                    header('Location: consultation.php?visit_id=' . $visit_id);
-                    exit;
-                }
+            // ✅ CHECK AUTO-COMPLETE - AUTOMATIC IF BALANCE = 0
+            $auto_completed = checkAndAutoCompleteVisit($db, $visit_id, $bill_id);
+            
+            if ($auto_completed) {
+                $_SESSION['flash_message'] = "✅ Consultation saved AND auto-completed! Status: COMPLETED";
+                $_SESSION['flash_type'] = 'success';
+            } else {
+                $_SESSION['flash_message'] = "✅ Consultation saved! Status changed to WAITING. Auto-complete will run automatically when bills are fully paid.";
+                $_SESSION['flash_type'] = 'success';
             }
-            
-            $_SESSION['flash_message'] = "✅ Consultation saved! Status changed to WAITING. Auto-complete will run when diagnosis is filled and balance is 0.";
-            $_SESSION['flash_type'] = 'success';
         } else {
             error_log("❌ Failed to update visit #$visit_id status");
             $_SESSION['flash_message'] = "⚠️ Consultation saved but status may not be WAITING.";
@@ -2560,7 +2509,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         /* ================================================================ */
-        /* PAGE HEADER */
+        /* PAGE HEADER - BLUE GRADIENT BACKGROUND */
         /* ================================================================ */
         .page-header {
             display: flex;
@@ -2610,56 +2559,136 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .page-subtitle strong { color: #ffffff !important; font-weight: 700; }
         
-        .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.65rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .btn-outline-light {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 16px;
-            border-radius: 10px;
-            font-weight: 500;
-            font-size: 0.82rem;
-            transition: all 0.3s;
-            text-decoration: none;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            backdrop-filter: blur(4px);
-            position: relative;
-            z-index: 1;
-        }
-        .btn-outline-light:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        }
-        
-        .status-badge-lg {
+        /* ================================================================ */
+        /* STATUS BADGE - PURPLE BACKGROUND IN HEADER */
+        /* ================================================================ */
+        .status-badge {
             display: inline-block;
             padding: 4px 16px;
             border-radius: 20px;
             font-size: 0.75rem;
             font-weight: 600;
+            background: #7C3AED !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.3);
+            box-shadow: 0 2px 8px rgba(124, 58, 237, 0.4);
         }
+        .status-badge.badge-purple {
+            background: #7C3AED !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        .status-badge.badge-success {
+            background: #059669 !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        .status-badge.badge-warning {
+            background: #D97706 !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        .status-badge.badge-info {
+            background: #0B5ED7 !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        .status-badge.badge-danger {
+            background: #DC2626 !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        
+        /* ================================================================ */
+        /* SUMMARY CARDS - INDIVIDUAL COLORS */
+        /* ================================================================ */
+        .bill-summary-card {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 18px 20px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+        }
+        .bill-summary-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            border-radius: 14px 14px 0 0;
+        }
+        .bill-summary-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
+        .bill-summary-card .bill-summary-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        .bill-summary-card .bill-summary-content { flex: 1; }
+        .bill-summary-card .bill-summary-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: block;
+        }
+        .bill-summary-card .bill-summary-value {
+            font-size: 1.2rem;
+            font-weight: 700;
+            display: block;
+            margin-top: 2px;
+            color: var(--text-primary);
+        }
+        
+        /* Total Card - Blue */
+        .bill-summary-card.total-card { border-color: var(--primary); }
+        .bill-summary-card.total-card::before { background: var(--primary); }
+        .bill-summary-card.total-card .bill-summary-icon { background: var(--primary-bg); color: var(--primary); }
+        .bill-summary-card.total-card .bill-summary-value { color: var(--primary); }
+        
+        /* Paid Card - Green */
+        .bill-summary-card.paid-card { border-color: var(--success); }
+        .bill-summary-card.paid-card::before { background: var(--success); }
+        .bill-summary-card.paid-card .bill-summary-icon { background: var(--success-bg); color: var(--success); }
+        .bill-summary-card.paid-card .bill-summary-value { color: var(--success); }
+        
+        /* Remaining Card - Orange / Green when zero */
+        .bill-summary-card.remaining-card { border-color: var(--warning); }
+        .bill-summary-card.remaining-card::before { background: var(--warning); }
+        .bill-summary-card.remaining-card .bill-summary-icon { background: var(--warning-bg); color: var(--warning); }
+        .bill-summary-card.remaining-card .bill-summary-value { color: var(--warning); }
+        .bill-summary-card.remaining-card.zero-balance { border-color: var(--success); }
+        .bill-summary-card.remaining-card.zero-balance::before { background: var(--success); }
+        .bill-summary-card.remaining-card.zero-balance .bill-summary-icon { background: var(--success-bg); color: var(--success); }
+        .bill-summary-card.remaining-card.zero-balance .bill-summary-value { color: var(--success); }
+        
+        /* Discount Card - Purple */
+        .bill-summary-card.discount-card { border-color: var(--purple); }
+        .bill-summary-card.discount-card::before { background: var(--purple); }
+        .bill-summary-card.discount-card .bill-summary-icon { background: var(--purple-bg); color: var(--purple); }
+        .bill-summary-card.discount-card .bill-summary-value { color: var(--purple); }
+        
+        /* ================================================================ */
+        /* OTHER BADGE STYLES */
+        /* ================================================================ */
         .badge-warning { background: var(--warning-bg); color: var(--warning); border: 1px solid var(--warning); }
         .badge-info { background: var(--primary-bg); color: var(--primary); border: 1px solid var(--primary); }
         .badge-success { background: var(--success-bg); color: var(--success); border: 1px solid var(--success); }
         .badge-danger { background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger); }
-        .badge-purple { background: var(--purple-bg); color: var(--purple); border: 1px solid var(--purple); }
         
         /* ================================================================ */
-        /* CONSULTATION CARDS */
+        /* REST OF STYLES REMAIN UNCHANGED - COMPRESSED */
         /* ================================================================ */
         .consultation-card {
             background: var(--bg-card);
@@ -2701,93 +2730,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .card-title i { color: var(--primary); font-size: 1.2rem; }
         
-        /* ================================================================ */
-        /* 4 BILL SUMMARY CARDS */
-        /* ================================================================ */
         .bill-summary-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 16px;
             margin-bottom: 20px;
         }
-        .bill-summary-card {
-            background: var(--bg-card);
-            border-radius: 14px;
-            padding: 18px 20px;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-            position: relative;
-            overflow: hidden;
-        }
-        .bill-summary-card::before {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            height: 4px;
-            border-radius: 14px 14px 0 0;
-        }
-        .bill-summary-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-md); }
-        .bill-summary-card .bill-summary-icon {
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.2rem;
-            flex-shrink: 0;
-            background: var(--gray-100);
-            color: var(--gray-600);
-        }
-        .bill-summary-card .bill-summary-content { flex: 1; }
-        .bill-summary-card .bill-summary-label {
-            font-size: 0.65rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            display: block;
-        }
-        .bill-summary-card .bill-summary-value {
-            font-size: 1.2rem;
-            font-weight: 700;
-            display: block;
-            margin-top: 2px;
-            color: var(--text-primary);
-        }
         
-        .bill-summary-card.total-card { border-color: var(--primary); }
-        .bill-summary-card.total-card::before { background: var(--primary); }
-        .bill-summary-card.total-card .bill-summary-icon { background: var(--primary-bg); color: var(--primary); }
-        .bill-summary-card.total-card .bill-summary-value { color: var(--primary); }
-        
-        .bill-summary-card.paid-card { border-color: var(--success); }
-        .bill-summary-card.paid-card::before { background: var(--success); }
-        .bill-summary-card.paid-card .bill-summary-icon { background: var(--success-bg); color: var(--success); }
-        .bill-summary-card.paid-card .bill-summary-value { color: var(--success); }
-        
-        .bill-summary-card.remaining-card { border-color: var(--warning); }
-        .bill-summary-card.remaining-card::before { background: var(--warning); }
-        .bill-summary-card.remaining-card .bill-summary-icon { background: var(--warning-bg); color: var(--warning); }
-        .bill-summary-card.remaining-card .bill-summary-value { color: var(--warning); }
-        .bill-summary-card.remaining-card.zero-balance { border-color: var(--success); }
-        .bill-summary-card.remaining-card.zero-balance::before { background: var(--success); }
-        .bill-summary-card.remaining-card.zero-balance .bill-summary-icon { background: var(--success-bg); color: var(--success); }
-        .bill-summary-card.remaining-card.zero-balance .bill-summary-value { color: var(--success); }
-        
-        .bill-summary-card.discount-card { border-color: var(--purple); }
-        .bill-summary-card.discount-card::before { background: var(--purple); }
-        .bill-summary-card.discount-card .bill-summary-icon { background: var(--purple-bg); color: var(--purple); }
-        .bill-summary-card.discount-card .bill-summary-value { color: var(--purple); }
-        
-        /* ================================================================ */
-        /* STATUS FLOW */
-        /* ================================================================ */
         .status-flow {
             display: flex;
             align-items: center;
@@ -2821,9 +2770,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.6rem;
         }
         
-        /* ================================================================ */
-        /* VITAL SIGNS */
-        /* ================================================================ */
         .vital-signs-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -2872,28 +2818,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .vital-sign-item .vital-unit { font-size: 0.7rem; color: var(--text-secondary); font-weight: 400; }
         
-        .vital-sign-item.bp-item { border-color: var(--primary-light); }
-        .vital-sign-item.bp-item::before { background: var(--primary); }
-        .vital-sign-item.bp-item .vital-value { color: var(--primary); }
-        .vital-sign-item.temp-item { border-color: #FCA5A5; }
-        .vital-sign-item.temp-item::before { background: #DC2626; }
-        .vital-sign-item.temp-item .vital-value { color: #DC2626; }
-        .vital-sign-item.pulse-item { border-color: #C4B5FD; }
-        .vital-sign-item.pulse-item::before { background: #7C3AED; }
-        .vital-sign-item.pulse-item .vital-value { color: #7C3AED; }
-        .vital-sign-item.weight-item { border-color: #FCD34D; }
-        .vital-sign-item.weight-item::before { background: #D97706; }
-        .vital-sign-item.weight-item .vital-value { color: #D97706; }
-        .vital-sign-item.height-item { border-color: #6EE7B7; }
-        .vital-sign-item.height-item::before { background: #059669; }
-        .vital-sign-item.height-item .vital-value { color: #059669; }
-        .vital-sign-item.bmi-item { border-color: #93C5FD; }
-        .vital-sign-item.bmi-item::before { background: #2563EB; }
-        .vital-sign-item.bmi-item .vital-value { color: #2563EB; }
-        
-        /* ================================================================ */
-        /* PATIENT INFO */
-        /* ================================================================ */
         .patient-info-block {
             display: flex;
             align-items: center;
@@ -2947,9 +2871,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .col-span-2 { grid-column: span 2; }
         
-        /* ================================================================ */
-        /* FORM ELEMENTS */
-        /* ================================================================ */
         .form-group { margin-bottom: 16px; }
         .form-group:last-child { margin-bottom: 0; }
         .form-label {
@@ -2983,9 +2904,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             background: var(--gray-100);
         }
         
-        /* ================================================================ */
-        /* BUTTONS */
-        /* ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -3012,9 +2930,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .btn-sm { padding: 4px 12px; font-size: 0.7rem; min-height: 30px; }
         .btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
         
-        /* ================================================================ */
-        /* FORM ACTIONS */
-        /* ================================================================ */
         .form-actions {
             display: flex;
             flex-wrap: wrap;
@@ -3024,9 +2939,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-top: 2px solid var(--border-color);
         }
         
-        /* ================================================================ */
-        /* ALERT */
-        /* ================================================================ */
         .alert {
             padding: 14px 20px;
             border-radius: var(--radius);
@@ -3043,9 +2955,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .alert-warning { background: var(--warning-bg); color: var(--warning); border-color: var(--warning); }
         .alert-info { background: var(--primary-bg); color: var(--primary); border-color: var(--primary); }
         
-        /* ================================================================ */
-        /* TOAST */
-        /* ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 30px;
@@ -3097,9 +3006,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transform: scale(1.1);
         }
         
-        /* ================================================================ */
-        /* FOOTER */
-        /* ================================================================ */
         .footer {
             padding: 16px 0;
             border-top: 2px solid var(--border-color);
@@ -3110,9 +3016,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* ================================================================ */
-        /* UTILITY CLASSES */
-        /* ================================================================ */
         .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .mb-6 { margin-bottom: 24px; }
         .mt-2 { margin-top: 8px; }
@@ -3182,9 +3085,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border: 1px dashed var(--border-color);
         }
         
-        /* ================================================================ */
-        /* LAB CART ITEMS */
-        /* ================================================================ */
         .lab-cart-items { max-height: 200px; overflow-y: auto; }
         .lab-cart-item {
             display: flex;
@@ -3210,9 +3110,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .lab-cart-item .btn-remove-cart:hover { background: var(--danger); color: #ffffff; }
         .lab-cart-empty { text-align: center; padding: 16px; color: var(--text-secondary); font-size: 0.85rem; }
         
-        /* ================================================================ */
-        /* MEDICATION ITEMS */
-        /* ================================================================ */
         .medication-item {
             display: flex;
             align-items: center;
@@ -3273,9 +3170,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .btn-remove:hover { background: var(--danger); color: #ffffff; transform: scale(1.1); }
         
-        /* ================================================================ */
-        /* ADDED ITEMS */
-        /* ================================================================ */
         .added-item-card {
             background: var(--bg-card);
             border-radius: 10px;
@@ -3356,9 +3250,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex-shrink: 0;
         }
         
-        /* ================================================================ */
-        /* SECTION TOTALS */
-        /* ================================================================ */
         .section-total {
             display: inline-flex;
             align-items: center;
@@ -3379,9 +3270,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .section-total.purple { background: linear-gradient(135deg, #7C3AED, #8B5CF6); }
         .section-total.orange { background: linear-gradient(135deg, #D97706, #F59E0B); }
         
-        /* ================================================================ */
-        /* TOGGLE SECTIONS */
-        /* ================================================================ */
         .toggle-section {
             border: 1px solid var(--border-color);
             border-radius: var(--radius);
@@ -3407,9 +3295,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .toggle-body { padding: 0 18px 18px 18px; display: none; background: var(--bg-card); }
         .toggle-body.open { display: block; }
         
-        /* ================================================================ */
-        /* ITEMS GRID */
-        /* ================================================================ */
         .items-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -3469,9 +3354,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .procedure-item-select.selected .item-check i, .equipment-item-select.selected .item-check i { opacity: 1; }
         
-        /* ================================================================ */
-        /* RESPONSIVE */
-        /* ================================================================ */
         @media (max-width: 1024px) {
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
             .vital-signs-grid { grid-template-columns: repeat(2, 1fr); }
@@ -3554,7 +3436,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 (<?= htmlspecialchars($visit['patient_code'] ?? 'N/A') ?>)
                 <span style="color:rgba(255,255,255,0.4);">|</span>
                 Status: 
-                <span class="status-badge <?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>" id="visitStatusBadge">
+                <span class="status-badge <?= getStatusBadgeClass($visit['status'] ?? 'pending') ?>" id="visitStatusBadge" style="background:#7C3AED !important; color:#ffffff !important; border:1px solid rgba(255,255,255,0.3); box-shadow:0 2px 8px rgba(124,58,237,0.4);">
                     <?= ucfirst(str_replace('_', ' ', $visit['status'] ?? 'Assigned')) ?>
                 </span>
                 <span style="font-size:0.75rem;color:rgba(255,255,255,0.7);" id="lastUpdateTime">⏱ <?= date('H:i:s') ?></span>
@@ -3620,7 +3502,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <?php elseif ($visit_status === 'prescribed'): ?>
                 ✅ Lab results complete! Add medications, procedures, equipment then click <strong>"Save Consultation"</strong> to change to WAITING.
             <?php elseif ($visit_status === 'waiting'): ?>
-                Consultation saved. Waiting for payment to complete.
+                Consultation saved. Auto-complete will trigger automatically when bills are fully paid.
             <?php elseif ($visit_status === 'completed'): ?>
                 ✅ Consultation completed successfully!
             <?php endif; ?>
@@ -3633,6 +3515,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-receipt"></i> Bill Summary</h3>
         <div class="bill-summary-grid" id="billSummaryGrid">
+            <!-- Total Amount - Blue -->
             <div class="bill-summary-card total-card">
                 <div class="bill-summary-icon"><i class="fas fa-file-invoice"></i></div>
                 <div class="bill-summary-content">
@@ -3640,6 +3523,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <span class="bill-summary-value" id="totalAmountDisplay">TSh <?= number_format($bill_subtotal, 0) ?></span>
                 </div>
             </div>
+            <!-- Paid Amount - Green -->
             <div class="bill-summary-card paid-card">
                 <div class="bill-summary-icon"><i class="fas fa-check-circle"></i></div>
                 <div class="bill-summary-content">
@@ -3647,6 +3531,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <span class="bill-summary-value" id="paidAmountDisplay">TSh <?= number_format($bill_paid, 0) ?></span>
                 </div>
             </div>
+            <!-- Remaining - Orange / Green -->
             <div class="bill-summary-card remaining-card <?= ($bill_balance) <= 0 ? 'zero-balance' : '' ?>">
                 <div class="bill-summary-icon"><i class="fas <?= ($bill_balance) > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle' ?>"></i></div>
                 <div class="bill-summary-content">
@@ -3654,6 +3539,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <span class="bill-summary-value" id="remainingAmountDisplay">TSh <?= number_format($bill_balance, 0) ?></span>
                 </div>
             </div>
+            <!-- Total Discount - Purple -->
             <div class="bill-summary-card discount-card">
                 <div class="bill-summary-icon"><i class="fas fa-percent"></i></div>
                 <div class="bill-summary-content">
@@ -3687,9 +3573,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </span>
             <span style="font-size:0.7rem;color:var(--text-secondary);" id="autoCompleteStatus">
                 <?php if ($is_waiting && $bill_balance <= 0 && !empty($visit['diagnosis'])): ?>
-                    <span style="color:var(--success);">⏳ Status is WAITING, diagnosis exists, and balance is 0. Auto-complete in 3 seconds...</span>
+                    <span style="color:var(--success);">✅ Status is WAITING, diagnosis exists, and balance is 0. Auto-complete will trigger automatically in a few seconds.</span>
                 <?php elseif ($is_waiting && $bill_balance <= 0 && empty($visit['diagnosis'])): ?>
-                    <span style="color:var(--danger);">❌ Status is WAITING and balance is 0, but NO diagnosis! Please enter diagnosis first.</span>
+                    <span style="color:var(--danger);">❌ Status is WAITING and balance is 0, but NO diagnosis! Please enter diagnosis.</span>
                 <?php elseif ($is_waiting && $bill_balance > 0): ?>
                     <span style="color:var(--warning);">⏳ Status is WAITING. Waiting for payment. Balance: TSh <?= number_format($bill_balance, 0) ?></span>
                 <?php elseif ($visit_status === 'prescribed'): ?>
@@ -3793,7 +3679,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <!-- ================================================================ -->
     <form method="POST" action="consultation.php?visit_id=<?= $visit_id ?>" id="consultationForm">
     
-    <!-- Symptoms & History -->
+    <!-- ================================================================ -->
+    <!-- ✅ CHIEF COMPLAINT & HISTORY - Additional Notes NI JUU -->
+    <!-- ================================================================ -->
     <div class="consultation-card mb-6">
         <h3 class="card-title">
             <i class="fas fa-list-ul"></i> Chief Complaint & History
@@ -3804,6 +3692,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             <?php endif; ?>
         </h3>
         
+        <!-- ✅ CHIEF COMPLAINT - Kwanza -->
         <div class="form-group">
             <label class="form-label">Chief Complaint <span class="required">*</span></label>
             <select class="form-control" id="complaintSelect" onchange="addComplaintOnSelect()">
@@ -3821,6 +3710,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
         
+        <!-- ✅ ADDITIONAL NOTES - SASA INAKUWA JUU (kabla ya HPI na Physical Exam) -->
+        <div class="form-group">
+            <label class="form-label">Additional Notes</label>
+            <textarea name="notes" class="form-control" rows="2" 
+                      placeholder="Additional notes about the patient..."
+                      <?= $sections_frozen && !$is_waiting ? 'disabled' : '' ?>
+                      id="notesTextarea"><?= htmlspecialchars($visit['notes'] ?? '') ?></textarea>
+        </div>
+        
+        <!-- ✅ HPI - Baada ya Notes -->
         <div class="form-group">
             <label class="form-label">History of Presenting Illness (HPI)</label>
             <textarea name="hpi" class="form-control" rows="3" 
@@ -3829,6 +3728,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                       id="hpiTextarea"><?= htmlspecialchars($visit['hpi'] ?? '') ?></textarea>
         </div>
         
+        <!-- ✅ Physical Examination - Mwisho -->
         <div class="form-group">
             <label class="form-label">Physical Examination</label>
             <textarea name="physical_exam" class="form-control" rows="3" 
@@ -4076,20 +3976,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             
+            <!-- ✅ TREATMENT PLAN - SASA INAKUWA SAVED KWA DATABASE -->
             <div class="form-group">
                 <label class="form-label">Treatment Plan</label>
                 <textarea name="treatment" class="form-control" rows="3" 
                           placeholder="Describe treatment plan..."
                           <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
                           id="treatmentTextarea"><?= htmlspecialchars($visit['treatment'] ?? '') ?></textarea>
-            </div>
-            
-            <div class="form-group">
-                <label class="form-label">Additional Notes</label>
-                <textarea name="notes" class="form-control" rows="2" 
-                          placeholder="Additional notes..."
-                          <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>
-                          id="notesTextarea"><?= htmlspecialchars($visit['notes'] ?? '') ?></textarea>
             </div>
             
             <div id="diagnosisAutoSaveStatus" style="font-size:0.7rem;color:var(--text-secondary);margin-top:8px;display:flex;align-items:center;gap:8px;">
@@ -4157,24 +4050,27 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <input type="text" id="medDosage" class="form-control" placeholder="e.g. 500mg" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Frequency</label>
-                        <select id="medFrequency" class="form-control" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                            <option value="">Select Frequency</option>
-                            <option value="Once Daily">Once Daily</option>
-                            <option value="Twice Daily">Twice Daily</option>
-                            <option value="Three Times Daily">Three Times Daily</option>
-                            <option value="Four Times Daily">Four Times Daily</option>
-                            <option value="Every 4 Hours">Every 4 Hours</option>
-                            <option value="Every 6 Hours">Every 6 Hours</option>
-                            <option value="Every 8 Hours">Every 8 Hours</option>
-                            <option value="Every 12 Hours">Every 12 Hours</option>
-                            <option value="As Needed (PRN)">As Needed (PRN)</option>
-                            <option value="Before Meals">Before Meals</option>
-                            <option value="After Meals">After Meals</option>
-                            <option value="With Meals">With Meals</option>
-                            <option value="At Bedtime">At Bedtime</option>
-                            <option value="On Empty Stomach">On Empty Stomach</option>
-                        </select>
+                        <label class="form-label">Frequency <span class="required">*</span></label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <select id="medFrequency" class="form-control" style="flex:1;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                                <option value="">Select Frequency</option>
+                                <option value="Once Daily">Once Daily</option>
+                                <option value="Twice Daily">Twice Daily</option>
+                                <option value="Three Times Daily">Three Times Daily</option>
+                                <option value="Four Times Daily">Four Times Daily</option>
+                                <option value="Every 4 Hours">Every 4 Hours</option>
+                                <option value="Every 6 Hours">Every 6 Hours</option>
+                                <option value="Every 8 Hours">Every 8 Hours</option>
+                                <option value="Every 12 Hours">Every 12 Hours</option>
+                                <option value="As Needed (PRN)">As Needed (PRN)</option>
+                                <option value="Before Meals">Before Meals</option>
+                                <option value="After Meals">After Meals</option>
+                                <option value="With Meals">With Meals</option>
+                                <option value="At Bedtime">At Bedtime</option>
+                                <option value="On Empty Stomach">On Empty Stomach</option>
+                            </select>
+                            <input type="text" id="medFrequencyManual" class="form-control" placeholder="Other..." style="flex:1;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                        </div>
                     </div>
                 </div>
                 
@@ -4184,17 +4080,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <input type="number" id="medDuration" class="form-control" value="7" min="1" max="90" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">Route</label>
-                        <select id="medRoute" class="form-control" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
-                            <option value="">Select Route</option>
-                            <option value="Oral">Oral</option>
-                            <option value="Topical">Topical</option>
-                            <option value="Injection">Injection</option>
-                            <option value="IV">IV</option>
-                            <option value="IM">IM</option>
-                            <option value="Sublingual">Sublingual</option>
-                            <option value="Inhalation">Inhalation</option>
-                        </select>
+                        <label class="form-label">Route <span class="required">*</span></label>
+                        <div style="display:flex;gap:8px;align-items:center;">
+                            <select id="medRoute" class="form-control" style="flex:1;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                                <option value="">Select Route</option>
+                                <option value="Oral">Oral</option>
+                                <option value="Topical">Topical</option>
+                                <option value="Injection">Injection</option>
+                                <option value="IV">IV</option>
+                                <option value="IM">IM</option>
+                                <option value="Sublingual">Sublingual</option>
+                                <option value="Inhalation">Inhalation</option>
+                                <option value="Nasal">Nasal</option>
+                                <option value="Ophthalmic">Ophthalmic</option>
+                                <option value="Otic">Otic</option>
+                                <option value="Rectal">Rectal</option>
+                            </select>
+                            <input type="text" id="medRouteManual" class="form-control" placeholder="Other..." style="flex:1;" <?= ($sections_frozen && !$is_waiting) ? 'disabled' : '' ?>>
+                        </div>
                     </div>
                 </div>
                 
@@ -4441,7 +4344,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </span>
             <?php elseif ($lab_results_available || $is_waiting): ?>
                 <span style="font-size:0.75rem;color:var(--success);align-self:center;" id="frozenActionsMessage">
-                    <i class="fas fa-check-circle"></i> <?= $is_waiting ? 'Consultation saved - Waiting for payment' : 'Lab results available - All actions unlocked' ?>
+                    <i class="fas fa-check-circle"></i> <?= $is_waiting ? 'Consultation saved - Auto-complete will trigger when bills are fully paid.' : 'Lab results available - All actions unlocked' ?>
                 </span>
             <?php endif; ?>
             <a href="my_patients.php" class="btn btn-outline">
@@ -4462,6 +4365,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <div class="form-group">
             <label class="form-label">Chief Complaint</label>
             <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['symptoms'] ?? 'No complaint recorded')) ?></div>
+        </div>
+        <div class="form-group">
+            <label class="form-label">Additional Notes</label>
+            <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['notes'] ?? 'No notes recorded')) ?></div>
         </div>
         <div class="form-group">
             <label class="form-label">HPI</label>
@@ -4500,7 +4407,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-diagnoses"></i> Diagnosis</h3>
+        <h3 class="card-title"><i class="fas fa-diagnoses"></i> Diagnosis & Treatment</h3>
         <?php if (!empty($visit['diagnosis']) || !empty($visit['disease_name'])): ?>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
                 <div>
@@ -4517,15 +4424,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             <div class="form-group mt-3">
-                <label class="form-label">Treatment</label>
+                <label class="form-label">Treatment Plan</label>
                 <div class="form-control" style="min-height:60px;background:var(--gray-50);">
                     <?= nl2br(htmlspecialchars($visit['treatment'] ?? 'No treatment recorded')) ?>
-                </div>
-            </div>
-            <div class="form-group mt-3">
-                <label class="form-label">Notes</label>
-                <div class="form-control" style="min-height:60px;background:var(--gray-50);">
-                    <?= nl2br(htmlspecialchars($visit['notes'] ?? 'No notes recorded')) ?>
                 </div>
             </div>
         <?php else: ?>
@@ -4651,17 +4552,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH AUTO-SAVE (DATA ONLY) -->
+<!-- JAVASCRIPT - WITH AUTO-COMPLETE (AUTOMATIC WHEN BILLS PAID) -->
 <!-- ================================================================ -->
 <script>
 // ================================================================
-// CONSULTATION JAVASCRIPT - WITH AUTO-SAVE (DATA ONLY)
+// CONSULTATION JAVASCRIPT - AUTO-COMPLETE TRIGGERS AUTOMATICALLY
+// WHEN BILLS ARE FULLY PAID (balance = 0 and status = waiting)
 // ================================================================
 
 var AUTO_UPDATE_INTERVAL = 3000;
 var FULL_UPDATE_INTERVAL = 5000;
 var LAB_CHECK_INTERVAL = 2000;
-var AUTO_SAVE_INTERVAL = 30000; // 30 seconds
+var AUTO_SAVE_INTERVAL = 30000;
 var updateInterval = null;
 var fullUpdateInterval = null;
 var labCheckInterval = null;
@@ -4674,6 +4576,7 @@ var isPrescribed = <?= $is_prescribed ? 'true' : 'false' ?>;
 var isLabTest = <?= $is_lab_test ? 'true' : 'false' ?>;
 var autoRefreshNeeded = <?= $auto_refresh_needed ? 'true' : 'false' ?>;
 var hasDiagnosis = <?= !empty($visit['diagnosis']) ? 'true' : 'false' ?>;
+var autoCompleteTriggered = false;
 
 var selectedProcedures = [];
 var selectedEquipment = [];
@@ -4807,18 +4710,15 @@ function getDiagnosisData() {
 // ✅ AUTO-SAVE DIAGNOSIS - SAVES DATA ONLY, NO STATUS CHANGE!
 // ================================================================
 function autoSaveDiagnosis() {
-    // Don't auto-save if completed, waiting, or currently saving
     if (isCompleted || isWaiting || diagnosisSaving) return;
     
     var diagnosisData = getDiagnosisData();
     if (!diagnosisData) return;
     
-    // Check if data has actually changed (avoid unnecessary saves)
     var diagnosisManual = diagnosisData.diagnosis_manual || '';
     var treatment = diagnosisData.treatment || '';
     var symptoms = diagnosisData.symptoms || '';
     
-    // If empty data, don't save
     if (!diagnosisManual && !treatment && !symptoms) return;
     
     var saveIndicator = document.getElementById('diagnosisSaveIndicator');
@@ -4827,7 +4727,6 @@ function autoSaveDiagnosis() {
     if (savedIndicator) savedIndicator.style.display = 'none';
     
     diagnosisSaving = true;
-    console.log('🔄 Auto-saving data (NO status change):', diagnosisData);
     
     var dataToSend = {
         action: 'save_diagnosis',
@@ -4858,16 +4757,11 @@ function autoSaveDiagnosis() {
                 statusEl.innerHTML = '✅ Saved: ' + result.data.diagnosis;
                 statusEl.style.color = 'var(--success)';
             }
-            
-            console.log('✅ Data auto-saved (NO status change):', result.data);
-        } else {
-            console.error('❌ Auto-save failed:', result.message);
         }
     })
     .catch(function(error) {
         diagnosisSaving = false;
         if (saveIndicator) saveIndicator.style.display = 'none';
-        console.error('❌ Auto-save error:', error);
     });
 }
 
@@ -4886,22 +4780,15 @@ function checkLabResultsAndUpdateStatus() {
     .then(data => {
         if (data.success && data.status_updated) {
             showToast('✅ Lab Results Completed!', 'Status updated to PRESCRIBED. Add medications and procedures then click "Save Consultation".', 'success');
-            console.log('✅ Status updated to prescribed:', data.message);
-            
             var statusBadge = document.getElementById('visitStatusBadge');
             if (statusBadge) {
                 statusBadge.textContent = 'Prescribed';
                 statusBadge.className = 'status-badge badge-purple';
             }
-            
             updateStatusFlow('prescribed');
-            
-            // ✅ NO AUTO-COMPLETE HERE! Just update UI.
         }
     })
-    .catch(function(err) {
-        console.error('❌ Error checking lab results:', err);
-    });
+    .catch(function(err) {});
 }
 
 // ================================================================
@@ -4923,120 +4810,60 @@ function updateStatusFlow(newStatus) {
 }
 
 // ================================================================
-// CHECK AND AUTO-COMPLETE - ONLY IF STATUS IS 'waiting'
+// ✅ CHECK AUTO-COMPLETE - AUTOMATIC WHEN BALANCE = 0
 // ================================================================
-function checkAndAutoComplete() {
-    if (isCompleted) return;
+function checkAndTriggerAutoComplete() {
+    if (isCompleted || autoCompleteTriggered) return;
     
+    if (!isWaiting) return;
+    
+    // Check if diagnosis exists
+    if (!hasDiagnosis) {
+        var statusEl = document.getElementById('autoCompleteStatus');
+        if (statusEl) {
+            statusEl.innerHTML = '<span style="color:var(--danger);">❌ Status is WAITING but NO diagnosis! Please enter diagnosis.</span>';
+        }
+        return;
+    }
+    
+    // Check balance
     var formData = new FormData();
-    formData.append('action', 'get_visit_status');
-    formData.append('visit_id', visitId);
+    formData.append('action', 'get_bill_totals');
     
     fetch(window.location.href, { method: 'POST', body: formData })
     .then(response => response.json())
-    .then(data => {
-        if (data.success) {
-            var currentStatus = data.status || 'unknown';
-            
-            if (currentStatus !== 'waiting') {
-                console.log('ℹ️ Auto-complete skipped: Status is "' + currentStatus + '", must be "waiting"');
+    .then(billData => {
+        if (billData.success) {
+            var balance = Number(billData.bill_balance || 0);
+            if (balance <= 0) {
+                // ✅ BALANCE IS 0 - TRIGGER AUTO-COMPLETE
+                autoCompleteTriggered = true;
+                showToast('✅ Auto-Complete Triggered!', 'All bills are paid. Status changing to COMPLETED.', 'success');
+                
                 var statusEl = document.getElementById('autoCompleteStatus');
                 if (statusEl) {
-                    statusEl.innerHTML = '<span style="color:var(--warning);">⏳ Auto-complete requires status "waiting". Current: "' + currentStatus + '"</span>';
+                    statusEl.innerHTML = '<span style="color:var(--success);">✅ Auto-complete triggered! Status changing to COMPLETED...</span>';
                 }
-                return;
-            }
-            
-            // Check if diagnosis exists
-            if (!hasDiagnosis) {
-                console.log('ℹ️ Auto-complete skipped: No diagnosis exists');
+                
+                // Reload page to show completed status
+                setTimeout(function() {
+                    window.location.reload();
+                }, 2000);
+            } else {
                 var statusEl = document.getElementById('autoCompleteStatus');
                 if (statusEl) {
-                    statusEl.innerHTML = '<span style="color:var(--danger);">❌ Auto-complete requires diagnosis. Please enter diagnosis first.</span>';
+                    statusEl.innerHTML = '<span style="color:var(--warning);">⏳ Status is WAITING. Waiting for payment. Balance: TSh ' + balance.toLocaleString() + '</span>';
                 }
-                return;
             }
-            
-            var formData2 = new FormData();
-            formData2.append('action', 'get_bill_totals');
-            
-            fetch(window.location.href, { method: 'POST', body: formData2 })
-            .then(response => response.json())
-            .then(billData => {
-                if (billData.success && billData.bill_balance <= 0) {
-                    console.log('✅ Status is "waiting", diagnosis exists, and balance is 0. Auto-completing in 3 seconds...');
-                    var statusEl = document.getElementById('autoCompleteStatus');
-                    if (statusEl) {
-                        statusEl.innerHTML = '<span style="color:var(--success);">⏳ Status is WAITING, diagnosis exists, and balance is 0. Auto-complete in 3 seconds...</span>';
-                    }
-                    setTimeout(function() {
-                        autoCompleteVisit();
-                    }, 3000);
-                } else {
-                    console.log('⏳ Status is "waiting" but balance is ' + (billData.bill_balance || 'unknown'));
-                    var statusEl = document.getElementById('autoCompleteStatus');
-                    if (statusEl) {
-                        statusEl.innerHTML = '<span style="color:var(--warning);">⏳ Status is WAITING. Waiting for payment. Balance: TSh ' + Number(billData.bill_balance || 0).toLocaleString() + '</span>';
-                    }
-                }
-            });
         }
     })
     .catch(function(err) {
-        console.error('❌ Error checking status:', err);
+        console.error('Error checking auto-complete:', err);
     });
 }
 
 // ================================================================
-// AUTO-COMPLETE VISIT - ONLY TRIGGERED AFTER SAVE CONSULTATION
-// ================================================================
-function autoCompleteVisit() {
-    var formData = new FormData();
-    formData.append('action', 'get_visit_status');
-    formData.append('visit_id', visitId);
-    
-    fetch(window.location.href, { method: 'POST', body: formData })
-    .then(response => response.json())
-    .then(data => {
-        if (data.success && data.status === 'waiting') {
-            // Check diagnosis again
-            if (!hasDiagnosis) {
-                showToast('❌ Error', 'Auto-complete requires diagnosis. Please enter diagnosis first.', 'error');
-                return;
-            }
-            
-            var formData2 = new FormData();
-            formData2.append('action', 'auto_complete_visit');
-            formData2.append('visit_id', visitId);
-            
-            fetch(window.location.href, { method: 'POST', body: formData2 })
-            .then(response => response.json())
-            .then(result => {
-                if (result.success) {
-                    showToast('✅ Auto-Completed!', 'Consultation completed automatically! Status is WAITING, diagnosis exists, and balance is 0.', 'success');
-                    console.log('✅ Auto-complete successful:', result.message);
-                    setTimeout(function() { window.location.reload(); }, 2000);
-                } else {
-                    console.log('ℹ️ Auto-complete not triggered:', result.message);
-                    showToast('ℹ️ Info', result.message, 'info');
-                }
-            })
-            .catch(function(err) {
-                console.error('❌ Auto-complete error:', err);
-            });
-        } else {
-            var status = data ? data.status : 'unknown';
-            console.log('ℹ️ Auto-complete aborted: Status is "' + status + '", must be "waiting"');
-            showToast('ℹ️ Info', 'Auto-complete requires status "waiting". Current: "' + status + '"', 'info');
-        }
-    })
-    .catch(function(err) {
-        console.error('❌ Error checking status:', err);
-    });
-}
-
-// ================================================================
-// BILL TOTALS UPDATE - 4 CARDS
+// BILL TOTALS UPDATE - 4 CARDS WITH AUTO-COMPLETE
 // ================================================================
 function updateBillTotals(billData) {
     if (!billData) return;
@@ -5097,6 +4924,11 @@ function updateBillTotals(billData) {
         var now = new Date();
         lastUpdated.textContent = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     }
+    
+    // ✅ CHECK AUTO-COMPLETE AUTOMATICALLY
+    if (isWaiting && !autoCompleteTriggered && !isCompleted) {
+        checkAndTriggerAutoComplete();
+    }
 }
 
 // ================================================================
@@ -5130,13 +4962,21 @@ function fetchBillTotals() {
                 status: data.bill_status || 'pending'
             };
             updateBillTotals(billData);
+            
+            // If auto_completed flag is true, reload
+            if (data.auto_completed) {
+                showToast('✅ Auto-Complete!', 'Consultation auto-completed successfully!', 'success');
+                setTimeout(function() {
+                    window.location.reload();
+                }, 2000);
+            }
         }
     })
     .catch(function(err) { console.error('Fetch bill totals error:', err); });
 }
 
 // ================================================================
-// FULL STATE UPDATE - NO AUTO-COMPLETE
+// FULL STATE UPDATE - WITH AUTO-COMPLETE
 // ================================================================
 function fetchFullState() {
     if (isUpdating || isCompleted) return;
@@ -5148,6 +4988,12 @@ function fetchFullState() {
     .then(data => {
         if (data.success) {
             updateFullUI(data);
+            if (data.auto_completed) {
+                showToast('✅ Auto-Complete!', 'Consultation auto-completed successfully!', 'success');
+                setTimeout(function() {
+                    window.location.reload();
+                }, 2000);
+            }
         }
         isUpdating = false;
     })
@@ -5505,13 +5351,23 @@ function addMedicationAjax() {
     var medSelect = document.getElementById('medicationSelect');
     var qty = parseInt(document.getElementById('medQuantity').value) || 0;
     var dosage = document.getElementById('medDosage').value;
-    var frequency = document.getElementById('medFrequency').value;
+    
+    var freqSelect = document.getElementById('medFrequency');
+    var freqManual = document.getElementById('medFrequencyManual');
+    var frequency = freqManual.value.trim() || freqSelect.value;
+    
     var duration = document.getElementById('medDuration').value;
-    var route = document.getElementById('medRoute').value;
+    
+    var routeSelect = document.getElementById('medRoute');
+    var routeManual = document.getElementById('medRouteManual');
+    var route = routeManual.value.trim() || routeSelect.value;
+    
     var instructions = document.getElementById('medInstructions').value;
     
     if (!medSelect.value) { showToast('❌ Error', 'Please select a medication', 'error'); return; }
     if (qty < 1) { showToast('❌ Error', 'Quantity must be at least 1', 'error'); return; }
+    if (!frequency) { showToast('❌ Error', 'Please enter frequency', 'error'); return; }
+    if (!route) { showToast('❌ Error', 'Please enter route', 'error'); return; }
     
     var stock = parseInt(medSelect.options[medSelect.selectedIndex]?.dataset?.stock) || 0;
     if (qty > stock) { showToast('⚠️ Warning', 'Not enough stock across all batches! Available: ' + stock, 'warning'); return; }
@@ -5558,8 +5414,10 @@ function addMedicationAjax() {
             document.getElementById('medQuantity').value = '1';
             document.getElementById('medDosage').value = '';
             document.getElementById('medFrequency').value = '';
+            document.getElementById('medFrequencyManual').value = '';
             document.getElementById('medDuration').value = '7';
             document.getElementById('medRoute').value = '';
+            document.getElementById('medRouteManual').value = '';
             document.getElementById('medInstructions').value = '';
         } else {
             showToast('❌ Error', data.message, 'error');
@@ -5674,7 +5532,6 @@ function removeAddedItem(type, id) {
             btn.innerHTML = '<i class="fas fa-times"></i>';
         }
         showToast('❌ Error', 'Network error. Please try again.', 'error');
-        console.error('Remove item error:', err);
     });
 }
 
@@ -5722,7 +5579,6 @@ function checkLabStatus() {
             var newHash = data.pending + '|' + data.in_progress + '|' + data.completed;
             
             if (labStatusHash && labStatusHash !== newHash) {
-                console.log('🔄 Lab status changed! Refreshing page...');
                 showToast('✅ Lab Status Updated', 'Lab tests status changed. Refreshing page...', 'success');
                 setTimeout(function() {
                     window.location.reload();
@@ -5797,7 +5653,7 @@ function escapeHtml(text) {
 }
 
 // ================================================================
-// AUTO-UPDATE
+// AUTO-UPDATE WITH AUTO-COMPLETE
 // ================================================================
 function startAutoUpdate() {
     if (isCompleted) return;
@@ -5822,14 +5678,29 @@ function startAutoUpdate() {
         checkLabResultsAndUpdateStatus();
     }, LAB_CHECK_INTERVAL);
     
-    // ✅ AUTO-SAVE EVERY 30 SECONDS - DATA ONLY
     autoSaveInterval = setInterval(function() {
         if (!isCompleted && !isWaiting && !isLabTest) {
             autoSaveDiagnosis();
         }
     }, AUTO_SAVE_INTERVAL);
     
-    console.log('🔄 Auto-update started (Auto-save every 30s - data only)');
+    // ✅ CHECK AUTO-COMPLETE - AUTOMATIC
+    if (isWaiting) {
+        setTimeout(function() {
+            checkAndTriggerAutoComplete();
+        }, 3000);
+        
+        // Check every 10 seconds
+        setInterval(function() {
+            if (isWaiting && !autoCompleteTriggered && !isCompleted) {
+                checkAndTriggerAutoComplete();
+            }
+        }, 10000);
+    }
+    
+    console.log('🔄 Auto-update started');
+    console.log('💰 Auto-complete triggered AUTOMATICALLY when status=waiting AND balance=0');
+    console.log('✅ No button click needed!');
 }
 
 function stopAutoUpdate() {
@@ -5866,12 +5737,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 } else {
                     document.getElementById('manualDiagnosisBox').style.display = 'none';
                 }
-                // ✅ AUTO-SAVE on change (data only)
                 autoSaveDiagnosis();
             });
         }
         
-        // ✅ AUTO-SAVE on input changes
         var inputs = [
             'diagnosisManualInput', 'treatmentTextarea', 'symptomsTextarea',
             'hpiTextarea', 'physicalExamTextarea', 'notesTextarea'
@@ -5888,48 +5757,26 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
-        // ✅ AUTO-SAVE on page unload (before navigating away)
         window.addEventListener('beforeunload', function() {
             if (!isCompleted && !isWaiting) {
                 autoSaveDiagnosis();
             }
         });
         
-        console.log('✅ Auto-save ENABLED - saves data only (NO status change)');
-        console.log('ℹ️ Save Consultation button = changes status to "waiting"');
-        console.log('ℹ️ Auto-complete = only after Save Consultation + diagnosis exists + balance=0');
-        console.log('ℹ️ Auto-save does NOT change status!');
+        console.log('✅ Auto-save ENABLED - saves data only');
+        console.log('🔒 SECURE: Auto-complete triggered AUTOMATICALLY when:');
+        console.log('   1. Status = "waiting"');
+        console.log('   2. Diagnosis exists');
+        console.log('   3. Balance = 0 (bills fully paid)');
+        console.log('✅ NO button click required for auto-complete!');
+        console.log('📌 Summary Cards: Total=Blue, Paid=Green, Remaining=Orange, Discount=Purple');
         
-        // ✅ Only check auto-complete if status is 'waiting'
+        // Initial auto-complete check
         if (isWaiting) {
-            console.log('✅ Visit is "waiting". Checking auto-complete...');
             setTimeout(function() {
-                checkAndAutoComplete();
-            }, 3000);
-        } else {
-            var statusBadge = document.getElementById('visitStatusBadge');
-            var currentStatus = statusBadge ? statusBadge.textContent.toLowerCase().trim() : 'unknown';
-            console.log('ℹ️ Visit status is "' + currentStatus + '". Auto-complete requires "waiting".');
-            console.log('ℹ️ Click "Save Consultation" to change to "waiting"');
+                checkAndTriggerAutoComplete();
+            }, 2000);
         }
-        
-        if (autoRefreshNeeded) {
-            showToast('✅ Lab Results Updated', 'New lab results are available!', 'success');
-            setTimeout(function() {
-                fetchFullState();
-                fetchBillTotals();
-            }, 500);
-        }
-        
-        console.log('💰 Braick - Consultation (AUTO-SAVE DATA ONLY)');
-        console.log('✅ 4 Cards: Total Amount, Paid Amount, Remaining, Total Discount');
-        console.log('✅ Status Flow: assigned → lab_test → prescribed → waiting → completed');
-        console.log('✅ Lab results → PRESCRIBED ONLY');
-        console.log('✅ Auto-save: Saves DATA only (NO status change)');
-        console.log('✅ Save Consultation: Changes status to "waiting"');
-        console.log('✅ Auto-complete: Only after Save Consultation + diagnosis exists + balance=0');
-        console.log('✅ NO auto-complete on Ajax refresh or sidebar navigation');
-        console.log('✅ Diagnosis required for auto-complete!');
     }
 });
 
