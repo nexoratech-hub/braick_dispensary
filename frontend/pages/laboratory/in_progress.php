@@ -1,6 +1,6 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/laboratory/in_progress_tests.php
+// FILE: frontend/pages/laboratory/in_progress.php
 // LABORATORY - IN PROGRESS TESTS
 // ✅ USING NEW DATABASE: dispensary_db
 // ✅ ONLY ONE TABLE: lab_tests

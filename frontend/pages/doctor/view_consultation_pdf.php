@@ -4,6 +4,8 @@
 // VIEW CONSULTATION AS PDF - A4 SIZE WITH LOGO, BRANCH & PHONE
 // BRAICK DISPENSARY - TUNAJALI AFYA YAKO
 // FIXED: Shows diagnosis directly from visits table
+// FIXED: Shows admin phone numbers ONLY (without names)
+// FIXED: 4 BILL SUMMARY CARDS: Total, Paid, Balance, Discount
 // ================================================================
 
 // Start session
@@ -55,6 +57,48 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die('Database connection error: ' . $e->getMessage());
+}
+
+// ================================================================
+// ✅ GET ALL ADMINS PHONE NUMBERS (Without names)
+// ================================================================
+$admin_phones = [];
+try {
+    $stmt = $db->prepare("
+        SELECT phone 
+        FROM users 
+        WHERE role = 'admin' 
+        AND status = 'active'
+        AND phone IS NOT NULL 
+        AND phone != ''
+        ORDER BY id ASC
+    ");
+    $stmt->execute();
+    $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+} catch (Exception $e) {
+    $admin_phones = [];
+    error_log("Error fetching admin phones: " . $e->getMessage());
+}
+
+// If no admin phones found, try branch-specific
+if (empty($admin_phones)) {
+    try {
+        $stmt = $db->prepare("
+            SELECT phone 
+            FROM users 
+            WHERE role = 'admin' 
+            AND status = 'active'
+            AND (branch_id = ? OR branch_id IS NULL)
+            AND phone IS NOT NULL 
+            AND phone != ''
+            ORDER BY id ASC
+            LIMIT 1
+        ");
+        $stmt->execute([$doctor_branch_id]);
+        $admin_phones = $stmt->fetchAll(PDO::FETCH_COLUMN);
+    } catch (Exception $e) {
+        $admin_phones = [];
+    }
 }
 
 // ================================================================
@@ -158,27 +202,6 @@ if (!empty($visit['treatment'])) {
 // Fallback to disease_treatment
 else if (!empty($visit['disease_treatment'])) {
     $treatment_display = $visit['disease_treatment'];
-}
-
-// ================================================================
-// GET ADMIN PHONE NUMBER
-// ================================================================
-$admin_phone = '';
-try {
-    $stmt = $db->prepare("SELECT phone FROM users WHERE role = 'admin' AND branch_id = ? LIMIT 1");
-    $stmt->execute([$doctor_branch_id]);
-    $admin = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($admin) {
-        $admin_phone = $admin['phone'] ?? '';
-    }
-    if (empty($admin_phone)) {
-        $stmt = $db->prepare("SELECT phone FROM users WHERE role = 'admin' LIMIT 1");
-        $stmt->execute();
-        $admin = $stmt->fetch(PDO::FETCH_ASSOC);
-        $admin_phone = $admin['phone'] ?? '';
-    }
-} catch (Exception $e) {
-    $admin_phone = '';
 }
 
 // ================================================================
@@ -326,14 +349,15 @@ $stmt = $db->prepare("
 $stmt->execute([$visit_id]);
 $equipment_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// 7. Bill Summary
+// 7. Bill Summary - 4 Cards: Total, Paid, Balance, Discount
 $bill_items = [];
 $total_bill_amount = 0;
 $paid_total = 0;
 $bill_balance = 0;
+$bill_total_discount = 0;
 $bill_status = 'pending';
 
-$stmt = $db->prepare("SELECT id, status, total_amount, paid_amount, balance FROM bills WHERE visit_id = ?");
+$stmt = $db->prepare("SELECT id, status, total_amount, paid_amount, balance, total_discount FROM bills WHERE visit_id = ?");
 $stmt->execute([$visit_id]);
 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
 if ($bill) {
@@ -342,6 +366,7 @@ if ($bill) {
     $total_bill_amount = $bill['total_amount'] ?? 0;
     $paid_total = $bill['paid_amount'] ?? 0;
     $bill_balance = $bill['balance'] ?? 0;
+    $bill_total_discount = $bill['total_discount'] ?? 0;
     
     $stmt = $db->prepare("
         SELECT id, item_name, item_type, quantity, unit_price, total_price, status 
@@ -411,9 +436,17 @@ foreach ($logo_paths as $path) {
 }
 
 // ================================================================
-// BUILD PDF CONTENT FUNCTION - FIXED DIAGNOSIS DISPLAY
+// BUILD PDF CONTENT FUNCTION
 // ================================================================
-function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $prescriptions, $prescription_items, $procedures, $equipment_items, $bill_items, $total_bill_amount, $paid_total, $bill_balance, $bill_status, $branch_location, $branch_phone, $doctor_branch_name, $doctor_name, $logo_base64, $admin_phone, $diagnosis_display, $disease_code_display, $treatment_display) {
+function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $prescriptions, $prescription_items, $procedures, $equipment_items, $bill_items, $total_bill_amount, $paid_total, $bill_balance, $bill_total_discount, $bill_status, $branch_location, $branch_phone, $doctor_branch_name, $doctor_name, $logo_base64, $admin_phones, $diagnosis_display, $disease_code_display, $treatment_display) {
+    
+    // Build admin phones string (numbers only, comma separated)
+    $admin_phones_string = '';
+    if (!empty($admin_phones)) {
+        $admin_phones_string = implode(' | ', array_map(function($phone) {
+            return '📞 ' . htmlspecialchars($phone);
+        }, $admin_phones));
+    }
     ?>
     
     <!-- ================================================================ -->
@@ -440,7 +473,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             </div>
             <div class="contact-row">
                 <i class="fas fa-phone"></i> 
-                <span><?= htmlspecialchars($branch_phone ?: $admin_phone) ?></span>
+                <span><?= htmlspecialchars($branch_phone ?: (!empty($admin_phones) ? $admin_phones[0] : '')) ?></span>
             </div>
             <div class="contact-row">
                 <i class="fas fa-calendar-alt"></i> 
@@ -448,6 +481,20 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             </div>
         </div>
     </div>
+    
+    <!-- ================================================================ -->
+    <!-- ✅ ADMINS SECTION - PHONE NUMBERS ONLY (NO NAMES) -->
+    <!-- ================================================================ -->
+    <?php if (!empty($admin_phones_string)): ?>
+    <div class="admins-section">
+        <div class="admins-title">
+            <i class="fas fa-phone"></i> Admin Contact Numbers
+        </div>
+        <div class="admins-list">
+            <?= $admin_phones_string ?>
+        </div>
+    </div>
+    <?php endif; ?>
     
     <!-- DOCUMENT TITLE -->
     <div class="doc-title-bar">
@@ -864,32 +911,40 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- 12. BILL SUMMARY -->
+    <!-- 12. BILL SUMMARY - 4 CARDS: Total, Paid, Balance, Discount -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">💰</span>
         BILL SUMMARY
         <span class="section-count"><?= count($bill_items) ?> items</span>
     </div>
-    <div class="bill-grid-pdf">
+    
+    <!-- 4 Cards: Total, Paid, Balance, Discount -->
+    <div class="bill-grid-4">
         <div class="bill-card-pdf total">
             <div class="amount">TSh <?= number_format($total_bill_amount, 0) ?></div>
             <div class="label">Total Amount</div>
         </div>
         <div class="bill-card-pdf paid">
             <div class="amount">TSh <?= number_format($paid_total, 0) ?></div>
-            <div class="label">Paid</div>
+            <div class="label">Paid Amount</div>
         </div>
         <div class="bill-card-pdf balance <?= $bill_balance <= 0 ? 'zero' : '' ?>">
             <div class="amount">TSh <?= number_format($bill_balance, 0) ?></div>
-            <div class="label">Balance</div>
+            <div class="label">Remaining Balance</div>
+        </div>
+        <div class="bill-card-pdf discount">
+            <div class="amount">TSh <?= number_format($bill_total_discount, 0) ?></div>
+            <div class="label">Total Discount</div>
         </div>
     </div>
+    
     <div class="bill-status-bar">
         <span class="status-label">Status:</span>
         <span class="badge-pdf <?= $bill_balance <= 0 ? 'success' : 'warning' ?>"><?= $bill_balance <= 0 ? '✅ Paid' : '⏳ ' . ucfirst($bill_status) ?></span>
         <span class="item-count">Total Items: <?= count($bill_items) ?></span>
     </div>
+    
     <?php 
         $consultation_total_display = 0;
         foreach ($bill_items as $item) {
@@ -926,13 +981,27 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
                 <div class="stamp-date">Date: <?= date('F d, Y') ?></div>
             </div>
         </div>
+        
+        <!-- ✅ ADMIN PHONES ONLY IN FOOTER - No names -->
+        <?php if (!empty($admin_phones_string)): ?>
+            <div style="text-align:center;margin-top:8px;padding:4px 0;border-top:1px solid #E2E8F0;font-size:7pt;color:#64748B;">
+                <i class="fas fa-phone" style="color:#0B5ED7;"></i> 
+                <strong>Admin Contacts:</strong> 
+                <?= $admin_phones_string ?>
+            </div>
+        <?php endif; ?>
+        
         <div class="footer-motto">
             <span class="brand">💙 BRAICK DISPENSARY</span> 
             <span class="motto-text">- TUNAJALI AFYA YAKO</span>
         </div>
         <div class="footer-bottom">
             <?= htmlspecialchars($branch_location ?: $doctor_branch_name) ?> • 
-            <?= htmlspecialchars($branch_phone ?: $admin_phone) ?> • 
+            <?php if (!empty($admin_phones_string)): ?>
+                <?= $admin_phones_string ?>
+            <?php elseif (!empty($branch_phone)): ?>
+                <?= htmlspecialchars($branch_phone) ?>
+            <?php endif; ?> • 
             Generated on <?= date('F d, Y h:i A') ?> • 
             All rights reserved
         </div>
@@ -1055,6 +1124,48 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             width: 16px;
             text-align: center;
             font-size: 9pt;
+        }
+        
+        /* ================================================================ */
+        /* ✅ ADMINS SECTION - PHONE NUMBERS ONLY */
+        /* ================================================================ */
+        .admins-section {
+            background: #E8F0FE;
+            border-radius: 8px;
+            padding: 6px 14px;
+            margin-bottom: 10px;
+            border: 1px solid #6EA8FE;
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 6px 16px;
+        }
+        .admins-section .admins-title {
+            font-size: 8pt;
+            font-weight: 700;
+            color: #0B5ED7;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .admins-section .admins-title i {
+            font-size: 9pt;
+        }
+        .admins-section .admins-list {
+            font-size: 8.5pt;
+            color: #1E293B;
+            font-weight: 500;
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 12px;
+        }
+        .admins-section .admins-list .admin-phone {
+            background: #ffffff;
+            padding: 1px 8px;
+            border-radius: 4px;
+            border: 1px solid #93C5FD;
+            font-family: monospace;
+            font-size: 8pt;
         }
         
         /* ================================================================ */
@@ -1414,11 +1525,11 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         }
         
         /* ================================================================ */
-        /* BILL SUMMARY */
+        /* BILL SUMMARY - 4 CARDS */
         /* ================================================================ */
-        .bill-grid-pdf {
+        .bill-grid-4 {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 8px;
             margin: 4px 0;
         }
@@ -1447,6 +1558,8 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .bill-card-pdf.balance .amount { color: #DC2626; }
         .bill-card-pdf.balance.zero { border-color: #6EE7B7; background: #D1FAE5; }
         .bill-card-pdf.balance.zero .amount { color: #059669; }
+        .bill-card-pdf.discount { border-color: #FCD34D; background: #FEF3C7; }
+        .bill-card-pdf.discount .amount { color: #D97706; }
         
         .bill-status-bar {
             display: flex;
@@ -1644,15 +1757,17 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             .vital-grid-cards { grid-template-columns: repeat(3, 1fr); }
             .info-grid-2 { grid-template-columns: 1fr; }
             .info-grid-3 { grid-template-columns: 1fr; }
-            .bill-grid-pdf { grid-template-columns: 1fr; }
+            .bill-grid-4 { grid-template-columns: 1fr 1fr; }
             .pdf-footer .footer-stamp-area { flex-direction: column; align-items: center; }
             #pdfContent { padding: 16px; }
             .clinic-name { font-size: 16pt; }
             .doc-title { font-size: 13pt; }
+            .admins-section { flex-direction: column; align-items: flex-start; }
         }
         
         @media (max-width: 480px) {
             .vital-grid-cards { grid-template-columns: 1fr 1fr; }
+            .bill-grid-4 { grid-template-columns: 1fr; }
             .header-logo-area { flex-direction: column; }
             .header-logo-img { height: 40px; }
             .pdf-container { border-radius: 0; }
@@ -1708,13 +1823,14 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             $total_bill_amount, 
             $paid_total, 
             $bill_balance, 
+            $bill_total_discount,
             $bill_status, 
             $branch_location, 
             $branch_phone, 
             $doctor_branch_name, 
             $doctor_name, 
             $logo_base64, 
-            $admin_phone,
+            $admin_phones,
             $diagnosis_display,
             $disease_code_display,
             $treatment_display
@@ -1754,9 +1870,10 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     console.log('🔑 Disease Code (from visits): <?= htmlspecialchars($disease_code_display ?: 'Not recorded') ?>');
     console.log('💊 Treatment (from visits): <?= htmlspecialchars($treatment_display ?: 'Not recorded') ?>');
     console.log('🏢 Branch: <?= htmlspecialchars($branch_location ?: $doctor_branch_name) ?>');
-    console.log('📞 Phone: <?= htmlspecialchars($branch_phone ?: $admin_phone) ?>');
+    console.log('📞 Admin Phones: <?= implode(', ', $admin_phones) ?>');
     console.log('💙 Motto: BRAICK DISPENSARY - TUNAJALI AFYA YAKO');
-    console.log('✅ FIXED: Diagnosis shows directly from visits.diagnosis column');
+    console.log('✅ FIXED: 4 Bill Cards: Total, Paid, Balance, Discount');
+    console.log('✅ FIXED: Admin phone numbers shown without names');
 </script>
 
 </body>

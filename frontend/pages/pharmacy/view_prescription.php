@@ -980,11 +980,7 @@ include_once '../../components/pharmacy_sidebar.php';
                 <i class="fas fa-arrow-left"></i> Back to List
             </a>
             
-            <?php if ($prescription['status'] !== 'dispensed' && $prescription['status'] !== 'cancelled'): ?>
-                <a href="dispense.php?id=<?= $prescription['id'] ?>" class="btn btn-success-custom">
-                    <i class="fas fa-prescription-bottle"></i> Go to Dispense
-                </a>
-            <?php endif; ?>
+
         </div>
     </div>
 

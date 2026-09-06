@@ -6,6 +6,7 @@
 // ✅ ONLY ONE TABLE: lab_tests
 // SHOWS: lab_tests with status = 'completed'
 // WITH FULL LOGIN SESSION PROTECTION
+// ✅ BLUE THEME - ONDOA PRINT - ONGEZA SIZE
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -259,10 +260,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     
     <style>
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
+            --primary: #2563EB;
+            --primary-dark: #1D4ED8;
+            --primary-light: #60A5FA;
+            --primary-bg: #DBEAFE;
+            --primary-gradient-from: #1E3A5F;
+            --primary-gradient-to: #2563EB;
             --success: #059669;
             --success-bg: #D1FAE5;
             --danger: #DC2626;
@@ -286,12 +289,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --transition: all 0.3s ease;
             --shadow: 0 1px 3px rgba(0,0,0,0.06);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
+            --deep-blue: #1E3A5F;
+            --deep-blue-dark: #172554;
+            --deep-blue-light: #3B82F6;
         }
         
         [data-theme="dark"] {
@@ -301,6 +308,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
+            --primary-bg: #1E3A5F;
+            --deep-blue: #1E3A5F;
+            --deep-blue-dark: #172554;
+            --deep-blue-light: #3B82F6;
         }
         
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -326,27 +337,39 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         .page-header {
-            background: linear-gradient(135deg, var(--success), var(--success-dark));
+            background: linear-gradient(135deg, #1E3A5F, #2563EB, #3B82F6);
             border-radius: 16px;
-            padding: 24px 32px;
+            padding: 28px 36px;
             margin-bottom: 28px;
             display: flex;
             flex-wrap: wrap;
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(5, 150, 105, 0.25);
+            box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25);
             position: relative;
             overflow: hidden;
         }
         
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 300px;
+            height: 300px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
         .page-header .page-title {
             color: white;
-            font-size: 1.6rem;
+            font-size: 1.8rem;
             font-weight: 700;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 14px;
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
@@ -366,23 +389,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             flex-wrap: wrap;
             position: relative;
             z-index: 1;
+            margin-top: 4px;
         }
         
         .role-badge-display {
             background: rgba(255,255,255,0.2);
             color: white;
-            padding: 4px 14px;
+            padding: 4px 16px;
             border-radius: 20px;
             font-size: 0.65rem;
             font-weight: 600;
             text-transform: uppercase;
             backdrop-filter: blur(4px);
+            letter-spacing: 0.05em;
         }
         
         .header-badge {
             background: rgba(255,255,255,0.15);
             color: white;
-            padding: 4px 14px;
+            padding: 4px 16px;
             border-radius: 20px;
             font-size: 0.7rem;
             font-weight: 500;
@@ -393,11 +418,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border: 1px solid rgba(255,255,255,0.1);
         }
         
+        .header-badge.blue-badge {
+            background: rgba(59, 130, 246, 0.3);
+            border-color: rgba(59, 130, 246, 0.2);
+        }
+        
         .btn-outline-light {
-            background: rgba(255,255,255,0.15);
+            background: rgba(255,255,255,0.12);
             color: white;
             border: 1px solid rgba(255,255,255,0.2);
-            padding: 8px 18px;
+            padding: 8px 20px;
             border-radius: 10px;
             font-weight: 500;
             font-size: 0.82rem;
@@ -409,23 +439,28 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             backdrop-filter: blur(4px);
             position: relative;
             z-index: 1;
+            cursor: pointer;
         }
         
         .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        /* ================================================================ */
+        /* STATS CARDS - BLUE THEME */
+        /* ================================================================ */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
-            gap: 16px;
+            gap: 18px;
             margin-bottom: 24px;
         }
         
         .stat-card-custom {
             border-radius: 14px;
-            padding: 20px 24px;
+            padding: 22px 26px;
             color: white;
             transition: var(--transition);
             box-shadow: var(--shadow);
@@ -434,27 +469,40 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             cursor: default;
         }
         
+        .stat-card-custom::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -20%;
+            width: 150px;
+            height: 150px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
         .stat-card-custom:hover {
-            transform: translateY(-4px);
-            box-shadow: var(--shadow-md);
+            transform: translateY(-5px);
+            box-shadow: var(--shadow-lg);
         }
         
         .stat-card-custom .stat-icon {
-            font-size: 1.8rem;
-            margin-bottom: 4px;
+            font-size: 2rem;
+            margin-bottom: 6px;
             display: block;
             opacity: 0.9;
         }
         
         .stat-card-custom .stat-number {
-            font-size: 2rem;
-            font-weight: 700;
+            font-size: 2.2rem;
+            font-weight: 800;
             display: block;
             line-height: 1.2;
+            letter-spacing: -0.02em;
         }
         
         .stat-card-custom .stat-label {
-            font-size: 0.75rem;
+            font-size: 0.8rem;
             opacity: 0.85;
             font-weight: 500;
             display: block;
@@ -462,22 +510,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         .stat-card-custom .stat-sub {
-            font-size: 0.65rem;
+            font-size: 0.7rem;
             opacity: 0.7;
             display: block;
             margin-top: 4px;
         }
         
-        .stat-card-custom.green { background: linear-gradient(135deg, #059669, #10B981); }
-        .stat-card-custom.blue { background: linear-gradient(135deg, #0B5ED7, #1A73E8); }
-        .stat-card-custom.purple { background: linear-gradient(135deg, #7C3AED, #8B5CF6); }
-        .stat-card-custom.orange { background: linear-gradient(135deg, #D97706, #F59E0B); }
-        .stat-card-custom.teal { background: linear-gradient(135deg, #0D9488, #14B8A6); }
+        .stat-card-custom.blue-dark { background: linear-gradient(135deg, #1E3A5F, #2563EB); }
+        .stat-card-custom.blue-light { background: linear-gradient(135deg, #2563EB, #3B82F6); }
+        .stat-card-custom.blue-mid { background: linear-gradient(135deg, #1D4ED8, #2563EB); }
+        .stat-card-custom.blue-teal { background: linear-gradient(135deg, #0D9488, #14B8A6); }
+        .stat-card-custom.purple-blue { background: linear-gradient(135deg, #4F46E5, #7C3AED); }
         
+        /* ================================================================ */
+        /* CARD */
+        /* ================================================================ */
         .card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
-            padding: 20px 24px;
+            padding: 24px 28px;
             border: 1px solid var(--border-color);
             transition: var(--transition);
             box-shadow: var(--shadow);
@@ -492,46 +543,49 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-bottom: 12px;
+            margin-bottom: 16px;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 10px;
         }
         
         .card-title {
-            font-size: 0.95rem;
-            font-weight: 600;
+            font-size: 1.1rem;
+            font-weight: 700;
             color: var(--text-primary);
         }
         
+        /* ================================================================ */
+        /* FILTER FORM */
+        /* ================================================================ */
         .filter-form {
             display: flex;
-            gap: 10px;
+            gap: 12px;
             flex-wrap: wrap;
             align-items: center;
-            margin-bottom: 16px;
         }
         
         .filter-form input, .filter-form select {
-            padding: 8px 12px;
+            padding: 10px 14px;
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
-            font-size: 0.8rem;
+            font-size: 0.9rem;
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
             transition: var(--transition);
+            min-width: 180px;
         }
         
         .filter-form input:focus, .filter-form select:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
         }
         
         .filter-form .btn {
-            padding: 8px 16px;
+            padding: 10px 22px;
             border-radius: var(--radius);
             font-weight: 600;
-            font-size: 0.8rem;
+            font-size: 0.85rem;
             border: none;
             cursor: pointer;
             transition: var(--transition);
@@ -542,6 +596,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .filter-form .btn:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
         }
         
         .filter-form .btn-reset {
@@ -554,8 +609,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border-color: var(--danger);
             color: var(--danger);
             background: transparent;
+            box-shadow: none;
         }
         
+        /* ================================================================ */
+        /* TABLE - BIGGER SIZE */
+        /* ================================================================ */
         .table-container {
             overflow-x: auto;
             border-radius: var(--radius-lg);
@@ -565,21 +624,21 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .table-container table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.82rem;
+            font-size: 0.95rem;
         }
         
         .table-container thead {
-            background: var(--success);
+            background: linear-gradient(135deg, #1E3A5F, #2563EB);
             color: white;
         }
         
         .table-container thead th {
-            padding: 12px 16px;
+            padding: 16px 20px;
             text-align: left;
-            font-weight: 600;
-            font-size: 0.7rem;
+            font-weight: 700;
+            font-size: 0.8rem;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.06em;
             white-space: nowrap;
             position: sticky;
             top: 0;
@@ -592,20 +651,24 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         .table-container tbody tr:hover {
-            background: var(--success-bg);
+            background: var(--primary-bg);
         }
         
         .table-container tbody td {
-            padding: 10px 16px;
+            padding: 14px 20px;
             vertical-align: middle;
             color: var(--text-primary);
+            font-size: 0.9rem;
         }
         
+        /* ================================================================ */
+        /* BADGES */
+        /* ================================================================ */
         .badge {
             display: inline-block;
-            padding: 2px 10px;
+            padding: 3px 12px;
             border-radius: 12px;
-            font-size: 0.6rem;
+            font-size: 0.65rem;
             font-weight: 600;
         }
         
@@ -617,9 +680,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .status-badge {
             display: inline-block;
-            font-size: 0.65rem;
+            font-size: 0.7rem;
             font-weight: 600;
-            padding: 3px 12px;
+            padding: 4px 14px;
             border-radius: 20px;
             text-transform: capitalize;
         }
@@ -630,33 +693,51 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border: 1px solid var(--success);
         }
         
+        /* ================================================================ */
+        /* PATIENT CELL */
+        /* ================================================================ */
         .patient-cell {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
         }
         
         .patient-avatar-sm {
-            width: 32px;
-            height: 32px;
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
             color: white;
             font-weight: 700;
-            font-size: 0.7rem;
+            font-size: 0.9rem;
             flex-shrink: 0;
         }
         
+        .patient-cell .patient-name {
+            font-weight: 600;
+            font-size: 0.95rem;
+            color: var(--text-primary);
+        }
+        
+        .patient-cell .patient-id {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            font-family: monospace;
+        }
+        
+        /* ================================================================ */
+        /* BUTTONS */
+        /* ================================================================ */
         .btn {
             display: inline-flex;
             align-items: center;
-            gap: 4px;
-            padding: 4px 12px;
-            border-radius: 6px;
+            gap: 6px;
+            padding: 8px 18px;
+            border-radius: 8px;
             font-weight: 600;
-            font-size: 0.7rem;
+            font-size: 0.8rem;
             transition: var(--transition);
             cursor: pointer;
             border: none;
@@ -664,42 +745,91 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             font-family: inherit;
         }
         
-        .btn-primary { background: var(--primary); color: white; }
-        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
-        .btn-success { background: var(--success); color: white; }
-        .btn-success:hover { background: #047857; transform: translateY(-1px); }
-        .btn-outline { background: transparent; color: var(--text-secondary); border: 1px solid var(--border-color); }
-        .btn-outline:hover { background: var(--gray-50); border-color: var(--primary); color: var(--primary); }
-        .btn-xs { padding: 2px 6px; font-size: 0.6rem; border-radius: 3px; }
-        .btn-print { background: #6B7280; color: white; }
-        .btn-print:hover { background: #4B5563; transform: translateY(-1px); }
+        .btn-primary {
+            background: var(--primary);
+            color: white;
+        }
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+        }
         
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+        .btn-success:hover {
+            background: #047857;
+            transform: translateY(-2px);
+        }
+        
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+        }
+        .btn-outline:hover {
+            background: var(--gray-50);
+            border-color: var(--primary);
+            color: var(--primary);
+        }
+        
+        .btn-sm {
+            padding: 6px 14px;
+            font-size: 0.75rem;
+            border-radius: 6px;
+        }
+        
+        .btn-xs {
+            padding: 4px 10px;
+            font-size: 0.7rem;
+            border-radius: 4px;
+        }
+        
+        /* ================================================================ */
+        /* OTHER */
+        /* ================================================================ */
         .font-mono { font-family: monospace; }
         .font-semibold { font-weight: 600; }
         .text-success { color: var(--success); }
         .text-warning { color: var(--warning); }
         .text-primary { color: var(--primary); }
         .text-gray-400 { color: var(--text-secondary); }
-        .text-sm { font-size: 0.85rem; }
-        .text-xs { font-size: 0.75rem; }
+        .text-sm { font-size: 0.9rem; }
+        .text-xs { font-size: 0.8rem; }
+        .text-2xl { font-size: 1.5rem; }
+        .font-bold { font-weight: 700; }
+        .mt-2 { margin-top: 8px; }
+        .mt-3 { margin-top: 12px; }
+        .mb-2 { margin-bottom: 8px; }
+        .flex { display: flex; }
+        .flex-wrap { flex-wrap: wrap; }
+        .gap-2 { gap: 8px; }
+        .items-center { align-items: center; }
+        .justify-between { justify-content: space-between; }
         
         .empty-state {
             text-align: center;
-            padding: 40px 20px;
+            padding: 60px 20px;
             color: var(--text-secondary);
         }
         
         .empty-state i {
-            font-size: 3rem;
+            font-size: 4rem;
             color: var(--border-color);
             display: block;
-            margin-bottom: 12px;
+            margin-bottom: 16px;
         }
         
         .empty-state h3 {
-            font-size: 1.2rem;
+            font-size: 1.3rem;
             color: var(--text-primary);
             margin-bottom: 8px;
+        }
+        
+        .empty-state p {
+            font-size: 0.95rem;
         }
         
         .alert {
@@ -741,40 +871,50 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .toast-custom.info { background: var(--primary); }
         
         .footer {
-            padding: 14px 0;
+            padding: 16px 0;
             border-top: 1px solid var(--border-color);
-            margin-top: 24px;
+            margin-top: 28px;
             text-align: center;
-            font-size: 0.7rem;
+            font-size: 0.75rem;
             color: var(--text-secondary);
         }
         
         .footer .footer-brand {
             color: var(--primary);
-            font-weight: 600;
+            font-weight: 700;
         }
         
+        /* ================================================================ */
+        /* RESPONSIVE */
+        /* ================================================================ */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
-            .page-header { padding: 16px 18px; }
+            .page-header { padding: 18px 20px; }
             .page-header .page-title { font-size: 1.3rem; }
+            .page-header .page-title i { font-size: 1.4rem; }
             .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 12px; }
-            .stat-card-custom { padding: 14px 16px; }
-            .stat-card-custom .stat-number { font-size: 1.5rem; }
+            .stat-card-custom { padding: 16px 18px; }
+            .stat-card-custom .stat-number { font-size: 1.6rem; }
             .filter-form { flex-direction: column; align-items: stretch; }
-            .table-container thead th { padding: 8px 10px; font-size: 0.6rem; }
-            .table-container tbody td { padding: 6px 10px; font-size: 0.7rem; }
+            .filter-form input, .filter-form select { width: 100%; min-width: unset; }
+            .table-container thead th { padding: 10px 12px; font-size: 0.65rem; }
+            .table-container tbody td { padding: 8px 12px; font-size: 0.75rem; }
+            .card { padding: 16px 18px; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
-            .stat-card-custom { padding: 10px 14px; }
-            .stat-card-custom .stat-number { font-size: 1.2rem; }
+            .stat-card-custom { padding: 12px 14px; }
+            .stat-card-custom .stat-number { font-size: 1.3rem; }
+            .stat-card-custom .stat-icon { font-size: 1.4rem; }
+            .stat-card-custom .stat-label { font-size: 0.65rem; }
+            .page-header .page-title { font-size: 1.1rem; }
+            .page-header .page-subtitle { font-size: 0.75rem; }
         }
     </style>
 </head>
@@ -792,7 +932,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <i class="fas fa-check-circle"></i>
                 Completed Tests
                 <span class="role-badge-display">LABORATORY</span>
-                <span class="header-badge">
+                <span class="header-badge blue-badge">
                     <i class="fas fa-check"></i> <?= $total_completed_count ?> Total
                 </span>
             </h1>
@@ -817,10 +957,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
-            <a href="in_progress_tests.php" class="btn-outline-light" style="background:rgba(255,255,255,0.2);">
+            <a href="in_progress_tests.php" class="btn-outline-light" style="background:rgba(255,255,255,0.15);">
                 <i class="fas fa-spinner"></i> In Progress (<?= $in_progress_count ?>)
             </a>
-            <a href="pending_requests.php" class="btn-outline-light" style="background:rgba(255,255,255,0.15);">
+            <a href="pending_requests.php" class="btn-outline-light" style="background:rgba(255,255,255,0.1);">
                 <i class="fas fa-clock"></i> Pending (<?= $pending_count ?>)
             </a>
         </div>
@@ -835,31 +975,31 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
+    <!-- STATS CARDS - BLUE THEME -->
     <!-- ================================================================ -->
     <div class="stats-grid">
-        <div class="stat-card-custom green">
+        <div class="stat-card-custom blue-dark">
             <span class="stat-icon">✅</span>
             <span class="stat-number"><?= $total_completed_count ?></span>
             <span class="stat-label">Total Completed</span>
             <span class="stat-sub">All time</span>
         </div>
         
-        <div class="stat-card-custom teal">
+        <div class="stat-card-custom blue-light">
             <span class="stat-icon">📅</span>
             <span class="stat-number"><?= $completed_today ?></span>
             <span class="stat-label">Completed Today</span>
             <span class="stat-sub"><?= date('F d, Y') ?></span>
         </div>
         
-        <div class="stat-card-custom blue">
+        <div class="stat-card-custom blue-mid">
             <span class="stat-icon">📊</span>
             <span class="stat-number"><?= $completed_week ?></span>
             <span class="stat-label">This Week</span>
             <span class="stat-sub">Last 7 days</span>
         </div>
         
-        <div class="stat-card-custom purple">
+        <div class="stat-card-custom purple-blue">
             <span class="stat-icon">📈</span>
             <span class="stat-number"><?= $completed_month ?></span>
             <span class="stat-label">This Month</span>
@@ -897,7 +1037,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     <div class="card">
         <div class="card-header">
             <h3 class="card-title">
-                <i class="fas fa-list" style="color:var(--success);margin-right:8px;"></i>
+                <i class="fas fa-list" style="color:var(--primary);margin-right:10px;"></i>
                 Completed Tests
                 <span class="text-sm font-normal text-gray-400">(<?= $total_completed ?> records)</span>
             </h3>
@@ -911,12 +1051,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <table>
                     <thead>
                         <tr>
-                            <th>#</th>
-                            <th>Patient</th>
-                            <th>Test</th>
-                            <th>Doctor</th>
-                            <th>Completed At</th>
-                            <th style="text-align:center;">Actions</th>
+                            <th style="width:40px;text-align:center;">#</th>
+                            <th style="min-width:200px;">Patient</th>
+                            <th style="min-width:180px;">Test</th>
+                            <th style="min-width:160px;">Doctor</th>
+                            <th style="min-width:140px;">Completed At</th>
+                            <th style="text-align:center;min-width:80px;">Actions</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -924,18 +1064,17 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                             $color = '#' . substr(md5($item['patient_name'] ?? 'Unknown'), 0, 6);
                             $test_id = $item['test_id'];
                             $view_link = "view_test.php?id=" . $test_id;
-                            $print_link = "print_test_result.php?id=" . $test_id;
                         ?>
                             <tr>
-                                <td><?= $i++ ?></td>
+                                <td style="text-align:center;font-weight:700;"><?= $i++ ?></td>
                                 <td>
                                     <div class="patient-cell">
                                         <div class="patient-avatar-sm" style="background: <?= $color ?>;">
                                             <?= strtoupper(substr($item['patient_name'] ?? 'U', 0, 1)) ?>
                                         </div>
                                         <div>
-                                            <div class="font-semibold text-sm"><?= htmlspecialchars($item['patient_name'] ?? 'Unknown') ?></div>
-                                            <div class="text-xs text-gray-400"><?= htmlspecialchars($item['patient_code'] ?? 'N/A') ?></div>
+                                            <div class="patient-name"><?= htmlspecialchars($item['patient_name'] ?? 'Unknown') ?></div>
+                                            <div class="patient-id"><?= htmlspecialchars($item['patient_code'] ?? 'N/A') ?></div>
                                         </div>
                                     </div>
                                 </td>
@@ -947,29 +1086,25 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                                     <?php if (!empty($item['results'])): ?>
                                         <div class="text-xs text-gray-400 mt-1">
                                             <i class="fas fa-file-medical-alt"></i> 
-                                            <?= strlen($item['results']) > 100 ? substr(htmlspecialchars($item['results']), 0, 100) . '...' : htmlspecialchars($item['results']) ?>
+                                            <?= strlen($item['results']) > 80 ? substr(htmlspecialchars($item['results']), 0, 80) . '...' : htmlspecialchars($item['results']) ?>
                                         </div>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="text-sm">Dr. <?= htmlspecialchars($item['doctor_name'] ?? 'N/A') ?></div>
-                                    <?php if (!empty($item['specialty'])): ?>
-                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($item['specialty']) ?></div>
+                                    <div class="text-sm font-semibold">Dr. <?= htmlspecialchars($item['doctor_name'] ?? 'N/A') ?></div>
+                                    <?php if (!empty($item['doctor_specialty'])): ?>
+                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($item['doctor_specialty']) ?></div>
                                     <?php endif; ?>
                                 </td>
                                 <td>
-                                    <div class="text-sm"><?= date('d/m/Y', strtotime($item['completed_at'] ?? 'now')) ?></div>
+                                    <div class="text-sm font-semibold"><?= date('d/m/Y', strtotime($item['completed_at'] ?? 'now')) ?></div>
                                     <div class="text-xs text-gray-400"><?= date('h:i A', strtotime($item['completed_at'] ?? 'now')) ?></div>
                                 </td>
-                                <td>
-                                    <div style="display:flex;gap:4px;flex-wrap:wrap;justify-content:center;">
-                                        <a href="<?= $view_link ?>" class="btn btn-primary btn-xs" title="View Details">
-                                            <i class="fas fa-eye"></i>
-                                        </a>
-                                        <a href="<?= $print_link ?>" class="btn btn-print btn-xs" title="Print Result" target="_blank">
-                                            <i class="fas fa-print"></i>
-                                        </a>
-                                    </div>
+                                <td style="text-align:center;">
+                                    <!-- ✅ Only View button - No Print -->
+                                    <a href="<?= $view_link ?>" class="btn btn-primary btn-sm" title="View Details">
+                                        <i class="fas fa-eye"></i> View
+                                    </a>
                                 </td>
                             </tr>
                         <?php endforeach; ?>
@@ -977,14 +1112,18 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 </table>
             </div>
             
-            <div class="mt-3 text-xs text-gray-400 flex justify-between items-center flex-wrap gap-2">
-                <span><i class="fas fa-info-circle mr-1"></i> Showing <?= $total_completed ?> completed test(s)</span>
-                <span><i class="fas fa-check-circle mr-1" style="color:var(--success);"></i> All tests are marked as completed</span>
+            <div class="mt-3 flex justify-between items-center flex-wrap gap-2">
+                <span class="text-xs text-gray-400">
+                    <i class="fas fa-info-circle mr-1"></i> Showing <?= $total_completed ?> completed test(s)
+                </span>
+                <span class="text-xs text-gray-400">
+                    <i class="fas fa-check-circle mr-1" style="color:var(--success);"></i> All tests are marked as completed
+                </span>
             </div>
             
         <?php else: ?>
             <div class="empty-state">
-                <i class="fas fa-check-circle" style="color: var(--success);"></i>
+                <i class="fas fa-check-circle" style="color: var(--primary);"></i>
                 <h3>No Completed Tests</h3>
                 <p>No lab tests have been completed yet.</p>
                 <p class="text-xs text-gray-400 mt-2">
@@ -1138,12 +1277,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }, 5000);
     }
 
-    console.log('%c✅ Completed Tests (NEW DATABASE - dispensary_db)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ ONLY ONE TABLE: lab_tests', 'font-size:13px; color:#34D399;');
+    console.log('%c🔵 Completed Tests (BLUE THEME)', 'font-size:20px; font-weight:bold; color:#2563EB;');
+    console.log('%c✅ Removed Print button - View only', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Increased font sizes for better visibility', 'font-size:13px; color:#34D399;');
+    console.log('%c🔵 Blue theme applied throughout', 'font-size:13px; color:#2563EB;');
     console.log('%c📊 Total Completed: <?= $total_completed_count ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📅 Today: <?= $completed_today ?> | This Week: <?= $completed_week ?> | This Month: <?= $completed_month ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

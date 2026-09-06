@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/components/cashier_sidebar.php
-// CASHIER - SHARED SIDEBAR (USING API FOR REAL-TIME UPDATES)
-// GREEN THEME - WITH API INTEGRATION
+// CASHIER - SHARED SIDEBAR (USING AJAX FOR REAL-TIME UPDATES)
+// GREEN THEME - WITH AJAX INTEGRATION
 // BRAICK DISPENSARY
 // FIXED: Real-time auto-update when data changes
+// REMOVED: Cancelled Bills
 // ================================================================
 
 // ================================================================
@@ -65,7 +66,6 @@ try {
 $pending_bills = 0;
 $partial_payments = 0;
 $total_paid = 0;
-$cancelled_bills = 0;
 $total_expenses = 0;
 $patients_waiting = 0;
 
@@ -83,10 +83,6 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $total_paid = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'cancelled'");
-        $stmt->execute([$user_branch_id]);
-        $cancelled_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        
         $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'paid'");
         $stmt->execute([$user_branch_id]);
         $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
@@ -101,13 +97,12 @@ if ($db !== null && isset($_SESSION['user_id'])) {
 }
 
 // ================================================================
-// GENERATE INITIAL HASH - FIXED: More comprehensive
+// GENERATE INITIAL HASH
 // ================================================================
 $hash_data = [
     'pending_bills' => $pending_bills,
     'partial_payments' => $partial_payments,
     'paid_bills' => $total_paid,
-    'cancelled_bills' => $cancelled_bills,
     'total_expenses' => round($total_expenses, 2),
     'patients_waiting' => $patients_waiting
 ];
@@ -138,7 +133,6 @@ $initial_data = [
     'pending_bills' => $pending_bills,
     'partial_payments' => $partial_payments,
     'total_paid' => $total_paid,
-    'cancelled_bills' => $cancelled_bills,
     'total_expenses' => $total_expenses,
     'patients_waiting' => $patients_waiting,
     'branch_id' => $user_branch_id,
@@ -728,16 +722,6 @@ $initial_data = [
             <?php endif; ?>
         </a>
         
-        <a href="/dispensary_system/frontend/pages/cashier/cancelled_bills.php" class="sidebar-link <?= isActive('cancelled_bills.php') ?>">
-            <i class="fas fa-times-circle"></i>
-            <span class="link-text">Cancelled Bills</span>
-            <?php if ($cancelled_bills > 0): ?>
-                <span class="badge red" id="sidebarCancelledBadge"><?= $cancelled_bills ?></span>
-            <?php else: ?>
-                <span class="badge" id="sidebarCancelledBadge">0</span>
-            <?php endif; ?>
-        </a>
-        
         <!-- Payments -->
         <div class="nav-label"><span class="label-icon">💳</span> Payments</div>
         
@@ -797,14 +781,14 @@ $initial_data = [
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH API INTEGRATION - FIXED -->
+<!-- JAVASCRIPT - WITH AJAX INTEGRATION -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
     // CONFIGURATION
     // ================================================================
     var SIDEBAR_CONFIG = {
-        API_URL: '/dispensary_system/backend/api/get_cashier_sidebar_stats.php',
+        AJAX_URL: '/dispensary_system/backend/api/cashier_sidebar_ajax.php',
         CHECK_INTERVAL: 2000,      // Check every 2 seconds
         FORCE_INTERVAL: 5000,      // Force refresh every 5 seconds
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
@@ -917,7 +901,7 @@ $initial_data = [
     })();
 
     // ================================================================
-    // UPDATE SIDEBAR BADGES - FIXED: Better update logic
+    // UPDATE SIDEBAR BADGES
     // ================================================================
     function updateSidebarBadges(data) {
         if (!data) return false;
@@ -972,23 +956,7 @@ $initial_data = [
             }
         }
         
-        // 4. Cancelled Bills
-        var cancelledBadge = document.getElementById('sidebarCancelledBadge');
-        if (cancelledBadge && data.cancelled_bills !== undefined) {
-            var oldVal = cancelledBadge.textContent;
-            var newVal = String(data.cancelled_bills);
-            if (oldVal !== newVal) {
-                hasChanges = true;
-                cancelledBadge.textContent = newVal;
-                cancelledBadge.className = parseInt(newVal) > 0 ? 'badge red' : 'badge';
-                cancelledBadge.classList.remove('badge-update');
-                void cancelledBadge.offsetWidth;
-                cancelledBadge.classList.add('badge-update');
-                console.log('🔄 Cancelled Bills: ' + oldVal + ' → ' + newVal);
-            }
-        }
-        
-        // 5. Expenses - FIXED: Format with TSh
+        // 4. Expenses
         var expensesBadge = document.getElementById('sidebarExpensesBadge');
         if (expensesBadge && data.total_expenses !== undefined) {
             var oldVal = expensesBadge.textContent;
@@ -1005,7 +973,7 @@ $initial_data = [
             }
         }
         
-        // 6. Update timestamp
+        // 5. Update timestamp
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
             var now = new Date();
@@ -1037,7 +1005,7 @@ $initial_data = [
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA FROM API - FIXED: Always check for changes
+    // FETCH SIDEBAR DATA - DIRECT AJAX (NO EXTERNAL API)
     // ================================================================
     function fetchSidebarData(forceUpdate) {
         if (sidebarState.isUpdating && !forceUpdate) return;
@@ -1052,9 +1020,9 @@ $initial_data = [
             formData.append('force_update', '1');
         }
         
-        console.log('📡 Fetching sidebar data... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
+        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
         
-        fetch(SIDEBAR_CONFIG.API_URL, {
+        fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
             body: formData,
             credentials: 'same-origin'
@@ -1069,7 +1037,7 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
-                console.log('📥 API Response: has_changed=' + data.has_changed + ', hash=' + data.hash);
+                console.log('📥 AJAX Response: has_changed=' + data.has_changed + ', hash=' + data.hash);
                 
                 if (data.has_changed && data.data) {
                     // Data has changed - update badges
@@ -1105,23 +1073,42 @@ $initial_data = [
                     }
                     sidebarState.hasInitialData = true;
                 }
+                
+                // Update status dot
+                var statusDot = document.getElementById('sidebarStatusDot');
+                if (statusDot) {
+                    statusDot.className = 'status-dot online';
+                }
+                var statusText = document.getElementById('sidebarStatusText');
+                if (statusText) {
+                    statusText.textContent = 'Online';
+                }
+                
             } else {
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
-                console.warn('⚠️ API Error:', data.message);
+                console.warn('⚠️ AJAX Error:', data.message);
             }
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            if (forceUpdate) {
-                console.warn('❌ Sidebar API error:', error.message);
+            console.warn('❌ Sidebar AJAX error:', error.message);
+            
+            // Update status to offline
+            var statusDot = document.getElementById('sidebarStatusDot');
+            if (statusDot) {
+                statusDot.className = 'status-dot offline';
+            }
+            var statusText = document.getElementById('sidebarStatusText');
+            if (statusText) {
+                statusText.textContent = 'Offline';
             }
         });
     }
 
     // ================================================================
-    // START AUTO-UPDATE - FIXED: More aggressive checking
+    // START AUTO-UPDATE
     // ================================================================
     function startSidebarAutoUpdate() {
         if (sidebarState.updateInterval) {
@@ -1170,7 +1157,7 @@ $initial_data = [
     }
 
     // ================================================================
-    // MANUAL REFRESH - Exposed for debugging
+    // MANUAL REFRESH
     // ================================================================
     function refreshSidebarData() {
         console.log('🔄 Manual refresh triggered');
@@ -1189,7 +1176,7 @@ $initial_data = [
     window.getSidebarHash = function() { return sidebarState.dataHash; };
 
     // ================================================================
-    // VISIBILITY CHANGE - Restart when tab becomes visible
+    // VISIBILITY CHANGE
     // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
@@ -1204,7 +1191,7 @@ $initial_data = [
     });
 
     // ================================================================
-    // DOM READY - Start the auto-update
+    // DOM READY
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         console.log('📄 DOM ready - starting sidebar...');
@@ -1216,7 +1203,7 @@ $initial_data = [
     // ================================================================
     // CONSOLE LOG
     // ================================================================
-    console.log('%c💰 Braick Dispensary - Cashier Sidebar (FIXED)', 
+    console.log('%c💰 Braick Dispensary - Cashier Sidebar (AJAX)', 
         'font-size:16px; font-weight:bold; color:#059669;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
         'font-size:13px; color:#34D399;');
@@ -1224,13 +1211,13 @@ $initial_data = [
         'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
     console.log('   Pending: <?= $pending_bills ?>, Partial: <?= $partial_payments ?>');
-    console.log('   Paid: <?= $total_paid ?>, Cancelled: <?= $cancelled_bills ?>');
+    console.log('   Paid: <?= $total_paid ?>');
     console.log('   Expenses: TSh <?= number_format($total_expenses) ?>');
     console.log('   Patients Waiting: <?= $patients_waiting ?>');
     console.log('%c🔑 Initial Hash: <?= $initial_hash ?>', 'font-size:12px; color:#94A3B8;');
     console.log('%c⚡ Auto-Update: Every 2s (checks for changes)', 'font-size:13px; color:#34D399;');
     console.log('%c🔄 Force refresh: Every 5s (safety net)', 'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 API: ' + SIDEBAR_CONFIG.API_URL, 'font-size:12px; color:#94A3B8;');
+    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 'font-size:12px; color:#94A3B8;');
     console.log('%c💡 Call window.refreshSidebarData() for manual update', 'font-size:12px; color:#6EA8FE;');
     console.log('%c✅ Data updates AUTOMATICALLY when database changes!', 'font-size:13px; font-weight:bold; color:#34D399;');
 </script>

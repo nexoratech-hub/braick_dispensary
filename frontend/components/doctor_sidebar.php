@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/components/doctor_sidebar.php
-// DOCTOR - SHARED SIDEBAR (WITH API INTEGRATION - FIXED)
+// DOCTOR - SHARED SIDEBAR (WITH AJAX INTEGRATION - FIXED)
 // FIXED: Sidebar toggles properly with full page width when hidden
 // REMOVED: Doctor profile from sidebar (cleaner design)
 // BRAICK DISPENSARY
@@ -65,7 +65,6 @@ try {
 // ================================================================
 $site_name = 'Braick Dispensary';
 $currency = 'TSh';
-$slogan = 'Tunajali Afya Yako';
 
 try {
     if ($db !== null) {
@@ -83,12 +82,10 @@ try {
             $currency = $result['setting_value'];
         }
     }
-} catch (Exception $e) {
-    // Keep default
-}
+} catch (Exception $e) {}
 
 // ================================================================
-// GET REAL DATA FOR BADGES - FIXED QUERIES
+// GET REAL DATA FOR BADGES
 // ================================================================
 $patient_count = 0;
 $lab_count = 0;
@@ -99,30 +96,22 @@ $completed_consultations = 0;
 $cancelled_consultations = 0;
 $pending_prescriptions = 0;
 $total_consultations = 0;
-
-// Services counts
 $procedures_count = 0;
-$tools_count = 0;
 $lab_tests_count = 0;
 $expiring_medicines = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
-        // 1. Total Patients (distinct patients)
         $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?");
         $stmt->execute([$doctor_id]);
         $patient_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 2. Pending Lab Tests
         try {
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status IN ('pending', 'in_progress')");
             $stmt->execute([$doctor_id]);
             $lab_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        } catch (Exception $e) {
-            $lab_count = 0;
-        }
+        } catch (Exception $e) { $lab_count = 0; }
         
-        // 3. Pending Referrals - FIXED: includes 'referred' status
         try {
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
@@ -132,20 +121,14 @@ if ($db !== null && isset($_SESSION['user_id'])) {
             ");
             $stmt->execute([$doctor_id]);
             $referral_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        } catch (Exception $e) {
-            $referral_count = 0;
-        }
+        } catch (Exception $e) { $referral_count = 0; }
         
-        // 4. Today's Appointments
         try {
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE() AND status IN ('scheduled', 'confirmed')");
             $stmt->execute([$doctor_id]);
             $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        } catch (Exception $e) {
-            $appointment_count = 0;
-        }
+        } catch (Exception $e) { $appointment_count = 0; }
         
-        // 5. Pending Consultations - includes 'prescribed' status
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -156,7 +139,6 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$doctor_id]);
         $pending_consultations = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 6. Completed Consultations
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -167,7 +149,6 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$doctor_id]);
         $completed_consultations = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 7. Cancelled Consultations
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM visits 
@@ -177,38 +158,26 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$doctor_id]);
         $cancelled_consultations = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 8. Total Consultations
         $total_consultations = $pending_consultations + $completed_consultations + $cancelled_consultations;
         
-        // 9. Pending Prescriptions
         try {
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'");
             $stmt->execute([$doctor_id]);
             $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        } catch (Exception $e) {
-            $pending_prescriptions = 0;
-        }
+        } catch (Exception $e) { $pending_prescriptions = 0; }
         
-        // ================================================================
-        // 10. SERVICES COUNTS
-        // ================================================================
         try {
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM procedures_catalog WHERE (branch_id IS NULL OR branch_id = ?) AND is_active = 1");
             $stmt->execute([$doctor_branch_id]);
             $procedures_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        } catch (Exception $e) {
-            $procedures_count = 0;
-        }
+        } catch (Exception $e) { $procedures_count = 0; }
         
         try {
             $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests_catalog WHERE (branch_id IS NULL OR branch_id = ?) AND is_active = 1");
             $stmt->execute([$doctor_branch_id]);
             $lab_tests_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        } catch (Exception $e) {
-            $lab_tests_count = 0;
-        }
+        } catch (Exception $e) { $lab_tests_count = 0; }
         
-        // 11. Expiring Medicines
         try {
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
@@ -221,33 +190,21 @@ if ($db !== null && isset($_SESSION['user_id'])) {
             ");
             $stmt->execute([$doctor_branch_id]);
             $expiring_medicines = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        } catch (Exception $e) {
-            $expiring_medicines = 0;
-        }
+        } catch (Exception $e) { $expiring_medicines = 0; }
         
     } catch (Exception $e) {
         error_log("Sidebar data error: " . $e->getMessage());
     }
 }
 
-// ================================================================
-// DOCTOR ONLINE STATUS
-// ================================================================
 $doctor_is_online = $_SESSION['is_online'] ?? 0;
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-// Detect current page
 $current_page = basename($_SERVER['PHP_SELF']);
 
-// ================================================================
-// FUNCTION TO CHECK ACTIVE STATE
-// ================================================================
 function isActive($page) {
     global $current_page;
     if ($page === $current_page) {
@@ -256,14 +213,8 @@ function isActive($page) {
     return '';
 }
 
-// ================================================================
-// LOGO PATH
-// ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// GENERATE INITIAL HASH FOR CHANGE DETECTION
-// ================================================================
 $initial_data_hash = md5(json_encode([
     'patient_count' => $patient_count,
     'pending_consultations' => $pending_consultations,
@@ -278,7 +229,7 @@ $initial_data_hash = md5(json_encode([
 ]));
 
 // ================================================================
-// HANDLE AJAX REQUEST FOR SIDEBAR DATA - WITH HASH
+// AJAX HANDLER FOR SIDEBAR DATA
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_sidebar_data') {
     header('Content-Type: application/json');
@@ -297,12 +248,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         exit;
     }
     
-    $response = [
-        'success' => false,
-        'has_changed' => false,
-        'hash' => '',
-        'data' => null
-    ];
+    $response = ['success' => false, 'has_changed' => false, 'hash' => '', 'data' => null];
     
     $data = [
         'patientCount' => 0,
@@ -323,7 +269,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     if ($doctor_id > 0 && $db !== null) {
         try {
-            // Doctor info
             $stmt = $db->prepare("SELECT full_name, is_online FROM users WHERE id = ? AND role = 'doctor' AND status = 'active'");
             $stmt->execute([$doctor_id]);
             $doctor = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -332,21 +277,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $data['doctorStatus'] = ($doctor['is_online'] ?? 0) ? 'online' : 'offline';
             }
             
-            // 1. Total Patients
             $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM visits WHERE doctor_id = ?");
             $stmt->execute([$doctor_id]);
             $data['patientCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 2. Pending Lab Tests
             try {
                 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE doctor_id = ? AND status IN ('pending', 'in_progress')");
                 $stmt->execute([$doctor_id]);
                 $data['labCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            } catch (Exception $e) {
-                $data['labCount'] = 0;
-            }
+            } catch (Exception $e) { $data['labCount'] = 0; }
             
-            // 3. Pending Referrals - FIXED: includes 'referred' status
             try {
                 $stmt = $db->prepare("
                     SELECT COUNT(*) as count 
@@ -356,20 +296,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ");
                 $stmt->execute([$doctor_id]);
                 $data['referralCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            } catch (Exception $e) {
-                $data['referralCount'] = 0;
-            }
+            } catch (Exception $e) { $data['referralCount'] = 0; }
             
-            // 4. Today's Appointments
             try {
                 $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE doctor_id = ? AND DATE(appointment_date) = CURDATE() AND status IN ('scheduled', 'confirmed')");
                 $stmt->execute([$doctor_id]);
                 $data['appointmentCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            } catch (Exception $e) {
-                $data['appointmentCount'] = 0;
-            }
+            } catch (Exception $e) { $data['appointmentCount'] = 0; }
             
-            // 5. Pending Consultations - includes 'prescribed' status
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM visits 
@@ -380,7 +314,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$doctor_id]);
             $data['pendingConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 6. Completed Consultations
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM visits 
@@ -391,7 +324,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$doctor_id]);
             $data['completedConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 7. Cancelled Consultations
             $stmt = $db->prepare("
                 SELECT COUNT(*) as count 
                 FROM visits 
@@ -401,36 +333,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             $stmt->execute([$doctor_id]);
             $data['cancelledConsultations'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
             
-            // 8. Total Consultations
             $data['totalConsultations'] = $data['pendingConsultations'] + $data['completedConsultations'] + $data['cancelledConsultations'];
             
-            // 9. Pending Prescriptions
             try {
                 $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE doctor_id = ? AND status = 'pending'");
                 $stmt->execute([$doctor_id]);
                 $data['pendingPrescriptions'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            } catch (Exception $e) {
-                $data['pendingPrescriptions'] = 0;
-            }
+            } catch (Exception $e) { $data['pendingPrescriptions'] = 0; }
             
-            // 10. Services Counts
             try {
                 $stmt = $db->prepare("SELECT COUNT(*) as count FROM procedures_catalog WHERE (branch_id IS NULL OR branch_id = ?) AND is_active = 1");
                 $stmt->execute([$branch_id]);
                 $data['proceduresCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            } catch (Exception $e) {
-                $data['proceduresCount'] = 0;
-            }
+            } catch (Exception $e) { $data['proceduresCount'] = 0; }
             
             try {
                 $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests_catalog WHERE (branch_id IS NULL OR branch_id = ?) AND is_active = 1");
                 $stmt->execute([$branch_id]);
                 $data['labTestsCount'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            } catch (Exception $e) {
-                $data['labTestsCount'] = 0;
-            }
+            } catch (Exception $e) { $data['labTestsCount'] = 0; }
             
-            // 11. Expiring Medicines
             try {
                 $stmt = $db->prepare("
                     SELECT COUNT(*) as count 
@@ -443,11 +365,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ");
                 $stmt->execute([$branch_id]);
                 $data['expiringMedicines'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            } catch (Exception $e) {
-                $data['expiringMedicines'] = 0;
-            }
+            } catch (Exception $e) { $data['expiringMedicines'] = 0; }
             
-            // Generate hash
             $hash = md5(json_encode([
                 'patient_count' => $data['patientCount'],
                 'pending_consultations' => $data['pendingConsultations'],
@@ -480,14 +399,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     exit;
 }
 
-// ================================================================
-// SITE SLOGAN
-// ================================================================
 $site_slogan = 'Tunajali Afya Yako';
 
-// ================================================================
-// PASS INITIAL DATA TO JAVASCRIPT
-// ================================================================
 $initial_data = [
     'patientCount' => $patient_count,
     'labCount' => $lab_count,
@@ -506,20 +419,18 @@ $initial_data = [
 ];
 ?>
 
-<!-- SIDEBAR HTML -->
 <style>
     /* ================================================================
        SIDEBAR STYLES - FIXED: Full width when hidden
        ================================================================ */
     
-    /* Sidebar - positioned fixed with transform */
     .sidebar {
         position: fixed;
         top: 0;
         left: 0;
         bottom: 0;
         width: 270px;
-        background: #0B4EA8;
+        background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
         color: white;
         z-index: 9999;
         overflow-y: auto;
@@ -531,16 +442,14 @@ $initial_data = [
     }
     
     [data-theme="dark"] .sidebar {
-        background: #0A3D7A;
+        background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
-    /* When sidebar is hidden on mobile/tablet */
     .sidebar.hidden-sidebar {
         transform: translateX(-100%) !important;
     }
     
-    /* Desktop: always visible */
     @media (min-width: 1025px) {
         .sidebar {
             transform: translateX(0) !important;
@@ -550,18 +459,11 @@ $initial_data = [
         .sidebar.hidden-sidebar {
             transform: translateX(0) !important;
         }
-        #sidebarOverlay {
-            display: none !important;
-        }
-        .sidebar-close-btn {
-            display: none !important;
-        }
-        .sidebar-toggle-btn {
-            display: none !important;
-        }
+        #sidebarOverlay { display: none !important; }
+        .sidebar-close-btn { display: none !important; }
+        .sidebar-toggle-btn { display: none !important; }
     }
     
-    /* Mobile/Tablet: toggleable */
     @media (max-width: 1024px) {
         .sidebar {
             transform: translateX(-100%);
@@ -582,15 +484,10 @@ $initial_data = [
         #sidebarOverlay.active {
             display: block !important;
         }
-        .sidebar-close-btn {
-            display: block !important;
-        }
-        .sidebar-toggle-btn {
-            display: block !important;
-        }
+        .sidebar-close-btn { display: block !important; }
+        .sidebar-toggle-btn { display: block !important; }
     }
     
-    /* Overlay */
     #sidebarOverlay {
         position: fixed;
         top: 0;
@@ -609,21 +506,21 @@ $initial_data = [
     }
     
     .sidebar::-webkit-scrollbar { width: 5px; }
-    .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
+    .sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
     .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
     .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
     
-    /* Sidebar Brand */
     .sidebar-brand {
         padding: 18px 16px 14px;
         border-bottom: 2px solid rgba(255,255,255,0.08);
-        background: #0B4EA8;
+        background: rgba(0,0,0,0.05);
         position: sticky;
         top: 0;
         z-index: 5;
+        backdrop-filter: blur(10px);
     }
     [data-theme="dark"] .sidebar-brand {
-        background: #0A3D7A;
+        background: rgba(0,0,0,0.1);
     }
     .sidebar-brand .logo {
         width: 42px;
@@ -663,7 +560,6 @@ $initial_data = [
         transform: scale(1.05);
     }
     
-    /* Navigation */
     .sidebar-nav {
         padding: 10px 8px 20px;
     }
@@ -680,7 +576,6 @@ $initial_data = [
         margin-top: 0;
     }
     
-    /* Sidebar Links */
     .sidebar-link {
         display: flex;
         align-items: center;
@@ -701,25 +596,14 @@ $initial_data = [
         position: relative;
     }
     .sidebar-link:hover {
-        background: #0B5ED7;
+        background: rgba(255,255,255,0.08);
         color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
         transform: translateX(4px);
     }
     .sidebar-link.active {
-        background: #0B5ED7;
+        background: rgba(255,255,255,0.12);
         color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
-    }
-    .sidebar-link.active::before {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 20%;
-        bottom: 20%;
-        width: 4px;
-        background: white;
-        border-radius: 0 4px 4px 0;
+        box-shadow: inset 3px 0 0 #6EA8FE;
     }
     .sidebar-link i {
         width: 20px;
@@ -728,10 +612,9 @@ $initial_data = [
         flex-shrink: 0;
     }
     
-    /* Badges */
     .sidebar-link .badge {
         margin-left: auto;
-        background: rgba(255,255,255,0.15);
+        background: rgba(255,255,255,0.12);
         padding: 1px 8px;
         border-radius: 20px;
         font-size: 0.6rem;
@@ -765,11 +648,7 @@ $initial_data = [
         background: #0D9488;
     }
     .sidebar-link:hover .badge {
-        background: rgba(255,255,255,0.25);
-    }
-    .sidebar-link.active .badge {
-        background: rgba(255,255,255,0.25);
-        color: white;
+        background: rgba(255,255,255,0.2);
     }
     
     @keyframes pulse-badge {
@@ -786,7 +665,6 @@ $initial_data = [
         100% { transform: scale(1); opacity: 1; }
     }
     
-    /* Logout Link */
     .sidebar-link.logout-link {
         border-top: 2px solid rgba(255,255,255,0.08);
         padding-top: 10px;
@@ -799,7 +677,6 @@ $initial_data = [
         box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
     }
     
-    /* Live Indicator */
     .sidebar-live-indicator {
         display: inline-flex;
         align-items: center;
@@ -822,19 +699,19 @@ $initial_data = [
         50% { opacity: 0.4; transform: scale(0.8); }
     }
     
-    /* Sidebar Status - Removed doctor profile, kept status only */
     .sidebar-status {
         padding: 10px 16px;
         border-top: 2px solid rgba(255,255,255,0.08);
         display: flex;
         align-items: center;
         gap: 10px;
-        background: #0B4EA8;
+        background: rgba(0,0,0,0.05);
         position: sticky;
         bottom: 0;
+        backdrop-filter: blur(10px);
     }
     [data-theme="dark"] .sidebar-status {
-        background: #0A3D7A;
+        background: rgba(0,0,0,0.1);
     }
     .sidebar-status .status-dot {
         width: 8px;
@@ -859,9 +736,6 @@ $initial_data = [
         margin-left: auto;
     }
     
-    /* ================================================================
-       MAIN CONTENT OFFSET - FIXED: Full width when sidebar hidden
-       ================================================================ */
     .main-content {
         margin-left: 270px;
         margin-top: 68px;
@@ -870,12 +744,10 @@ $initial_data = [
         transition: margin-left 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
     
-    /* When sidebar is hidden on mobile/tablet */
     .main-content.sidebar-hidden {
         margin-left: 0 !important;
     }
     
-    /* Desktop: always have sidebar margin */
     @media (min-width: 1025px) {
         .main-content {
             margin-left: 270px !important;
@@ -885,7 +757,6 @@ $initial_data = [
         }
     }
     
-    /* Mobile/Tablet: full width when hidden */
     @media (max-width: 1024px) {
         .main-content {
             margin-left: 0;
@@ -897,100 +768,38 @@ $initial_data = [
     }
     
     @media (max-width: 640px) {
-        .main-content {
-            padding: 10px;
-        }
+        .main-content { padding: 10px; }
     }
     
-    /* Responsive adjustments for sidebar itself */
     @media (max-width: 1024px) {
-        .sidebar-brand {
-            padding: 14px 14px 10px;
-        }
-        .sidebar-brand .logo {
-            width: 36px;
-            height: 36px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.85rem;
-        }
-        .sidebar-link {
-            padding: 7px 10px;
-            font-size: 0.75rem;
-            gap: 8px;
-        }
-        .sidebar-link i {
-            width: 18px;
-            font-size: 0.8rem;
-        }
-        .sidebar-link .badge {
-            font-size: 0.55rem;
-            padding: 1px 7px;
-        }
-        .sidebar-close-btn {
-            display: block !important;
-        }
-        .sidebar-toggle-btn {
-            display: block !important;
-        }
+        .sidebar-brand { padding: 14px 14px 10px; }
+        .sidebar-brand .logo { width: 36px; height: 36px; }
+        .sidebar-brand .brand-text { font-size: 0.85rem; }
+        .sidebar-link { padding: 7px 10px; font-size: 0.75rem; gap: 8px; }
+        .sidebar-link i { width: 18px; font-size: 0.8rem; }
+        .sidebar-link .badge { font-size: 0.55rem; padding: 1px 7px; }
+        .sidebar-close-btn { display: block !important; }
+        .sidebar-toggle-btn { display: block !important; }
     }
     
     @media (max-width: 768px) {
-        .sidebar {
-            width: 300px;
-        }
-        .sidebar-brand {
-            padding: 12px 12px 10px;
-        }
-        .sidebar-brand .logo {
-            width: 34px;
-            height: 34px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.8rem;
-        }
-        .sidebar-link {
-            padding: 6px 10px;
-            font-size: 0.7rem;
-        }
-        .sidebar-link i {
-            width: 16px;
-            font-size: 0.75rem;
-        }
+        .sidebar { width: 300px; }
+        .sidebar-brand { padding: 12px 12px 10px; }
+        .sidebar-brand .logo { width: 34px; height: 34px; }
+        .sidebar-brand .brand-text { font-size: 0.8rem; }
+        .sidebar-link { padding: 6px 10px; font-size: 0.7rem; }
+        .sidebar-link i { width: 16px; font-size: 0.75rem; }
     }
     
     @media (max-width: 480px) {
-        .sidebar {
-            width: 100%;
-            max-width: 320px;
-        }
-        .sidebar-brand {
-            padding: 10px 10px 8px;
-        }
-        .sidebar-brand .logo {
-            width: 30px;
-            height: 30px;
-        }
-        .sidebar-brand .brand-text {
-            font-size: 0.75rem;
-        }
-        .sidebar-link {
-            padding: 5px 8px;
-            font-size: 0.65rem;
-            gap: 6px;
-        }
-        .sidebar-link i {
-            width: 14px;
-            font-size: 0.7rem;
-        }
-        .sidebar-link .badge {
-            font-size: 0.45rem;
-            padding: 1px 5px;
-            min-width: 16px;
-        }
-        .sidebar-nav .nav-label {
-            font-size: 0.4rem;
-        }
+        .sidebar { width: 100%; max-width: 320px; }
+        .sidebar-brand { padding: 10px 10px 8px; }
+        .sidebar-brand .logo { width: 30px; height: 30px; }
+        .sidebar-brand .brand-text { font-size: 0.75rem; }
+        .sidebar-link { padding: 5px 8px; font-size: 0.65rem; gap: 6px; }
+        .sidebar-link i { width: 14px; font-size: 0.7rem; }
+        .sidebar-link .badge { font-size: 0.45rem; padding: 1px 5px; min-width: 16px; }
+        .sidebar-nav .nav-label { font-size: 0.4rem; }
     }
 </style>
 
@@ -1131,15 +940,14 @@ $initial_data = [
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH API INTEGRATION - FIXED AUTO-UPDATE -->
+<!-- JAVASCRIPT - WITH AJAX INTEGRATION -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
     // CONFIGURATION
     // ================================================================
     var SIDEBAR_CONFIG = {
-        API_URL: '/dispensary_system/backend/api/get_doctor_sidebar_stats.php',
-        CHECK_INTERVAL: 3000, // Check every 3 seconds
+        CHECK_INTERVAL: 3000,
         DOCTOR_ID: <?= json_encode($doctor_id) ?>,
         BRANCH_ID: <?= json_encode($doctor_branch_id) ?>,
         INITIAL_HASH: '<?= $initial_data_hash ?>'
@@ -1194,41 +1002,33 @@ $initial_data = [
             }
             
             function openSidebar() {
-                if (isDesktopView()) {
-                    return;
-                }
+                if (isDesktopView()) return;
                 sidebar.classList.remove('hidden-sidebar');
                 sidebar.classList.add('open');
                 overlay.style.display = 'block';
                 overlay.classList.add('active');
                 document.body.style.overflow = 'hidden';
                 sidebarState.isOpen = true;
-                
                 if (mainContent) {
                     mainContent.classList.remove('sidebar-hidden');
                 }
             }
             
             function closeSidebar() {
-                if (isDesktopView()) {
-                    return;
-                }
+                if (isDesktopView()) return;
                 sidebar.classList.remove('open');
                 sidebar.classList.add('hidden-sidebar');
                 overlay.style.display = 'none';
                 overlay.classList.remove('active');
                 document.body.style.overflow = '';
                 sidebarState.isOpen = false;
-                
                 if (mainContent) {
                     mainContent.classList.add('sidebar-hidden');
                 }
             }
             
             function toggleSidebar() {
-                if (isDesktopView()) {
-                    return;
-                }
+                if (isDesktopView()) return;
                 if (sidebar.classList.contains('open')) {
                     closeSidebar();
                 } else {
@@ -1430,7 +1230,7 @@ $initial_data = [
     }
 
     // ================================================================
-    // FETCH LIVE DATA FROM API (WITH HASH)
+    // FETCH LIVE DATA (WITH HASH)
     // ================================================================
     function fetchSidebarData(forceUpdate) {
         var doctorId = <?= json_encode($doctor_id) ?>;
@@ -1580,7 +1380,7 @@ $initial_data = [
         }
     });
 
-    console.log('%c👨‍⚕️ Braick Dispensary - Doctor Sidebar (FIXED)', 
+    console.log('%c👨‍⚕️ Braick Dispensary - Doctor Sidebar', 
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($doctor_full_name) ?>', 
         'font-size:13px; color:#059669;');

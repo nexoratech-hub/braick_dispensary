@@ -1,13 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
-// PHARMACY - SHARED SIDEBAR (USING API FOR REAL-TIME UPDATES)
-// ✅ TOGGLE BUTTON KWENYE HEADER (SI FLOATING)
-// ✅ BLUE COLOR THEME
-// ✅ JINA NA LOGO KUTOKA system_settings
-// ✅ FONTS ZIMEONGEZWA SIZE
-// ✅ PROFILE SECTION IMETOLEWA
-// ✅ API INTEGRATION - get_pharmacy_sidebar_stats.php
+// PHARMACY - SHARED SIDEBAR (DIRECT AJAX - NO EXTERNAL API)
+// ✅ BLUE THEME - SAME AS TABLE HEADER (#0B5ED7)
+// ✅ FONTS ZOTE NYEUPE
+// ✅ OTC HISTORY - INOYESHA ZOTE
+// ✅ PRESCRIPTION HISTORY - INOYESHA ZOTE
+// ✅ DIRECT AJAX - HAKUNA API YA NJE
 // ================================================================
 
 // ================================================================
@@ -102,53 +101,101 @@ if (!empty($site_logo)) {
 }
 
 // ================================================================
-// GET INITIAL STATISTICS FOR BADGES
+// GET INITIAL STATISTICS FOR BADGES - DIRECT FROM DATABASE
 // ================================================================
 $pending_prescriptions = 0;
 $low_stock_count = 0;
 $expired_count = 0;
 $today_sales = 0;
 $today_otc = 0;
+$total_prescriptions = 0;
+$total_dispensed = 0;
+$total_otc = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
+        // 1. Pending Prescriptions (pending + confirmed)
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM prescriptions 
+            WHERE branch_id = ? 
+            AND status IN ('pending', 'confirmed')
+        ");
         $stmt->execute([$user_branch_id]);
-        $pending_prescriptions = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $pending_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
+        // 2. Total Prescriptions
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM prescriptions 
+            WHERE branch_id = ?
+        ");
+        $stmt->execute([$user_branch_id]);
+        $total_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // 3. Total Dispensed
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM prescriptions 
+            WHERE branch_id = ? 
+            AND status = 'dispensed'
+        ");
+        $stmt->execute([$user_branch_id]);
+        $total_dispensed = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // 4. Low Stock
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM medications_inventory 
-            WHERE branch_id = ? AND quantity <= reorder_level AND quantity > 0 AND status = 'active'
+            WHERE branch_id = ? 
+            AND quantity <= IFNULL(reorder_level, 10)
+            AND quantity > 0 
+            AND status = 'active'
         ");
         $stmt->execute([$user_branch_id]);
-        $low_stock_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $low_stock_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
+        // 5. Expired Stock
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM medications_inventory 
             WHERE branch_id = ? 
             AND expiry_date IS NOT NULL 
             AND expiry_date < CURDATE()
+            AND status = 'active'
         ");
         $stmt->execute([$user_branch_id]);
-        $expired_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $expired_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
+        // 6. Today Prescriptions Dispensed
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM prescriptions 
-            WHERE branch_id = ? AND status = 'dispensed' AND DATE(dispensed_at) = CURDATE()
+            WHERE branch_id = ? 
+            AND status = 'dispensed' 
+            AND DATE(dispensed_at) = CURDATE()
         ");
         $stmt->execute([$user_branch_id]);
-        $today_sales = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $today_sales = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
+        // 7. Today OTC Sales
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM otc_sales 
-            WHERE branch_id = ? AND DATE(created_at) = CURDATE()
+            WHERE branch_id = ? 
+            AND DATE(created_at) = CURDATE()
         ");
         $stmt->execute([$user_branch_id]);
-        $today_otc = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $today_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+        
+        // 8. TOTAL OTC Sales
+        $stmt = $db->prepare("
+            SELECT COUNT(*) as count 
+            FROM otc_sales 
+            WHERE branch_id = ?
+        ");
+        $stmt->execute([$user_branch_id]);
+        $total_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
     } catch (Exception $e) {
         error_log("Pharmacy sidebar initial stats error: " . $e->getMessage());
@@ -163,7 +210,10 @@ $initial_hash = md5(json_encode([
     'low_stock' => $low_stock_count,
     'expired' => $expired_count,
     'today_prescriptions' => $today_sales,
-    'today_otc' => $today_otc
+    'today_otc' => $today_otc,
+    'total_prescriptions' => $total_prescriptions,
+    'total_dispensed' => $total_dispensed,
+    'total_otc' => $total_otc
 ]));
 
 // ================================================================
@@ -188,6 +238,9 @@ $initial_data = [
     'expired' => $expired_count,
     'today_prescriptions' => $today_sales,
     'today_otc' => $today_otc,
+    'total_prescriptions' => $total_prescriptions,
+    'total_dispensed' => $total_dispensed,
+    'total_otc' => $total_otc,
     'branch_id' => $user_branch_id,
     'branch_name' => $user_branch_name,
     'user_name' => $user_full_name
@@ -196,7 +249,7 @@ $initial_data = [
 
 <style>
     /* ================================================================
-       SIDEBAR - BLUE THEME (BIGGER FONTS)
+       SIDEBAR - BLUE THEME SAME AS TABLE HEADER (#0B5ED7)
        ================================================================ */
     
     .sidebar-modern {
@@ -205,25 +258,29 @@ $initial_data = [
         left: 0;
         bottom: 0;
         width: 270px;
-        background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
-        color: white;
+        background: linear-gradient(180deg, #0B5ED7 0%, #0A4CA8 100%);
+        color: #ffffff !important;
         z-index: 9999;
         overflow-y: auto;
         overflow-x: hidden;
         transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
         transform: translateX(-100%);
-        box-shadow: 4px 0 30px rgba(0,0,0,0.3);
+        box-shadow: 4px 0 30px rgba(11, 94, 215, 0.4);
         padding-bottom: 16px;
         font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
     }
     
     [data-theme="dark"] .sidebar-modern {
-        background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
-        box-shadow: 4px 0 30px rgba(0,0,0,0.5);
+        background: linear-gradient(180deg, #0A4CA8 0%, #083A7A 100%);
+        box-shadow: 4px 0 30px rgba(0,0,0,0.6);
     }
     
     .sidebar-modern.open {
         transform: translateX(0) !important;
+    }
+    
+    .sidebar-modern * {
+        color: #ffffff !important;
     }
     
     .sidebar-modern::-webkit-scrollbar { width: 4px; }
@@ -253,12 +310,12 @@ $initial_data = [
     }
     
     /* ================================================================
-       SIDEBAR BRAND - BLUE THEME (BIGGER FONTS)
+       SIDEBAR BRAND - BLUE THEME
        ================================================================ */
     .sidebar-brand-modern {
         padding: 18px 18px 14px;
-        border-bottom: 2px solid rgba(255,255,255,0.06);
-        background: rgba(0,0,0,0.1);
+        border-bottom: 2px solid rgba(255,255,255,0.08);
+        background: rgba(0,0,0,0.05);
         position: sticky;
         top: 0;
         z-index: 5;
@@ -272,7 +329,7 @@ $initial_data = [
         object-fit: cover;
         background: white;
         padding: 4px;
-        border: 1px solid rgba(255,255,255,0.08);
+        border: 1px solid rgba(255,255,255,0.1);
         transition: transform 0.3s ease;
     }
     
@@ -281,7 +338,7 @@ $initial_data = [
     }
     
     .sidebar-brand-modern .brand-text-modern {
-        color: white;
+        color: #ffffff !important;
         font-weight: 700;
         font-size: 1rem;
         line-height: 1.2;
@@ -289,7 +346,7 @@ $initial_data = [
     }
     
     .sidebar-brand-modern .brand-sub-modern {
-        color: rgba(255,255,255,0.5);
+        color: rgba(255,255,255,0.6) !important;
         font-size: 0.6rem;
         font-weight: 500;
         letter-spacing: 0.04em;
@@ -300,7 +357,7 @@ $initial_data = [
         display: none;
         background: rgba(255,255,255,0.06);
         border: none;
-        color: rgba(255,255,255,0.6);
+        color: rgba(255,255,255,0.6) !important;
         font-size: 1.1rem;
         cursor: pointer;
         padding: 4px 10px;
@@ -311,7 +368,7 @@ $initial_data = [
     
     .sidebar-close-btn-modern:hover {
         background: rgba(255,255,255,0.12);
-        color: white;
+        color: #ffffff !important;
         transform: rotate(90deg);
     }
     
@@ -320,11 +377,11 @@ $initial_data = [
     }
     
     /* ================================================================
-       PROFILE SECTION IMETOLEWA - HAKUNA USER PROFILE
+       PROFILE SECTION IMETOLEWA
        ================================================================ */
     
     /* ================================================================
-       NAVIGATION (BIGGER FONTS)
+       NAVIGATION - FONTS NYEUPE KABISA
        ================================================================ */
     .sidebar-nav-modern {
         padding: 8px 10px 16px;
@@ -334,7 +391,7 @@ $initial_data = [
         font-size: 0.55rem;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: rgba(255,255,255,0.35);
+        color: rgba(255,255,255,0.5) !important;
         padding: 8px 12px 4px;
         font-weight: 700;
     }
@@ -344,7 +401,7 @@ $initial_data = [
     }
     
     /* ================================================================
-       SIDEBAR LINKS - BLUE THEME (BIGGER FONTS)
+       SIDEBAR LINKS - PURE BLUE, FONTS NYEUPE
        ================================================================ */
     .sidebar-link-modern {
         display: flex;
@@ -352,7 +409,7 @@ $initial_data = [
         gap: 10px;
         padding: 8px 12px;
         border-radius: 8px;
-        color: rgba(255,255,255,0.65);
+        color: rgba(255,255,255,0.75) !important;
         text-decoration: none;
         transition: all 0.2s ease;
         font-size: 0.78rem;
@@ -368,15 +425,15 @@ $initial_data = [
     }
     
     .sidebar-link-modern:hover {
-        background: rgba(255,255,255,0.08);
-        color: white;
+        background: rgba(255,255,255,0.1);
+        color: #ffffff !important;
         transform: translateX(3px);
     }
     
     .sidebar-link-modern.active {
-        background: rgba(255,255,255,0.12);
-        color: white;
-        box-shadow: inset 3px 0 0 #0AA84F;
+        background: rgba(255,255,255,0.15);
+        color: #ffffff !important;
+        box-shadow: inset 3px 0 0 #6EA8FE;
     }
     
     .sidebar-link-modern i {
@@ -384,28 +441,28 @@ $initial_data = [
         text-align: center;
         font-size: 0.85rem;
         flex-shrink: 0;
-        color: rgba(255,255,255,0.4);
+        color: rgba(255,255,255,0.5) !important;
     }
     
     .sidebar-link-modern.active i {
-        color: white;
+        color: #ffffff !important;
     }
     
     .sidebar-link-modern:hover i {
-        color: rgba(255,255,255,0.7);
+        color: rgba(255,255,255,0.8) !important;
     }
     
     /* ================================================================
-       BADGES (BIGGER FONTS)
+       BADGES - FONTS NYEUPE
        ================================================================ */
     .sidebar-link-modern .badge-modern {
         margin-left: auto;
-        background: rgba(255,255,255,0.06);
+        background: rgba(255,255,255,0.08);
         padding: 2px 8px;
         border-radius: 12px;
         font-size: 0.6rem;
         font-weight: 600;
-        color: rgba(255,255,255,0.5);
+        color: rgba(255,255,255,0.6) !important;
         transition: all 0.3s ease;
         flex-shrink: 0;
         min-width: 20px;
@@ -413,45 +470,45 @@ $initial_data = [
     }
     
     .sidebar-link-modern .badge-modern.danger {
-        background: rgba(239, 68, 68, 0.2);
-        color: #F87171;
+        background: rgba(239, 68, 68, 0.25);
+        color: #F87171 !important;
         animation: pulse-badge-modern 2s infinite;
     }
     
     .sidebar-link-modern .badge-modern.green {
         background: rgba(52, 211, 153, 0.15);
-        color: #34D399;
+        color: #34D399 !important;
     }
     
     .sidebar-link-modern .badge-modern.orange {
         background: rgba(251, 191, 36, 0.15);
-        color: #FBBF24;
+        color: #FBBF24 !important;
     }
     
     .sidebar-link-modern .badge-modern.red {
         background: rgba(239, 68, 68, 0.25);
-        color: #F87171;
+        color: #F87171 !important;
         animation: pulse-badge-modern 2s infinite;
     }
     
     .sidebar-link-modern .badge-modern.blue {
         background: rgba(96, 165, 250, 0.15);
-        color: #60A5FA;
+        color: #60A5FA !important;
     }
     
     .sidebar-link-modern:hover .badge-modern {
-        background: rgba(255,255,255,0.1);
-        color: rgba(255,255,255,0.7);
+        background: rgba(255,255,255,0.12);
+        color: rgba(255,255,255,0.8) !important;
     }
     
     .sidebar-link-modern.active .badge-modern {
-        background: rgba(255,255,255,0.1);
-        color: white;
+        background: rgba(255,255,255,0.12);
+        color: #ffffff !important;
     }
     
     .sidebar-link-modern.active .badge-modern.danger {
         background: rgba(239, 68, 68, 0.3);
-        color: #FCA5A5;
+        color: #FCA5A5 !important;
     }
     
     /* ================================================================
@@ -483,21 +540,21 @@ $initial_data = [
        LOGOUT LINK
        ================================================================ */
     .sidebar-link-modern.logout-link-modern {
-        border-top: 1px solid rgba(255,255,255,0.05);
+        border-top: 1px solid rgba(255,255,255,0.06);
         padding-top: 10px;
         margin-top: 6px;
-        color: rgba(252, 165, 165, 0.5);
+        color: rgba(252, 165, 165, 0.5) !important;
         font-size: 0.78rem;
     }
     
     .sidebar-link-modern.logout-link-modern:hover {
         background: rgba(220, 38, 38, 0.15);
-        color: #F87171;
+        color: #F87171 !important;
         box-shadow: none;
     }
     
     .sidebar-link-modern.logout-link-modern:hover i {
-        color: #F87171;
+        color: #F87171 !important;
     }
     
     /* ================================================================
@@ -505,11 +562,11 @@ $initial_data = [
        ================================================================ */
     .sidebar-status-modern {
         padding: 8px 18px;
-        border-top: 1px solid rgba(255,255,255,0.04);
+        border-top: 1px solid rgba(255,255,255,0.06);
         display: flex;
         align-items: center;
         gap: 10px;
-        background: rgba(0,0,0,0.1);
+        background: rgba(0,0,0,0.05);
         position: sticky;
         bottom: 0;
         backdrop-filter: blur(10px);
@@ -534,13 +591,13 @@ $initial_data = [
     
     .sidebar-status-modern .status-text-modern {
         font-size: 0.6rem;
-        color: rgba(255,255,255,0.4);
+        color: rgba(255,255,255,0.5) !important;
         font-weight: 500;
     }
     
     .sidebar-status-modern .status-time-modern {
         font-size: 0.55rem;
-        color: rgba(255,255,255,0.25);
+        color: rgba(255,255,255,0.35) !important;
         margin-left: auto;
         display: flex;
         align-items: center;
@@ -569,11 +626,10 @@ $initial_data = [
         .sidebar-modern {
             transform: translateX(0) !important;
             z-index: 50;
-            box-shadow: 2px 0 16px rgba(0,0,0,0.08);
+            box-shadow: 2px 0 16px rgba(11, 94, 215, 0.15);
         }
         #sidebarOverlayModern { display: none !important; }
         .sidebar-close-btn-modern { display: none !important; }
-        .sidebar-toggle-float-modern { display: none !important; }
     }
     
     @media (max-width: 1024px) {
@@ -582,7 +638,7 @@ $initial_data = [
             transform: translateX(-100%);
             z-index: 9999;
             border-radius: 0 12px 12px 0;
-            box-shadow: 4px 0 30px rgba(0,0,0,0.3);
+            box-shadow: 4px 0 30px rgba(11, 94, 215, 0.3);
         }
         .sidebar-modern.open { transform: translateX(0) !important; }
         #sidebarOverlayModern { display: none; z-index: 9998; }
@@ -597,7 +653,6 @@ $initial_data = [
         .sidebar-status-modern { padding: 6px 16px; }
         .sidebar-status-modern .status-text-modern { font-size: 0.55rem; }
         .sidebar-status-modern .status-time-modern { font-size: 0.5rem; }
-        .sidebar-toggle-float-modern { display: none !important; }
     }
     
     @media (max-width: 768px) {
@@ -612,7 +667,6 @@ $initial_data = [
         .sidebar-status-modern { padding: 5px 14px; }
         .sidebar-status-modern .status-text-modern { font-size: 0.5rem; }
         .sidebar-status-modern .status-time-modern { font-size: 0.45rem; }
-        .sidebar-toggle-float-modern { display: none !important; }
     }
     
     @media (max-width: 480px) {
@@ -633,7 +687,6 @@ $initial_data = [
         .sidebar-status-modern .status-text-modern { font-size: 0.45rem; }
         .sidebar-status-modern .status-time-modern { font-size: 0.4rem; }
         .sidebar-status-modern .status-dot-modern { width: 5px; height: 5px; }
-        .sidebar-toggle-float-modern { display: none !important; }
     }
     
     /* ================================================================
@@ -660,14 +713,14 @@ $initial_data = [
 <aside class="sidebar-modern" id="sidebarModern">
     
     <!-- ================================================================ -->
-    <!-- BRAND / HEADER - JINA NA LOGO KUTOKA SYSTEM SETTINGS -->
+    <!-- BRAND / HEADER -->
     <!-- ================================================================ -->
     <div class="sidebar-brand-modern">
         <div class="flex items-center gap-3">
             <img src="<?= $site_logo_path ?>" 
                  alt="<?= htmlspecialchars($site_name) ?>" 
                  class="logo-modern"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2234%22 height=%2234%22%3E%3Crect width=%2234%22 height=%2234%22 fill=%22%230B4EA8%22 rx=%228%22/%3E%3Ctext x=%2217%22 y=%2224%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2234%22 height=%2234%22%3E%3Crect width=%2234%22 height=%2234%22 fill=%22%230B5ED7%22 rx=%228%22/%3E%3Ctext x=%2217%22 y=%2224%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div class="truncate">
                 <p class="brand-text-modern" id="sidebarSiteName"><?= htmlspecialchars($site_name) ?></p>
                 <p class="brand-sub-modern">💊 Pharmacy Panel</p>
@@ -708,7 +761,7 @@ $initial_data = [
         
         <a href="/dispensary_system/frontend/pages/pharmacy/prescription_history.php" class="sidebar-link-modern <?= isActive('prescription_history.php') ?>">
             <i class="fas fa-history"></i> Prescription History
-            <span class="badge-modern green" id="sidebarTodayPrescriptionsModern"><?= $today_sales ?></span>
+            <span class="badge-modern green" id="sidebarTotalPrescriptionsModern"><?= $total_prescriptions ?></span>
         </a>
         
         <!-- OTC Sales -->
@@ -720,7 +773,7 @@ $initial_data = [
         
         <a href="/dispensary_system/frontend/pages/pharmacy/otc_history.php" class="sidebar-link-modern <?= isActive('otc_history.php') ?>">
             <i class="fas fa-shopping-cart"></i> OTC History
-            <span class="badge-modern green" id="sidebarTodayOtcModern"><?= $today_otc ?></span>
+            <span class="badge-modern green" id="sidebarTotalOtcModern"><?= $total_otc ?></span>
         </a>
         
         <!-- Medicines -->
@@ -775,16 +828,16 @@ $initial_data = [
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - WITH API INTEGRATION -->
+<!-- JAVASCRIPT - DIRECT AJAX (NO EXTERNAL API) -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // CONFIGURATION
+    // CONFIGURATION - DIRECT AJAX (NO EXTERNAL API)
     // ================================================================
     var SIDEBAR_CONFIG = {
-        API_URL: '/dispensary_system/backend/api/get_pharmacy_sidebar_stats.php',
+        AJAX_URL: '/dispensary_system/backend/api/pharmacy_sidebar_ajax.php',
         CHECK_INTERVAL: 2000,
-        FORCE_INTERVAL: 10000,
+        FORCE_INTERVAL: 5000,
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
@@ -899,6 +952,8 @@ $initial_data = [
         
         var hasChanges = false;
         
+        console.log('📊 Updating badges with data:', data);
+        
         // 1. Pending Prescriptions
         var pendingBadge = document.getElementById('sidebarPendingBadgeModern');
         if (pendingBadge && data.pending_prescriptions !== undefined) {
@@ -911,6 +966,7 @@ $initial_data = [
                 pendingBadge.classList.remove('badge-update-modern');
                 void pendingBadge.offsetWidth;
                 pendingBadge.classList.add('badge-update-modern');
+                console.log('🔄 Pending Prescriptions: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -926,6 +982,7 @@ $initial_data = [
                 lowStockBadge.classList.remove('badge-update-modern');
                 void lowStockBadge.offsetWidth;
                 lowStockBadge.classList.add('badge-update-modern');
+                console.log('🔄 Low Stock: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -941,36 +998,39 @@ $initial_data = [
                 expiredBadge.classList.remove('badge-update-modern');
                 void expiredBadge.offsetWidth;
                 expiredBadge.classList.add('badge-update-modern');
+                console.log('🔄 Expired: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 4. Today Prescriptions
-        var todayPrescBadge = document.getElementById('sidebarTodayPrescriptionsModern');
-        if (todayPrescBadge && data.today_prescriptions !== undefined) {
-            var oldVal = todayPrescBadge.textContent;
-            var newVal = data.today_prescriptions;
+        // 4. TOTAL Prescriptions
+        var totalPrescBadge = document.getElementById('sidebarTotalPrescriptionsModern');
+        if (totalPrescBadge && data.total_prescriptions !== undefined) {
+            var oldVal = totalPrescBadge.textContent;
+            var newVal = data.total_prescriptions;
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
-                todayPrescBadge.textContent = newVal;
-                todayPrescBadge.className = parseInt(newVal) > 0 ? 'badge-modern green' : 'badge-modern';
-                todayPrescBadge.classList.remove('badge-update-modern');
-                void todayPrescBadge.offsetWidth;
-                todayPrescBadge.classList.add('badge-update-modern');
+                totalPrescBadge.textContent = newVal;
+                totalPrescBadge.className = parseInt(newVal) > 0 ? 'badge-modern green' : 'badge-modern';
+                totalPrescBadge.classList.remove('badge-update-modern');
+                void totalPrescBadge.offsetWidth;
+                totalPrescBadge.classList.add('badge-update-modern');
+                console.log('🔄 Total Prescriptions: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 5. Today OTC
-        var todayOtcBadge = document.getElementById('sidebarTodayOtcModern');
-        if (todayOtcBadge && data.today_otc !== undefined) {
-            var oldVal = todayOtcBadge.textContent;
-            var newVal = data.today_otc;
+        // 5. TOTAL OTC
+        var totalOtcBadge = document.getElementById('sidebarTotalOtcModern');
+        if (totalOtcBadge && data.total_otc !== undefined) {
+            var oldVal = totalOtcBadge.textContent;
+            var newVal = data.total_otc;
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
-                todayOtcBadge.textContent = newVal;
-                todayOtcBadge.className = parseInt(newVal) > 0 ? 'badge-modern green' : 'badge-modern';
-                todayOtcBadge.classList.remove('badge-update-modern');
-                void todayOtcBadge.offsetWidth;
-                todayOtcBadge.classList.add('badge-update-modern');
+                totalOtcBadge.textContent = newVal;
+                totalOtcBadge.className = parseInt(newVal) > 0 ? 'badge-modern green' : 'badge-modern';
+                totalOtcBadge.classList.remove('badge-update-modern');
+                void totalOtcBadge.offsetWidth;
+                totalOtcBadge.classList.add('badge-update-modern');
+                console.log('🔄 Total OTC: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -1002,7 +1062,7 @@ $initial_data = [
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA FROM API
+    // FETCH SIDEBAR DATA - DIRECT AJAX (NO EXTERNAL API)
     // ================================================================
     function fetchSidebarData(forceUpdate) {
         if (sidebarState.isUpdating && !forceUpdate) return;
@@ -1017,7 +1077,9 @@ $initial_data = [
             formData.append('force_update', '1');
         }
         
-        fetch(SIDEBAR_CONFIG.API_URL, {
+        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
+        
+        fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
             body: formData,
             credentials: 'same-origin'
@@ -1032,13 +1094,16 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
+                console.log('📥 AJAX Response:', data);
+                
                 if (data.has_changed && data.data) {
-                    // Update UI with new data
-                    updateSidebarBadges(data.data);
-                    sidebarState.dataHash = data.hash;
+                    var hasUpdates = updateSidebarBadges(data.data);
+                    if (hasUpdates) {
+                        sidebarState.dataHash = data.hash;
+                        console.log('✅ Sidebar updated with new data');
+                    }
                     sidebarState.hasInitialData = true;
                     
-                    // Dispatch custom event
                     var event = new CustomEvent('sidebarDataUpdated', {
                         detail: {
                             data: data.data,
@@ -1049,7 +1114,6 @@ $initial_data = [
                     document.dispatchEvent(event);
                     
                 } else if (data.has_changed === false) {
-                    // Just update timestamp
                     var timeEl = document.getElementById('sidebarLiveTimeModern');
                     if (timeEl) {
                         var now = new Date();
@@ -1062,16 +1126,34 @@ $initial_data = [
                     }
                     sidebarState.hasInitialData = true;
                 }
+                
+                var statusDot = document.getElementById('sidebarStatusDotModern');
+                if (statusDot) {
+                    statusDot.className = 'status-dot-modern online';
+                }
+                var statusText = document.getElementById('sidebarStatusTextModern');
+                if (statusText) {
+                    statusText.textContent = 'Online';
+                }
+                
             } else {
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
+                console.warn('⚠️ AJAX Error:', data.message);
             }
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            if (forceUpdate) {
-                console.warn('Pharmacy sidebar API error:', error.message);
+            console.warn('❌ Sidebar AJAX error:', error.message);
+            
+            var statusDot = document.getElementById('sidebarStatusDotModern');
+            if (statusDot) {
+                statusDot.className = 'status-dot-modern offline';
+            }
+            var statusText = document.getElementById('sidebarStatusTextModern');
+            if (statusText) {
+                statusText.textContent = 'Offline';
             }
         });
     }
@@ -1164,21 +1246,24 @@ $initial_data = [
     // ================================================================
     // CONSOLE LOG
     // ================================================================
-    console.log('%c💊 Braick Pharmacy Sidebar (API Integrated)', 
+    console.log('%c💊 Braick Pharmacy Sidebar (BLUE THEME - #0B5ED7)', 
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏥 Site: <?= htmlspecialchars($site_name) ?>', 
         'font-size:12px; color:#34D399;');
     console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
     console.log('   Pending: <?= $pending_prescriptions ?>, Low Stock: <?= $low_stock_count ?>');
-    console.log('   Expired: <?= $expired_count ?>, Today: <?= $today_sales ?>, OTC: <?= $today_otc ?>');
+    console.log('   Expired: <?= $expired_count ?>, Total Prescriptions: <?= $total_prescriptions ?>');
+    console.log('   Total OTC: <?= $total_otc ?>, Dispensed: <?= $total_dispensed ?>');
     console.log('%c⚡ Smart Updates: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 10s (safety net)', 
+    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
         'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 API Endpoint: ' + SIDEBAR_CONFIG.API_URL, 
+    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 
         'font-size:12px; color:#94A3B8;');
     console.log('%c💡 Call window.refreshSidebarData() to manually update', 
         'font-size:12px; color:#6EA8FE;');
     console.log('%c📱 Click ☰ in header to open sidebar on mobile', 
         'font-size:12px; color:#34D399;');
+    console.log('%c🎨 Blue color: #0B5ED7 (same as table header)', 
+        'font-size:12px; color:#0B5ED7;');
 </script>

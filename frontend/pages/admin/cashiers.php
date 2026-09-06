@@ -2,12 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/admin/cashiers.php
 // SUPER ADMIN - VIEW ALL CASHIERS
-// FIXED: Revenue uses paid_amount from bills
-// FIXED: Prescription revenue from prescription_items table
-// FIXED: OTC revenue from otc_sales table
-// FIXED: Bills count excludes OTC bills (bill_number LIKE 'BILL-OTC-%')
-// FIXED: Total revenue = patient_bills_revenue + otc_revenue ONLY
-//        (Prescription is already included in patient_bills_revenue)
+// FIXED: 3 cards top (BIGGER), 4 cards bottom (SMALLER)
+// FIXED: Top cards have larger font and padding
 // ================================================================
 
 // ================================================================
@@ -107,7 +103,7 @@ try {
 }
 
 // ================================================================
-// GET FINANCIAL SUMMARY - FIXED: Correct revenue calculation
+// GET FINANCIAL SUMMARY
 // ================================================================
 function getFinancialSummary($db, $branch_id = 'all') {
     $results = [];
@@ -120,7 +116,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
         $params[] = (int)$branch_id;
     }
     
-    // 1. PATIENT BILLS REVENUE - Using paid_amount, excludes OTC bills
+    // 1. PATIENT BILLS REVENUE
     $sql_patient = "
         SELECT COALESCE(SUM(b.paid_amount), 0) as patient_revenue
         FROM bills b
@@ -135,7 +131,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $patient_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['patient_revenue'] ?? 0;
     $results['patient_revenue'] = $patient_revenue;
     
-    // 2. OTC REVENUE - from otc_sales table
+    // 2. OTC REVENUE
     $sql_otc = "
         SELECT COALESCE(SUM(os.total_amount), 0) as otc_revenue
         FROM otc_sales os
@@ -151,7 +147,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['otc_revenue'] ?? 0;
     $results['otc_revenue'] = $otc_revenue;
     
-    // 3. PRESCRIPTION REVENUE - from prescription_items table (FOR DISPLAY ONLY)
+    // 3. PRESCRIPTION REVENUE (DISPLAY ONLY)
     $sql_prescription = "
         SELECT COALESCE(SUM(pi.total_price), 0) as prescription_revenue
         FROM prescription_items pi
@@ -169,10 +165,9 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $results['prescription_revenue'] = $prescription_revenue;
     
     // 4. TOTAL REVENUE = Patient Bills + OTC ONLY
-    //    (Prescription is already included in patient_bills_revenue)
     $results['total_revenue'] = $patient_revenue + $otc_revenue;
     
-    // 5. TOTAL EXPENSES - from expenses table
+    // 5. TOTAL EXPENSES
     $sql_expenses = "
         SELECT COALESCE(SUM(amount), 0) as total_expenses
         FROM expenses
@@ -190,7 +185,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     // 6. NET PROFIT
     $results['net_profit'] = $results['total_revenue'] - $results['total_expenses'];
     
-    // 7. PAID BILLS - Excludes OTC bills
+    // 7. PAID BILLS
     $sql_paid = "
         SELECT COUNT(*) as paid_bills
         FROM bills b
@@ -204,7 +199,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params);
     $results['paid_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['paid_bills'] ?? 0;
     
-    // 8. PENDING BILLS - Excludes OTC bills
+    // 8. PENDING BILLS
     $sql_pending = "
         SELECT COUNT(*) as pending_bills
         FROM bills b
@@ -218,35 +213,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
     $stmt->execute($params);
     $results['pending_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['pending_bills'] ?? 0;
     
-    // 9. CANCELLED BILLS - Excludes OTC bills
-    $sql_cancelled = "
-        SELECT COUNT(*) as cancelled_bills
-        FROM bills b
-        WHERE b.status = 'cancelled' 
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        $branch_condition
-    ";
-    $stmt = $db->prepare($sql_cancelled);
-    $stmt->execute($params);
-    $results['cancelled_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['cancelled_bills'] ?? 0;
-    
-    // 10. PARTIAL BILLS - Excludes OTC bills
-    $sql_partial = "
-        SELECT COUNT(*) as partial_bills
-        FROM bills b
-        WHERE b.status = 'partial' 
-        AND b.patient_id IS NOT NULL
-        AND b.visit_id IS NOT NULL
-        AND b.bill_number NOT LIKE 'BILL-OTC-%'
-        $branch_condition
-    ";
-    $stmt = $db->prepare($sql_partial);
-    $stmt->execute($params);
-    $results['partial_bills'] = $stmt->fetch(PDO::FETCH_ASSOC)['partial_bills'] ?? 0;
-    
-    // 11. TOTAL BILLS - Excludes OTC bills
+    // 9. TOTAL BILLS
     $sql_total = "
         SELECT COUNT(*) as total_bills
         FROM bills b
@@ -266,9 +233,7 @@ function getFinancialSummary($db, $branch_id = 'all') {
 $financial = getFinancialSummary($db, $selected_branch_id);
 
 // ================================================================
-// BUILD QUERY FOR BRANCHES - SHOW ALL ACTIVE BRANCHES
-// FIXED: Uses correct table names and excludes OTC bills
-// FIXED: Total revenue = patient_bills_revenue + otc_revenue ONLY
+// BUILD QUERY FOR BRANCHES
 // ================================================================
 $query = "
     SELECT 
@@ -321,16 +286,6 @@ $query = "
             0
         ) as partial_bills,
         COALESCE(
-            (SELECT COUNT(*) 
-             FROM bills pb
-             WHERE pb.branch_id = b.id 
-             AND pb.status = 'cancelled'
-             AND pb.patient_id IS NOT NULL
-             AND pb.visit_id IS NOT NULL
-             AND pb.bill_number NOT LIKE 'BILL-OTC-%'), 
-            0
-        ) as cancelled_bills,
-        COALESCE(
             (SELECT COALESCE(SUM(pb.paid_amount), 0) 
              FROM bills pb
              WHERE pb.branch_id = b.id 
@@ -372,7 +327,6 @@ $query = "
                 (SELECT COALESCE(SUM(os.total_amount), 0) 
                  FROM otc_sales os
                  WHERE os.branch_id = b.id AND os.payment_status = 'paid')
-                -- PRESCRIPTION REMOVED FROM TOTAL REVENUE (already in patient_bills)
             ), 
             0
         ) as total_revenue
@@ -382,16 +336,14 @@ $query = "
 
 $params = [];
 
-// Branch filter - ONLY APPLY IF NOT 'all' AND branch exists
+// Branch filter
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    // Verify branch exists before filtering
     $check_stmt = $db->prepare("SELECT id FROM branches WHERE id = ? AND status = 'active'");
     $check_stmt->execute([(int)$selected_branch_id]);
     if ($check_stmt->fetch()) {
         $query .= " AND b.id = ?";
         $params[] = (int)$selected_branch_id;
     } else {
-        // Branch doesn't exist - reset to all
         $selected_branch_id = 'all';
         $redirect_url = $_SERVER['PHP_SELF'];
         $params_redirect = [];
@@ -405,12 +357,11 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     }
 }
 
-// Status filter - show only branches with specific status
+// Status filter
 if ($status_filter !== 'all') {
     $query .= " AND b.status = ?";
     $params[] = $status_filter;
 } else {
-    // Default: show only active branches
     $query .= " AND b.status = 'active'";
 }
 
@@ -446,7 +397,6 @@ $total_bills = 0;
 $total_pending = 0;
 $total_paid = 0;
 $total_partial = 0;
-$total_cancelled = 0;
 $total_revenue = 0;
 $total_patient_bills_revenue = 0;
 $total_otc_revenue = 0;
@@ -459,7 +409,6 @@ foreach ($cashiers as $c) {
     $total_pending += ($c['pending_bills'] ?? 0);
     $total_paid += ($c['paid_bills'] ?? 0);
     $total_partial += ($c['partial_bills'] ?? 0);
-    $total_cancelled += ($c['cancelled_bills'] ?? 0);
     $total_patient_bills_revenue += ($c['patient_bills_revenue'] ?? 0);
     $total_otc_revenue += ($c['otc_revenue'] ?? 0);
     $total_prescription_revenue += ($c['prescription_revenue'] ?? 0);
@@ -802,18 +751,134 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         /* ================================================================
-           8 CARDS - CUSTOM COLORS
+           7 CARDS - 3 TOP (BIGGER), 4 BOTTOM (SMALLER)
            ================================================================ */
-        .stats-grid-8 {
+        .stats-grid-7 {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
             gap: 14px;
             margin-bottom: 24px;
         }
         
-        .stat-card-8 {
+        /* TOP ROW: 3 cards - each takes 1.33 columns (we use 3 of 4 columns) */
+        .stats-grid-7 .card-row-top {
+            grid-column: span 1;
+            min-height: 120px;
+            padding: 20px 24px;
+        }
+        
+        /* BOTTOM ROW: 4 cards - each takes 1 column */
+        .stats-grid-7 .card-row-bottom {
+            grid-column: span 1;
+            min-height: 90px;
+            padding: 14px 16px;
+        }
+        
+        /* ================================================================
+           TOP CARDS - BIGGER FONT
+           ================================================================ */
+        .stats-grid-7 .card-row-top .stat-number {
+            font-size: 2.4rem;
+            font-weight: 800;
+            color: white;
+            margin: 0;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+        }
+        
+        .stats-grid-7 .card-row-top .stat-label {
+            font-size: 0.7rem;
+            color: rgba(255,255,255,0.85);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 0 0 2px 0;
+        }
+        
+        .stats-grid-7 .card-row-top .stat-sub {
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.9);
+            margin-top: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+        }
+        
+        .stats-grid-7 .card-row-top .stat-icon {
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            flex-shrink: 0;
+            background: rgba(255,255,255,0.18);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.12);
+            backdrop-filter: blur(8px);
+            transition: all 0.3s ease;
+            position: relative;
+            z-index: 1;
+            margin-bottom: 6px;
+        }
+        
+        /* ================================================================
+           BOTTOM CARDS - SMALLER FONT
+           ================================================================ */
+        .stats-grid-7 .card-row-bottom .stat-number {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: white;
+            margin: 0;
+            line-height: 1.1;
+            letter-spacing: -0.02em;
+        }
+        
+        .stats-grid-7 .card-row-bottom .stat-label {
+            font-size: 0.55rem;
+            color: rgba(255,255,255,0.85);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 0 0 1px 0;
+        }
+        
+        .stats-grid-7 .card-row-bottom .stat-sub {
+            font-size: 0.5rem;
+            color: rgba(255,255,255,0.9);
+            margin-top: 2px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        
+        .stats-grid-7 .card-row-bottom .stat-icon {
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.9rem;
+            flex-shrink: 0;
+            background: rgba(255,255,255,0.18);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.12);
+            backdrop-filter: blur(8px);
+            transition: all 0.3s ease;
+            position: relative;
+            z-index: 1;
+            margin-bottom: 4px;
+        }
+        
+        /* ================================================================
+           COMMON CARD STYLES
+           ================================================================ */
+        .stat-card-7 {
             border-radius: 14px;
-            padding: 16px 18px;
             border: none;
             display: flex;
             flex-direction: column;
@@ -822,11 +887,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: white;
             position: relative;
             overflow: hidden;
-            min-height: 100px;
             cursor: default;
         }
         
-        .stat-card-8::before {
+        .stat-card-7::before {
             content: '';
             position: absolute;
             top: -50%;
@@ -838,7 +902,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             pointer-events: none;
             transition: all 0.5s ease;
         }
-        .stat-card-8::after {
+        .stat-card-7::after {
             content: '';
             position: absolute;
             bottom: -40%;
@@ -850,72 +914,22 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             pointer-events: none;
             transition: all 0.5s ease;
         }
-        .stat-card-8:hover {
+        .stat-card-7:hover {
             transform: translateY(-4px) scale(1.01);
             box-shadow: 0 10px 32px rgba(0,0,0,0.2);
         }
-        .stat-card-8:hover::before { transform: scale(1.3); right: -10%; }
-        .stat-card-8:hover::after { transform: scale(1.4); bottom: -30%; }
+        .stat-card-7:hover::before { transform: scale(1.3); right: -10%; }
+        .stat-card-7:hover::after { transform: scale(1.4); bottom: -30%; }
         
-        .stat-card-8 .stat-icon {
-            width: 44px;
-            height: 44px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 1.1rem;
-            flex-shrink: 0;
-            background: rgba(255,255,255,0.18);
-            color: white;
-            border: 1px solid rgba(255,255,255,0.12);
-            backdrop-filter: blur(8px);
-            transition: all 0.3s ease;
-            position: relative;
-            z-index: 1;
-            margin-bottom: 4px;
-        }
-        .stat-card-8:hover .stat-icon {
-            transform: scale(1.05) rotate(-2deg);
-            background: rgba(255,255,255,0.3);
-        }
-        .stat-card-8 .stat-content {
+        .stat-card-7 .stat-content {
             position: relative;
             z-index: 1;
             flex: 1;
             display: flex;
             flex-direction: column;
         }
-        .stat-card-8 .stat-label {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.85);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            margin: 0 0 1px 0;
-        }
-        .stat-card-8 .stat-number {
-            font-size: 1.8rem;
-            font-weight: 800;
-            color: white;
-            margin: 0;
-            line-height: 1.1;
-            letter-spacing: -0.02em;
-        }
-        .stat-card-8 .stat-sub {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.9);
-            margin-top: 3px;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-        .stat-card-8 .stat-sub .highlight {
-            color: rgba(255,255,255,0.95);
-            font-weight: 600;
-        }
-        .stat-card-8 .stat-arrow {
+        
+        .stat-card-7 .stat-arrow {
             position: absolute;
             right: 12px;
             bottom: 12px;
@@ -924,9 +938,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transition: all 0.3s ease;
             z-index: 1;
         }
-        .stat-card-8:hover .stat-arrow {
+        .stat-card-7:hover .stat-arrow {
             transform: translateX(6px);
             color: rgba(255,255,255,0.4);
+        }
+        
+        .stat-card-7 .stat-icon:hover {
+            transform: scale(1.05) rotate(-2deg);
+            background: rgba(255,255,255,0.3);
         }
         
         /* ================================================================
@@ -944,10 +963,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
         .card-orange:hover { box-shadow: 0 10px 32px rgba(217, 119, 6, 0.4); }
         
+        .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
+        .card-purple:hover { box-shadow: 0 10px 32px rgba(124, 58, 237, 0.4); }
+        
         [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
         [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
         [data-theme="dark"] .card-orange { background: linear-gradient(135deg, #D97706, #B45309); }
+        [data-theme="dark"] .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
         
         /* ================================================================
            FILTER BAR
@@ -1312,26 +1335,29 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .stats-grid-8 { grid-template-columns: repeat(4, 1fr); }
+            .stats-grid-7 { grid-template-columns: repeat(2, 1fr); }
             .sidebar { transform: translateX(-100%); }
             .sidebar.open { transform: translateX(0); }
         }
         @media (max-width: 768px) {
-            .stats-grid-8 { grid-template-columns: 1fr 1fr; }
+            .stats-grid-7 { grid-template-columns: 1fr 1fr; }
+            .stats-grid-7 .card-row-top { grid-column: span 1; }
+            .stats-grid-7 .card-row-bottom { grid-column: span 1; }
+            .stats-grid-7 .card-row-top { min-height: 100px; padding: 16px 18px; }
+            .stats-grid-7 .card-row-top .stat-number { font-size: 1.8rem; }
+            .stats-grid-7 .card-row-bottom .stat-number { font-size: 1.4rem; }
             .cashier-grid { grid-template-columns: 1fr; }
             .page-header-box .page-title { font-size: 1.3rem; }
             .page-header-box { padding: 16px 18px; }
-            .stat-card-8 { padding: 14px 16px; min-height: 90px; }
-            .stat-card-8 .stat-number { font-size: 1.4rem; }
-            .stat-card-8 .stat-icon { width: 38px; height: 38px; font-size: 1rem; }
             .filter-bar { flex-direction: column; align-items: stretch; }
             .filter-bar select, .filter-bar input { width: 100%; min-width: unset; }
         }
         @media (max-width: 480px) {
-            .stats-grid-8 { grid-template-columns: 1fr; }
-            .stat-card-8 { padding: 12px 14px; min-height: 80px; }
-            .stat-card-8 .stat-number { font-size: 1.2rem; }
-            .stat-card-8 .stat-icon { width: 34px; height: 34px; font-size: 0.85rem; }
+            .stats-grid-7 { grid-template-columns: 1fr; }
+            .stats-grid-7 .card-row-top { grid-column: span 1; }
+            .stats-grid-7 .card-row-bottom { grid-column: span 1; }
+            .stats-grid-7 .card-row-top .stat-number { font-size: 1.6rem; }
+            .stats-grid-7 .card-row-bottom .stat-number { font-size: 1.2rem; }
             .page-header-box .page-title { font-size: 1rem; flex-direction: column; align-items: flex-start; }
             .page-header-box .page-subtitle { font-size: 0.75rem; flex-direction: column; align-items: flex-start; gap: 4px; }
             .cashier-card .card-stats { grid-template-columns: repeat(2, 1fr); }
@@ -1486,12 +1512,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 8 CARDS - CUSTOM COLORS -->
+    <!-- 7 CARDS - 3 TOP (BIGGER), 4 BOTTOM (SMALLER) -->
     <!-- ================================================================ -->
-    <div class="stats-grid-8 animate-fade-in-up" style="animation-delay:0.05s;">
+    <div class="stats-grid-7 animate-fade-in-up" style="animation-delay:0.05s;">
         
-        <!-- 1. Total Revenue - BLUE -->
-        <div class="stat-card-8 card-blue">
+        <!-- ROW 1: 3 CARDS - BIGGER (span 1 column each, using 3 of 4 columns) -->
+        
+        <!-- 1. Total Revenue - BLUE (BIGGER) -->
+        <div class="stat-card-7 card-blue card-row-top">
             <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Total Revenue</p>
@@ -1501,8 +1529,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 2. Total Expenses - RED -->
-        <div class="stat-card-8 card-red">
+        <!-- 2. Total Expenses - RED (BIGGER) -->
+        <div class="stat-card-7 card-red card-row-top">
             <div class="stat-icon"><i class="fas fa-arrow-up"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Total Expenses</p>
@@ -1512,8 +1540,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 3. Net Profit - GREEN -->
-        <div class="stat-card-8 card-green">
+        <!-- 3. Net Profit - GREEN (BIGGER) -->
+        <div class="stat-card-7 card-green card-row-top">
             <div class="stat-icon"><i class="fas fa-chart-line"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Net Profit</p>
@@ -1523,8 +1551,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 4. Prescription Revenue - PURPLE (DISPLAY ONLY) -->
-        <div class="stat-card-8" style="background: linear-gradient(135deg, #7C3AED, #6D28D9);">
+        <!-- ROW 2: 4 CARDS - SMALLER (span 1 column each) -->
+        
+        <!-- 4. Prescription Revenue - PURPLE (SMALLER) -->
+        <div class="stat-card-7 card-purple card-row-bottom">
             <div class="stat-icon"><i class="fas fa-prescription"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Prescription Revenue</p>
@@ -1534,8 +1564,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 5. OTC Revenue - BLUE -->
-        <div class="stat-card-8 card-blue">
+        <!-- 5. OTC Revenue - BLUE (SMALLER) -->
+        <div class="stat-card-7 card-blue card-row-bottom">
             <div class="stat-icon"><i class="fas fa-cash-register"></i></div>
             <div class="stat-content">
                 <p class="stat-label">OTC Revenue</p>
@@ -1545,8 +1575,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 6. Paid Bills - GREEN -->
-        <div class="stat-card-8 card-green">
+        <!-- 6. Paid Bills - GREEN (SMALLER) -->
+        <div class="stat-card-7 card-green card-row-bottom">
             <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Paid Bills</p>
@@ -1556,24 +1586,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
         
-        <!-- 7. Pending Bills - ORANGE -->
-        <div class="stat-card-8 card-orange">
+        <!-- 7. Pending Bills - ORANGE (SMALLER) -->
+        <div class="stat-card-7 card-orange card-row-bottom">
             <div class="stat-icon"><i class="fas fa-clock"></i></div>
             <div class="stat-content">
                 <p class="stat-label">Pending Bills</p>
                 <p class="stat-number"><?= number_format($financial['pending_bills']) ?></p>
                 <p class="stat-sub">⏳ Awaiting payment</p>
-            </div>
-            <i class="fas fa-arrow-right stat-arrow"></i>
-        </div>
-        
-        <!-- 8. Cancelled Bills - RED -->
-        <div class="stat-card-8 card-red">
-            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-            <div class="stat-content">
-                <p class="stat-label">Cancelled Bills</p>
-                <p class="stat-number"><?= number_format($financial['cancelled_bills']) ?></p>
-                <p class="stat-sub">❌ Voided transactions</p>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </div>
@@ -1703,9 +1722,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         </div>
                     </div>
                     
-                    <!-- ============================================================ -->
-                    <!-- CARD ACTIONS - View & Edit ONLY -->
-                    <!-- ============================================================ -->
                     <div class="card-actions">
                         <a href="view_cashier.php?id=<?= (int)$cashier['id'] ?>" class="btn-action primary">
                             <i class="fas fa-eye"></i> View
@@ -1860,15 +1876,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c💰 Braick Dispensary - Cashiers', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Total Branches: <?= $total_cashiers ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Total Revenue: TSh <?= number_format($financial['total_revenue'], 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c   ├─ Patient Bills: TSh <?= number_format($financial['patient_revenue'], 0) ?>', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c   ├─ OTC Sales: TSh <?= number_format($financial['otc_revenue'], 0) ?>', 'font-size:12px; color:#D97706;');
-    console.log('%c   └─ Prescriptions: TSh <?= number_format($financial['prescription_revenue'], 0) ?> (DISPLAY ONLY - Included in Bills)', 'font-size:12px; color:#7C3AED;');
-    console.log('%c💸 Total Expenses: TSh <?= number_format($financial['total_expenses'], 0) ?>', 'font-size:13px; color:#DC2626;');
-    console.log('%c✅ FIXED: Total Revenue = Patient Bills + OTC ONLY', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Prescription is already in Patient Bills - NO DOUBLE COUNT', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Excludes OTC bills from bills table (bill_number LIKE "BILL-OTC-%")', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FIXED: Patient bills use paid_amount (not total_amount)', 'font-size:13px; color:#34D399;');
+    console.log('%c📊 3 TOP (BIGGER) + 4 BOTTOM (SMALLER)', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c   ├─ TOP: Revenue, Expenses, Net Profit (Bigger fonts, more padding)', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c   └─ BOTTOM: Prescription, OTC, Paid, Pending (Smaller fonts, less padding)', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Removed: Cancelled Bills card', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

@@ -2,7 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/view_patient_prescriptions.php
 // PHARMACY - VIEW PATIENT PRESCRIPTIONS
-// FIXED: Update only discount, keep other bill items
+// ✅ FIXED: Discount uses discount_amount column (NOT pharmacy_discount)
+// ✅ FIXED: total_discount accumulates all discounts
+// ✅ FIXED: total_amount = subtotal - total_discount
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -87,7 +89,7 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
     
     // ================================================================
-    // ✅ HANDLE SAVE - FIXED: Only update discount, don't replace bill
+    // ✅ FIXED: HANDLE SAVE - Discount uses discount_amount column
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_and_confirm') {
         $patient_id = isset($_POST['patient_id']) ? (int)$_POST['patient_id'] : 0;
@@ -160,10 +162,12 @@ try {
                 $visit_id = $prescriptions[0]['visit_id'] ?? null;
                 
                 // ================================================================
-                // ✅ FIX: Check if bill exists and update ONLY discount
+                // ✅ FIXED: Check if bill exists and update with CORRECT discount
+                // ✅ Uses discount_amount column (NOT pharmacy_discount)
                 // ================================================================
                 $stmt = $db->prepare("
-                    SELECT id, total_amount, discount_amount, subtotal
+                    SELECT id, total_amount, paid_amount, balance, discount_amount, 
+                           total_discount, subtotal
                     FROM bills 
                     WHERE patient_id = ? AND visit_id = ? AND status IN ('pending', 'partial')
                     ORDER BY id DESC LIMIT 1
@@ -175,11 +179,15 @@ try {
                 
                 if ($existing_bill) {
                     $bill_id = $existing_bill['id'];
-                    $current_total = $existing_bill['total_amount'];
-                    $current_discount = $existing_bill['discount_amount'] ?? 0;
+                    $current_total = (float)$existing_bill['total_amount'];
+                    $current_paid = (float)$existing_bill['paid_amount'];
+                    $current_balance = (float)$existing_bill['balance'];
+                    $current_total_discount = (float)$existing_bill['total_discount'];
+                    $current_discount_amount = (float)$existing_bill['discount_amount'];
+                    $current_subtotal = (float)$existing_bill['subtotal'];
                     
                     // ================================================================
-                    // GET MEDICATION TOTAL FROM BILL_ITEMS (to calculate correct discount)
+                    // GET MEDICATION TOTAL FROM BILL_ITEMS
                     // ================================================================
                     $stmt_med = $db->prepare("
                         SELECT SUM(total_price) as med_total, COUNT(*) as med_count
@@ -192,7 +200,7 @@ try {
                     $med_count = $med_data['med_count'] ?? 0;
                     
                     // ================================================================
-                    // GET OTHER ITEMS TOTAL (unchanged)
+                    // GET OTHER ITEMS TOTAL (unchanged - consultation, lab, procedures)
                     // ================================================================
                     $stmt_other = $db->prepare("
                         SELECT SUM(total_price) as other_total
@@ -204,12 +212,13 @@ try {
                     $other_total = $other_data['other_total'] ?? 0;
                     
                     // ================================================================
-                    // UPDATE MEDICATION ITEMS WITH DISCOUNT (pro-rata)
+                    // ✅ FIXED: APPLY DISCOUNT TO MEDICATION ITEMS (pro-rata)
                     // ================================================================
                     $discount_per_item = ($discount_amount > 0 && $med_count > 0) 
                         ? $discount_amount / $med_count 
                         : 0;
                     
+                    // Update each medication item with discount
                     $stmt_update_items = $db->prepare("
                         UPDATE bill_items 
                         SET discount_amount = ?,
@@ -228,7 +237,7 @@ try {
                     ]);
                     
                     // ================================================================
-                    // GET NEW MEDICATION TOTAL FROM BILL_ITEMS (with discount)
+                    // GET NEW MEDICATION TOTAL FROM BILL_ITEMS (with discount applied)
                     // ================================================================
                     $stmt_new_med = $db->prepare("
                         SELECT SUM(total_price) as med_total, SUM(discount_amount) as med_discount
@@ -241,28 +250,48 @@ try {
                     $new_med_discount = $new_med_data['med_discount'] ?? 0;
                     
                     // ================================================================
-                    // ✅ FIX: CALCULATE NEW BILL TOTAL
+                    // ✅ FIXED: CALCULATE NEW BILL TOTAL - DISCOUNT SUBTRACTS
                     // NEW TOTAL = (NEW MEDICATION TOTAL) + OTHER ITEMS
                     // ================================================================
                     $new_total = $new_med_total + $other_total;
                     
                     // ================================================================
-                    // ✅ FIX: UPDATE BILL - ONLY CHANGE DISCOUNT AND TOTAL
+                    // ✅ FIXED: UPDATE BILL - USE discount_amount (NOT pharmacy_discount)
                     // ================================================================
+                    $new_total_discount = $current_total_discount + $discount_amount;
+                    $new_discount_amount = $current_discount_amount + $discount_amount;
+                    $new_balance = $new_total - $current_paid;
+                    if ($new_balance < 0) $new_balance = 0;
+                    
+                    // Determine new status
+                    if ($new_balance <= 0) {
+                        $new_status = 'paid';
+                    } elseif ($current_paid > 0) {
+                        $new_status = 'partial';
+                    } else {
+                        $new_status = 'pending';
+                    }
+                    
+                    // ✅ UPDATE bills - Uses discount_amount, NOT pharmacy_discount
                     $stmt_update_bill = $db->prepare("
                         UPDATE bills 
-                        SET discount_amount = ?,
+                        SET 
+                            discount_amount = ?,
+                            total_discount = ?,
                             total_amount = ?,
                             balance = ?,
+                            status = ?,
                             updated_at = NOW(),
-                            notes = CONCAT(COALESCE(notes, ''), ' | Pharmacy discount: ', ?, ' applied ', NOW())
+                            notes = CONCAT(COALESCE(notes, ''), ' | Pharmacy discount: ', ?, ' at ', NOW())
                         WHERE id = ? AND patient_id = ? AND visit_id = ?
                     ");
                     $stmt_update_bill->execute([
-                        $new_med_discount,
+                        $new_discount_amount,
+                        $new_total_discount,
                         $new_total,
-                        $new_total, // balance = total (not paid yet)
-                        $discount_amount,
+                        $new_balance,
+                        $new_status,
+                        number_format($discount_amount, 0),
                         $bill_id,
                         $patient_id,
                         $visit_id
@@ -270,7 +299,9 @@ try {
                     
                     $message = "✅ Prescription(s) confirmed! Bill updated.<br>";
                     $message .= "Medication discount: " . $currency . " " . number_format($discount_amount, 0) . "<br>";
-                    $message .= "New bill total: " . $currency . " " . number_format($new_total, 0) . " (was " . $currency . " " . number_format($current_total, 0) . ")";
+                    $message .= "New bill total: " . $currency . " " . number_format($new_total, 0) . " (was " . $currency . " " . number_format($current_total, 0) . ")<br>";
+                    $message .= "Total discount: " . $currency . " " . number_format($new_total_discount, 0) . " (was " . $currency . " " . number_format($current_total_discount, 0) . ")<br>";
+                    $message .= "New balance: " . $currency . " " . number_format($new_balance, 0);
                     $message_type = 'success';
                     
                 } else {
@@ -290,21 +321,27 @@ try {
                     $item_total = $stmt_items->fetch(PDO::FETCH_ASSOC);
                     $med_total = $item_total['med_total'] ?? 0;
                     
+                    // ✅ FIXED: Subtract discount
                     $final_total = $med_total - $discount_amount;
                     if ($final_total < 0) $final_total = 0;
                     
+                    // ✅ Use discount_amount column (NOT pharmacy_discount)
                     $stmt = $db->prepare("
                         INSERT INTO bills (
                             bill_number, patient_id, visit_id, branch_id, created_by,
-                            subtotal, discount_amount, discount_percent, total_amount,
-                            paid_amount, balance, status, payment_method, notes,
+                            subtotal, discount_amount, total_discount,
+                            total_amount, paid_amount, balance, status, payment_method, notes,
                             created_at, updated_at
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'cash', ?, NOW(), NOW())
                     ");
                     $stmt->execute([
                         $bill_number, $patient_id, $visit_id, $user_branch_id, $user_id,
-                        $med_total, $discount_amount, 0, $final_total,
-                        0, $final_total,
+                        $med_total, 
+                        $discount_amount,    // discount_amount
+                        $discount_amount,    // total_discount
+                        $final_total,        // total_amount
+                        0,                   // paid_amount
+                        $final_total,        // balance
                         "Prescription confirmed - Discount: " . number_format($discount_amount, 2)
                     ]);
                     $bill_id = $db->lastInsertId();
@@ -320,6 +357,11 @@ try {
                     $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
                     
                     foreach ($items as $item) {
+                        $item_discount = ($discount_amount > 0 && count($items) > 0) 
+                            ? $discount_amount / count($items) 
+                            : 0;
+                        $final_price = $item['total_price'] - $item_discount;
+                        
                         $stmt = $db->prepare("
                             INSERT INTO bill_items (
                                 bill_id, patient_id, branch_id, item_type, item_name,
@@ -332,12 +374,17 @@ try {
                             $bill_id, $patient_id, $user_branch_id,
                             $item['medication_name'] . ' (' . $item['dosage'] . ')',
                             $item['quantity'], $item['unit_price'], $item['total_price'],
-                            0, 0, $item['total_price'], $item['id']
+                            $item_discount,
+                            0, 
+                            $final_price, 
+                            $item['id']
                         ]);
                     }
                     
                     $message = "✅ Prescription(s) confirmed! New bill created.<br>";
-                    $message .= "Total: " . $currency . " " . number_format($final_total, 0);
+                    $message .= "Subtotal: " . $currency . " " . number_format($med_total, 0) . "<br>";
+                    $message .= "Discount: " . $currency . " " . number_format($discount_amount, 0) . "<br>";
+                    $message .= "Final Total: " . $currency . " " . number_format($final_total, 0);
                     $message_type = 'success';
                 }
                 
@@ -1470,7 +1517,9 @@ include_once '../../components/pharmacy_sidebar.php';
                             <select id="instr_select_<?= $item['id'] ?>" class="instr-select" data-item-id="<?= $item['id'] ?>" onchange="updateInstructionInput(<?= $item['id'] ?>); updateLiveData();">
                                 <option value="">-- Select --</option>
                                 <?php foreach ($instruction_options as $opt): ?>
-                                    <option value="<?= htmlspecialchars($opt) ?>"><?= htmlspecialchars($opt) ?></option>
+                                    <option value="<?= htmlspecialchars($opt) ?>" <?= $item['instructions'] == $opt ? 'selected' : '' ?>>
+                                        <?= htmlspecialchars($opt) ?>
+                                    </option>
                                 <?php endforeach; ?>
                                 <option value="__custom__">✏️ Custom...</option>
                             </select>
@@ -2065,8 +2114,10 @@ include_once '../../components/pharmacy_sidebar.php';
     });
 
     console.log('%c💊 Braick - Patient Prescriptions View (FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Fixed: Discount updates existing bill, does NOT replace it', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Bill total = (Medication total after discount) + Other items', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Fixed: Discount uses discount_amount column (NOT pharmacy_discount)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ total_discount accumulates all discounts', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ total_amount = subtotal - total_discount', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ pharmacy_discount column is NOT used', 'font-size:13px; color:#F59E0B;');
     console.log('%c✅ Other items (consultation, lab tests, procedures) are preserved', 'font-size:13px; color:#D97706;');
 </script>
 

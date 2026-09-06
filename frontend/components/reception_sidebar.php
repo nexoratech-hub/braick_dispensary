@@ -83,7 +83,6 @@ $site_logo_path = '';
 
 if ($db !== null) {
     try {
-        // Get site name
         $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'site_name'");
         $stmt->execute();
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -91,7 +90,6 @@ if ($db !== null) {
             $site_name = $result['setting_value'];
         }
         
-        // Get site logo
         $stmt = $db->prepare("SELECT setting_value FROM system_settings WHERE setting_key = 'site_logo'");
         $stmt->execute();
         $result = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -125,32 +123,26 @@ $services_count = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
-        // 1. Total Patients
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
         $stmt->execute([$user_branch_id]);
         $patient_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 2. Today's Appointments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 3. Pending Appointments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
         $stmt->execute([$user_branch_id]);
         $pending_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 4. Today's Visits
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 5. Pending Patients (needs doctor assignment)
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
         $stmt->execute([$user_branch_id]);
         $pending_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        // 6. Services Count
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
         $stmt->execute([$user_branch_id]);
         $services_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -189,74 +181,31 @@ function isActive($page, $exact = false) {
 }
 
 // ================================================================
-// HANDLE AJAX REQUEST FOR SIDEBAR DATA
+// GENERATE INITIAL HASH
 // ================================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'get_reception_sidebar_data') {
-    header('Content-Type: application/json');
-    
-    if (!isset($_SESSION['user_id'])) {
-        echo json_encode(['success' => false, 'error' => 'Not logged in']);
-        exit;
-    }
-    
-    $branch_id = (int)($_POST['branch_id'] ?? $_SESSION['branch_id'] ?? 1);
-    
-    $response = [
-        'success' => false,
-        'patients' => 0,
-        'appointments' => 0,
-        'pending_appointments' => 0,
-        'today_visits' => 0,
-        'pending_patients' => 0,
-        'services_count' => 0,
-        'hash' => ''
-    ];
-    
-    if ($db !== null) {
-        try {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-            $stmt->execute([$branch_id]);
-            $response['patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
-            $stmt->execute([$branch_id]);
-            $response['appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
-            $stmt->execute([$branch_id]);
-            $response['pending_appointments'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
-            $stmt->execute([$branch_id]);
-            $response['today_visits'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
-            $stmt->execute([$branch_id]);
-            $response['pending_patients'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
-            $stmt->execute([$branch_id]);
-            $response['services_count'] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-            
-            $response['success'] = true;
-            $response['hash'] = md5(
-                $response['patients'] . 
-                $response['appointments'] . 
-                $response['pending_appointments'] . 
-                $response['today_visits'] . 
-                $response['pending_patients'] .
-                $response['services_count']
-            );
-            
-        } catch (Exception $e) {
-            $response['success'] = false;
-            $response['error'] = $e->getMessage();
-        }
-    }
-    
-    echo json_encode($response);
-    exit;
-}
+$initial_hash = md5(json_encode([
+    'patients' => $patient_count,
+    'appointments' => $appointment_count,
+    'pending_appointments' => $pending_appointments,
+    'today_visits' => $today_visits,
+    'pending_patients' => $pending_patients,
+    'services_count' => $services_count
+]));
+
+// ================================================================
+// PASS DATA TO JAVASCRIPT
+// ================================================================
+$initial_data = [
+    'patients' => $patient_count,
+    'appointments' => $appointment_count,
+    'pending_appointments' => $pending_appointments,
+    'today_visits' => $today_visits,
+    'pending_patients' => $pending_patients,
+    'services_count' => $services_count,
+    'branch_id' => $user_branch_id,
+    'branch_name' => $user_branch_name,
+    'user_name' => $user_full_name
+];
 ?>
 
 <style>
@@ -264,14 +213,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
        SIDEBAR STYLES - FULLY FIXED FOR MOBILE
        ================================================================ */
     
-    /* Sidebar Container */
     .sidebar {
         position: fixed;
         top: 0;
         left: 0;
         bottom: 0;
         width: 280px;
-        background: #0B4EA8;
+        background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
         color: white;
         z-index: 9999;
         overflow-y: auto;
@@ -283,7 +231,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     [data-theme="dark"] .sidebar {
-        background: #0A3D7A;
+        background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
         box-shadow: 4px 0 30px rgba(0,0,0,0.5);
     }
     
@@ -292,7 +240,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     .sidebar::-webkit-scrollbar { width: 5px; }
-    .sidebar::-webkit-scrollbar-track { background: #0A3D7A; }
+    .sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
     .sidebar::-webkit-scrollbar-thumb { background: #6EA8FE; border-radius: 10px; }
     .sidebar::-webkit-scrollbar-thumb:hover { background: #9EC5FE; }
     
@@ -323,14 +271,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     .sidebar-brand {
         padding: 18px 16px 14px;
         border-bottom: 2px solid rgba(255,255,255,0.08);
-        background: #0B4EA8;
+        background: rgba(0,0,0,0.05);
         position: sticky;
         top: 0;
         z-index: 5;
+        backdrop-filter: blur(10px);
     }
     
     [data-theme="dark"] .sidebar-brand {
-        background: #0A3D7A;
+        background: rgba(0,0,0,0.1);
     }
     
     .sidebar-brand .logo {
@@ -356,9 +305,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         font-weight: 500;
     }
     
-    /* ================================================================
-       SIDEBAR CLOSE BUTTON (Mobile)
-       ================================================================ */
     .sidebar-close-btn {
         display: none;
         background: rgba(255,255,255,0.1);
@@ -394,7 +340,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         font-size: 0.5rem;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: #9EC5FE;
+        color: #6EA8FE;
         padding: 0 10px;
         margin: 12px 0 4px;
         font-weight: 700;
@@ -428,27 +374,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     .sidebar-link:hover {
-        background: #0B5ED7;
+        background: rgba(255,255,255,0.08);
         color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
         transform: translateX(4px);
     }
     
     .sidebar-link.active {
-        background: #0B5ED7;
+        background: rgba(255,255,255,0.12);
         color: white;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.35);
-    }
-    
-    .sidebar-link.active::before {
-        content: '';
-        position: absolute;
-        left: 0;
-        top: 20%;
-        bottom: 20%;
-        width: 4px;
-        background: white;
-        border-radius: 0 4px 4px 0;
+        box-shadow: inset 3px 0 0 #6EA8FE;
     }
     
     .sidebar-link i {
@@ -463,7 +397,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
        ================================================================ */
     .sidebar-link .badge {
         margin-left: auto;
-        background: rgba(255,255,255,0.15);
+        background: rgba(255,255,255,0.12);
         padding: 1px 8px;
         border-radius: 20px;
         font-size: 0.6rem;
@@ -473,41 +407,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         flex-shrink: 0;
         min-width: 20px;
         text-align: center;
+        border: 1px solid rgba(255,255,255,0.05);
     }
     
     .sidebar-link .badge.danger {
         background: #EF4444;
         animation: pulse-badge 2s infinite;
+        border-color: #EF4444;
     }
     
     .sidebar-link .badge.green {
         background: #059669;
+        border-color: #059669;
     }
     
     .sidebar-link .badge.orange {
         background: #D97706;
+        border-color: #D97706;
     }
     
     .sidebar-link .badge.purple {
         background: #7C3AED;
+        border-color: #7C3AED;
     }
     
     .sidebar-link .badge.blue {
         background: #0B5ED7;
+        border-color: #0B5ED7;
     }
     
     .sidebar-link:hover .badge {
-        background: rgba(255,255,255,0.25);
+        background: rgba(255,255,255,0.2);
+        transform: scale(1.05);
     }
     
     .sidebar-link.active .badge {
-        background: rgba(255,255,255,0.25);
+        background: rgba(255,255,255,0.2);
         color: white;
     }
     
     @keyframes pulse-badge {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.1); }
+    }
+    
+    /* ================================================================
+       BADGE UPDATE ANIMATION
+       ================================================================ */
+    .badge-update {
+        animation: badgePop 0.3s ease;
+    }
+    
+    @keyframes badgePop {
+        0% { transform: scale(0.5); opacity: 0; }
+        70% { transform: scale(1.3); }
+        100% { transform: scale(1); opacity: 1; }
     }
     
     /* ================================================================
@@ -527,19 +481,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     }
     
     /* ================================================================
-       BADGE UPDATE ANIMATION
-       ================================================================ */
-    .badge-update {
-        animation: badgePop 0.3s ease;
-    }
-    
-    @keyframes badgePop {
-        0% { transform: scale(0.5); opacity: 0; }
-        70% { transform: scale(1.3); }
-        100% { transform: scale(1); opacity: 1; }
-    }
-    
-    /* ================================================================
        SIDEBAR STATUS (Footer)
        ================================================================ */
     .sidebar-status {
@@ -548,13 +489,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         display: flex;
         align-items: center;
         gap: 10px;
-        background: #0B4EA8;
+        background: rgba(0,0,0,0.05);
         position: sticky;
         bottom: 0;
+        backdrop-filter: blur(10px);
     }
     
     [data-theme="dark"] .sidebar-status {
-        background: #0A3D7A;
+        background: rgba(0,0,0,0.1);
     }
     
     .sidebar-status .status-dot {
@@ -580,7 +522,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     
     .sidebar-status .status-time {
         font-size: 0.55rem;
-        color: #9EC5FE;
+        color: #6EA8FE;
         margin-left: auto;
         display: flex;
         align-items: center;
@@ -762,6 +704,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             height: 6px;
         }
     }
+    
+    /* ================================================================
+       PRINT HIDE
+       ================================================================ */
+    @media print {
+        .sidebar {
+            display: none !important;
+        }
+        #sidebarOverlay {
+            display: none !important;
+        }
+    }
+    
+    /* ================================================================
+       UTILITY
+       ================================================================ */
+    .flex { display: flex; }
+    .items-center { align-items: center; }
+    .gap-2 { gap: 8px; }
+    .gap-3 { gap: 12px; }
+    .mt-2 { margin-top: 8px; }
+    .mt-1 { margin-top: 4px; }
+    .ml-auto { margin-left: auto; }
+    .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
 
 <!-- ================================================================ -->
@@ -787,7 +753,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 <p class="brand-text" id="sidebarSiteName"><?= htmlspecialchars($site_name) ?></p>
                 <p class="brand-sub">Reception Panel</p>
             </div>
-            <!-- Close button for mobile -->
             <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
                 <i class="fas fa-times"></i>
             </button>
@@ -906,6 +871,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 <!-- ================================================================ -->
 <script>
     // ================================================================
+    // CONFIGURATION
+    // ================================================================
+    var SIDEBAR_CONFIG = {
+        AJAX_URL: '/dispensary_system/backend/api/reception_sidebar_ajax.php',
+        CHECK_INTERVAL: 2000,
+        FORCE_INTERVAL: 5000,
+        BRANCH_ID: <?= json_encode($user_branch_id) ?>,
+        INITIAL_HASH: '<?= $initial_hash ?>'
+    };
+    
+    // ================================================================
+    // STATE
+    // ================================================================
+    var sidebarState = {
+        dataHash: SIDEBAR_CONFIG.INITIAL_HASH,
+        isUpdating: false,
+        hasInitialData: false,
+        updateInterval: null,
+        forceInterval: null,
+        lastUpdate: null,
+        changeCount: 0
+    };
+    
+    // ================================================================
     // SIDEBAR TOGGLE - FULLY FIXED FOR ALL DEVICES
     // ================================================================
     (function() {
@@ -954,24 +943,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 }
             }
             
-            // Toggle button from header
             if (toggleBtn) {
                 var newToggle = toggleBtn.cloneNode(true);
                 toggleBtn.parentNode.replaceChild(newToggle, toggleBtn);
                 var freshToggle = document.getElementById('sidebarToggle');
                 
-                freshToggle.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    console.log('🔘 Hamburger clicked!');
-                    toggleSidebar();
-                });
-                console.log('✅ Toggle button attached');
+                if (freshToggle) {
+                    freshToggle.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        console.log('🔘 Hamburger clicked!');
+                        toggleSidebar();
+                    });
+                    console.log('✅ Toggle button attached');
+                }
             } else {
                 console.warn('⚠️ Toggle button not found');
             }
             
-            // Close button
             if (closeBtn) {
                 closeBtn.addEventListener('click', function(e) {
                     e.preventDefault();
@@ -981,7 +970,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 console.log('✅ Close button attached');
             }
             
-            // Overlay click
             if (overlay) {
                 overlay.addEventListener('click', function(e) {
                     if (e.target === overlay) {
@@ -991,14 +979,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 console.log('✅ Overlay click handler attached');
             }
             
-            // ESC key
             document.addEventListener('keydown', function(e) {
                 if (e.key === 'Escape' && sidebar.classList.contains('open')) {
                     closeSidebar();
                 }
             });
             
-            // Resize
             window.addEventListener('resize', function() {
                 if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
                     closeSidebar();
@@ -1018,80 +1004,142 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     // ================================================================
     // UPDATE SIDEBAR BADGES
     // ================================================================
-    function updateSidebarBadges(patientCount, appointmentCount, pendingAppointments, todayVisits, pendingPatients, servicesCount) {
-        var el = document.getElementById('receptionPatientCount');
-        if (el && patientCount !== undefined) {
-            el.textContent = patientCount;
-            el.classList.remove('badge-update');
-            void el.offsetWidth;
-            el.classList.add('badge-update');
+    function updateSidebarBadges(data) {
+        if (!data) return false;
+        
+        var hasChanges = false;
+        
+        // 1. Patients
+        var patientEl = document.getElementById('receptionPatientCount');
+        if (patientEl && data.patients !== undefined) {
+            var oldVal = patientEl.textContent;
+            var newVal = data.patients;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                patientEl.textContent = newVal;
+                patientEl.className = parseInt(newVal) > 0 ? 'badge badge-update' : 'badge badge-update';
+                patientEl.classList.remove('badge-update');
+                void patientEl.offsetWidth;
+                patientEl.classList.add('badge-update');
+                console.log('🔄 Patients: ' + oldVal + ' → ' + newVal);
+            }
         }
         
-        el = document.getElementById('receptionAppointmentCount');
-        if (el && appointmentCount !== undefined) {
-            el.textContent = appointmentCount;
-            el.className = pendingAppointments > 0 ? 'badge danger' : 'badge';
-            el.classList.remove('badge-update');
-            void el.offsetWidth;
-            el.classList.add('badge-update');
+        // 2. Appointments
+        var apptEl = document.getElementById('receptionAppointmentCount');
+        if (apptEl && data.appointments !== undefined) {
+            var oldVal = apptEl.textContent;
+            var newVal = data.appointments;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                apptEl.textContent = newVal;
+                var pending = data.pending_appointments || 0;
+                apptEl.className = parseInt(pending) > 0 ? 'badge danger badge-update' : 'badge badge-update';
+                apptEl.classList.remove('badge-update');
+                void apptEl.offsetWidth;
+                apptEl.classList.add('badge-update');
+                console.log('🔄 Appointments: ' + oldVal + ' → ' + newVal);
+            }
         }
         
-        el = document.getElementById('receptionTodayVisits');
-        if (el && todayVisits !== undefined) {
-            el.textContent = todayVisits;
-            el.className = todayVisits > 0 ? 'badge green' : 'badge';
-            el.classList.remove('badge-update');
-            void el.offsetWidth;
-            el.classList.add('badge-update');
+        // 3. Today Visits
+        var visitEl = document.getElementById('receptionTodayVisits');
+        if (visitEl && data.today_visits !== undefined) {
+            var oldVal = visitEl.textContent;
+            var newVal = data.today_visits;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                visitEl.textContent = newVal;
+                visitEl.className = parseInt(newVal) > 0 ? 'badge green badge-update' : 'badge badge-update';
+                visitEl.classList.remove('badge-update');
+                void visitEl.offsetWidth;
+                visitEl.classList.add('badge-update');
+                console.log('🔄 Today Visits: ' + oldVal + ' → ' + newVal);
+            }
         }
         
-        el = document.getElementById('receptionPendingPatients');
-        if (el && pendingPatients !== undefined) {
-            el.textContent = pendingPatients;
-            el.className = pendingPatients > 0 ? 'badge danger' : 'badge';
-            el.classList.remove('badge-update');
-            void el.offsetWidth;
-            el.classList.add('badge-update');
+        // 4. Pending Patients
+        var pendingEl = document.getElementById('receptionPendingPatients');
+        if (pendingEl && data.pending_patients !== undefined) {
+            var oldVal = pendingEl.textContent;
+            var newVal = data.pending_patients;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                pendingEl.textContent = newVal;
+                pendingEl.className = parseInt(newVal) > 0 ? 'badge danger badge-update' : 'badge badge-update';
+                pendingEl.classList.remove('badge-update');
+                void pendingEl.offsetWidth;
+                pendingEl.classList.add('badge-update');
+                console.log('🔄 Pending Patients: ' + oldVal + ' → ' + newVal);
+            }
         }
         
-        el = document.getElementById('receptionServicesCount');
-        if (el && servicesCount !== undefined) {
-            el.textContent = servicesCount;
-            el.className = servicesCount > 0 ? 'badge purple' : 'badge';
-            el.classList.remove('badge-update');
-            void el.offsetWidth;
-            el.classList.add('badge-update');
+        // 5. Services
+        var servicesEl = document.getElementById('receptionServicesCount');
+        if (servicesEl && data.services_count !== undefined) {
+            var oldVal = servicesEl.textContent;
+            var newVal = data.services_count;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                servicesEl.textContent = newVal;
+                servicesEl.className = parseInt(newVal) > 0 ? 'badge purple badge-update' : 'badge badge-update';
+                servicesEl.classList.remove('badge-update');
+                void servicesEl.offsetWidth;
+                servicesEl.classList.add('badge-update');
+                console.log('🔄 Services: ' + oldVal + ' → ' + newVal);
+            }
         }
         
+        // 6. Update timestamp
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
-            var timeStr = now.toLocaleTimeString('en-US', { 
-                hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true 
+            var timeStr = now.toLocaleTimeString('en-US', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
             });
-            timeEl.textContent = timeStr;
+            if (timeEl.textContent !== timeStr) {
+                timeEl.textContent = timeStr;
+            }
         }
+        
+        // Flash sidebar if data changed
+        if (hasChanges) {
+            var sidebarEl = document.getElementById('sidebar');
+            if (sidebarEl) {
+                sidebarEl.classList.remove('sidebar-data-flash');
+                void sidebarEl.offsetWidth;
+                sidebarEl.classList.add('sidebar-data-flash');
+            }
+            sidebarState.changeCount++;
+            console.log('📊 Sidebar updated: ' + sidebarState.changeCount + ' changes detected');
+        }
+        
+        return hasChanges;
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA
+    // FETCH SIDEBAR DATA - DIRECT AJAX
     // ================================================================
-    var sidebarUpdateInterval = null;
-    var sidebarIsUpdating = false;
-    var branchId = <?= json_encode($_SESSION['branch_id'] ?? 1) ?>;
-    var lastDataHash = null;
-
-    function fetchSidebarData() {
-        if (sidebarIsUpdating) return;
-        sidebarIsUpdating = true;
+    function fetchSidebarData(forceUpdate) {
+        if (sidebarState.isUpdating && !forceUpdate) return;
+        if (!SIDEBAR_CONFIG.BRANCH_ID) return;
+        
+        sidebarState.isUpdating = true;
         
         var formData = new FormData();
         formData.append('action', 'get_reception_sidebar_data');
-        formData.append('branch_id', branchId);
+        formData.append('branch_id', SIDEBAR_CONFIG.BRANCH_ID);
+        formData.append('hash', sidebarState.dataHash);
+        if (forceUpdate) {
+            formData.append('force_update', '1');
+        }
         
-        fetch(window.location.href, {
+        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
+        
+        fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
-            body: formData
+            body: formData,
+            credentials: 'same-origin'
         })
         .then(function(response) {
             if (!response.ok) {
@@ -1100,67 +1148,183 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             return response.json();
         })
         .then(function(data) {
+            sidebarState.isUpdating = false;
+            
             if (data.success) {
-                if (lastDataHash !== data.hash) {
-                    lastDataHash = data.hash;
-                    updateSidebarBadges(
-                        data.patients || 0,
-                        data.appointments || 0,
-                        data.pending_appointments || 0,
-                        data.today_visits || 0,
-                        data.pending_patients || 0,
-                        data.services_count || 0
-                    );
+                console.log('📥 AJAX Response: has_changed=' + data.has_changed + ', hash=' + data.hash);
+                
+                if (data.has_changed && data.data) {
+                    updateSidebarBadges(data.data);
+                    sidebarState.dataHash = data.hash;
+                    sidebarState.hasInitialData = true;
+                    sidebarState.lastUpdate = new Date();
+                    
+                    var event = new CustomEvent('sidebarDataUpdated', {
+                        detail: {
+                            data: data.data,
+                            summary: data.summary,
+                            timestamp: data.timestamp
+                        }
+                    });
+                    document.dispatchEvent(event);
+                    
+                    console.log('✅ Sidebar data updated at:', sidebarState.lastUpdate.toLocaleTimeString());
+                    
+                } else if (data.has_changed === false) {
+                    var timeEl = document.getElementById('sidebarLiveTime');
+                    if (timeEl) {
+                        var now = new Date();
+                        var timeStr = now.toLocaleTimeString('en-US', {
+                            hour: '2-digit', minute: '2-digit', second: '2-digit'
+                        });
+                        if (timeEl.textContent !== timeStr) {
+                            timeEl.textContent = timeStr;
+                        }
+                    }
+                    sidebarState.hasInitialData = true;
                 }
+                
+                var statusDot = document.getElementById('sidebarStatusDot');
+                if (statusDot) {
+                    statusDot.className = 'status-dot online';
+                }
+                var statusText = document.getElementById('sidebarStatusText');
+                if (statusText) {
+                    statusText.textContent = 'Online';
+                }
+                
+            } else {
+                if (data.message && data.message.includes('Unauthorized')) {
+                    window.location.href = '/dispensary_system/frontend/pages/login.php';
+                }
+                console.warn('⚠️ AJAX Error:', data.message);
             }
-            sidebarIsUpdating = false;
         })
         .catch(function(error) {
-            sidebarIsUpdating = false;
+            sidebarState.isUpdating = false;
+            console.warn('❌ Sidebar AJAX error:', error.message);
+            
+            var statusDot = document.getElementById('sidebarStatusDot');
+            if (statusDot) {
+                statusDot.className = 'status-dot offline';
+            }
+            var statusText = document.getElementById('sidebarStatusText');
+            if (statusText) {
+                statusText.textContent = 'Offline';
+            }
         });
     }
 
+    // ================================================================
+    // START AUTO-UPDATE
+    // ================================================================
     function startSidebarAutoUpdate() {
-        if (sidebarUpdateInterval) {
-            clearInterval(sidebarUpdateInterval);
+        if (sidebarState.updateInterval) {
+            clearInterval(sidebarState.updateInterval);
         }
+        if (sidebarState.forceInterval) {
+            clearInterval(sidebarState.forceInterval);
+        }
+        
         setTimeout(function() {
-            fetchSidebarData();
-        }, 1000);
-        sidebarUpdateInterval = setInterval(fetchSidebarData, 3000);
-        console.log('%c🔄 Reception Sidebar auto-update started (every 3s)', 'font-size:12px; color:#34D399;');
+            fetchSidebarData(true);
+        }, 500);
+        
+        sidebarState.updateInterval = setInterval(function() {
+            if (!sidebarState.isUpdating) {
+                fetchSidebarData(false);
+            }
+        }, SIDEBAR_CONFIG.CHECK_INTERVAL);
+        
+        sidebarState.forceInterval = setInterval(function() {
+            if (!sidebarState.isUpdating && sidebarState.hasInitialData) {
+                fetchSidebarData(true);
+            }
+        }, SIDEBAR_CONFIG.FORCE_INTERVAL);
+        
+        console.log('🔄 Sidebar auto-update started (check: ' + 
+            SIDEBAR_CONFIG.CHECK_INTERVAL/1000 + 's, force: ' + 
+            SIDEBAR_CONFIG.FORCE_INTERVAL/1000 + 's)');
     }
 
     function stopSidebarAutoUpdate() {
-        if (sidebarUpdateInterval) {
-            clearInterval(sidebarUpdateInterval);
-            sidebarUpdateInterval = null;
+        if (sidebarState.updateInterval) {
+            clearInterval(sidebarState.updateInterval);
+            sidebarState.updateInterval = null;
         }
+        if (sidebarState.forceInterval) {
+            clearInterval(sidebarState.forceInterval);
+            sidebarState.forceInterval = null;
+        }
+        console.log('🔄 Sidebar auto-update stopped');
     }
 
+    // ================================================================
+    // MANUAL REFRESH
+    // ================================================================
+    function refreshSidebarData() {
+        fetchSidebarData(true);
+        return true;
+    }
+
+    // ================================================================
+    // EXPOSE FUNCTIONS
+    // ================================================================
+    window.refreshSidebarData = refreshSidebarData;
+    window.fetchSidebarData = fetchSidebarData;
+    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
+    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
+    window.getSidebarState = function() { return sidebarState; };
+    window.getSidebarHash = function() { return sidebarState.dataHash; };
+
+    // ================================================================
+    // VISIBILITY CHANGE
+    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
         } else {
             startSidebarAutoUpdate();
+            setTimeout(function() {
+                fetchSidebarData(true);
+            }, 500);
         }
     });
 
+    // ================================================================
+    // DOM READY
+    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
-        }, 2000);
+        }, 1500);
     });
 
-    window.updateSidebarBadges = updateSidebarBadges;
-    window.fetchSidebarData = fetchSidebarData;
-    window.startSidebarAutoUpdate = startSidebarAutoUpdate;
-    window.stopSidebarAutoUpdate = stopSidebarAutoUpdate;
-
-    console.log('%c🏥 Reception Sidebar (UPDATED - system_settings)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Jina na logo kutoka system_settings table', 'font-size:12px; color:#34D399;');
-    console.log('%c📋 MENU MPYA: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 'font-size:12px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:12px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c📋 Patients: <?= $patient_count ?> | Appointments: <?= $appointment_count ?>', 'font-size:12px; color:#9EC5FE;');
+    // ================================================================
+    // CONSOLE LOG
+    // ================================================================
+    console.log('%c🏥 Braick Dispensary - Reception Sidebar (AJAX)', 
+        'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Jina na logo kutoka system_settings table', 
+        'font-size:12px; color:#34D399;');
+    console.log('%c📋 MENU: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 
+        'font-size:12px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
+        'font-size:12px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 
+        'font-size:12px; color:#6EA8FE;');
+    console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
+    console.log('   Patients: <?= $patient_count ?>, Appointments: <?= $appointment_count ?>');
+    console.log('   Today Visits: <?= $today_visits ?>, Pending Patients: <?= $pending_patients ?>');
+    console.log('   Services: <?= $services_count ?>');
+    console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
+        'font-size:13px; color:#34D399;');
+    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
+        'font-size:13px; color:#F59E0B;');
+    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 
+        'font-size:12px; color:#94A3B8;');
+    console.log('%c💡 Call window.refreshSidebarData() to manually update', 
+        'font-size:12px; color:#6EA8FE;');
+    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 
+        'font-size:12px; color:#34D399;');
 </script>

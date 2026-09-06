@@ -1,10 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/components/admin_sidebar.php
-// SUPER ADMIN - SHARED SIDEBAR (FULLY FIXED WITH API)
+// SUPER ADMIN - SHARED SIDEBAR (FULLY FIXED WITH AJAX)
 // FULLY RESPONSIVE - ALL DEVICES
 // BACKGROUND: BLUE | HOVER: GREEN
-// WITH API REAL-TIME DATA UPDATES
+// WITH AJAX REAL-TIME DATA UPDATES
 // WITH LOGIN PROTECTION
 // WITH ABSOLUTE PATHS
 // BRAICK DISPENSARY
@@ -151,18 +151,18 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         
         // Pending prescriptions
         if ($selected_branch_id === 'all') {
-            $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status = 'pending'");
+            $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status IN ('pending', 'confirmed')");
         } else {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'pending'");
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status IN ('pending', 'confirmed')");
             $stmt->execute([(int)$selected_branch_id]);
         }
         $pending_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // Pending lab tests
         if ($selected_branch_id === 'all') {
-            $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status IN ('pending', '') OR status IS NULL");
+            $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status IN ('pending', 'in_progress')");
         } else {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND (status IN ('pending', '') OR status IS NULL)");
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status IN ('pending', 'in_progress')");
             $stmt->execute([(int)$selected_branch_id]);
         }
         $pending_lab_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
@@ -182,10 +182,17 @@ if ($db !== null && isset($_SESSION['user_id'])) {
 $initial_hash = md5(json_encode([
     'total_employees' => $total_employees,
     'total_patients' => $total_patients,
+    'today_patients' => $today_patients,
     'total_doctors' => $total_doctors,
+    'pharmacy_count' => $module_counts['pharmacy'],
+    'reception_count' => $module_counts['reception'],
+    'laboratory_count' => $module_counts['laboratory'],
+    'cashier_count' => $module_counts['cashier'],
+    'total_services' => $total_services,
+    'today_services' => $today_services,
+    'total_branches' => $total_branches,
     'pending_prescriptions' => $pending_prescriptions,
-    'pending_lab_tests' => $pending_lab_tests,
-    'total_branches' => $total_branches
+    'pending_lab_tests' => $pending_lab_tests
 ]));
 
 // ================================================================
@@ -1017,8 +1024,6 @@ $initial_data = [
             <span class="link-text">Departments</span>
         </a>
         
-        <!-- BILLS MENU REMOVED -->
-        
         <a href="/dispensary_system/frontend/pages/admin/reports.php?branch=<?= $selected_branch_id ?>" 
            class="sidebar-link <?= isActive('reports.php') ?>">
             <i class="fas fa-chart-bar"></i>
@@ -1073,16 +1078,16 @@ $initial_data = [
 </aside>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - FULL SIDEBAR FUNCTIONALITY WITH API -->
+<!-- JAVASCRIPT - FULL SIDEBAR FUNCTIONALITY WITH AJAX -->
 <!-- ================================================================ -->
 <script>
     // ================================================================
     // CONFIGURATION
     // ================================================================
     var SIDEBAR_CONFIG = {
-        API_URL: '/dispensary_system/backend/api/get_admin_sidebar_stats.php',
+        AJAX_URL: '/dispensary_system/backend/api/admin_sidebar_ajax.php',
         CHECK_INTERVAL: 2000,
-        FORCE_INTERVAL: 10000,
+        FORCE_INTERVAL: 5000,
         BRANCH_ID: '<?= $selected_branch_id ?>',
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
@@ -1347,7 +1352,7 @@ $initial_data = [
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA FROM API
+    // FETCH SIDEBAR DATA - DIRECT AJAX (NO EXTERNAL API)
     // ================================================================
     function fetchSidebarData(forceUpdate) {
         if (sidebarState.isUpdating && !forceUpdate) return;
@@ -1362,7 +1367,9 @@ $initial_data = [
             formData.append('force_update', '1');
         }
         
-        fetch(SIDEBAR_CONFIG.API_URL, {
+        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
+        
+        fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
             body: formData,
             credentials: 'same-origin'
@@ -1377,6 +1384,8 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
+                console.log('📥 AJAX Response:', data);
+                
                 if (data.has_changed && data.data) {
                     updateSidebarBadges(data.data);
                     sidebarState.dataHash = data.hash;
@@ -1405,16 +1414,35 @@ $initial_data = [
                     }
                     sidebarState.hasInitialData = true;
                 }
+                
+                // Update status
+                var statusDot = document.getElementById('sidebarFooterDot');
+                if (statusDot) {
+                    statusDot.className = 'status-dot online';
+                }
+                var statusText = document.getElementById('sidebarFooterText');
+                if (statusText) {
+                    statusText.textContent = 'Online';
+                }
+                
             } else {
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
+                console.warn('⚠️ AJAX Error:', data.message);
             }
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            if (forceUpdate) {
-                console.warn('Sidebar API error:', error.message);
+            console.warn('❌ Sidebar AJAX error:', error.message);
+            
+            var statusDot = document.getElementById('sidebarFooterDot');
+            if (statusDot) {
+                statusDot.className = 'status-dot offline';
+            }
+            var statusText = document.getElementById('sidebarFooterText');
+            if (statusText) {
+                statusText.textContent = 'Offline';
             }
         });
     }
@@ -1507,7 +1535,7 @@ $initial_data = [
     // ================================================================
     // CONSOLE LOG
     // ================================================================
-    console.log('%c🏥 Braick Dispensary - Admin Sidebar (API Integrated)', 
+    console.log('%c🏥 Braick Dispensary - Admin Sidebar (AJAX Integrated)', 
         'font-size:16px; font-weight:bold; color:#0AA84F;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 
         'font-size:13px; color:#34D399;');
@@ -1517,9 +1545,9 @@ $initial_data = [
     console.log('   Pending Prescriptions: <?= $pending_prescriptions ?>, Pending Lab: <?= $pending_lab_tests ?>');
     console.log('%c⚡ Smart Auto-Update: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 10s (safety net)', 
+    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
         'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 API Endpoint: ' + SIDEBAR_CONFIG.API_URL, 
+    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 
         'font-size:12px; color:#94A3B8;');
     console.log('%c💡 Call window.refreshSidebarData() to manually update', 
         'font-size:12px; color:#6EA8FE;');

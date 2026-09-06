@@ -1,10 +1,10 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/laboratory/view_test.php
-// VIEW LAB TEST - WITH PDF DOWNLOAD & ULTRASOUND TEMPLATES
+// VIEW LAB TEST - WITH PDF DOWNLOAD ONLY (NO PRINT)
 // USING NEW DATABASE: dispensary_db
 // WITH FULL LOGIN SESSION PROTECTION
-// MODERN DESIGN - PHARMACY STYLE
+// MODERN DESIGN - BLUE THEME
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -64,7 +64,6 @@ try {
 // GET TEST ID
 // ================================================================
 $test_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$print_mode = isset($_GET['print']) && $_GET['print'] == 1;
 
 if ($test_id <= 0) {
     header('Location: pending_tests.php');
@@ -72,7 +71,7 @@ if ($test_id <= 0) {
 }
 
 // ================================================================
-// GET TEST DETAILS - FIXED: Removed result_template_id
+// GET TEST DETAILS
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
@@ -209,14 +208,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     
     <style>
         /* ================================================================
-           ROOT VARIABLES
+           ROOT VARIABLES - BLUE THEME
            ================================================================ */
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #6EA8FE;
-            --primary-bg: #E8F0FE;
-            --primary-gradient: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            --primary: #2563EB;
+            --primary-dark: #1D4ED8;
+            --primary-light: #60A5FA;
+            --primary-bg: #DBEAFE;
+            --primary-gradient: linear-gradient(135deg, #1E3A5F, #2563EB, #3B82F6);
             --success: #059669;
             --success-dark: #047857;
             --success-bg: #D1FAE5;
@@ -248,6 +247,8 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --text-primary: #1E293B;
             --text-secondary: #64748B;
             --border-color: #E2E8F0;
+            --deep-blue: #1E3A5F;
+            --deep-blue-dark: #172554;
         }
         
         [data-theme="dark"] {
@@ -257,6 +258,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
             --border-color: #334155;
+            --primary-bg: #1E3A5F;
+            --deep-blue: #1E3A5F;
+            --deep-blue-dark: #172554;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -280,10 +284,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
         
         /* ================================================================
-           PAGE HEADER
+           PAGE HEADER - BLUE
            ================================================================ */
         .page-header {
-            background: var(--primary-gradient);
+            background: linear-gradient(135deg, #1E3A5F, #2563EB, #3B82F6);
             border-radius: 16px;
             padding: 24px 32px;
             margin-bottom: 28px;
@@ -292,7 +296,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             justify-content: space-between;
             align-items: center;
             gap: 16px;
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.25);
+            box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25);
             position: relative;
             overflow: hidden;
         }
@@ -447,6 +451,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             border-radius: 20px;
             font-size: 0.6rem;
             font-weight: 600;
+        }
+        
+        .card-title .badge-count.success {
+            background: var(--success);
+        }
+        
+        .card-title .badge-count.warning {
+            background: var(--warning);
         }
         
         .detail-row {
@@ -738,7 +750,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         .btn-primary:hover {
             background: var(--primary-dark);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
         }
         
         .btn-success {
@@ -771,6 +783,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         .btn-danger:hover {
             background: #991B1B;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        .btn-pdf {
+            background: linear-gradient(135deg, #DC2626, #991B1B);
+            color: white;
+        }
+        
+        .btn-pdf:hover {
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
         }
@@ -820,7 +842,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             justify-content: space-between;
             align-items: center;
             flex-shrink: 0;
-            background: var(--primary-gradient);
+            background: linear-gradient(135deg, #1E3A5F, #2563EB);
             border-radius: var(--radius-lg) var(--radius-lg) 0 0;
         }
         
@@ -843,6 +865,16 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             background: rgba(255,255,255,0.15);
             color: white;
             border: 1px solid rgba(255,255,255,0.2);
+            padding: 6px 14px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
         }
         
         .pdf-modal-header .modal-actions .btn:hover {
@@ -1059,6 +1091,18 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
+        
+        .spinner {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        
+        @keyframes spin { to { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
@@ -1069,7 +1113,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
 <main class="main-content">
 
     <!-- ================================================================ -->
-    <!-- PAGE HEADER -->
+    <!-- PAGE HEADER - BLUE -->
     <!-- ================================================================ -->
     <div class="page-header">
         <div>
@@ -1099,14 +1143,12 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <!-- ✅ Download PDF - ONLY BUTTON -->
             <?php if ($test['status'] !== 'cancelled'): ?>
-                <button onclick="generatePDF()" class="btn-outline-light">
+                <button onclick="generatePDF()" class="btn-outline-light" style="background:rgba(220,38,38,0.3);border-color:rgba(220,38,38,0.3);">
                     <i class="fas fa-file-pdf"></i> Download PDF
                 </button>
             <?php endif; ?>
-            <button onclick="window.print()" class="btn-outline-light">
-                <i class="fas fa-print"></i> Print
-            </button>
             <a href="pending_tests.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
@@ -1154,7 +1196,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 <i class="fas fa-tag"></i> <?= htmlspecialchars($test['test_category'] ?? 'N/A') ?>
             </span>
             <?php if (!empty($test['test_price']) && $test['test_price'] > 0): ?>
-                <span class="badge-count" style="background:var(--success);">
+                <span class="badge-count success">
                     TSh <?= number_format($test['test_price']) ?>
                 </span>
             <?php endif; ?>
@@ -1193,7 +1235,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             <i class="fas fa-file-medical-alt" style="color:<?= $test['status'] === 'completed' ? 'var(--success)' : 'var(--warning)' ?>;"></i>
             Test Results
             <?php if ($test['status'] === 'completed'): ?>
-                <span class="badge-count" style="background:var(--success);">
+                <span class="badge-count success">
                     <i class="fas fa-check-circle"></i> Completed
                 </span>
             <?php elseif ($test['status'] === 'in_progress'): ?>
@@ -1205,7 +1247,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                     <i class="fas fa-times-circle"></i> Cancelled
                 </span>
             <?php else: ?>
-                <span class="badge-count" style="background:var(--warning);">
+                <span class="badge-count warning">
                     <i class="fas fa-clock"></i> Pending
                 </span>
             <?php endif; ?>
@@ -1214,19 +1256,15 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         <?php if ($test['status'] === 'completed' && !empty($test['results'])): ?>
             
             <?php 
-            // Check if this is an ultrasound test (category contains 'ultrasound')
+            // Check if this is an ultrasound test
             $is_ultrasound = stripos($test['test_category'] ?? '', 'ultrasound') !== false;
-            $is_obstetric = stripos($test['test_name'] ?? '', 'obstetric') !== false;
-            $is_abdominal = stripos($test['test_name'] ?? '', 'abdominal') !== false;
-            
-            // Parse formatted_result for ultrasound
             $ultrasound_data = [];
             if (!empty($test['formatted_result'])) {
                 $ultrasound_data = json_decode($test['formatted_result'], true);
             }
             ?>
             
-            <?php if ($is_ultrasound && !empty($test['formatted_result'])): ?>
+            <?php if ($is_ultrasound && !empty($test['formatted_result']) && is_array($ultrasound_data) && count($ultrasound_data) > 0): ?>
                 
                 <!-- ULTRASOUND RESULT DISPLAY -->
                 <div class="ultrasound-result-container">
@@ -1420,13 +1458,10 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                 PDF Preview - <?= htmlspecialchars($test['test_name'] ?? 'Test') ?>
             </div>
             <div class="modal-actions">
-                <button onclick="downloadPDF()" class="btn btn-sm">
+                <button onclick="downloadPDF()" class="btn">
                     <i class="fas fa-download"></i> Download
                 </button>
-                <button onclick="window.print()" class="btn btn-sm">
-                    <i class="fas fa-print"></i> Print
-                </button>
-                <button onclick="closePDFModal()" class="btn btn-sm btn-danger-modal">
+                <button onclick="closePDFModal()" class="btn btn-danger-modal">
                     <i class="fas fa-times"></i> Cancel
                 </button>
             </div>
@@ -1528,28 +1563,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     setInterval(updateDateTime, 1000);
 
     // ================================================================
-    // SEARCH
-    // ================================================================
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-    
-    function performSearch() {
-        var query = searchInput.value.trim();
-        if (query.length > 0) {
-            window.location.href = 'search.php?q=' + encodeURIComponent(query);
-        }
-    }
-    
-    if (searchBtn) {
-        searchBtn.addEventListener('click', performSearch);
-    }
-    if (searchInput) {
-        searchInput.addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') performSearch();
-        });
-    }
-
-    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
@@ -1575,7 +1588,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     }
 
     // ================================================================
-    // GENERATE PDF - FIXED: No result_template_id
+    // GENERATE PDF - REMOVED PRINT BUTTON
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -1583,9 +1596,9 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         
         var statusLabel = '<?= getStatusLabel($test['status'] ?? 'pending') ?>';
         var statusClass = '<?= $test['status'] ?? 'pending' ?>';
-        var statusColor = statusClass === 'completed' ? '#059669' : (statusClass === 'in_progress' ? '#0B5ED7' : (statusClass === 'cancelled' ? '#DC2626' : '#D97706'));
+        var statusColor = statusClass === 'completed' ? '#059669' : (statusClass === 'in_progress' ? '#2563EB' : (statusClass === 'cancelled' ? '#DC2626' : '#D97706'));
         
-        // Check if ultrasound based on category or test_name
+        // Check if ultrasound
         var isUltrasound = <?= (stripos($test['test_category'] ?? '', 'ultrasound') !== false || stripos($test['test_name'] ?? '', 'ultrasound') !== false) ? 'true' : 'false' ?>;
         var ultrasoundData = <?= !empty($test['formatted_result']) ? json_encode(json_decode($test['formatted_result'], true)) : '{}' ?>;
         
@@ -1698,9 +1711,6 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             // ================================================================
             // NORMAL PDF TEMPLATE
             // ================================================================
-            var resultsContent = '<?= addslashes(nl2br(htmlspecialchars($test['results'] ?? ''))) ?>';
-            var interpretationContent = '<?= addslashes(nl2br(htmlspecialchars($test['interpretation'] ?? ''))) ?>';
-            
             html = `
                 <div class="pdf-header">
                     <div class="pdf-logo">
@@ -1803,6 +1813,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
     
     function downloadPDF() {
         var element = document.getElementById('pdfContent');
+        var btn = document.querySelector('.pdf-modal-header .modal-actions .btn:first-child');
+        var originalHtml = btn ? btn.innerHTML : '';
+        
+        if (btn) {
+            btn.innerHTML = '<span class="spinner"></span> Generating...';
+            btn.disabled = true;
+        }
+        
         var opt = {
             margin: [10, 10, 10, 10],
             filename: 'Test_<?= htmlspecialchars($test['test_name'] ?? 'test') ?>_<?= $test['id'] ?>.pdf',
@@ -1821,7 +1839,19 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
             pagebreak: { mode: 'avoid-all' }
         };
         
-        html2pdf().set(opt).from(element).save();
+        html2pdf().set(opt).from(element).save().then(function() {
+            if (btn) {
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
+            }
+            showToast('✅ Success', 'PDF downloaded successfully!', 'success');
+        }).catch(function() {
+            if (btn) {
+                btn.innerHTML = originalHtml;
+                btn.disabled = false;
+            }
+            showToast('❌ Error', 'Failed to generate PDF', 'error');
+        });
     }
 
     // ================================================================
@@ -1842,17 +1872,14 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
-    console.log('%c🧪 Braick - View Test', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Ultrasound template support added', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ PDF with Official Stamp and Technician signature', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ "New DB" removed from page', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Fixed: Removed result_template_id from query', 'font-size:13px; color:#34D399;');
+    console.log('%c🧪 Braick - View Test (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c✅ Removed Print button - Download PDF only', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ PDF Download with Official Stamp', 'font-size:13px; color:#34D399;');
+    console.log('%c🔵 Blue theme applied throughout', 'font-size:13px; color:#2563EB;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🆔 Test ID: <?= $test['id'] ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($test['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Status: <?= getStatusLabel($test['status'] ?? 'pending') ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c🖼️ Ultrasound: <?= (stripos($test['test_category'] ?? '', 'ultrasound') !== false) ? 'YES' : 'NO' ?>', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

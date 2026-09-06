@@ -1,6 +1,6 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/laboratory/pending_tests.php
+// FILE: frontend/pages/laboratory/pending_requests.php
 // LABORATORY - PENDING TESTS
 // USING NEW DATABASE: dispensary_db (lab_tests table)
 // WITH REAL-TIME AUTO-UPDATE (3 SECONDS)
@@ -70,55 +70,40 @@ $message = '';
 $message_type = '';
 
 // ================================================================
-// HANDLE ACTIONS - START TEST (FIXED - NO BRANCH FILTER)
+// HANDLE ACTIONS - START TEST
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $test_id = isset($_POST['test_id']) ? (int)$_POST['test_id'] : 0;
     
     if ($_POST['action'] === 'start_test' && $test_id > 0) {
         try {
-            // ✅ FIXED: First check if test exists (no branch filter)
-            $stmt = $db->prepare("SELECT id, test_name, status, branch_id FROM lab_tests WHERE id = ?");
-            $stmt->execute([$test_id]);
-            $test = $stmt->fetch(PDO::FETCH_ASSOC);
+            $stmt = $db->prepare("
+                UPDATE lab_tests 
+                SET status = 'in_progress',
+                    lab_technician_id = ?,
+                    started_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = ? AND branch_id = ? AND (status IS NULL OR status = 'pending')
+            ");
+            $stmt->execute([$user_id, $test_id, $user_branch_id]);
             
-            if (!$test) {
-                $message = "❌ Test not found (ID: $test_id)";
-                $message_type = 'error';
-            } else {
-                // ✅ FIXED: Update without branch filter, just use id
-                $stmt = $db->prepare("
-                    UPDATE lab_tests 
-                    SET status = 'in_progress',
-                        lab_technician_id = ?,
-                        started_at = NOW(),
-                        updated_at = NOW()
-                    WHERE id = ? AND (status IS NULL OR status = 'pending' OR status = '')
-                ");
-                $stmt->execute([$user_id, $test_id]);
+            if ($stmt->rowCount() > 0) {
+                $message = "✅ Test started successfully!";
+                $message_type = 'success';
                 
-                if ($stmt->rowCount() > 0) {
-                    $message = "✅ Test started successfully: " . htmlspecialchars($test['test_name']);
-                    $message_type = 'success';
-                    
-                    // Log activity
-                    try {
-                        $stmt = $db->prepare("
-                            INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
-                            VALUES (?, ?, 'lab_test_started', ?, NOW())
-                        ");
-                        $stmt->execute([
-                            $user_id,
-                            $user_branch_id,
-                            "Started lab test ID: {$test_id} - " . $test['test_name']
-                        ]);
-                    } catch (Exception $e) {
-                        // Silent fail for logging
-                    }
-                } else {
-                    $message = "⚠️ Test not found or already in progress.";
-                    $message_type = 'warning';
-                }
+                // Log activity
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                    VALUES (?, ?, 'lab_test_started', ?, NOW())
+                ");
+                $stmt->execute([
+                    $user_id,
+                    $user_branch_id,
+                    "Started lab test ID: {$test_id}"
+                ]);
+            } else {
+                $message = "⚠️ Test not found or already in progress.";
+                $message_type = 'warning';
             }
         } catch (Exception $e) {
             $message = "❌ Error: " . $e->getMessage();
@@ -142,15 +127,18 @@ $query = "
         u.specialty,
         v.visit_number,
         v.visit_type,
+        ltc.category as test_category,
+        ltc.price as test_price,
         TIMESTAMPDIFF(MINUTE, lt.created_at, NOW()) as waiting_time
     FROM lab_tests lt
     LEFT JOIN patients pat ON lt.patient_id = pat.id
     LEFT JOIN users u ON lt.doctor_id = u.id
     LEFT JOIN visits v ON lt.visit_id = v.id
-    WHERE (lt.status IS NULL OR lt.status = 'pending' OR lt.status = '')
+    LEFT JOIN lab_tests_catalog ltc ON lt.test_id = ltc.id
+    WHERE lt.branch_id = ? AND (lt.status IS NULL OR lt.status = 'pending' OR lt.status = '')
 ";
 
-$params = [];
+$params = [$user_branch_id];
 
 if (!empty($search)) {
     $query .= " AND (pat.full_name LIKE ? OR pat.patient_id LIKE ? OR lt.test_name LIKE ?)";
@@ -171,32 +159,32 @@ $stmt->execute($params);
 $tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET COUNTS - NEW DATABASE (FIXED - NO BRANCH FILTER)
+// GET COUNTS - NEW DATABASE
 // ================================================================
 
 // Pending count
 $stmt = $db->prepare("
     SELECT COUNT(*) as count FROM lab_tests 
-    WHERE (status IS NULL OR status = 'pending' OR status = '')
+    WHERE branch_id = ? AND (status IS NULL OR status = 'pending' OR status = '')
 ");
-$stmt->execute();
+$stmt->execute([$user_branch_id]);
 $pending_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // In Progress count
 $stmt = $db->prepare("
     SELECT COUNT(*) as count FROM lab_tests 
-    WHERE status = 'in_progress'
+    WHERE branch_id = ? AND status = 'in_progress'
 ");
-$stmt->execute();
+$stmt->execute([$user_branch_id]);
 $in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // Completed Today count
 $today = date('Y-m-d');
 $stmt = $db->prepare("
     SELECT COUNT(*) as count FROM lab_tests 
-    WHERE status = 'completed' AND DATE(completed_at) = ?
+    WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = ?
 ");
-$stmt->execute([$today]);
+$stmt->execute([$user_branch_id, $today]);
 $completed_today_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
 // Total count
@@ -209,7 +197,7 @@ $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetchColumn() ?? 0;
+    $unread_notifications = $stmt->fetch()['total'] ?? 0;
 } catch (Exception $e) {
     $unread_notifications = 0;
 }
@@ -1166,7 +1154,7 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
                                 <td><?= $i++ ?></td>
                                 <td>
                                     <div class="font-medium text-sm"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></div>
-                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['test_type'] ?? 'N/A') ?></div>
+                                    <div class="text-xs text-gray-400"><?= htmlspecialchars($test['test_category'] ?? 'N/A') ?></div>
                                     <?php if (!empty($test['test_price']) && $test['test_price'] > 0): ?>
                                         <div class="text-xs text-gray-400">TSh <?= number_format($test['test_price']) ?></div>
                                     <?php endif; ?>
@@ -1424,10 +1412,13 @@ include_once __DIR__ . '/../../components/laboratory_sidebar.php';
         }
     });
 
-    console.log('%c🧪 Braick - Pending Tests (FIXED)', 'font-size:18px; font-weight:bold; color:#D97706;');
-    console.log('%c✅ Removed branch filter - shows all pending tests', 'font-size:13px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📊 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c🧪 Braick - Pending Tests (NEW DATABASE)', 'font-size:18px; font-weight:bold; color:#D97706;');
+    console.log('%c📊 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
+    console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📊 Pending: <?= $pending_count ?> | In Progress: <?= $in_progress_count ?> | Completed Today: <?= $completed_today_count ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ Tables: lab_tests, patients, users, visits, lab_tests_catalog, activity_logs', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Design: Modern pharmacy-style with gradient cards', 'font-size:13px; color:#D97706;');
 </script>
 
 </body>

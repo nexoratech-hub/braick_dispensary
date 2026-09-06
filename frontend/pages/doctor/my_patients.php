@@ -4,7 +4,8 @@
 // DOCTOR - MY PATIENTS LIST
 // FIXED: Removed patient_bills table (use bills instead)
 // FIXED: Added VISITS button to view all visits
-// FIXED: Full CSS with dark mode support
+// FIXED: Action buttons equal width (View and Visits same size)
+// FIXED: Removed visit count from button
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -549,24 +550,46 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     
     /* ================================================================
-       ACTION BUTTONS - VIEW + VISITS
+       ACTION BUTTONS - EQUAL WIDTH
        ================================================================ */
+    .btn-action-group {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        align-items: center;
+    }
+    
     .btn-action {
         display: inline-flex;
         align-items: center;
+        justify-content: center;
         gap: 6px;
-        padding: 6px 16px;
+        padding: 6px 12px;
         border-radius: 8px;
-        font-size: 0.75rem;
+        font-size: 0.72rem;
         font-weight: 600;
         transition: all 0.3s ease;
         text-decoration: none;
         border: none;
         cursor: pointer;
         white-space: nowrap;
+        min-width: 80px;
+        min-height: 32px;
+        height: 32px;
+        width: 80px;
+        box-sizing: border-box;
+        line-height: 1;
+        flex-shrink: 0;
     }
     
-    .btn-action i { font-size: 0.8rem; }
+    .btn-action i {
+        font-size: 0.75rem;
+        flex-shrink: 0;
+    }
+    
+    .btn-action span {
+        flex-shrink: 0;
+    }
     
     .btn-view {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
@@ -580,6 +603,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         color: white;
     }
     
+    .btn-view:active {
+        transform: translateY(0px);
+    }
+    
     .btn-visits {
         background: linear-gradient(135deg, #0D9488, #0F766E);
         color: white;
@@ -590,6 +617,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         transform: translateY(-2px);
         box-shadow: 0 4px 16px rgba(13, 148, 136, 0.4);
         color: white;
+    }
+    
+    .btn-visits:active {
+        transform: translateY(0px);
     }
     
     [data-theme="dark"] .btn-view {
@@ -610,12 +641,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     [data-theme="dark"] .btn-visits:hover {
         box-shadow: 0 4px 16px rgba(13, 148, 136, 0.3);
         color: white;
-    }
-    
-    .btn-action-group {
-        display: flex;
-        gap: 6px;
-        flex-wrap: wrap;
     }
     
     /* ================================================================
@@ -815,6 +840,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
        ================================================================ */
     @media (max-width: 1024px) {
         .main-content { padding: 16px; }
+        .btn-action { min-width: 70px; width: 70px; }
     }
     @media (max-width: 768px) {
         .main-content { padding: 12px; }
@@ -823,8 +849,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .filter-section .filter-label { margin-bottom: 4px; }
         .table-header-wrapper { flex-direction: column; align-items: stretch; }
         .table-header-wrapper .search-box { max-width: 100%; }
-        .btn-action { padding: 4px 10px; font-size: 0.65rem; }
-        .btn-action i { font-size: 0.65rem; }
+        .btn-action { 
+            min-width: 60px; 
+            width: 60px;
+            padding: 4px 8px; 
+            font-size: 0.62rem; 
+            min-height: 28px;
+            height: 28px;
+        }
+        .btn-action i { font-size: 0.62rem; }
         .stat-card-mini .stat-number { font-size: 1.4rem; }
         .page-title { font-size: 1.2rem; }
         .btn-action-group { gap: 4px; }
@@ -833,8 +866,15 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .main-content { padding: 8px; }
         .stat-card-mini .stat-number { font-size: 1.2rem; }
         .page-title { font-size: 1rem; }
-        .btn-action { padding: 3px 8px; font-size: 0.6rem; }
-        .btn-action i { font-size: 0.6rem; }
+        .btn-action { 
+            min-width: 50px; 
+            width: 50px;
+            padding: 3px 6px; 
+            font-size: 0.55rem; 
+            min-height: 24px;
+            height: 24px;
+        }
+        .btn-action i { font-size: 0.55rem; }
         .stat-card-mini { padding: 10px 12px; }
         .card { padding: 12px 14px; }
     }
@@ -1143,12 +1183,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                         <!-- VIEW PATIENT DETAILS -->
                                         <a href="patient_details.php?id=<?= $patient['id'] ?>" 
                                            class="btn-action btn-view" title="View Patient Details">
-                                            <i class="fas fa-eye"></i> View
+                                            <i class="fas fa-eye"></i> <span>View</span>
                                         </a>
                                         <!-- VIEW ALL VISITS -->
                                         <a href="patient_visits.php?id=<?= $patient['id'] ?>" 
-                                           class="btn-action btn-visits" title="View All Visits (<?= $patient['total_visits'] ?? 0 ?>)">
-                                            <i class="fas fa-clinic-medical"></i> Visits <?= $patient['total_visits'] ?? 0 ?>
+                                           class="btn-action btn-visits" title="View All Visits">
+                                            <i class="fas fa-clinic-medical"></i> 
+                                            <span>Visits</span>
                                         </a>
                                     </div>
                                 </td>
@@ -1377,10 +1418,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c👤 Total Patients: <?= $total_assigned ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🟢 Active: <?= $active_patients ?> | ⏳ Pending Visits: <?= $pending_visits ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔍 Real-time table search filter enabled', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c✅ Two buttons: View (details) + Visits (all visits)', 'font-size:13px; color:#059669;');
-    console.log('%c📋 Visits button shows count: <?= $patient['total_visits'] ?? 0 ?>', 'font-size:13px; color:#0D9488;');
+    console.log('%c✅ Action buttons: View + Visits (equal width 80px)', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Removed visit count from Visits button', 'font-size:13px; color:#059669;');
     console.log('%c🌙 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
-    console.log('%c🔧 FIXED: Removed patient_bills table (using bills instead)', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

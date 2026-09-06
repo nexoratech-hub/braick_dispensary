@@ -2,9 +2,10 @@
 // ================================================================
 // FILE: frontend/pages/cashier/paid_bills.php
 // CASHIER - PAID BILLS LIST WITH PDF EXPORT
-// FIXED: Shows regular bills (with visit_id) AND OTC sales
-// FIXED: View buttons for BOTH Regular and OTC (vertical layout)
-// FIXED: Direct links to print_receipt.php
+// ✅ FIXED: Shows regular bills (with visit_id) AND OTC sales
+// ✅ FIXED: View buttons for BOTH Regular and OTC (vertical layout)
+// ✅ FIXED: Direct links to print_receipt.php
+// ✅ ADDED: 4 Summary Cards (Subtotal, Paid, Discount, Remaining)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -153,19 +154,25 @@ if (!empty($search)) {
 }
 
 // ================================================================
-// GET PAID BILLS - COMBINE REGULAR BILLS (with visit_id) + OTC SALES
+// GET PAID BILLS - COMBINE REGULAR BILLS + OTC SALES
 // ================================================================
 try {
     $all_paid = [];
+    $all_subtotal = 0;
+    $all_total_discount = 0;
+    $all_total_paid = 0;
+    $all_total_balance = 0;
     
     // ================================================================
-    // 1. GET REGULAR PAID BILLS FROM bills TABLE (ONLY WITH VISIT_ID)
+    // 1. GET REGULAR PAID BILLS FROM bills TABLE
     // ================================================================
     $sql_bills = "
         SELECT 
             b.id as bill_id,
             b.bill_number,
             b.patient_id,
+            b.subtotal,
+            b.total_discount,
             b.total_amount,
             b.paid_amount,
             b.balance,
@@ -191,8 +198,6 @@ try {
         LEFT JOIN visits v ON b.visit_id = v.id
         WHERE b.branch_id = ? 
         AND b.status = 'paid'
-        AND b.visit_id IS NOT NULL
-        AND b.visit_id > 0
         $date_condition
         $search_condition
     ";
@@ -203,6 +208,10 @@ try {
     
     foreach ($regular_bills as $bill) {
         $all_paid[] = $bill;
+        $all_subtotal += (float)($bill['subtotal'] ?? 0);
+        $all_total_discount += (float)($bill['total_discount'] ?? 0);
+        $all_total_paid += (float)($bill['paid_amount'] ?? 0);
+        $all_total_balance += (float)($bill['balance'] ?? 0);
     }
     
     // ================================================================
@@ -224,6 +233,8 @@ try {
             o.id as bill_id,
             o.sale_number as bill_number,
             o.patient_id,
+            o.subtotal,
+            0 as total_discount,
             o.total_amount,
             o.total_amount as paid_amount,
             0 as balance,
@@ -257,6 +268,10 @@ try {
     
     foreach ($otc_bills as $bill) {
         $all_paid[] = $bill;
+        $all_subtotal += (float)($bill['subtotal'] ?? 0);
+        $all_total_discount += (float)($bill['total_discount'] ?? 0);
+        $all_total_paid += (float)($bill['paid_amount'] ?? 0);
+        $all_total_balance += (float)($bill['balance'] ?? 0);
     }
     
     // ================================================================
@@ -268,9 +283,10 @@ try {
     
     $paid_bills = $all_paid;
     $total_bills = count($paid_bills);
-    foreach ($paid_bills as $bill) {
-        $total_paid_amount += (float)($bill['total_amount'] ?? 0);
-    }
+    $total_paid_amount = $all_total_paid;
+    $total_subtotal = $all_subtotal;
+    $total_discount = $all_total_discount;
+    $total_balance = $all_total_balance;
     
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
@@ -278,6 +294,9 @@ try {
     $paid_bills = [];
     $total_paid_amount = 0;
     $total_bills = 0;
+    $total_subtotal = 0;
+    $total_discount = 0;
+    $total_balance = 0;
 }
 
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
@@ -369,48 +388,6 @@ include_once '../../components/cashier_sidebar.php';
             --otc-bg: #2A1A3A;
         }
 
-        [data-theme="dark"] .bg-white { background-color: #1E293B !important; }
-        [data-theme="dark"] .text-gray-700 { color: #CBD5E1 !important; }
-        [data-theme="dark"] .text-gray-800 { color: #E2E8F0 !important; }
-        [data-theme="dark"] .text-gray-900 { color: #F1F5F9 !important; }
-        [data-theme="dark"] .border-gray-200 { border-color: #334155 !important; }
-        [data-theme="dark"] .bg-gray-50 { background-color: #1E293B !important; }
-        [data-theme="dark"] .bg-gray-100 { background-color: #2D3748 !important; }
-        [data-theme="dark"] .shadow { box-shadow: 0 1px 3px rgba(0,0,0,0.3) !important; }
-        [data-theme="dark"] .shadow-md { box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important; }
-        [data-theme="dark"] .shadow-lg { box-shadow: 0 10px 25px rgba(0,0,0,0.4) !important; }
-        [data-theme="dark"] .filter-btn { border-color: #334155; color: #94A3B8; }
-        [data-theme="dark"] .filter-btn:hover { border-color: #34D399; color: #34D399; background: rgba(5, 150, 105, 0.15); }
-        [data-theme="dark"] .filter-btn.active { background: #059669; color: white; border-color: #059669; }
-        [data-theme="dark"] .filter-btn.active:hover { background: #047857; border-color: #047857; }
-        [data-theme="dark"] .date-picker-group .form-control { background: #1E293B; color: #F1F5F9; border-color: #334155; }
-        [data-theme="dark"] .date-picker-group .form-control:focus { border-color: #34D399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.1); }
-        [data-theme="dark"] .data-table tbody tr:hover td { background: #1A3A2A; }
-        [data-theme="dark"] .data-table td { border-bottom-color: #334155; }
-        [data-theme="dark"] .stat-card { background: #1E293B; border-color: #334155; }
-        [data-theme="dark"] .stat-card:hover { border-color: #059669; }
-        [data-theme="dark"] .card { background: #1E293B; border-color: #334155; }
-        [data-theme="dark"] .card:hover { border-color: #059669; }
-        [data-theme="dark"] .page-header { background: linear-gradient(135deg, #059669, #047857) !important; }
-        [data-theme="dark"] .footer { border-top-color: #334155; }
-        [data-theme="dark"] .toast-custom.success { background: #059669; }
-        [data-theme="dark"] .toast-custom.error { background: #DC2626; }
-        [data-theme="dark"] .header-badge { background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.1); }
-        [data-theme="dark"] .status-badge.paid { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .status-badge.otc { background: #2A1A3A; color: #A78BFA; }
-        [data-theme="dark"] .text-gray-400 { color: #94A3B8 !important; }
-        [data-theme="dark"] .text-gray-500 { color: #94A3B8 !important; }
-        [data-theme="dark"] .text-gray-600 { color: #94A3B8 !important; }
-        [data-theme="dark"] .font-mono.text-gray-700 { color: #CBD5E1 !important; }
-        [data-theme="dark"] .font-semibold.text-gray-800 { color: #E2E8F0 !important; }
-        [data-theme="dark"] .card-title { color: #F1F5F9 !important; }
-        [data-theme="dark"] .footer .footer-brand { color: #34D399; }
-        [data-theme="dark"] .footer .text-gray-300 { color: #475569 !important; }
-        [data-theme="dark"] .toast-custom { box-shadow: 0 20px 25px rgba(0,0,0,0.4); }
-        [data-theme="dark"] .role-badge-display { background: #1E3A5F; color: #6EA8FE; }
-        [data-theme="dark"] .branch-badge-display { background: #1A3A2A; color: #34D399; }
-        [data-theme="dark"] .otc-badge { background: #2A1A3A; color: #A78BFA; border-color: rgba(139,92,246,0.2); }
-        
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
@@ -534,6 +511,93 @@ include_once '../../components/cashier_sidebar.php';
             transform: translateY(-2px);
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
+        
+        /* ================================================================ */
+        /* ✅ 4 SUMMARY CARDS */
+        /* ================================================================ */
+        .summary-cards {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
+            margin-bottom: 24px;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .summary-card {
+            background: var(--bg-card);
+            border-radius: 14px;
+            padding: 18px 20px;
+            border: 2px solid var(--border-color);
+            text-align: center;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-sm);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .summary-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+        }
+        
+        .summary-card:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
+            border-color: var(--success-light);
+        }
+        
+        .summary-card .card-label {
+            font-size: 0.65rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: block;
+        }
+        
+        .summary-card .card-value {
+            font-size: 1.4rem;
+            font-weight: 700;
+            display: block;
+            margin-top: 4px;
+            font-family: monospace;
+        }
+        
+        .summary-card .card-sub {
+            font-size: 0.55rem;
+            color: var(--text-secondary);
+            display: block;
+            margin-top: 2px;
+        }
+        
+        /* Card 1: Subtotal */
+        .summary-card.subtotal-card { border-color: var(--primary); }
+        .summary-card.subtotal-card::before { background: var(--primary); }
+        .summary-card.subtotal-card .card-value { color: var(--primary); }
+        
+        /* Card 2: Paid Amount */
+        .summary-card.paid-card { border-color: var(--success); }
+        .summary-card.paid-card::before { background: var(--success); }
+        .summary-card.paid-card .card-value { color: var(--success); }
+        
+        /* Card 3: Discount */
+        .summary-card.discount-card { border-color: var(--warning); }
+        .summary-card.discount-card::before { background: var(--warning); }
+        .summary-card.discount-card .card-value { color: var(--warning); }
+        
+        /* Card 4: Remaining Balance */
+        .summary-card.balance-card { border-color: var(--danger); }
+        .summary-card.balance-card::before { background: var(--danger); }
+        .summary-card.balance-card .card-value { color: var(--danger); }
+        .summary-card.balance-card.zero-balance { border-color: var(--success); }
+        .summary-card.balance-card.zero-balance::before { background: var(--success); }
+        .summary-card.balance-card.zero-balance .card-value { color: var(--success); }
         
         .filter-section {
             background: var(--bg-card);
@@ -1229,6 +1293,7 @@ include_once '../../components/cashier_sidebar.php';
         
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
+            .summary-cards { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -1239,6 +1304,7 @@ include_once '../../components/cashier_sidebar.php';
             .card { padding: 14px 16px; }
             .btn-group-vertical .btn { font-size: 0.5rem; padding: 3px 6px; min-width: 40px; }
             .btn-group-vertical .btn i { font-size: 0.6rem; }
+            .summary-cards { grid-template-columns: 1fr 1fr; }
         }
         
         @media (max-width: 640px) {
@@ -1251,6 +1317,7 @@ include_once '../../components/cashier_sidebar.php';
             .data-table { font-size: 0.6rem; min-width: 500px; }
             .btn-group-vertical .btn { font-size: 0.45rem; padding: 2px 5px; min-width: 35px; }
             .btn-group-vertical .btn i { font-size: 0.5rem; }
+            .summary-cards { grid-template-columns: 1fr; }
         }
     </style>
     
@@ -1293,13 +1360,6 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-shopping-cart"></i>
                     Including OTC Sales
                 </span>
-                
-                <?php if ($filter !== 'all' && $filter !== 'custom'): ?>
-                <span class="header-badge">
-                    <i class="fas fa-filter"></i>
-                    <?= ucfirst(str_replace('months', ' Months', $filter)) ?>
-                </span>
-                <?php endif; ?>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1322,6 +1382,42 @@ include_once '../../components/cashier_sidebar.php';
             <?= $message ?>
         </div>
     <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- ✅ 4 SUMMARY CARDS - Subtotal, Paid, Discount, Remaining -->
+    <!-- FORMULA: REMAINING = SUBTOTAL - PAID - DISCOUNT -->
+    <!-- ================================================================ -->
+    <div class="summary-cards" id="summaryCards">
+        <!-- Card 1: Subtotal -->
+        <div class="summary-card subtotal-card">
+            <span class="card-label">📋 Subtotal</span>
+            <span class="card-value" id="summarySubtotal"><?= $currency ?> <?= number_format($total_subtotal, 0) ?></span>
+            <span class="card-sub">Total before discounts</span>
+        </div>
+        
+        <!-- Card 2: Paid Amount -->
+        <div class="summary-card paid-card">
+            <span class="card-label">✅ Paid Amount</span>
+            <span class="card-value" id="summaryPaid"><?= $currency ?> <?= number_format($total_paid_amount, 0) ?></span>
+            <span class="card-sub"><?= $total_bills ?> bill(s) paid</span>
+        </div>
+        
+        <!-- Card 3: Total Discount -->
+        <div class="summary-card discount-card">
+            <span class="card-label">🏷️ Total Discount</span>
+            <span class="card-value" id="summaryDiscount"><?= $currency ?> <?= number_format($total_discount, 0) ?></span>
+            <span class="card-sub">Discounts applied</span>
+        </div>
+        
+        <!-- Card 4: Remaining Balance -->
+        <div class="summary-card balance-card <?= $total_balance <= 0 ? 'zero-balance' : '' ?>">
+            <span class="card-label">📊 Remaining Balance</span>
+            <span class="card-value" id="summaryBalance"><?= $currency ?> <?= number_format($total_balance, 0) ?></span>
+            <span class="card-sub" id="balanceFormula">
+                <?= number_format($total_subtotal, 0) ?> - <?= number_format($total_paid_amount, 0) ?> - <?= number_format($total_discount, 0) ?> = <?= number_format($total_balance, 0) ?>
+            </span>
+        </div>
+    </div>
 
     <!-- FILTERS -->
     <div class="filter-section">
@@ -1427,7 +1523,8 @@ include_once '../../components/cashier_sidebar.php';
                         <th class="col-type">Type</th>
                         <th class="col-patient">Patient</th>
                         <th class="col-visit">Visit</th>
-                        <th class="col-amount">Total</th>
+                        <th class="col-amount">Subtotal</th>
+                        <th class="col-amount">Discount</th>
                         <th class="col-paid">Paid</th>
                         <th class="col-items">Items</th>
                         <th class="col-cashier">Received By</th>
@@ -1438,8 +1535,11 @@ include_once '../../components/cashier_sidebar.php';
                 </thead>
                 <tbody>
                     <?php if (is_array($paid_bills) && count($paid_bills) > 0): ?>
-                        <?php $i = 1; foreach ($paid_bills as $bill): 
+                        <?php foreach ($paid_bills as $bill): 
                             $is_otc = ($bill['bill_type'] ?? '') === 'OTC';
+                            $bill_subtotal = (float)($bill['subtotal'] ?? 0);
+                            $bill_discount = (float)($bill['total_discount'] ?? 0);
+                            $bill_paid = (float)($bill['paid_amount'] ?? 0);
                         ?>
                             <tr>
                                 <td>
@@ -1473,12 +1573,17 @@ include_once '../../components/cashier_sidebar.php';
                                 </td>
                                 <td class="text-right">
                                     <span class="font-semibold text-gray-800">
-                                        <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>
+                                        <?= $currency ?> <?= number_format($bill_subtotal, 0) ?>
+                                    </span>
+                                </td>
+                                <td class="text-right">
+                                    <span class="font-semibold text-yellow-600">
+                                        <?= $currency ?> <?= number_format($bill_discount, 0) ?>
                                     </span>
                                 </td>
                                 <td class="text-right">
                                     <span class="font-semibold <?= $is_otc ? 'text-purple-600' : 'text-green-600' ?>">
-                                        <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
+                                        <?= $currency ?> <?= number_format($bill_paid, 0) ?>
                                     </span>
                                 </td>
                                 <td class="text-center">
@@ -1502,12 +1607,8 @@ include_once '../../components/cashier_sidebar.php';
                                     </span>
                                 </td>
                                 <td>
-                                    <!-- ============================================================
-                                         VERTICAL BUTTONS: View on top, Print below
-                                         ============================================================ -->
                                     <div class="btn-group-vertical">
                                         <?php if ($is_otc): ?>
-                                            <!-- OTC: View OTC Sale + Print OTC Receipt -->
                                             <a href="view_otc_sale.php?id=<?= $bill['reference_id'] ?>" class="btn btn-view-otc" title="View OTC Sale">
                                                 <i class="fas fa-eye"></i> View
                                             </a>
@@ -1515,7 +1616,6 @@ include_once '../../components/cashier_sidebar.php';
                                                 <i class="fas fa-print"></i> Print
                                             </a>
                                         <?php else: ?>
-                                            <!-- Regular: View Bill + Print Receipt -->
                                             <a href="view_bill.php?id=<?= $bill['bill_id'] ?>" class="btn btn-view" title="View Bill">
                                                 <i class="fas fa-eye"></i> View
                                             </a>
@@ -1529,7 +1629,7 @@ include_once '../../components/cashier_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="11" class="text-center py-8 text-gray-400">
+                            <td colspan="12" class="text-center py-8 text-gray-400">
                                 <i class="fas fa-check-circle text-3xl block mb-2 text-green-500"></i>
                                 <p class="text-lg">No paid bills or OTC sales found</p>
                                 <p class="text-sm">
@@ -1612,6 +1712,28 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     // DARK MODE
     // ================================================================
+    (function() {
+        var htmlElement = document.documentElement;
+        function syncDarkMode() {
+            var isDark = localStorage.getItem('darkMode') === 'true';
+            if (isDark) {
+                htmlElement.setAttribute('data-theme', 'dark');
+            } else {
+                htmlElement.removeAttribute('data-theme');
+            }
+        }
+        syncDarkMode();
+        window.addEventListener('storage', function(e) {
+            if (e.key === 'darkMode') syncDarkMode();
+        });
+        document.addEventListener('darkModeChanged', function(e) {
+            if (e.detail && e.detail.isDark) {
+                htmlElement.setAttribute('data-theme', 'dark');
+            } else {
+                htmlElement.removeAttribute('data-theme');
+            }
+        });
+    })();
 
     // ================================================================
     // SIDEBAR TOGGLE
@@ -1738,13 +1860,19 @@ include_once '../../components/cashier_sidebar.php';
         var totalBills = <?= $total_bills ?>;
         var filterLabel = '<?= $filter ?>';
         var filterDisplay = filterLabel === 'all' ? 'All Time' : filterLabel;
-        var totalAmount = <?= $total_paid_amount ?>;
+        var totalSubtotal = <?= $total_subtotal ?>;
+        var totalDiscount = <?= $total_discount ?>;
+        var totalPaid = <?= $total_paid_amount ?>;
+        var totalBalance = <?= $total_balance ?>;
         
         var billsHtml = '';
         var counter = 1;
         <?php foreach ($paid_bills as $bill): 
             $is_otc = ($bill['bill_type'] ?? '') === 'OTC';
             $typeLabel = $is_otc ? 'OTC' : 'Reg';
+            $bill_subtotal = (float)($bill['subtotal'] ?? 0);
+            $bill_discount = (float)($bill['total_discount'] ?? 0);
+            $bill_paid = (float)($bill['paid_amount'] ?? 0);
         ?>
             billsHtml += `
                 <tr>
@@ -1752,8 +1880,9 @@ include_once '../../components/cashier_sidebar.php';
                     <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:10px;text-align:center;"><span style="background:<?= $is_otc ? '#EDE9FE;color:#6D28D9;' : '#E8F0FE;color:#0B5ED7;' ?>padding:1px 8px;border-radius:8px;font-weight:600;">${typeLabel}</span></td>
                     <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:11px;"><strong><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></strong></td>
                     <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:10px;text-align:center;"><?= $is_otc ? '—' : htmlspecialchars($bill['visit_number'] ?? 'N/A') ?></td>
-                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:11px;">${currency} <?= number_format($bill['total_amount'] ?? 0, 0) ?></td>
-                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:11px;<?= $is_otc ? 'color:#6D28D9;' : 'color:#059669;' ?>">${currency} <?= number_format($bill['paid_amount'] ?? 0, 0) ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:11px;">${currency} <?= number_format($bill_subtotal, 0) ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:11px;color:#D97706;">${currency} <?= number_format($bill_discount, 0) ?></td>
+                    <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:right;font-size:11px;<?= $is_otc ? 'color:#6D28D9;' : 'color:#059669;' ?>">${currency} <?= number_format($bill_paid, 0) ?></td>
                     <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;text-align:center;font-size:11px;"><?= $bill['item_count'] ?? 0 ?></td>
                     <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:11px;"><?= htmlspecialchars($bill['cashier_name'] ?? 'N/A') ?></td>
                     <td style="padding:2px 5px;border-bottom:1px solid #E2E8F0;font-size:11px;"><?= isset($bill['paid_date']) ? date('d/m/y h:i A', strtotime($bill['paid_date'])) : 'N/A' ?></td>
@@ -1763,7 +1892,7 @@ include_once '../../components/cashier_sidebar.php';
         <?php endforeach; ?>
         
         if (!billsHtml) {
-            billsHtml = `<tr><td colspan="9" style="text-align:center;padding:20px;font-size:14px;color:#64748B;">No paid bills or OTC sales found</td></tr>`;
+            billsHtml = `<tr><td colspan="10" style="text-align:center;padding:20px;font-size:14px;color:#64748B;">No paid bills or OTC sales found</td></tr>`;
         }
         
         var html = `
@@ -1784,22 +1913,23 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
             </div>
             
-            <!-- SUMMARY -->
-            <div style="margin-bottom:6px;">
-                <div class="pdf-section-title"><i class="fas fa-chart-bar"></i> Summary</div>
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin:4px 0;">
-                    <div style="background:#D1FAE5;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #059669;">
-                        <div style="font-size:18px;font-weight:700;color:#059669;">${totalBills}</div>
-                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">📋 Total Records</div>
-                    </div>
-                    <div style="background:#E8F0FE;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #0B5ED7;">
-                        <div style="font-size:18px;font-weight:700;color:#0B5ED7;">${filterDisplay}</div>
-                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">📅 Date Range</div>
-                    </div>
-                    <div style="background:#D1FAE5;padding:6px 10px;border-radius:6px;text-align:center;border:1px solid #059669;">
-                        <div style="font-size:18px;font-weight:700;color:#059669;">${currency} <?= number_format($total_paid_amount, 0) ?></div>
-                        <div style="font-size:9px;color:#64748B;text-transform:uppercase;font-weight:600;">💰 Total Paid</div>
-                    </div>
+            <!-- 4 SUMMARY CARDS -->
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:10px;">
+                <div style="background:#E8F0FE;padding:6px 4px;border-radius:6px;text-align:center;border:1px solid #0B5ED7;">
+                    <div style="font-size:16px;font-weight:700;color:#0B5ED7;">${currency} ${totalSubtotal.toLocaleString()}</div>
+                    <div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:600;">📋 Subtotal</div>
+                </div>
+                <div style="background:#D1FAE5;padding:6px 4px;border-radius:6px;text-align:center;border:1px solid #059669;">
+                    <div style="font-size:16px;font-weight:700;color:#059669;">${currency} ${totalPaid.toLocaleString()}</div>
+                    <div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:600;">✅ Paid</div>
+                </div>
+                <div style="background:#FEF3C7;padding:6px 4px;border-radius:6px;text-align:center;border:1px solid #D97706;">
+                    <div style="font-size:16px;font-weight:700;color:#D97706;">${currency} ${totalDiscount.toLocaleString()}</div>
+                    <div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:600;">🏷️ Discount</div>
+                </div>
+                <div style="background:${totalBalance > 0 ? '#FEE2E2' : '#D1FAE5'};padding:6px 4px;border-radius:6px;text-align:center;border:1px solid ${totalBalance > 0 ? '#DC2626' : '#059669'};">
+                    <div style="font-size:16px;font-weight:700;color:${totalBalance > 0 ? '#DC2626' : '#059669'};">${currency} ${totalBalance.toLocaleString()}</div>
+                    <div style="font-size:8px;color:#64748B;text-transform:uppercase;font-weight:600;">📊 Remaining</div>
                 </div>
             </div>
             
@@ -1807,12 +1937,6 @@ include_once '../../components/cashier_sidebar.php';
             <div style="margin-bottom:6px;">
                 <div class="pdf-section-title"><i class="fas fa-list"></i> Paid Records (${totalBills})</div>
                 <div class="pdf-table-wrap" style="position:relative;">
-                    <div class="all-paid-stamp" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-30deg);font-size:60px;font-weight:900;color:rgba(5,150,105,0.12);text-transform:uppercase;letter-spacing:8px;border:8px solid rgba(5,150,105,0.08);padding:15px 30px;border-radius:16px;pointer-events:none;z-index:10;font-family:'Inter',sans-serif;white-space:nowrap;">
-                        <div style="position:relative;z-index:2;color:rgba(5,150,105,0.15);font-size:54px;">
-                            ALL <span style="color:rgba(220,38,38,0.10);font-weight:300;margin:0 4px;">//</span> PAID
-                        </div>
-                        <div style="position:absolute;top:-10%;left:-10%;width:120%;height:120%;border:4px solid rgba(5,150,105,0.04);transform:rotate(-45deg);border-radius:16px;pointer-events:none;"></div>
-                    </div>
                     <table class="pdf-table" style="font-size:11px;width:100%;border-collapse:collapse;position:relative;">
                         <thead>
                             <tr>
@@ -1820,7 +1944,8 @@ include_once '../../components/cashier_sidebar.php';
                                 <th style="background:#059669;color:white;padding:2px 5px;text-align:center;font-size:9px;">Type</th>
                                 <th style="background:#059669;color:white;padding:2px 5px;text-align:left;font-size:9px;">Patient</th>
                                 <th style="background:#059669;color:white;padding:2px 5px;text-align:center;font-size:9px;">Visit</th>
-                                <th style="background:#059669;color:white;padding:2px 5px;text-align:right;font-size:9px;">Total</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:right;font-size:9px;">Subtotal</th>
+                                <th style="background:#059669;color:white;padding:2px 5px;text-align:right;font-size:9px;">Discount</th>
                                 <th style="background:#059669;color:white;padding:2px 5px;text-align:right;font-size:9px;">Paid</th>
                                 <th style="background:#059669;color:white;padding:2px 5px;text-align:center;font-size:9px;">Items</th>
                                 <th style="background:#059669;color:white;padding:2px 5px;text-align:left;font-size:9px;">Received By</th>
@@ -1840,6 +1965,10 @@ include_once '../../components/cashier_sidebar.php';
                     <div class="footer-left">
                         <span>Generated by: <?= htmlspecialchars($user_full_name) ?></span>
                         <span style="margin-left:14px;">Date: <?= date('F d, Y') ?></span>
+                        <div style="margin-top:4px;font-size:13px;color:#059669;">
+                            <strong>Total: ${currency} ${totalPaid.toLocaleString()}</strong>
+                            ${totalDiscount > 0 ? ' | Discount: ${currency} ${totalDiscount.toLocaleString()}' : ''}
+                        </div>
                     </div>
                     <div class="stamp-box" style="position:relative;">
                         <div class="stamp-title">Official Stamp</div>
@@ -1911,13 +2040,14 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c✅ Braick - Paid Bills & OTC Sales', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Shows BOTH regular bills (with visit_id) AND OTC paid sales', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Vertical buttons: View on top, Print below', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ View buttons for BOTH Regular and OTC', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Direct links to print_receipt.php', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Braick - Paid Bills & OTC Sales (WITH 4 CARDS)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ 4 Cards: Subtotal | Paid | Discount | Remaining', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FORMULA: REMAINING = SUBTOTAL - PAID - DISCOUNT', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Shows BOTH regular bills AND OTC paid sales', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📋 Total Records: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Total Amount: <?= $currency ?> <?= number_format($total_paid_amount, 0) ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c💰 Total Paid: <?= $currency ?> <?= number_format($total_paid_amount, 0) ?>', 'font-size:13px; color:#34D399;');
+    console.log('%c🏷️ Total Discount: <?= $currency ?> <?= number_format($total_discount, 0) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c📊 Remaining Balance: <?= $currency ?> <?= number_format($total_balance, 0) ?>', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/dashboard.php
-// CASHIER DASHBOARD - FULL FIXED
+// CASHIER DASHBOARD - FIXED
 // Uses: bills, bill_items, prescriptions, lab_tests
 // BRAICK DISPENSARY
 // ================================================================
@@ -108,21 +108,7 @@ try {
     $pending_bills_total = $pending_bills_data['total'] ?? 0;
     
     // ================================================================
-    // 3. CANCELLED BILLS (status = 'cancelled')
-    // ================================================================
-    $stmt = $db->prepare("
-        SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
-        FROM bills 
-        WHERE branch_id = ? 
-        AND status = 'cancelled'
-    ");
-    $stmt->execute([$cashier_branch_id]);
-    $cancelled_bills_data = $stmt->fetch(PDO::FETCH_ASSOC);
-    $cancelled_bills = $cancelled_bills_data['count'] ?? 0;
-    $cancelled_bills_total = $cancelled_bills_data['total'] ?? 0;
-    
-    // ================================================================
-    // 4. TOTAL BILLS (all bills)
+    // 3. TOTAL BILLS (all bills)
     // ================================================================
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
@@ -135,7 +121,7 @@ try {
     $total_bills_amount = $total_bills_data['total'] ?? 0;
     
     // ================================================================
-    // 5. PAID BILLS (status = 'paid')
+    // 4. PAID BILLS (status = 'paid')
     // ================================================================
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
@@ -149,7 +135,7 @@ try {
     $paid_bills_total = $paid_bills_data['total'] ?? 0;
     
     // ================================================================
-    // 6. PARTIAL PAYMENTS (status = 'partial')
+    // 5. PARTIAL PAYMENTS (status = 'partial')
     // ================================================================
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance
@@ -164,7 +150,7 @@ try {
     $partial_bills_balance = $partial_bills_data['total_balance'] ?? 0;
     
     // ================================================================
-    // 7. EXPENSES (from expenses table)
+    // 6. EXPENSES (from expenses table)
     // ================================================================
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(amount), 0) as total
@@ -190,7 +176,7 @@ try {
     $today_expenses = $today_expenses_data['total'] ?? 0;
     
     // ================================================================
-    // 8. PAYMENT HISTORY (Recent payments from bills)
+    // 7. PAYMENT HISTORY (Recent payments from bills)
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -283,8 +269,6 @@ try {
     $total_bills_amount = 0;
     $paid_bills = 0;
     $paid_bills_total = 0;
-    $cancelled_bills = 0;
-    $cancelled_bills_total = 0;
     $partial_bills = 0;
     $partial_bills_paid = 0;
     $partial_bills_balance = 0;
@@ -380,9 +364,11 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 8 STATS CARDS -->
+    <!-- ✅ FIXED: 6 STATS CARDS (3 TOP + 3 BOTTOM) - NO CANCELLED BILLS -->
     <!-- ================================================================ -->
-    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(180px, 1fr));gap:14px;margin-bottom:28px;">
+    
+    <!-- ROW 1: TOP 3 CARDS -->
+    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(3, 1fr);gap:14px;margin-bottom:14px;">
         
         <!-- Card 1: Today Payments -->
         <div class="stat-card-modern" onclick="window.location.href='payment_history.php'" style="background:linear-gradient(135deg, #0B5ED7, #0A4CA8);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(11,94,215,0.25);">
@@ -422,26 +408,7 @@ include_once '../../components/cashier_sidebar.php';
             </div>
         </div>
         
-        <!-- Card 3: Cancelled Bills -->
-        <div class="stat-card-modern" onclick="window.location.href='cancelled_bills.php'" style="background:linear-gradient(135deg, #6B7280, #4B5563);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(107,114,128,0.25);">
-            <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
-                <div>
-                    <div class="stat-number" id="statCancelled" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format($cancelled_bills) ?></div>
-                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Cancelled Bills</div>
-                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">TSh <?= number_format($cancelled_bills_total) ?></div>
-                </div>
-                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
-                    <i class="fas fa-ban"></i>
-                </div>
-            </div>
-            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
-                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
-                Live
-            </div>
-        </div>
-        
-        <!-- Card 4: Total Bills -->
+        <!-- Card 3: Total Bills -->
         <div class="stat-card-modern" onclick="window.location.href='all_bills.php'" style="background:linear-gradient(135deg, #D97706, #B45309);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(217,119,6,0.25);">
             <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
@@ -460,7 +427,12 @@ include_once '../../components/cashier_sidebar.php';
             </div>
         </div>
         
-        <!-- Card 5: Paid Bills -->
+    </div>
+
+    <!-- ROW 2: BOTTOM 3 CARDS -->
+    <div class="stats-grid" style="display:grid;grid-template-columns:repeat(3, 1fr);gap:14px;margin-bottom:28px;">
+        
+        <!-- Card 4: Paid Bills -->
         <div class="stat-card-modern" onclick="window.location.href='paid_bills.php'" style="background:linear-gradient(135deg, #059669, #047857);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(5,150,105,0.25);">
             <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
@@ -479,7 +451,7 @@ include_once '../../components/cashier_sidebar.php';
             </div>
         </div>
         
-        <!-- Card 6: Partial Payments -->
+        <!-- Card 5: Partial Payments -->
         <div class="stat-card-modern" onclick="window.location.href='partial_payments.php'" style="background:linear-gradient(135deg, #7C3AED, #6D28D9);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(124,58,237,0.25);">
             <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
@@ -498,7 +470,7 @@ include_once '../../components/cashier_sidebar.php';
             </div>
         </div>
         
-        <!-- Card 7: Expenses -->
+        <!-- Card 6: Expenses -->
         <div class="stat-card-modern" onclick="window.location.href='expenses.php'" style="background:linear-gradient(135deg, #E11D48, #BE123C);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(225,29,72,0.25);">
             <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
             <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
@@ -509,25 +481,6 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
                 <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
                     <i class="fas fa-money-bill-wave"></i>
-                </div>
-            </div>
-            <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
-                <span class="live-dot" style="display:inline-block;width:5px;height:5px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;"></span>
-                Live
-            </div>
-        </div>
-        
-        <!-- Card 8: Payment History -->
-        <div class="stat-card-modern" onclick="window.location.href='payment_history.php'" style="background:linear-gradient(135deg, #0D9488, #0F766E);border-radius:16px;padding:18px 20px;color:white;position:relative;overflow:hidden;cursor:pointer;transition:all 0.3s ease;box-shadow:0 4px 20px rgba(13,148,136,0.25);">
-            <div style="position:absolute;top:-30px;right:-30px;width:100px;height:100px;border-radius:50%;background:rgba(255,255,255,0.06);"></div>
-            <div style="display:flex;justify-content:space-between;align-items:flex-start;position:relative;z-index:1;">
-                <div>
-                    <div class="stat-number" id="statHistory" style="font-size:2rem;font-weight:700;line-height:1.2;letter-spacing:-0.02em;"><?= number_format(count($payment_history)) ?></div>
-                    <div class="stat-label" style="font-size:0.7rem;color:rgba(255,255,255,0.85);font-weight:500;margin-top:2px;">Recent Payments</div>
-                    <div style="font-size:0.6rem;color:rgba(255,255,255,0.6);margin-top:2px;">Last 15 transactions</div>
-                </div>
-                <div style="width:40px;height:40px;border-radius:12px;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:1.1rem;backdrop-filter:blur(4px);">
-                    <i class="fas fa-history"></i>
                 </div>
             </div>
             <div style="margin-top:10px;font-size:0.55rem;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;">
@@ -867,19 +820,17 @@ include_once '../../components/cashier_sidebar.php';
         var elements = {
             statTodayPayments: data.today_payments_count || 0,
             statPending: data.pending_bills || 0,
-            statCancelled: data.cancelled_bills || 0,
             statTotal: data.total_bills || 0,
             statPaid: data.paid_bills || 0,
             statPartial: data.partial_bills || 0,
             statExpenses: data.expenses_count || 0,
-            statHistory: data.history_count || 0,
             pendingCount: data.pending_bills || 0
         };
         
         for (var key in elements) {
             var el = document.getElementById(key);
             if (el) {
-                if (key === 'statTotal' || key === 'statPaid' || key === 'statExpenses' || key === 'statCancelled') {
+                if (key === 'statTotal' || key === 'statPaid' || key === 'statExpenses') {
                     el.textContent = Number(elements[key]).toLocaleString();
                 } else {
                     el.textContent = elements[key];
@@ -1118,7 +1069,10 @@ include_once '../../components/cashier_sidebar.php';
         .scroll-container::-webkit-scrollbar { width: 4px; }
         .scroll-container::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 4px; }
         .scroll-container::-webkit-scrollbar-thumb { background: var(--success); border-radius: 4px; }
-        @media (max-width: 768px) { .two-col-grid { grid-template-columns: 1fr !important; } }
+        @media (max-width: 768px) { 
+            .two-col-grid { grid-template-columns: 1fr !important; }
+            .stats-grid { grid-template-columns: 1fr !important; }
+        }
         .stat-number.updated { transform: scale(1.1); color: #FCD34D; }
         .method-item:hover { background: var(--bg-body); border-radius: 8px; }
         .item-summary:hover { background: var(--bg-body); border-radius: 8px; }
@@ -1137,14 +1091,12 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     // CONSOLE
     // ================================================================
-    console.log('%c🟢 Braick - Cashier Dashboard (Auto-Update 3s)', 'font-size:20px; font-weight:bold; color:#059669;');
+    console.log('%c🟢 Braick - Cashier Dashboard (6 Cards Only)', 'font-size:20px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Removed: Cancelled Bills Card', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Removed: Recent Bills Card', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ 6 Cards: Today Payments, Pending, Total, Paid, Partial, Expenses', 'font-size:13px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($cashier_name) ?>', 'font-size:16px; font-weight:bold; color:#FFD700;');
-    console.log('%c👤 Role: <?= strtoupper($cashier_role) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier_branch_name) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c📊 Pending Bills: <?= $pending_bills ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c💳 Today\'s Payments: <?= $today_payments_count ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ 8 Cards: Today Payments, Pending, Cancelled, Total, Paid, Partial, Expenses, History', 'font-size:13px; color:#34D399;');
-    console.log('%c🟢 Green Header Applied', 'font-size:13px; color:#059669;');
     console.log('%c🔄 Auto-update every 3 seconds (NO PAGE REFRESH)', 'font-size:13px; color:#34D399;');
 </script>
 

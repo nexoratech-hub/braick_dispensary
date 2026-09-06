@@ -1,24 +1,15 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/login.php
-// BRAICK DISPENSARY - LOGIN (SINGLE FORM WITH TOGGLE)
+// BRAICK DISPENSARY - LOGIN (DUAL GENERAL MODES)
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../backend/config/database.php';
 
-// ================================================================
-// CHECK IF AJAX REQUEST
-// ================================================================
 $is_ajax = isset($_POST['ajax']) || isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest';
 
 // ================================================================
@@ -37,11 +28,7 @@ if (isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
             case 'cashier': $redirect = 'cashier/dashboard.php'; break;
             default: $redirect = 'dashboard.php'; break;
         }
-        echo json_encode([
-            'success' => true, 
-            'redirect' => $redirect,
-            'message' => 'Already logged in'
-        ]);
+        echo json_encode(['success' => true, 'redirect' => $redirect, 'message' => 'Already logged in']);
         exit;
     }
     
@@ -59,20 +46,17 @@ if (isset($_SESSION['user_id']) && isset($_SESSION['role'])) {
 }
 
 $error = '';
-$active_mode = 'general';
+$active_mode = isset($_GET['mode']) ? $_GET['mode'] : 'general_blue';
+if (!in_array($active_mode, ['general_blue', 'general_green'])) {
+    $active_mode = 'general_blue';
+}
 
-// ================================================================
-// FUNCTION: Send JSON Response
-// ================================================================
 function sendJsonResponse($success, $message, $data = array()) {
     header('Content-Type: application/json');
-    echo json_encode(array_merge(array('success' => $success, 'message' => $message), $data));
+    echo json_encode(array_merge(['success' => $success, 'message' => $message], $data));
     exit;
 }
 
-// ================================================================
-// FUNCTION: Get User's Additional Roles (SAFE)
-// ================================================================
 function getUserAdditionalRoles($db, $user_id) {
     $extra_roles = array();
     try {
@@ -82,15 +66,10 @@ function getUserAdditionalRoles($db, $user_id) {
             $stmt->execute([$user_id]);
             $extra_roles = $stmt->fetchAll(PDO::FETCH_COLUMN);
         }
-    } catch (Exception $e) {
-        // Table doesn't exist - ignore
-    }
+    } catch (Exception $e) {}
     return $extra_roles;
 }
 
-// ================================================================
-// FUNCTION: Get All User Roles
-// ================================================================
 function getAllUserRoles($db, $user_id, $primary_role) {
     $roles = array($primary_role);
     $extra = getUserAdditionalRoles($db, $user_id);
@@ -102,34 +81,23 @@ function getAllUserRoles($db, $user_id, $primary_role) {
     return $roles;
 }
 
-// ================================================================
-// FUNCTION: Get Primary Role (Non-Reception if available)
-// ================================================================
 function getPrimaryRoleFromRoles($roles) {
     if (count($roles) === 1) {
         return $roles[0];
     }
-    
     $priority_roles = array('admin', 'doctor', 'pharmacy', 'laboratory', 'cashier');
     foreach ($priority_roles as $priority) {
         if (in_array($priority, $roles)) {
             return $priority;
         }
     }
-    
     return $roles[0];
 }
 
-// ================================================================
-// FUNCTION: Check if User has Reception Role
-// ================================================================
 function hasReceptionRoleInRoles($roles) {
     return in_array('reception', $roles);
 }
 
-// ================================================================
-// FUNCTION: Get Dashboard URL
-// ================================================================
 function getDashboardUrlByRole($role) {
     switch ($role) {
         case 'admin': return 'admin/dashboard.php';
@@ -143,12 +111,12 @@ function getDashboardUrlByRole($role) {
 }
 
 // ================================================================
-// HANDLE LOGIN - SINGLE HANDLER FOR BOTH MODES
+// HANDLE LOGIN
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $username = trim($_POST['username'] ?? '');
     $password = $_POST['password'] ?? '';
-    $login_mode = $_POST['login_mode'] ?? 'general';
+    $login_mode = $_POST['login_mode'] ?? 'general_blue';
     $is_ajax = isset($_POST['ajax']) ? true : $is_ajax;
     
     $active_mode = $login_mode;
@@ -162,15 +130,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         try {
             $db = Database::getInstance()->getConnection();
             
+            // ================================================================
+            // CASE-SENSITIVE USERNAME CHECK - BINARY COMPARISON
+            // ================================================================
             $stmt = $db->prepare("
                 SELECT id, username, password, full_name, email, phone, role, branch_id, 
                        specialty, is_online, profile_pic, status, created_at,
                        password_changed_at, is_default_password
                 FROM users 
-                WHERE (username = ? OR email = ?) AND status = 'active'
+                WHERE BINARY username = ? OR BINARY email = ?
+                AND status = 'active'
             ");
             $stmt->execute([$username, $username]);
             $user = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$user) {
+                $stmt_check = $db->prepare("SELECT username FROM users WHERE LOWER(username) = LOWER(?) OR LOWER(email) = LOWER(?)");
+                $stmt_check->execute([$username, $username]);
+                $exists = $stmt_check->fetch(PDO::FETCH_ASSOC);
+                
+                if ($exists) {
+                    if ($is_ajax) {
+                        sendJsonResponse(false, 'Username/Email case mismatch. Please check your spelling (case-sensitive).');
+                    }
+                    $error = 'Username/Email case mismatch. Please check your spelling (case-sensitive).';
+                    goto end_login;
+                }
+            }
             
             if ($user) {
                 $password_valid = false;
@@ -188,24 +174,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($password_valid) {
                     $all_roles = getAllUserRoles($db, $user['id'], $user['role']);
                     
-                    // ================================================================
-                    // RECEPTION MODE CHECK
-                    // ================================================================
-                    if ($login_mode === 'reception' && !hasReceptionRoleInRoles($all_roles)) {
-                        if ($is_ajax) {
-                            sendJsonResponse(false, 'This user does not have Reception access.');
-                        }
-                        $error = 'This user does not have Reception access.';
-                        goto end_login;
-                    }
-                    
                     $primary_role = getPrimaryRoleFromRoles($all_roles);
                     $has_reception = hasReceptionRoleInRoles($all_roles);
-                    
-                    // If reception mode, force role to reception
-                    if ($login_mode === 'reception') {
-                        $primary_role = 'reception';
-                    }
                     
                     $_SESSION['user_id'] = $user['id'];
                     $_SESSION['username'] = $user['username'];
@@ -264,22 +234,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $redirect_url = getDashboardUrlByRole($primary_role);
                     
                     if ($is_ajax) {
-                        sendJsonResponse(true, 'Login successful', array('redirect' => $redirect_url));
+                        sendJsonResponse(true, 'Login successful', ['redirect' => $redirect_url]);
                     }
                     
                     header('Location: ' . $redirect_url);
                     exit;
                 } else {
                     if ($is_ajax) {
-                        sendJsonResponse(false, 'Invalid username/email or password. Please try again.');
+                        sendJsonResponse(false, 'Invalid password. Please try again.');
                     }
-                    $error = 'Invalid username/email or password. Please try again.';
+                    $error = 'Invalid password. Please try again.';
                 }
             } else {
                 if ($is_ajax) {
-                    sendJsonResponse(false, 'Invalid username/email or password. Please try again.');
+                    sendJsonResponse(false, 'Invalid username/email. Please check your spelling (case-sensitive).');
                 }
-                $error = 'Invalid username/email or password. Please try again.';
+                $error = 'Invalid username/email. Please check your spelling (case-sensitive).';
             }
         } catch (Exception $e) {
             error_log("Login error: " . $e->getMessage());
@@ -291,7 +261,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     
     end_login:
-    // End of login handling
 }
 
 // ================================================================
@@ -313,13 +282,6 @@ foreach ($possible_paths as $path) {
         break;
     }
 }
-
-// Check if reception mode is active
-if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
-    $active_mode = 'reception';
-} elseif (isset($_GET['mode']) && $_GET['mode'] === 'reception') {
-    $active_mode = 'reception';
-}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -331,14 +293,27 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     <style>
-        /* All styles same as before */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
             --primary-light: #6EA8FE;
-            --reception: #059669;
-            --reception-dark: #047857;
-            --reception-light: #6EE7B7;
+            --primary-bg-start: #E8F0FE;
+            --primary-bg-mid: #D1E0F9;
+            --primary-bg-end: #B8D0F5;
+            --primary-card: #0B5ED7;
+            --primary-card-light: #3B82F6;
+            --primary-card-bg: #DBEAFE;
+            
+            --green: #059669;
+            --green-dark: #047857;
+            --green-light: #6EE7B7;
+            --green-bg-start: #D1FAE5;
+            --green-bg-mid: #A7F3D0;
+            --green-bg-end: #6EE7B7;
+            --green-card: #059669;
+            --green-card-light: #34D399;
+            --green-card-bg: #D1FAE5;
+            
             --success: #059669;
             --success-bg: #D1FAE5;
             --danger: #DC2626;
@@ -369,15 +344,11 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             padding: 15px;
             position: relative;
             transition: all 0.4s ease;
-            background: linear-gradient(135deg, #E8F0FE 0%, #D1E0F9 50%, #B8D0F5 100%);
+            background: linear-gradient(135deg, var(--primary-bg-start) 0%, var(--primary-bg-mid) 50%, var(--primary-bg-end) 100%);
         }
         
-        body.general-mode {
-            background: linear-gradient(135deg, #E8F0FE 0%, #D1E0F9 50%, #B8D0F5 100%);
-        }
-        
-        body.reception-mode {
-            background: linear-gradient(135deg, #D1FAE5 0%, #A7F3D0 50%, #6EE7B7 100%);
+        body.green-mode {
+            background: linear-gradient(135deg, var(--green-bg-start) 0%, var(--green-bg-mid) 50%, var(--green-bg-end) 100%);
         }
         
         body.dark-mode {
@@ -393,7 +364,7 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             background: #0F172A;
         }
         
-        body.dark-mode .login-left.reception-mode {
+        body.dark-mode .login-left.green-mode {
             background: #064E3B;
         }
         
@@ -436,50 +407,50 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             color: var(--primary-light);
         }
         
-        body.dark-mode .toggle-container {
+        body.dark-mode .mode-switch-container {
             background: #0F172A;
             border-color: #334155;
         }
         
-        body.dark-mode .toggle-btn {
+        body.dark-mode .mode-btn {
             color: #94A3B8;
         }
         
-        body.dark-mode .toggle-btn:hover:not(.active) {
+        body.dark-mode .mode-btn:hover:not(.active) {
             background: rgba(255,255,255,0.05);
             color: #F1F5F9;
         }
         
-        body.dark-mode .toggle-btn.active {
+        body.dark-mode .mode-btn.active {
             background: #1E293B;
             color: var(--primary-light);
             box-shadow: 0 2px 8px rgba(0,0,0,0.3);
         }
         
-        body.dark-mode .toggle-btn.active.reception-active {
-            color: var(--reception-light);
+        body.dark-mode .mode-btn.active.green-active {
+            color: var(--green-light);
         }
         
-        body.dark-mode .toggle-btn .badge {
+        body.dark-mode .mode-btn .badge {
             background: #334155;
             color: #94A3B8;
         }
         
-        body.dark-mode .toggle-btn.active .badge {
+        body.dark-mode .mode-btn.active .badge {
             background: #1E3A5F;
             color: var(--primary-light);
         }
         
-        body.dark-mode .toggle-btn.active.reception-active .badge {
+        body.dark-mode .mode-btn.active.green-active .badge {
             background: #064E3B;
-            color: var(--reception-light);
+            color: var(--green-light);
         }
         
         body.dark-mode .login-container .btn-login {
             background: linear-gradient(135deg, #1A73E8 0%, #0B5ED7 100%);
         }
         
-        body.dark-mode .login-container.reception-mode .btn-login {
+        body.dark-mode .login-container.green-mode .btn-login {
             background: linear-gradient(135deg, #10B981 0%, #059669 100%);
         }
         
@@ -496,8 +467,8 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             background: rgba(255,255,255,0.05);
         }
         
-        body.dark-mode .login-container.reception-mode .password-toggle:hover {
-            color: var(--reception-light);
+        body.dark-mode .login-container.green-mode .password-toggle:hover {
+            color: var(--green-light);
         }
         
         body.dark-mode .alert-error {
@@ -510,6 +481,12 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             background: rgba(5, 150, 105, 0.15);
             color: #6EE7B7;
             border-color: rgba(5, 150, 105, 0.3);
+        }
+        
+        body.dark-mode .alert-info {
+            background: rgba(59, 130, 246, 0.15);
+            color: #93C5FD;
+            border-color: rgba(59, 130, 246, 0.3);
         }
         
         .login-wrapper {
@@ -525,8 +502,8 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         
         .login-container {
             width: 100%;
-            max-width: 1200px;
-            min-height: 550px;
+            max-width: 1100px;
+            min-height: 520px;
             max-height: 92vh;
             background: #FFFFFF;
             border-radius: var(--radius-lg);
@@ -538,7 +515,7 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             position: relative;
         }
         
-        .login-container.reception-mode {
+        .login-container.green-mode {
             box-shadow: 0 20px 60px rgba(5, 150, 105, 0.25);
         }
         
@@ -548,10 +525,10 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         }
         
         .login-left {
-            width: 50%;
-            min-width: 300px;
+            width: 45%;
+            min-width: 280px;
             background: var(--primary);
-            padding: 45px 40px;
+            padding: 40px 35px;
             display: flex;
             flex-direction: column;
             justify-content: center;
@@ -563,8 +540,8 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             transition: all 0.4s ease;
         }
         
-        .login-left.reception-mode {
-            background: var(--reception);
+        .login-left.green-mode {
+            background: var(--green);
         }
         
         .login-left::before {
@@ -598,17 +575,17 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             justify-content: center;
             position: relative;
             z-index: 1;
-            margin-bottom: 10px;
+            margin-bottom: 6px;
         }
         
         .login-logo-image {
-            width: 7rem;
-            height: 7rem;
+            width: 6rem;
+            height: 6rem;
             display: flex;
             align-items: center;
             justify-content: center;
             flex-shrink: 0;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
         }
         
         .login-logo-image img {
@@ -618,7 +595,7 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         }
         
         .login-logo-image .logo-placeholder {
-            font-size: 4rem;
+            font-size: 3.5rem;
             font-weight: 900;
             color: white;
             letter-spacing: -2px;
@@ -629,7 +606,7 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         }
         
         .login-brand-text .brand-name {
-            font-size: 3.2rem;
+            font-size: 2.8rem;
             font-weight: 900;
             background: linear-gradient(135deg, #FFFFFF 0%, #93C5FD 100%);
             -webkit-background-clip: text;
@@ -639,7 +616,7 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             line-height: 1.1;
         }
         
-        .login-left.reception-mode .login-brand-text .brand-name {
+        .login-left.green-mode .login-brand-text .brand-name {
             background: linear-gradient(135deg, #FFFFFF 0%, #6EE7B7 100%);
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
@@ -647,28 +624,28 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         }
         
         .login-brand-text .brand-tagline {
-            font-size: 0.9rem;
+            font-size: 0.8rem;
             font-weight: 400;
             opacity: 0.8;
-            letter-spacing: 4px;
+            letter-spacing: 3px;
             text-transform: uppercase;
             color: rgba(255,255,255,0.85);
-            margin-top: 4px;
+            margin-top: 2px;
         }
         
         .login-brand-text .divider-line {
-            width: 60px;
+            width: 50px;
             height: 3px;
             background: linear-gradient(90deg, rgba(255,255,255,0.6), rgba(255,255,255,0.1));
             border-radius: 4px;
-            margin: 6px auto 6px auto;
+            margin: 4px auto;
         }
         
         .login-mode-label {
-            font-size: 0.85rem;
+            font-size: 0.8rem;
             font-weight: 500;
             color: rgba(255,255,255,0.9);
-            margin-top: 8px;
+            margin-top: 6px;
             letter-spacing: 0.5px;
         }
         
@@ -676,71 +653,88 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             margin-right: 6px;
         }
         
-        .toggle-container {
+        /* ================================================================ */
+        /* MODE SWITCH - BLUE TOP, GREEN BOTTOM */
+        /* ================================================================ */
+        .mode-switch-container {
             display: flex;
             flex-direction: column;
-            gap: 10px;
+            gap: 8px;
             width: 100%;
             max-width: 280px;
-            margin-top: 16px;
+            margin-top: 14px;
             position: relative;
             z-index: 1;
+            background: rgba(255,255,255,0.06);
+            padding: 6px;
+            border-radius: var(--radius);
+            border: 1px solid rgba(255,255,255,0.08);
         }
         
-        .toggle-btn {
+        .mode-btn {
             width: 100%;
-            padding: 14px 24px;
-            border: 2px solid rgba(255,255,255,0.15);
-            border-radius: var(--radius);
-            font-size: 1rem;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 12px;
+            font-size: 0.85rem;
             font-weight: 600;
             font-family: 'Inter', sans-serif;
             cursor: pointer;
             transition: all 0.3s ease;
-            background: rgba(255,255,255,0.05);
-            color: rgba(255,255,255,0.7);
+            background: transparent;
+            color: rgba(255,255,255,0.5);
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 12px;
-            backdrop-filter: blur(4px);
+            gap: 10px;
         }
         
-        .toggle-btn:hover:not(.active) {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.9);
-            border-color: rgba(255,255,255,0.25);
+        .mode-btn:hover:not(.active) {
+            background: rgba(255,255,255,0.06);
+            color: rgba(255,255,255,0.75);
         }
         
-        .toggle-btn.active {
-            background: rgba(255,255,255,0.2);
-            color: #FFFFFF;
-            border-color: rgba(255,255,255,0.4);
-            box-shadow: 0 2px 12px rgba(0,0,0,0.15);
-        }
-        
-        .toggle-btn i {
-            font-size: 1.1rem;
-        }
-        
-        .toggle-btn .badge {
-            font-size: 0.6rem;
+        .mode-btn.active {
             background: rgba(255,255,255,0.15);
-            padding: 2px 12px;
-            border-radius: 10px;
-            color: rgba(255,255,255,0.7);
-            font-weight: 700;
+            color: #FFFFFF;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
         }
         
-        .toggle-btn.active .badge {
-            background: rgba(255,255,255,0.2);
-            color: rgba(255,255,255,0.9);
+        .mode-btn i {
+            font-size: 0.9rem;
+        }
+        
+        .mode-btn .badge {
+            font-size: 0.5rem;
+            background: rgba(255,255,255,0.1);
+            padding: 1px 10px;
+            border-radius: 10px;
+            color: rgba(255,255,255,0.5);
+            font-weight: 700;
+            letter-spacing: 0.5px;
+        }
+        
+        .mode-btn.active .badge {
+            background: rgba(255,255,255,0.15);
+            color: rgba(255,255,255,0.8);
+        }
+        
+        /* Blue button specific */
+        .mode-btn.blue-btn.active {
+            background: rgba(59, 130, 246, 0.25);
+            border-left: 3px solid #3B82F6;
+        }
+        
+        /* Green button specific */
+        .mode-btn.green-btn.active {
+            background: rgba(5, 150, 105, 0.25);
+            border-left: 3px solid #059669;
         }
         
         .login-right {
-            width: 50%;
-            min-width: 300px;
-            padding: 45px 50px 48px 50px;
+            width: 55%;
+            min-width: 280px;
+            padding: 40px 45px 42px 45px;
             display: flex;
             flex-direction: column;
             justify-content: center;
@@ -749,33 +743,41 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         }
         
         .login-right .welcome-text {
-            margin-bottom: 22px;
+            margin-bottom: 18px;
         }
         
         .login-right .welcome-text h2 {
-            font-size: 2rem;
+            font-size: 1.8rem;
             font-weight: 700;
             color: var(--gray-900);
-            margin-bottom: 4px;
+            margin-bottom: 2px;
             transition: all 0.4s ease;
         }
         
         .login-right .welcome-text .subtitle {
             color: var(--gray-500);
-            font-size: 1rem;
+            font-size: 0.95rem;
             transition: all 0.4s ease;
         }
         
+        .login-right .welcome-text .subtitle strong {
+            color: var(--primary);
+        }
+        
+        .login-container.green-mode .login-right .welcome-text .subtitle strong {
+            color: var(--green);
+        }
+        
         .login-right .form-group {
-            margin-bottom: 18px;
+            margin-bottom: 16px;
         }
         
         .login-right .form-group label {
             display: block;
-            font-size: 0.9rem;
+            font-size: 0.85rem;
             font-weight: 600;
             color: var(--gray-700);
-            margin-bottom: 5px;
+            margin-bottom: 4px;
             transition: all 0.4s ease;
         }
         
@@ -785,11 +787,11 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         
         .login-right .form-group .input-wrapper .input-icon {
             position: absolute;
-            left: 16px;
+            left: 14px;
             top: 50%;
             transform: translateY(-50%);
             color: var(--gray-400);
-            font-size: 1.05rem;
+            font-size: 1rem;
             transition: color 0.3s ease;
             z-index: 2;
             pointer-events: none;
@@ -797,10 +799,10 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         
         .login-right .form-group .input-wrapper input {
             width: 100%;
-            padding: 15px 52px 15px 52px;
+            padding: 13px 48px 13px 48px;
             border: 2px solid var(--gray-200);
             border-radius: var(--radius);
-            font-size: 1.05rem;
+            font-size: 1rem;
             font-family: 'Inter', sans-serif;
             background: var(--gray-50);
             transition: all 0.3s ease;
@@ -809,40 +811,40 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         
         .login-right .form-group .input-wrapper input:focus {
             border-color: var(--primary);
-            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.1);
+            box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.08);
             background: white;
             outline: none;
         }
         
-        .login-container.reception-mode .login-right .form-group .input-wrapper input:focus {
-            border-color: var(--reception);
-            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.1);
+        .login-container.green-mode .login-right .form-group .input-wrapper input:focus {
+            border-color: var(--green);
+            box-shadow: 0 0 0 4px rgba(5, 150, 105, 0.08);
         }
         
         .login-right .form-group .input-wrapper input::placeholder {
             color: var(--gray-400);
-            font-size: 1rem;
+            font-size: 0.95rem;
         }
         
         .password-toggle {
             position: absolute;
-            right: 16px;
+            right: 14px;
             top: 50%;
             transform: translateY(-50%);
             background: none;
             border: none;
             color: var(--gray-400);
             cursor: pointer;
-            font-size: 1.05rem;
-            padding: 6px;
+            font-size: 1rem;
+            padding: 4px;
             transition: all 0.3s ease;
             z-index: 2;
             display: flex;
             align-items: center;
             justify-content: center;
             border-radius: 50%;
-            width: 38px;
-            height: 38px;
+            width: 34px;
+            height: 34px;
         }
         
         .password-toggle:hover {
@@ -850,8 +852,8 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             background: var(--gray-100);
         }
         
-        .login-container.reception-mode .password-toggle:hover {
-            color: var(--reception);
+        .login-container.green-mode .password-toggle:hover {
+            color: var(--green);
         }
         
         .password-toggle:focus {
@@ -859,40 +861,40 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
         }
         
         .password-toggle i {
-            font-size: 1.05rem;
+            font-size: 1rem;
         }
         
         .login-options {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin: 4px 0 20px 0;
+            margin: 2px 0 16px 0;
         }
         
         .login-options .remember {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 0.95rem;
+            gap: 6px;
+            font-size: 0.9rem;
             color: var(--gray-600);
             cursor: pointer;
             user-select: none;
         }
         
         .login-options .remember input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
             accent-color: var(--primary);
             cursor: pointer;
             border-radius: 4px;
         }
         
-        .login-container.reception-mode .login-options .remember input[type="checkbox"] {
-            accent-color: var(--reception);
+        .login-container.green-mode .login-options .remember input[type="checkbox"] {
+            accent-color: var(--green);
         }
         
         .login-options .forgot {
-            font-size: 0.95rem;
+            font-size: 0.9rem;
             color: var(--primary);
             text-decoration: none;
             font-weight: 500;
@@ -904,22 +906,22 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             text-decoration: underline;
         }
         
-        .login-container.reception-mode .login-options .forgot {
-            color: var(--reception);
+        .login-container.green-mode .login-options .forgot {
+            color: var(--green);
         }
         
-        .login-container.reception-mode .login-options .forgot:hover {
-            color: var(--reception-dark);
+        .login-container.green-mode .login-options .forgot:hover {
+            color: var(--green-dark);
         }
         
         .btn-login {
             width: 100%;
-            padding: 15px;
+            padding: 13px;
             background: linear-gradient(135deg, #0B5ED7 0%, #0A4CA8 100%);
             color: white;
             border: none;
             border-radius: var(--radius);
-            font-size: 1.1rem;
+            font-size: 1.05rem;
             font-weight: 600;
             font-family: 'Inter', sans-serif;
             cursor: pointer;
@@ -933,18 +935,18 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             overflow: hidden;
         }
         
-        .login-container.reception-mode .btn-login {
+        .login-container.green-mode .btn-login {
             background: linear-gradient(135deg, #059669 0%, #047857 100%);
             box-shadow: 0 4px 16px rgba(5, 150, 105, 0.3);
         }
         
         .btn-login:hover:not(.loading):not(.success):not(.error) {
             transform: translateY(-2px);
-            box-shadow: 0 8px 32px rgba(11, 94, 215, 0.4);
+            box-shadow: 0 8px 28px rgba(11, 94, 215, 0.35);
         }
         
-        .login-container.reception-mode .btn-login:hover:not(.loading):not(.success):not(.error) {
-            box-shadow: 0 8px 32px rgba(5, 150, 105, 0.4);
+        .login-container.green-mode .btn-login:hover:not(.loading):not(.success):not(.error) {
+            box-shadow: 0 8px 28px rgba(5, 150, 105, 0.35);
         }
         
         .btn-login:active:not(.loading):not(.success):not(.error) {
@@ -961,7 +963,7 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             animation: btnPulse 0.8s ease-in-out infinite;
         }
         
-        .login-container.reception-mode .btn-login.loading {
+        .login-container.green-mode .btn-login.loading {
             background: linear-gradient(135deg, #059669 0%, #10B981 100%);
             box-shadow: 0 4px 20px rgba(5, 150, 105, 0.4);
         }
@@ -1049,6 +1051,12 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             border: 1px solid #6EE7B7;
         }
         
+        .alert-info {
+            background: #DBEAFE;
+            color: #1D4ED8;
+            border: 1px solid #93C5FD;
+        }
+        
         .login-footer {
             margin-top: 18px;
             text-align: center;
@@ -1063,8 +1071,8 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             transition: all 0.4s ease;
         }
         
-        .login-container.reception-mode .login-footer .brand {
-            color: var(--reception);
+        .login-container.green-mode .login-footer .brand {
+            color: var(--green);
         }
         
         .login-footer .heart {
@@ -1117,8 +1125,8 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             .login-right .welcome-text h2 { font-size: 1.6rem; }
             .login-right .form-group .input-wrapper input { padding: 13px 46px 13px 46px; font-size: 0.95rem; }
             .btn-login { padding: 13px; font-size: 1rem; }
-            .toggle-btn { font-size: 0.85rem; padding: 12px 18px; }
-            .toggle-container { max-width: 240px; }
+            .mode-btn { font-size: 0.8rem; padding: 10px 14px; }
+            .mode-switch-container { max-width: 240px; }
         }
         
         @media (max-width: 768px) {
@@ -1133,8 +1141,8 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             .login-right .welcome-text .subtitle { font-size: 0.85rem; }
             .login-right .form-group .input-wrapper input { padding: 12px 42px 12px 42px; font-size: 0.9rem; }
             .btn-login { padding: 12px; font-size: 0.95rem; }
-            .toggle-container { flex-direction: row; max-width: 100%; gap: 8px; margin-top: 10px; }
-            .toggle-btn { font-size: 0.8rem; padding: 10px 16px; }
+            .mode-switch-container { flex-direction: row; max-width: 100%; gap: 6px; margin-top: 10px; }
+            .mode-btn { font-size: 0.75rem; padding: 8px 12px; }
             .dark-mode-toggle { top: 14px; right: 14px; width: 42px; height: 42px; font-size: 1rem; }
         }
         
@@ -1158,14 +1166,15 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
             .login-options .forgot { font-size: 0.75rem; }
             .btn-login { padding: 10px; font-size: 0.85rem; gap: 8px; }
             .login-footer { font-size: 0.65rem; margin-top: 12px; }
-            .toggle-btn { font-size: 0.65rem; padding: 8px 12px; }
-            .toggle-btn i { font-size: 0.7rem; }
-            .toggle-btn .badge { font-size: 0.45rem; padding: 1px 6px; }
+            .mode-btn { font-size: 0.6rem; padding: 6px 10px; }
+            .mode-btn i { font-size: 0.7rem; }
+            .mode-btn .badge { font-size: 0.4rem; padding: 1px 6px; }
+            .mode-switch-container { flex-direction: column; gap: 4px; }
             .dark-mode-toggle { top: 10px; right: 10px; width: 36px; height: 36px; font-size: 0.85rem; }
         }
     </style>
 </head>
-<body class="<?= $active_mode === 'reception' ? 'reception-mode' : 'general-mode' ?>" id="bodyElement">
+<body class="<?= $active_mode === 'general_green' ? 'green-mode' : '' ?>" id="bodyElement">
 
 <!-- ================================================================ -->
 <!-- DARK MODE TOGGLE -->
@@ -1178,11 +1187,11 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
 <!-- LOGIN FORM -->
 <!-- ================================================================ -->
 <div class="login-wrapper">
-    <div class="login-container <?= $active_mode === 'reception' ? 'reception-mode' : '' ?>" id="loginContainer">
+    <div class="login-container <?= $active_mode === 'general_green' ? 'green-mode' : '' ?>" id="loginContainer">
         <!-- ================================================================ -->
         <!-- LEFT PANEL -->
         <!-- ================================================================ -->
-        <div class="login-left <?= $active_mode === 'reception' ? 'reception-mode' : '' ?>" id="leftPanel">
+        <div class="login-left <?= $active_mode === 'general_green' ? 'green-mode' : '' ?>" id="leftPanel">
             <div class="login-brand-wrapper">
                 <div class="login-logo-image">
                     <img src="<?= $logo_url ?>" 
@@ -1196,24 +1205,27 @@ if (isset($_POST['login_mode']) && $_POST['login_mode'] === 'reception') {
                 </div>
             </div>
             <div class="login-mode-label" id="modeLabel">
-                <i class="fas fa-users"></i> General Access
+                <i class="fas fa-palette"></i> Choose Theme
             </div>
             
             <!-- ================================================================ -->
-            <!-- TOGGLE BUTTONS -->
+            <!-- MODE TOGGLE - BLUE JUU, GREEN CHINI -->
             <!-- ================================================================ -->
-            <div class="toggle-container">
-                <button type="button" class="toggle-btn <?= $active_mode === 'general' ? 'active' : '' ?>" 
-                        id="generalToggle" data-mode="general">
-                    <i class="fas fa-sign-in-alt"></i>
-                    General
-                    <span class="badge">All</span>
+            <div class="mode-switch-container">
+                <!-- BLUE - JUU -->
+                <button type="button" class="mode-btn blue-btn <?= $active_mode === 'general_blue' ? 'active' : '' ?>" 
+                        id="blueToggle" data-mode="general_blue">
+                    <i class="fas fa-circle" style="color:#3B82F6;"></i>
+                    <span>General (Blue)</span>
+                    <span class="badge">Default</span>
                 </button>
-                <button type="button" class="toggle-btn <?= $active_mode === 'reception' ? 'active' : '' ?>" 
-                        id="receptionToggle" data-mode="reception">
-                    <i class="fas fa-user-tie"></i>
-                    Reception
-                    <span class="badge">Only</span>
+                
+                <!-- GREEN - CHINI -->
+                <button type="button" class="mode-btn green-btn <?= $active_mode === 'general_green' ? 'active' : '' ?>" 
+                        id="greenToggle" data-mode="general_green">
+                    <i class="fas fa-circle" style="color:#059669;"></i>
+                    <span>General (Green)</span>
+                    <span class="badge">Alternative</span>
                 </button>
             </div>
         </div>
@@ -1303,11 +1315,11 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ================================================================
-// TOGGLE BETWEEN GENERAL AND RECEPTION MODE
+// TOGGLE BETWEEN BLUE AND GREEN GENERAL MODES
 // ================================================================
 document.addEventListener('DOMContentLoaded', function() {
-    var generalToggle = document.getElementById('generalToggle');
-    var receptionToggle = document.getElementById('receptionToggle');
+    var blueToggle = document.getElementById('blueToggle');
+    var greenToggle = document.getElementById('greenToggle');
     var loginContainer = document.getElementById('loginContainer');
     var leftPanel = document.getElementById('leftPanel');
     var bodyElement = document.getElementById('bodyElement');
@@ -1323,48 +1335,46 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function setMode(mode) {
         // Update body class
-        bodyElement.classList.remove('general-mode', 'reception-mode');
-        if (mode === 'general') {
-            bodyElement.classList.add('general-mode');
-        } else {
-            bodyElement.classList.add('reception-mode');
+        bodyElement.classList.remove('green-mode');
+        if (mode === 'general_green') {
+            bodyElement.classList.add('green-mode');
         }
         
         // Update container class
-        loginContainer.classList.remove('reception-mode');
-        if (mode === 'reception') {
-            loginContainer.classList.add('reception-mode');
+        loginContainer.classList.remove('green-mode');
+        if (mode === 'general_green') {
+            loginContainer.classList.add('green-mode');
         }
         
         // Update left panel class
-        leftPanel.classList.remove('reception-mode');
-        if (mode === 'reception') {
-            leftPanel.classList.add('reception-mode');
+        leftPanel.classList.remove('green-mode');
+        if (mode === 'general_green') {
+            leftPanel.classList.add('green-mode');
         }
         
         // Update toggle buttons
-        generalToggle.classList.remove('active');
-        receptionToggle.classList.remove('active');
+        blueToggle.classList.remove('active');
+        greenToggle.classList.remove('active');
         
-        if (mode === 'general') {
-            generalToggle.classList.add('active');
+        if (mode === 'general_blue') {
+            blueToggle.classList.add('active');
             brandTagline.textContent = 'Dispensary & Healthcare';
-            modeLabel.innerHTML = '<i class="fas fa-users"></i> General Access';
+            modeLabel.innerHTML = '<i class="fas fa-palette"></i> Choose Theme';
             formTitle.textContent = 'Welcome Back';
-            formSubtitle.textContent = 'Login with any role (Non-Reception preferred)';
+            formSubtitle.textContent = 'Enter your credentials to access your account';
             btnText.textContent = 'Sign In';
-            loginMode.value = 'general';
+            loginMode.value = 'general_blue';
             if (btnIcon) btnIcon.className = 'fas fa-sign-in-alt';
             loginBtn.className = 'btn-login';
             loginBtn.disabled = false;
         } else {
-            receptionToggle.classList.add('active');
-            brandTagline.textContent = 'Front Desk Access';
-            modeLabel.innerHTML = '<i class="fas fa-user-tie"></i> Reception Only';
-            formTitle.textContent = 'Reception Login';
-            formSubtitle.textContent = 'Only users with <strong>Reception</strong> role can login here';
-            btnText.textContent = 'Login as Reception';
-            loginMode.value = 'reception';
+            greenToggle.classList.add('active');
+            brandTagline.textContent = 'Dispensary & Healthcare';
+            modeLabel.innerHTML = '<i class="fas fa-palette"></i> Choose Theme';
+            formTitle.textContent = 'Welcome Back';
+            formSubtitle.textContent = 'Enter your credentials to access your account';
+            btnText.textContent = 'Sign In';
+            loginMode.value = 'general_green';
             if (btnIcon) btnIcon.className = 'fas fa-sign-in-alt';
             loginBtn.className = 'btn-login';
             loginBtn.disabled = false;
@@ -1377,15 +1387,15 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('username').focus();
     }
     
-    generalToggle.addEventListener('click', function() {
+    blueToggle.addEventListener('click', function() {
         if (!this.classList.contains('active')) {
-            setMode('general');
+            setMode('general_blue');
         }
     });
     
-    receptionToggle.addEventListener('click', function() {
+    greenToggle.addEventListener('click', function() {
         if (!this.classList.contains('active')) {
-            setMode('reception');
+            setMode('general_green');
         }
     });
 });
@@ -1457,7 +1467,6 @@ document.addEventListener('DOMContentLoaded', function() {
             
             var username = usernameInput.value.trim();
             var password = passwordInput.value;
-            var mode = loginMode.value;
             
             if (!username || !password) {
                 showError('Please enter both username/email and password.');
@@ -1470,7 +1479,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var btnText = loginBtn.querySelector('.btn-text');
             
             if (btnIcon) btnIcon.className = 'fas fa-spinner fa-spin';
-            if (btnText) btnText.textContent = mode === 'reception' ? 'Logging in...' : 'Signing in...';
+            if (btnText) btnText.textContent = 'Signing in...';
             
             clearAlerts();
             
@@ -1514,7 +1523,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     setTimeout(function() {
                         loginBtn.className = 'btn-login';
                         if (btnIcon) btnIcon.className = 'fas fa-sign-in-alt';
-                        if (btnText) btnText.textContent = mode === 'reception' ? 'Login as Reception' : 'Sign In';
+                        if (btnText) btnText.textContent = 'Sign In';
                         loginBtn.disabled = false;
                         passwordInput.focus();
                         passwordInput.select();
@@ -1532,7 +1541,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 setTimeout(function() {
                     loginBtn.className = 'btn-login';
                     if (btnIcon) btnIcon.className = 'fas fa-sign-in-alt';
-                    if (btnText) btnText.textContent = mode === 'reception' ? 'Login as Reception' : 'Sign In';
+                    if (btnText) btnText.textContent = 'Sign In';
                     loginBtn.disabled = false;
                 }, 2500);
             });
@@ -1584,10 +1593,11 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!username.value) username.focus();
 });
 
-console.log('%c🏥 Braick Dispensary - Login (Single Form with Toggle)', 'font-size:24px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Single form - ONE handler for both General and Reception', 'font-size:14px; color:#059669;');
-console.log('%c✅ Toggle buttons change UI mode only', 'font-size:14px; color:#D97706;');
-console.log('%c✅ Reception mode checks if user has reception role', 'font-size:14px; color:#D97706;');
+console.log('%c🏥 Braick Dispensary - Login (Blue Top | Green Bottom)', 'font-size:24px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Blue Theme - TOP (Default)', 'font-size:14px; color:#3B82F6;');
+console.log('%c✅ Green Theme - BOTTOM (Alternative)', 'font-size:14px; color:#059669;');
+console.log('%c✅ Both are GENERAL modes - same login logic', 'font-size:14px; color:#D97706;');
+console.log('%c✅ Case-sensitive username check enabled', 'font-size:14px; color:#D97706;');
 </script>
 
 </body>

@@ -1,11 +1,12 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/make_payment.php
-// CASHIER - MAKE PAYMENT FOR SINGLE BILL
-// WITH PARTIAL PAYMENT AND DISCOUNT (Pharmacy + Cashier)
-// FIXED: Partial payment reduces balance, doesn't complete bill
-// FIXED: Correct status determination for partial payments
-// FIXED: Show proper banners based on actual bill status
+// CASHIER - MAKE PAYMENT - FULLY FIXED
+// ✅ Cards: Subtotal | Discount | Paid | Remaining
+// ✅ Formula: Remaining = Subtotal - Total_Discount - Paid
+// ✅ Paid amount shows correctly from database column
+// ✅ Uses ONLY the current bill, not all bills
+// ✅ NO DISCOUNT LOCKS - Cashier can add discount anytime
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -70,7 +71,7 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
 
     // ================================================================
-    // HANDLE AJAX REQUESTS - FIXED: Partial payment
+    // AJAX: MAKE PAYMENT
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         header('Content-Type: application/json');
@@ -91,7 +92,7 @@ try {
             try {
                 $db->beginTransaction();
                 
-                // Get bill details
+                // Get ONLY this bill
                 $stmt = $db->prepare("
                     SELECT b.*, p.full_name as patient_name, p.patient_id as patient_number
                     FROM bills b
@@ -99,51 +100,50 @@ try {
                     WHERE b.id = ? AND b.branch_id = ? AND b.status != 'cancelled'
                 ");
                 $stmt->execute([$bill_id, $user_branch_id]);
-                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                $current_bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                if (!$bill) {
+                if (!$current_bill) {
                     $db->rollBack();
                     echo json_encode(['success' => false, 'message' => 'Bill not found']);
                     exit;
                 }
                 
-                $balance = (float)$bill['balance'];
-                $paid_amount = (float)$bill['paid_amount'];
-                $pharmacy_discount = (float)($bill['discount_amount'] ?? 0);
-                $existing_cashier_discount = (float)($bill['cashier_discount'] ?? 0);
+                // ================================================================
+                // Use ONLY this bill's values
+                // ================================================================
+                $subtotal = (float)($current_bill['subtotal'] ?? $current_bill['total_amount'] ?? 0);
+                $paid_amount = (float)($current_bill['paid_amount'] ?? 0);
+                $discount = (float)($current_bill['total_discount'] ?? 0);
+                $balance = (float)($current_bill['balance'] ?? 0);
                 
-                // Calculate cashier discount
-                $cashier_discount = $discount_amount > 0 ? min($discount_amount, $balance) : 0;
+                // Calculate remaining balance
+                $remaining_balance = $subtotal - $discount - $paid_amount;
+                if ($remaining_balance < 0) $remaining_balance = 0;
                 
-                // Total discount = pharmacy discount + cashier discount
-                $total_discount = $pharmacy_discount + $cashier_discount;
-                
-                // Don't discount more than balance
-                if ($total_discount > $balance) {
-                    $total_discount = $balance;
-                    $cashier_discount = $total_discount - $pharmacy_discount;
-                    if ($cashier_discount < 0) $cashier_discount = 0;
+                // ✅ NEW cashier discount (NO LOCKS - ALWAYS ALLOWED)
+                $new_cashier_discount = 0;
+                if ($discount_amount > 0) {
+                    $new_cashier_discount = min($discount_amount, $remaining_balance);
                 }
                 
-                $amount_after_discount = $balance - $total_discount;
+                $new_total_discount = $discount + $new_cashier_discount;
+                $new_remaining_balance = $subtotal - $new_total_discount - $paid_amount;
+                if ($new_remaining_balance < 0) $new_remaining_balance = 0;
                 
-                // Determine amount to pay based on payment type
+                // Determine amount to pay
                 if ($payment_type === 'partial') {
-                    // For partial payment, use the entered partial amount
-                    $amount_to_pay = min($partial_amount, $amount_after_discount);
+                    $amount_to_pay = min($partial_amount, $new_remaining_balance);
                     if ($amount_to_pay <= 0) {
                         $db->rollBack();
                         echo json_encode(['success' => false, 'message' => 'Invalid partial amount']);
                         exit;
                     }
-                    // If partial amount equals or exceeds remaining, make it full
-                    if ($amount_to_pay >= $amount_after_discount) {
-                        $amount_to_pay = $amount_after_discount;
+                    if ($amount_to_pay >= $new_remaining_balance) {
+                        $amount_to_pay = $new_remaining_balance;
                         $payment_type = 'full';
                     }
                 } else {
-                    // Full payment - pay the entire remaining balance
-                    $amount_to_pay = $amount_after_discount;
+                    $amount_to_pay = $new_remaining_balance;
                 }
                 
                 if ($amount_to_pay <= 0) {
@@ -154,32 +154,22 @@ try {
                 
                 $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
                 
-                // Calculate new values
-                $new_paid_amount = $paid_amount + $amount_to_pay;
-                $new_balance = $balance - $amount_to_pay - $cashier_discount;
+                $new_paid = $paid_amount + $amount_to_pay;
+                $new_balance = $subtotal - $new_total_discount - $new_paid;
+                if ($new_balance < 0) $new_balance = 0;
                 
-                // FIX: new_cashier_discount should be existing + new cashier discount
-                $new_cashier_discount = $existing_cashier_discount + $cashier_discount;
-                $new_total_discount = $pharmacy_discount + $new_cashier_discount;
+                $current_cashier_discount = (float)($current_bill['cashier_discount'] ?? 0);
+                $updated_cashier_discount = $current_cashier_discount + $new_cashier_discount;
+                $updated_total_discount = $discount + $new_cashier_discount;
                 
-                // ================================================================
-                // ✅ FIX: Determine bill status correctly
-                // ================================================================
-                $new_balance_rounded = round($new_balance, 2);
-                $previous_balance_rounded = round($balance, 2);
-                
-                if ($new_balance_rounded <= 0.01) {
+                if ($new_balance <= 0.01) {
                     $new_status = 'paid';
-                } elseif ($new_balance_rounded < $previous_balance_rounded && $new_balance_rounded > 0) {
+                } elseif ($new_balance < $balance && $new_balance > 0) {
                     $new_status = 'partial';
-                } elseif ($new_balance_rounded == $previous_balance_rounded) {
-                    // No change - keep existing status
-                    $new_status = $bill['status'] ?? 'pending';
                 } else {
-                    $new_status = 'partial';
+                    $new_status = $current_bill['status'] ?? 'pending';
                 }
                 
-                // Update bill
                 $stmt = $db->prepare("
                     UPDATE bills 
                     SET paid_amount = ?,
@@ -191,33 +181,39 @@ try {
                     WHERE id = ? AND branch_id = ?
                 ");
                 $stmt->execute([
-                    $new_paid_amount,
-                    $new_balance_rounded,
-                    $new_cashier_discount,
-                    $new_total_discount,
+                    $new_paid,
+                    $new_balance,
+                    $updated_cashier_discount,
+                    $updated_total_discount,
                     $new_status,
                     $bill_id,
                     $user_branch_id
                 ]);
                 
-                // Update paid bill items based on amount paid
+                // Update bill items
                 $stmt = $db->prepare("
-                    SELECT id, total_price FROM bill_items 
-                    WHERE bill_id = ? AND status != 'cancelled' AND status != 'paid'
+                    SELECT id, total_price, status FROM bill_items 
+                    WHERE bill_id = ? AND status != 'cancelled'
                     ORDER BY created_at ASC
                 ");
                 $stmt->execute([$bill_id]);
-                $pending_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                $all_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 $remaining_to_pay = $amount_to_pay;
-                foreach ($pending_items as $item) {
+                foreach ($all_items as $item) {
                     if ($remaining_to_pay <= 0) break;
+                    if ($item['status'] === 'paid') continue;
+                    
                     $item_price = (float)$item['total_price'];
                     if ($remaining_to_pay >= $item_price) {
-                        // Mark as paid
                         $stmt_update = $db->prepare("UPDATE bill_items SET status = 'paid', updated_at = NOW() WHERE id = ?");
                         $stmt_update->execute([$item['id']]);
                         $remaining_to_pay -= $item_price;
+                    } else {
+                        $stmt_update = $db->prepare("UPDATE bill_items SET status = 'partial', updated_at = NOW() WHERE id = ?");
+                        $stmt_update->execute([$item['id']]);
+                        $remaining_to_pay = 0;
+                        break;
                     }
                 }
                 
@@ -229,26 +225,29 @@ try {
                 $stmt->execute([
                     $receipt_number,
                     $bill_id,
-                    $bill['patient_id'],
+                    $current_bill['patient_id'],
                     $amount_to_pay,
                     $payment_method,
                     null,
                     $user_id,
                     $user_branch_id,
-                    'Payment | Cashier Discount: ' . $currency . ' ' . number_format($cashier_discount, 0)
+                    'Payment | Total Disc: ' . $currency . ' ' . number_format($new_total_discount, 0) . 
+                    ' | Cashier Disc: ' . $currency . ' ' . number_format($new_cashier_discount, 0)
                 ]);
                 
                 $db->commit();
                 
                 $message = "Payment successful!";
                 $message .= " Amount: " . $currency . " " . number_format($amount_to_pay, 0);
-                if ($cashier_discount > 0) {
-                    $message .= " | Discount: " . $currency . " " . number_format($cashier_discount, 0);
+                if ($new_cashier_discount > 0) {
+                    $message .= " | New Cashier Discount: " . $currency . " " . number_format($new_cashier_discount, 0);
                 }
-                if ($new_status === 'paid') {
+                
+                $is_all_paid = ($new_balance <= 0.01);
+                if ($is_all_paid) {
                     $message .= " | Bill FULLY PAID! 🎉";
                 } else {
-                    $message .= " | Remaining: " . $currency . " " . number_format($new_balance_rounded, 0);
+                    $message .= " | Remaining: " . $currency . " " . number_format($new_balance, 0);
                 }
                 
                 echo json_encode([
@@ -256,16 +255,24 @@ try {
                     'message' => $message,
                     'receipt_number' => $receipt_number,
                     'amount_paid' => $amount_to_pay,
-                    'cashier_discount' => $cashier_discount,
+                    'cashier_discount' => $updated_cashier_discount,
                     'total_discount' => $new_total_discount,
-                    'new_balance' => $new_balance_rounded,
+                    'new_balance' => $new_balance,
                     'new_status' => $new_status,
-                    'is_paid' => ($new_status === 'paid'),
-                    'is_partial' => ($new_status === 'partial'),
+                    'is_paid' => $is_all_paid,
+                    'is_partial' => !$is_all_paid,
+                    'updated_totals' => [
+                        'subtotal' => $subtotal,
+                        'total_amount' => $subtotal - $new_total_discount,
+                        'total_paid' => $new_paid,
+                        'total_balance' => $new_balance,
+                        'total_discount' => $new_total_discount,
+                        'cashier_discount' => $updated_cashier_discount
+                    ],
                     'receipt' => [
                         'number' => $receipt_number,
-                        'patient' => $bill['patient_name'],
-                        'patient_id' => $bill['patient_number'],
+                        'patient' => $current_bill['patient_name'],
+                        'patient_id' => $current_bill['patient_number'],
                         'amount' => $amount_to_pay,
                         'method' => $payment_method,
                         'date' => date('Y-m-d H:i:s')
@@ -275,6 +282,7 @@ try {
             } catch (Exception $e) {
                 $db->rollBack();
                 echo json_encode(['success' => false, 'message' => 'Database error: ' . $e->getMessage()]);
+                error_log("❌ Payment error: " . $e->getMessage());
             }
             exit;
         }
@@ -284,12 +292,17 @@ try {
     }
 
     // ================================================================
-    // GET BILL DETAILS
+    // GET ONLY THIS BILL
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
             b.*,
-            b.discount_amount as pharmacy_discount,
+            b.subtotal,
+            b.total_amount,
+            b.paid_amount,
+            b.balance,
+            b.discount_amount,
+            b.pharmacy_discount,
             b.cashier_discount,
             b.total_discount,
             v.visit_number,
@@ -325,8 +338,25 @@ try {
     }
 
     // ================================================================
-    // GET BILL ITEMS
+    // Use ONLY this bill's values
     // ================================================================
+    $subtotal = (float)($bill['subtotal'] ?? $bill['total_amount'] ?? 0);
+    $paid_amount = (float)($bill['paid_amount'] ?? 0);
+    $total_discount = (float)($bill['total_discount'] ?? 0);
+    $balance = (float)($bill['balance'] ?? 0);
+    $pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0);
+    $cashier_discount = (float)($bill['cashier_discount'] ?? 0);
+    $discount_amount = (float)($bill['discount_amount'] ?? 0);
+    
+    // Calculate remaining balance
+    $remaining_balance = $subtotal - $total_discount - $paid_amount;
+    if ($remaining_balance < 0) $remaining_balance = 0;
+    
+    // ✅ NO LOCKS - Always allow discount
+    $is_locked = false;
+    $locked_discount = 0;
+
+    // GET BILL ITEMS
     $stmt = $db->prepare("
         SELECT 
             bi.*,
@@ -338,49 +368,62 @@ try {
     $stmt->execute([$bill_id]);
     $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-    // ================================================================
-    // CALCULATE TOTALS
-    // ================================================================
-    $total_amount = (float)($bill['total_amount'] ?? 0);
-    $paid_amount = (float)($bill['paid_amount'] ?? 0);
-    $balance = (float)($bill['balance'] ?? 0);
-    $pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0);
-    $cashier_discount = (float)($bill['cashier_discount'] ?? 0);
-    $total_discount = (float)($bill['total_discount'] ?? 0);
     $bill_status = $bill['status'] ?? 'pending';
-    $is_paid = ($bill_status === 'paid');
-    $is_partial = ($bill_status === 'partial');
-    $is_pending = ($bill_status === 'pending');
+    $is_paid = ($remaining_balance <= 0.01);
+    $is_partial = ($remaining_balance > 0 && $paid_amount > 0);
+    $is_pending = ($paid_amount == 0 && $remaining_balance > 0);
     
     // Count items by status
     $pending_items = 0;
     $paid_items = 0;
+    $partial_items = 0;
+    $medication_items = 0;
+    $unconfirmed_medication = 0;
+    
     foreach ($bill_items as $item) {
         if ($item['status'] === 'paid') {
             $paid_items++;
-        } elseif ($item['status'] === 'pending' || $item['status'] === 'partial') {
+        } elseif ($item['status'] === 'partial') {
+            $partial_items++;
+        } elseif ($item['status'] === 'pending') {
             $pending_items++;
         }
+        
+        if ($item['item_type'] === 'medication') {
+            $medication_items++;
+            if ($item['prescription_status'] !== 'dispensed' && $item['prescription_status'] !== 'confirmed') {
+                $unconfirmed_medication++;
+            }
+        }
     }
+
+    $patient_bill_count = 1;
 
 } catch (Exception $e) {
     $message = "Database error: " . $e->getMessage();
     $message_type = 'error';
     $bill = null;
     $bill_items = [];
-    $total_amount = 0;
+    $subtotal = 0;
     $paid_amount = 0;
-    $balance = 0;
+    $remaining_balance = 0;
+    $total_discount = 0;
     $pharmacy_discount = 0;
     $cashier_discount = 0;
-    $total_discount = 0;
+    $discount_amount = 0;
+    $is_locked = false;
+    $locked_discount = 0;
     $bill_status = 'pending';
     $is_paid = false;
     $is_partial = false;
     $is_pending = true;
     $pending_items = 0;
     $paid_items = 0;
+    $partial_items = 0;
+    $medication_items = 0;
+    $unconfirmed_medication = 0;
     $currency = 'TSh';
+    $patient_bill_count = 1;
     error_log("Make payment error: " . $e->getMessage());
 }
 
@@ -407,9 +450,6 @@ include_once '../../components/cashier_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           COMPLETE CSS (same as before - keeping all styles)
-           ================================================================ */
         :root {
             --primary: #059669;
             --primary-dark: #047857;
@@ -428,6 +468,8 @@ include_once '../../components/cashier_sidebar.php';
             --warning-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
+            --cyan: #0891B2;
+            --cyan-bg: #CFFAFE;
             --yellow: #D97706;
             --yellow-bg: #FEF3C7;
             --gray-50: #F8FAFC;
@@ -477,6 +519,7 @@ include_once '../../components/cashier_sidebar.php';
             --primary-bg: #1A3A2A;
             --success-bg: #1A3A2A;
             --yellow-bg: #3D2E0A;
+            --cyan-bg: #0A2A3A;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -510,7 +553,6 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             overflow: hidden;
         }
-        
         .page-header::before {
             content: '';
             position: absolute;
@@ -522,7 +564,6 @@ include_once '../../components/cashier_sidebar.php';
             border-radius: 50%;
             pointer-events: none;
         }
-        
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -534,7 +575,6 @@ include_once '../../components/cashier_sidebar.php';
             position: relative;
             z-index: 1;
         }
-        
         .page-header .page-title i { font-size: 2rem; opacity: 0.9; color: rgba(255,255,255,0.9); }
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -606,7 +646,6 @@ include_once '../../components/cashier_sidebar.php';
             border-color: var(--success);
             box-shadow: var(--shadow-md);
         }
-        
         .bill-card .card-header {
             background: var(--primary-gradient);
             color: white;
@@ -635,7 +674,6 @@ include_once '../../components/cashier_sidebar.php';
         .bill-card .card-header .bill-status.paid { background: rgba(5,150,105,0.4); border-color: #34D399; }
         .bill-card .card-header .bill-status.partial { background: rgba(217,119,6,0.4); border-color: #FBBF24; }
         .bill-card .card-header .bill-status.pending { background: rgba(11,94,215,0.4); border-color: #60A5FA; }
-        
         .bill-card .card-body { padding: 20px 24px; }
         
         .patient-info-grid {
@@ -664,6 +702,9 @@ include_once '../../components/cashier_sidebar.php';
         }
         .col-span-2 { grid-column: span 2; }
         
+        /* ================================================================ */
+        /* 4 CARDS: Subtotal | Discount | Paid | Remaining */
+        /* ================================================================ */
         .bill-summary-grid {
             display: grid;
             grid-template-columns: repeat(4, 1fr);
@@ -697,11 +738,17 @@ include_once '../../components/cashier_sidebar.php';
             display: block;
             margin-top: 2px;
         }
+        .bill-summary-card .sub-text {
+            font-size: 0.5rem;
+            color: var(--text-secondary);
+            display: block;
+            margin-top: 1px;
+        }
         .bill-summary-card.total .value { color: var(--primary); }
+        .bill-summary-card.discount .value { color: var(--warning); }
         .bill-summary-card.paid .value { color: var(--success); }
         .bill-summary-card.balance .value { color: var(--danger); }
         .bill-summary-card.balance.zero .value { color: var(--success); }
-        .bill-summary-card.discount .value { color: var(--warning); }
         
         .table-wrap {
             overflow-x: auto;
@@ -731,24 +778,19 @@ include_once '../../components/cashier_sidebar.php';
             z-index: 5;
         }
         .data-table thead th i { margin-right: 6px; opacity: 0.8; color: rgba(255,255,255,0.8); }
-        
         .data-table tbody td {
             padding: 8px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
         }
-        .data-table tbody tr:nth-child(even) {
-            background: var(--table-stripe);
-        }
-        .data-table tbody tr:hover td {
-            background: var(--table-hover);
-        }
-        .data-table tbody tr.paid-item td {
-            opacity: 0.7;
-        }
+        .data-table tbody tr:nth-child(even) { background: var(--table-stripe); }
+        .data-table tbody tr:hover td { background: var(--table-hover); }
+        .data-table tbody tr.paid-item td { opacity: 0.7; }
         .data-table tbody tr.paid-item td .item-status { color: var(--success); }
         .data-table tbody tr.paid-item td .item-price { color: var(--success); }
+        .data-table tbody tr.locked-item td { background: var(--yellow-bg); }
+        .data-table tbody tr.locked-item td .item-status { color: var(--warning); }
         
         .data-table tfoot tr {
             background: var(--primary-gradient);
@@ -772,6 +814,31 @@ include_once '../../components/cashier_sidebar.php';
         .item-status.paid { background: var(--success-bg); color: var(--success); }
         .item-status.pending { background: var(--warning-bg); color: var(--warning); }
         .item-status.partial { background: var(--primary-bg); color: var(--primary); }
+        .item-status.locked { background: var(--yellow-bg); color: var(--warning); }
+        .item-status.waiting { background: var(--yellow-bg); color: var(--warning); }
+        
+        .prescription-warning {
+            background: var(--yellow-bg);
+            border: 2px solid var(--warning);
+            border-radius: 12px;
+            padding: 12px 16px;
+            margin-top: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .prescription-warning i { color: var(--warning); font-size: 1.5rem; }
+        .prescription-warning .text { font-size: 0.85rem; color: var(--text-primary); }
+        .prescription-warning .text strong { color: var(--warning); }
+        .prescription-warning .badge {
+            background: var(--warning);
+            color: white;
+            padding: 2px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+        }
         
         .payment-controls {
             background: var(--bg-card);
@@ -916,9 +983,6 @@ include_once '../../components/cashier_sidebar.php';
         .btn:disabled { opacity: 0.6; cursor: not-allowed; transform: none !important; }
         .btn-sm { padding: 4px 12px; font-size: 0.75rem; }
         
-        /* ================================================================
-           ✅ FIX: PAID BANNER - Only show when truly fully paid
-           ================================================================ */
         .paid-banner {
             text-align: center;
             padding: 20px;
@@ -931,9 +995,6 @@ include_once '../../components/cashier_sidebar.php';
         .paid-banner h3 { font-weight: 600; color: var(--success); font-size: 1.2rem; margin: 0; }
         .paid-banner p { font-size: 0.85rem; color: var(--text-secondary); margin: 4px 0 0 0; }
         
-        /* ================================================================
-           ✅ FIX: PARTIAL BANNER - Show when balance remains
-           ================================================================ */
         .partial-banner {
             text-align: center;
             padding: 20px;
@@ -947,9 +1008,6 @@ include_once '../../components/cashier_sidebar.php';
         .partial-banner p { font-size: 0.85rem; color: var(--text-secondary); margin: 4px 0; }
         .partial-banner .remaining-amount { font-size: 1.5rem; font-weight: 700; color: var(--danger); }
         
-        /* ================================================================
-           ✅ FIX: PENDING BANNER - Show when no payment made yet
-           ================================================================ */
         .pending-banner {
             text-align: center;
             padding: 16px 20px;
@@ -1027,7 +1085,7 @@ include_once '../../components/cashier_sidebar.php';
         @media (max-width: 768px) {
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .bill-summary-grid { grid-template-columns: 1fr; }
+            .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
             .patient-info-grid { grid-template-columns: 1fr; }
             .payment-controls { flex-direction: column; align-items: stretch; }
             .payment-controls .control-group { justify-content: center; }
@@ -1040,6 +1098,10 @@ include_once '../../components/cashier_sidebar.php';
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
             .page-header .btn-outline-light { padding: 4px 10px; font-size: 0.7rem; }
+            .bill-summary-grid { grid-template-columns: 1fr 1fr; }
+        }
+        @media (max-width: 480px) {
+            .bill-summary-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -1064,6 +1126,11 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-eye"></i> RECEPTION
                     </span>
                 <?php endif; ?>
+                <?php if (!$is_locked): ?>
+                    <span class="header-badge" style="background:rgba(52,211,153,0.3);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                        <i class="fas fa-unlock"></i> DISCOUNT ACTIVE
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-credit-card"></i>
@@ -1076,19 +1143,24 @@ include_once '../../components/cashier_sidebar.php';
                 
                 <span class="header-badge" style="background:rgba(217,119,6,0.2);border-color:rgba(217,119,6,0.3);">
                     <i class="fas fa-money-bill"></i>
-                    Balance: <?= $currency ?> <?= number_format($balance, 0) ?>
+                    Remaining: <?= $currency ?> <?= number_format($remaining_balance, 0) ?>
                 </span>
                 
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);">
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-check-circle"></i>
+                    Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?>
+                </span>
+                
+                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.3);color:#FBBF24;">
                     <i class="fas fa-tag"></i>
-                    Pharmacy + Cashier Discounts
+                    Discount: <?= $currency ?> <?= number_format($total_discount, 0) ?>
                 </span>
                 
-                <!-- ✅ FIX: Show status badge in header -->
-                <span class="header-badge" style="background:<?= $is_paid ? 'rgba(52,211,153,0.3)' : ($is_partial ? 'rgba(251,191,36,0.3)' : 'rgba(96,165,250,0.3)') ?>;border-color:<?= $is_paid ? 'rgba(52,211,153,0.4)' : ($is_partial ? 'rgba(251,191,36,0.4)' : 'rgba(96,165,250,0.4)') ?>;color:<?= $is_paid ? '#34D399' : ($is_partial ? '#FBBF24' : '#60A5FA') ?>;">
-                    <i class="fas fa-circle"></i>
-                    <?= $is_paid ? 'FULLY PAID' : ($is_partial ? 'PARTIAL' : 'PENDING') ?>
-                </span>
+                <?php if ($unconfirmed_medication > 0): ?>
+                    <span class="header-badge" style="background:rgba(239,68,68,0.3);border-color:rgba(239,68,68,0.3);color:#FCA5A5;">
+                        <i class="fas fa-clock"></i> <?= $unconfirmed_medication ?> waiting pharmacy
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1109,6 +1181,20 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
+    <!-- PRESCRIPTION WARNING (Info only, NOT a lock) -->
+    <?php if ($unconfirmed_medication > 0): ?>
+        <div class="prescription-warning" style="border-color:var(--primary);background:var(--primary-bg);">
+            <i class="fas fa-prescription-bottle" style="color:var(--primary);"></i>
+            <div class="text">
+                <strong><?= $unconfirmed_medication ?> medication item(s)</strong> are waiting for pharmacy confirmation.
+                <span style="display:block;font-size:0.75rem;color:var(--text-secondary);">
+                    <i class="fas fa-info-circle"></i> You can still apply discount and make payment.
+                </span>
+            </div>
+            <span class="badge" style="background:var(--primary);">INFO</span>
+        </div>
+    <?php endif; ?>
+
     <!-- BILL CARD -->
     <div class="bill-card">
         <div class="card-header">
@@ -1121,7 +1207,7 @@ include_once '../../components/cashier_sidebar.php';
             <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <span class="bill-status <?= $bill_status ?>"><?= ucfirst($bill_status) ?></span>
                 <?php if ($is_paid): ?>
-                    <span style="background:rgba(52,211,153,0.3);padding:2px 12px;border-radius:20px;font-size:0.6rem;border:1px solid #34D399;">✅ FULLY PAID</span>
+                    <span style="background:rgba(52,211,153,0.3);padding:2px 12px;border-radius:20px;font-size:0.6rem;border:1px solid #34D399;">✅ ALL PAID</span>
                 <?php elseif ($is_partial): ?>
                     <span style="background:rgba(251,191,36,0.3);padding:2px 12px;border-radius:20px;font-size:0.6rem;border:1px solid #FBBF24;">🔄 PARTIAL</span>
                 <?php endif; ?>
@@ -1147,31 +1233,62 @@ include_once '../../components/cashier_sidebar.php';
                 <?php endif; ?>
             </div>
             
-            <!-- Bill Summary -->
+            <!-- ================================================================ -->
+            <!-- 4 CARDS: Subtotal | Discount | Paid | Remaining -->
+            <!-- ================================================================ -->
             <div class="bill-summary-grid">
+                <!-- Card 1: Subtotal -->
                 <div class="bill-summary-card total">
-                    <span class="label">Total Amount</span>
-                    <span class="value"><?= $currency ?> <?= number_format($total_amount, 0) ?></span>
+                    <span class="label">📋 Subtotal</span>
+                    <span class="value" id="totalAmountDisplay"><?= $currency ?> <?= number_format($subtotal, 0) ?></span>
+                    <span class="sub-text">1 bill</span>
                 </div>
-                <div class="bill-summary-card paid">
-                    <span class="label">Paid Amount</span>
-                    <span class="value"><?= $currency ?> <?= number_format($paid_amount, 0) ?></span>
-                </div>
-                <div class="bill-summary-card balance <?= $balance <= 0 ? 'zero' : '' ?>">
-                    <span class="label">Balance</span>
-                    <span class="value"><?= $currency ?> <?= number_format($balance, 0) ?></span>
-                </div>
+                
+                <!-- Card 2: Total Discount - NO LOCKS -->
                 <div class="bill-summary-card discount">
-                    <span class="label">Total Discount</span>
-                    <span class="value"><?= $currency ?> <?= number_format($total_discount, 0) ?></span>
-                    <?php if ($pharmacy_discount > 0 || $cashier_discount > 0): ?>
-                        <span style="font-size:0.5rem;color:var(--text-secondary);display:block;">
-                            Pharm: <?= $currency ?> <?= number_format($pharmacy_discount, 0) ?>
-                            <?php if ($cashier_discount > 0): ?>
-                                | Cash: <?= $currency ?> <?= number_format($cashier_discount, 0) ?>
-                            <?php endif; ?>
+                    <span class="label">🏷️ Total Discount</span>
+                    <span class="value" id="discountDisplay">
+                        <?= $currency ?> <?= number_format($total_discount, 0) ?>
+                    </span>
+                    <span class="sub-text" id="discountBreakdown">
+                        Pharm: <?= $currency ?> <?= number_format($pharmacy_discount, 0) ?>
+                        <?php if ($cashier_discount > 0): ?>
+                            | Cash: <?= $currency ?> <?= number_format($cashier_discount, 0) ?>
+                        <?php endif; ?>
+                        <?php if ($discount_amount > 0): ?>
+                            | Disc: <?= $currency ?> <?= number_format($discount_amount, 0) ?>
+                        <?php endif; ?>
+                        <span style="color:var(--success);display:block;font-size:0.5rem;">
+                            <i class="fas fa-unlock"></i> Discount always active
                         </span>
-                    <?php endif; ?>
+                    </span>
+                </div>
+                
+                <!-- Card 3: Paid Amount -->
+                <div class="bill-summary-card paid">
+                    <span class="label">✅ Paid Amount</span>
+                    <span class="value" id="paidAmountDisplay"><?= $currency ?> <?= number_format($paid_amount, 0) ?></span>
+                    <span class="sub-text" id="paidStatus">
+                        <?php if ($paid_amount > 0): ?>
+                            Total Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?>
+                            <?php if ($remaining_balance <= 0): ?>
+                                ✅ FULLY PAID
+                            <?php else: ?>
+                                🔄 Partial payment
+                            <?php endif; ?>
+                        <?php else: ?>
+                            No payments yet
+                        <?php endif; ?>
+                    </span>
+                </div>
+                
+                <!-- Card 4: Remaining Balance -->
+                <div class="bill-summary-card balance <?= $remaining_balance <= 0 ? 'zero' : '' ?>">
+                    <span class="label">📊 Remaining Balance</span>
+                    <span class="value" id="balanceDisplay"><?= $currency ?> <?= number_format($remaining_balance, 0) ?></span>
+                    <span class="sub-text" id="balanceStatus">
+                        <?= $remaining_balance <= 0 ? '✅ Bill fully paid!' : 'Pending payment' ?>
+                    </span>
                 </div>
             </div>
             
@@ -1186,6 +1303,12 @@ include_once '../../components/cashier_sidebar.php';
                     <?php if ($paid_items > 0): ?>
                         | <span style="color:var(--success);">✅ <?= $paid_items ?> paid</span>
                     <?php endif; ?>
+                    <?php if ($partial_items > 0): ?>
+                        | <span style="color:var(--primary);">🔄 <?= $partial_items ?> partial</span>
+                    <?php endif; ?>
+                    <?php if ($unconfirmed_medication > 0): ?>
+                        | <span style="color:var(--warning);">💊 <?= $unconfirmed_medication ?> waiting</span>
+                    <?php endif; ?>
                 </span>
             </h4>
             
@@ -1194,32 +1317,41 @@ include_once '../../components/cashier_sidebar.php';
                     <thead>
                         <tr>
                             <th style="width:5%;"><i class="fas fa-hashtag"></i> #</th>
-                            <th style="width:35%;"><i class="fas fa-box"></i> Item Name</th>
+                            <th style="width:30%;"><i class="fas fa-box"></i> Item Name</th>
                             <th style="width:12%;"><i class="fas fa-tag"></i> Type</th>
                             <th style="width:8%; text-align:center;"><i class="fas fa-cubes"></i> Qty</th>
                             <th style="width:15%; text-align:right;"><i class="fas fa-dollar-sign"></i> Unit Price</th>
                             <th style="width:15%; text-align:right;"><i class="fas fa-calculator"></i> Total</th>
-                            <th style="width:10%; text-align:center;"><i class="fas fa-circle"></i> Status</th>
+                            <th style="width:15%; text-align:center;"><i class="fas fa-circle"></i> Status</th>
                         </tr>
                     </thead>
                     <tbody>
                         <?php if (count($bill_items) > 0): ?>
                             <?php $i = 1; foreach ($bill_items as $item): 
                                 $is_item_paid = ($item['status'] === 'paid');
+                                $is_item_partial = ($item['status'] === 'partial');
+                                $is_medication = ($item['item_type'] === 'medication');
+                                $is_confirmed = ($item['prescription_status'] === 'dispensed' || $item['prescription_status'] === 'confirmed');
+                                $is_locked_item = $is_medication && !$is_confirmed;
                                 $price = (float)($item['total_price'] ?? $item['unit_price'] ?? 0);
                                 $unit_price = (float)($item['unit_price'] ?? 0);
                                 $qty = (int)($item['quantity'] ?? 1);
                             ?>
-                            <tr class="<?= $is_item_paid ? 'paid-item' : '' ?>">
+                            <tr class="<?= $is_item_paid ? 'paid-item' : '' ?> <?= $is_locked_item ? 'locked-item' : '' ?>">
                                 <td><?= $i++ ?></td>
                                 <td>
                                     <strong><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></strong>
                                     <?php if (!empty($item['description'])): ?>
                                         <br><small style="color:var(--text-secondary);"><?= htmlspecialchars($item['description']) ?></small>
                                     <?php endif; ?>
-                                    <?php if ($item['item_type'] === 'medication' && !empty($item['instructions'])): ?>
+                                    <?php if ($is_medication && !empty($item['instructions'])): ?>
                                         <div style="font-size:0.55rem;color:var(--text-secondary);margin-top:2px;background:var(--yellow-bg);padding:1px 6px;border-radius:4px;border-left:2px solid var(--yellow);">
                                             <i class="fas fa-edit"></i> <?= htmlspecialchars(substr($item['instructions'], 0, 40)) . (strlen($item['instructions']) > 40 ? '...' : '') ?>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if ($is_locked_item): ?>
+                                        <div style="font-size:0.5rem;color:var(--warning);margin-top:2px;">
+                                            <i class="fas fa-clock"></i> Waiting pharmacy confirmation
                                         </div>
                                     <?php endif; ?>
                                 </td>
@@ -1227,16 +1359,29 @@ include_once '../../components/cashier_sidebar.php';
                                     <span style="font-size:0.55rem;background:var(--bg-body);padding:1px 8px;border-radius:4px;border:1px solid var(--border-color);">
                                         <?= ucfirst($item['item_type'] ?? 'item') ?>
                                     </span>
+                                    <?php if ($is_medication): ?>
+                                        <?php if ($is_confirmed): ?>
+                                            <span style="font-size:0.45rem;color:var(--success);display:block;">✅ Confirmed</span>
+                                        <?php else: ?>
+                                            <span style="font-size:0.45rem;color:var(--warning);display:block;">⏳ Waiting</span>
+                                        <?php endif; ?>
+                                    <?php endif; ?>
                                 </td>
                                 <td style="text-align:center;"><?= $qty ?></td>
                                 <td style="text-align:right;font-family:monospace;"><?= $currency ?> <?= number_format($unit_price, 0) ?></td>
-                                <td style="text-align:right;font-family:monospace;font-weight:600;<?= $is_item_paid ? 'color:var(--success);' : 'color:var(--danger);' ?> class="item-price"">
+                                <td style="text-align:right;font-family:monospace;font-weight:600;<?= $is_item_paid ? 'color:var(--success);' : ($is_item_partial ? 'color:var(--warning);' : 'color:var(--danger);') ?>" class="item-price">
                                     <?= $currency ?> <?= number_format($price, 0) ?>
                                 </td>
                                 <td style="text-align:center;">
-                                    <span class="item-status <?= $is_item_paid ? 'paid' : 'pending' ?>">
-                                        <?= $is_item_paid ? '✅ Paid' : '⏳ Pending' ?>
-                                    </span>
+                                    <?php if ($is_item_paid): ?>
+                                        <span class="item-status paid">✅ Paid</span>
+                                    <?php elseif ($is_locked_item): ?>
+                                        <span class="item-status waiting">⏳ Waiting</span>
+                                    <?php elseif ($is_item_partial): ?>
+                                        <span class="item-status partial">🔄 Partial</span>
+                                    <?php else: ?>
+                                        <span class="item-status pending">⏳ Pending</span>
+                                    <?php endif; ?>
                                 </td>
                             </tr>
                             <?php endforeach; ?>
@@ -1252,10 +1397,10 @@ include_once '../../components/cashier_sidebar.php';
                     <tfoot>
                         <tr>
                             <td colspan="5" style="text-align:right;font-size:0.9rem;">
-                                <i class="fas fa-calculator"></i> GRAND TOTAL:
+                                <i class="fas fa-calculator"></i> SUBTOTAL:
                             </td>
                             <td style="text-align:right;font-family:monospace;font-size:1rem;color:#FCD34D;">
-                                <?= $currency ?> <?= number_format($total_amount, 0) ?>
+                                <?= $currency ?> <?= number_format($subtotal, 0) ?>
                             </td>
                             <td style="text-align:center;font-size:0.7rem;color:rgba(255,255,255,0.7);">
                                 <?= count($bill_items) ?> items
@@ -1266,34 +1411,33 @@ include_once '../../components/cashier_sidebar.php';
             </div>
             
             <!-- ================================================================ -->
-            <!-- ✅ FIX: BANNERS BASED ON ACTUAL BILL STATUS -->
+            <!-- BANNERS BASED ON STATUS -->
             <!-- ================================================================ -->
             
             <?php if ($is_paid): ?>
-                <!-- ✅ FULLY PAID BANNER -->
                 <div class="paid-banner">
                     <i class="fas fa-check-circle"></i>
-                    <h3>🎉 This bill is fully paid!</h3>
-                    <p>Total: <?= $currency ?> <?= number_format($total_amount, 0) ?> | Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?></p>
+                    <h3>🎉 Bill is fully paid!</h3>
+                    <p>Subtotal: <?= $currency ?> <?= number_format($subtotal, 0) ?> | Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?> | Discount: <?= $currency ?> <?= number_format($total_discount, 0) ?></p>
                     <a href="partial_payments.php" class="btn btn-success btn-sm" style="margin-top:8px;">
                         <i class="fas fa-arrow-left"></i> Back to Partial Bills
                     </a>
                 </div>
                 
             <?php elseif ($is_partial): ?>
-                <!-- ✅ PARTIAL BANNER - Show when balance remains -->
                 <div class="partial-banner" id="partialBanner">
                     <i class="fas fa-hand-holding-heart"></i>
                     <h3>🔄 Partial Payment Made</h3>
                     <p>
-                        Total: <?= $currency ?> <?= number_format($total_amount, 0) ?> | 
-                        Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?>
+                        Subtotal: <?= $currency ?> <?= number_format($subtotal, 0) ?> | 
+                        Paid: <?= $currency ?> <?= number_format($paid_amount, 0) ?> |
+                        Discount: <?= $currency ?> <?= number_format($total_discount, 0) ?>
                     </p>
                     <p style="margin-top:4px;">
-                        <span class="remaining-amount">Remaining Balance: <?= $currency ?> <?= number_format($balance, 0) ?></span>
+                        <span class="remaining-amount">Remaining Balance: <?= $currency ?> <?= number_format($remaining_balance, 0) ?></span>
                     </p>
                     <p style="font-size:0.8rem;color:var(--text-secondary);margin-top:8px;">
-                        <i class="fas fa-info-circle"></i> Continue making payments until the balance is zero
+                        <i class="fas fa-info-circle"></i> Formula: <?= number_format($subtotal, 0) ?> - <?= number_format($paid_amount, 0) ?> - <?= number_format($total_discount, 0) ?> = <?= number_format($remaining_balance, 0) ?>
                     </p>
                     <div style="margin-top:12px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">
                         <a href="make_payment.php?bill_id=<?= $bill_id ?>" class="btn btn-warning btn-sm">
@@ -1306,21 +1450,23 @@ include_once '../../components/cashier_sidebar.php';
                 </div>
                 
             <?php else: ?>
-                <!-- ✅ PENDING BANNER - No payment made yet -->
                 <div class="pending-banner">
                     <i class="fas fa-clock"></i>
                     <h3>⏳ Payment Pending</h3>
-                    <p>No payment has been made for this bill yet.</p>
+                    <p>No payment has been made for this patient yet.</p>
                     <p style="margin-top:4px;font-weight:600;color:var(--danger);">
-                        Balance: <?= $currency ?> <?= number_format($balance, 0) ?>
+                        Total Balance: <?= $currency ?> <?= number_format($remaining_balance, 0) ?>
+                    </p>
+                    <p style="font-size:0.7rem;color:var(--text-secondary);">
+                        Formula: <?= number_format($subtotal, 0) ?> - 0 - <?= number_format($total_discount, 0) ?> = <?= number_format($remaining_balance, 0) ?>
                     </p>
                 </div>
             <?php endif; ?>
             
             <!-- ================================================================ -->
-            <!-- ✅ FIX: PAYMENT CONTROLS - Show only if NOT fully paid -->
+            <!-- PAYMENT CONTROLS - Show only if NOT fully paid -->
             <!-- ================================================================ -->
-            <?php if (!$is_paid && $balance > 0): ?>
+            <?php if (!$is_paid && $remaining_balance > 0): ?>
             <div class="payment-controls" id="paymentControls">
                 <div class="control-group">
                     <label><i class="fas fa-hand-holding-usd" style="color:var(--primary);"></i> Method:</label>
@@ -1340,12 +1486,15 @@ include_once '../../components/cashier_sidebar.php';
                 <div class="divider"></div>
                 
                 <div class="control-group">
-                    <label><i class="fas fa-percent" style="color:var(--warning);"></i> Cashier Discount:</label>
+                    <label><i class="fas fa-percent" style="color:var(--warning);"></i> Add Cashier Discount:</label>
                     <div class="amount-input-wrap">
                         <span class="currency-prefix"><?= $currency ?></span>
                         <input type="text" id="discountAmount" class="discount-input" placeholder="0" 
                                value="0" oninput="formatAmount(this); updateTotals();">
                     </div>
+                    <span style="font-size:0.55rem;color:var(--text-secondary);">
+                        (NEW discount only, existing discount already applied)
+                    </span>
                 </div>
                 
                 <div class="divider"></div>
@@ -1361,25 +1510,16 @@ include_once '../../components/cashier_sidebar.php';
                 
                 <div class="divider"></div>
                 
+                <!-- TOTAL DISPLAY -->
                 <div class="total-display" id="totalDisplay">
                     <div class="total-item">
-                        <span class="label">Balance</span>
-                        <span class="value" id="displayBalance"><?= $currency ?> <?= number_format($balance, 0) ?></span>
+                        <span class="label">Remaining Balance</span>
+                        <span class="value grand" id="displayBalanceGrand"><?= $currency ?> <?= number_format($remaining_balance, 0) ?></span>
                     </div>
                     <div style="color:var(--border-color);">|</div>
                     <div class="total-item">
-                        <span class="label">Discount</span>
-                        <span class="value discount" id="displayDiscount"><?= $currency ?> 0</span>
-                    </div>
-                    <div style="color:var(--border-color);">|</div>
-                    <div class="total-item">
-                        <span class="label">Pharmacy Disc.</span>
-                        <span class="value discount" id="displayPharmacyDiscount"><?= $currency ?> <?= number_format($pharmacy_discount, 0) ?></span>
-                    </div>
-                    <div style="color:var(--border-color);">|</div>
-                    <div class="total-item">
-                        <span class="label">Amount to Pay</span>
-                        <span class="value grand" id="displayGrandTotal"><?= $currency ?> <?= number_format($balance, 0) ?></span>
+                        <span class="label">Total Discount</span>
+                        <span class="value discount" id="displayTotalDiscount"><?= $currency ?> <?= number_format($total_discount, 0) ?></span>
                     </div>
                 </div>
                 
@@ -1388,7 +1528,7 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-hand-holding-heart"></i> PAY PARTIAL
                     </button>
                     <button onclick="processPayment('full')" class="btn btn-success" id="fullPayBtn">
-                        <i class="fas fa-check-circle"></i> PAY FULL
+                        <i class="fas fa-check-circle"></i> PAY FULL (<?= $currency ?> <?= number_format($remaining_balance, 0) ?>)
                     </button>
                 </div>
             </div>
@@ -1428,15 +1568,32 @@ include_once '../../components/cashier_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- JAVASCRIPT - FIXED -->
+<!-- JAVASCRIPT - FULLY FIXED - NO LOCKS -->
+<!-- Remaining = Subtotal - Total_Discount - Paid -->
+<!-- Paid amount ALWAYS shows column value, NOT status -->
 <!-- ================================================================ -->
 <script>
     var billId = <?= $bill_id ?>;
-    var balance = <?= $balance ?>;
+    var patientId = <?= $bill['patient_id'] ?? 0 ?>;
+    var subtotal = <?= $subtotal ?>;
+    var paidAmount = <?= $paid_amount ?>;
+    var balance = <?= $remaining_balance ?>;
+    var totalDiscount = <?= $total_discount ?>;
     var pharmacyDiscount = <?= $pharmacy_discount ?>;
+    var cashierDiscount = <?= $cashier_discount ?>;
+    var discountAmount = <?= $discount_amount ?>;
+    var isLocked = false; // ✅ NO LOCKS
     var currency = '<?= $currency ?>';
     var isPaid = <?= $is_paid ? 'true' : 'false' ?>;
     var isPartial = <?= $is_partial ? 'true' : 'false' ?>;
+
+    console.log('💰 CORRECT Calculation (Single Bill - NO LOCKS):');
+    console.log('   Formula: Remaining = Subtotal - Total_Discount - Paid');
+    console.log('   Subtotal: ' + subtotal);
+    console.log('   Total Discount: ' + totalDiscount);
+    console.log('   Paid (from column): ' + paidAmount);
+    console.log('   Remaining: ' + subtotal + ' - ' + totalDiscount + ' - ' + paidAmount + ' = ' + balance);
+    console.log('   ✅ Discount always active - NO LOCKS');
 
     // ================================================================
     // DARK MODE
@@ -1490,7 +1647,8 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // UPDATE TOTALS
+    // UPDATE TOTALS - 4 CARDS - NO LOCKS
+    // Remaining = Subtotal - Total_Discount - Paid
     // ================================================================
     function updateTotals() {
         if (isPaid) return;
@@ -1498,44 +1656,66 @@ include_once '../../components/cashier_sidebar.php';
         var discountInput = document.getElementById('discountAmount');
         var partialInput = document.getElementById('partialAmount');
         
-        var discount = getRawValue(discountInput);
+        // ✅ NEW cashier discount - ALWAYS ALLOWED (NO LOCKS)
+        var newCashierDiscount = 0;
+        if (discountInput) {
+            newCashierDiscount = getRawValue(discountInput);
+        }
+        
+        // ✅ New total discount = existing total discount + new cashier discount
+        var newTotalDiscount = totalDiscount + newCashierDiscount;
+        
+        // ✅ Remaining = Subtotal - Total_Discount - Paid
+        var remainingBalance = subtotal - newTotalDiscount - paidAmount;
+        if (remainingBalance < 0) remainingBalance = 0;
+        
+        // Amount to pay
+        var amountToPay = remainingBalance;
         var partial = getRawValue(partialInput);
-        
-        // Total discount = pharmacy discount + cashier discount
-        var totalDiscount = pharmacyDiscount + discount;
-        if (totalDiscount > balance) {
-            totalDiscount = balance;
-            discount = totalDiscount - pharmacyDiscount;
-            if (discount < 0) discount = 0;
-            discountInput.value = discount > 0 ? discount.toFixed(0) : '0';
-            discountInput.dataset.rawValue = discount;
-        }
-        
-        var amountAfterDiscount = balance - totalDiscount;
-        var amountToPay = amountAfterDiscount;
-        
-        // If partial amount is entered and it's less than amountAfterDiscount
-        if (partial > 0 && partial < amountAfterDiscount) {
+        if (partial > 0 && partial < remainingBalance) {
             amountToPay = partial;
-        } else if (partial > 0 && partial >= amountAfterDiscount) {
-            amountToPay = amountAfterDiscount;
+        } else if (partial > 0 && partial >= remainingBalance) {
+            amountToPay = remainingBalance;
         }
         
-        // Update display
-        document.getElementById('displayBalance').textContent = currency + ' ' + balance.toFixed(0);
-        document.getElementById('displayDiscount').textContent = currency + ' ' + discount.toFixed(0);
-        document.getElementById('displayPharmacyDiscount').textContent = currency + ' ' + pharmacyDiscount.toFixed(0);
-        document.getElementById('displayGrandTotal').textContent = currency + ' ' + amountToPay.toFixed(0);
+        // Update 4 cards
+        document.getElementById('totalAmountDisplay').textContent = currency + ' ' + subtotal.toFixed(0);
+        
+        var discountDisplay = document.getElementById('discountDisplay');
+        if (discountDisplay) {
+            discountDisplay.textContent = currency + ' ' + newTotalDiscount.toFixed(0);
+        }
+        
+        document.getElementById('paidAmountDisplay').textContent = currency + ' ' + paidAmount.toFixed(0);
+        var paidStatus = document.getElementById('paidStatus');
+        if (paidStatus) {
+            if (paidAmount > 0) {
+                paidStatus.textContent = 'Total Paid: ' + currency + ' ' + paidAmount.toFixed(0);
+                if (remainingBalance <= 0) {
+                    paidStatus.textContent += ' ✅ FULLY PAID';
+                } else {
+                    paidStatus.textContent += ' 🔄 Partial payment';
+                }
+            } else {
+                paidStatus.textContent = 'No payments yet';
+            }
+        }
+        
+        document.getElementById('balanceDisplay').textContent = currency + ' ' + remainingBalance.toFixed(0);
+        document.getElementById('balanceStatus').textContent = remainingBalance <= 0 ? '✅ Bill fully paid!' : 'Pending payment';
+        
+        document.getElementById('displayBalanceGrand').textContent = currency + ' ' + remainingBalance.toFixed(0);
+        document.getElementById('displayTotalDiscount').textContent = currency + ' ' + newTotalDiscount.toFixed(0);
         
         // Update buttons
         var fullBtn = document.getElementById('fullPayBtn');
         var partialBtn = document.getElementById('partialPayBtn');
         
         fullBtn.disabled = false;
-        fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> PAY FULL (' + currency + ' ' + amountAfterDiscount.toFixed(0) + ')';
+        fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> PAY FULL (' + currency + ' ' + remainingBalance.toFixed(0) + ')';
         
         if (partial > 0) {
-            if (partial <= amountAfterDiscount) {
+            if (partial <= remainingBalance) {
                 partialBtn.disabled = false;
                 partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> PAY PARTIAL (' + currency + ' ' + amountToPay.toFixed(0) + ')';
             } else {
@@ -1547,10 +1727,16 @@ include_once '../../components/cashier_sidebar.php';
             partialBtn.innerHTML = '<i class="fas fa-hand-holding-heart"></i> Enter Partial Amount';
         }
         
-        if (amountAfterDiscount <= 0) {
+        if (remainingBalance <= 0) {
             fullBtn.disabled = true;
-            fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> No amount to pay';
+            fullBtn.innerHTML = '<i class="fas fa-check-circle"></i> Already Paid';
         }
+        
+        console.log('✅ Updated Balance (NO LOCKS):');
+        console.log('   Subtotal: ' + subtotal);
+        console.log('   Total Discount: ' + newTotalDiscount);
+        console.log('   Paid (from column): ' + paidAmount);
+        console.log('   Remaining: ' + subtotal + ' - ' + newTotalDiscount + ' - ' + paidAmount + ' = ' + remainingBalance);
     }
 
     // ================================================================
@@ -1558,33 +1744,30 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     function processPayment(type) {
         if (isPaid) {
-            showToast('✅ Already Paid', 'This bill is fully paid', 'info');
+            showToast('✅ Already Paid', 'Bill is fully paid', 'info');
             return;
         }
         
         var paymentMethod = document.getElementById('paymentMethod').value;
-        var discount = getRawValue(document.getElementById('discountAmount'));
+        
+        // ✅ NEW cashier discount - ALWAYS ALLOWED
+        var newCashierDiscount = getRawValue(document.getElementById('discountAmount'));
         var partialAmount = getRawValue(document.getElementById('partialAmount'));
         
-        // Calculate total discount (pharmacy + cashier)
-        var totalDiscount = pharmacyDiscount + discount;
-        if (totalDiscount > balance) {
-            totalDiscount = balance;
-            discount = totalDiscount - pharmacyDiscount;
-            if (discount < 0) discount = 0;
-        }
+        // ✅ Calculate remaining balance
+        var newTotalDiscount = totalDiscount + newCashierDiscount;
+        var remainingBalance = subtotal - newTotalDiscount - paidAmount;
+        if (remainingBalance < 0) remainingBalance = 0;
         
-        var amountAfterDiscount = balance - totalDiscount;
-        var amountToPay = amountAfterDiscount;
+        var amountToPay = remainingBalance;
         
-        // For partial payment, use the entered partial amount
         if (type === 'partial') {
             if (partialAmount <= 0) {
                 showToast('⚠️ Invalid Amount', 'Please enter a valid partial amount', 'warning');
                 return;
             }
-            if (partialAmount > amountAfterDiscount) {
-                showToast('⚠️ Amount Exceeds', 'Partial amount exceeds remaining balance (after discount)', 'warning');
+            if (partialAmount > remainingBalance) {
+                showToast('⚠️ Amount Exceeds', 'Partial amount exceeds remaining balance', 'warning');
                 return;
             }
             amountToPay = partialAmount;
@@ -1595,22 +1778,28 @@ include_once '../../components/cashier_sidebar.php';
             return;
         }
         
-        // Calculate new balance after this payment
-        var newBalance = amountAfterDiscount - amountToPay;
+        var newBalance = remainingBalance - amountToPay;
+        if (newBalance < 0) newBalance = 0;
+        var newStatus = (newBalance <= 0.01) ? 'paid' : 'partial';
+        
         var paymentTypeText = type === 'partial' ? 'PARTIAL' : 'FULL';
         
         var confirmMsg = '💳 ' + paymentTypeText + ' PAYMENT CONFIRMATION\n' +
                          '═══════════════════════════════\n' +
-                         'Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>\n' +
                          'Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>\n' +
                          '───────────────────────────────\n' +
-                         'Balance Before: ' + currency + ' ' + balance.toFixed(0) + '\n' +
-                         (discount > 0 ? 'Cashier Discount: -' + currency + ' ' + discount.toFixed(0) + '\n' : '') +
-                         (pharmacyDiscount > 0 ? 'Pharmacy Discount: -' + currency + ' ' + pharmacyDiscount.toFixed(0) + '\n' : '') +
+                         'Subtotal: ' + currency + ' ' + subtotal.toFixed(0) + '\n' +
+                         'Existing Total Discount: -' + currency + ' ' + totalDiscount.toFixed(0) + '\n' +
+                         (newCashierDiscount > 0 ? 'New Cashier Discount: -' + currency + ' ' + newCashierDiscount.toFixed(0) + '\n' : '') +
+                         'New Total Discount: -' + currency + ' ' + newTotalDiscount.toFixed(0) + '\n' +
                          '───────────────────────────────\n' +
+                         'Already Paid: ' + currency + ' ' + paidAmount.toFixed(0) + '\n' +
+                         'Balance Before: ' + currency + ' ' + remainingBalance.toFixed(0) + '\n' +
                          'Amount to Pay: ' + currency + ' ' + amountToPay.toFixed(0) + '\n' +
                          '───────────────────────────────\n' +
                          'New Balance: ' + currency + ' ' + newBalance.toFixed(0) + '\n' +
+                         'New Status: ' + newStatus.toUpperCase() + '\n' +
+                         '───────────────────────────────\n' +
                          'Payment Method: ' + paymentMethod.toUpperCase() + '\n\n' +
                          'Confirm ' + (type === 'partial' ? 'partial' : 'full') + ' payment?';
         
@@ -1629,8 +1818,8 @@ include_once '../../components/cashier_sidebar.php';
         formData.append('bill_id', billId);
         formData.append('payment_method', paymentMethod);
         formData.append('payment_type', type);
-        if (discount > 0) {
-            formData.append('discount_amount', discount);
+        if (newCashierDiscount > 0) {
+            formData.append('discount_amount', newCashierDiscount);
         }
         formData.append('partial_amount', amountToPay);
         
@@ -1644,7 +1833,12 @@ include_once '../../components/cashier_sidebar.php';
         .then(function(data) {
             if (data.success) {
                 showToast('✅ Success', data.message, 'success');
-                if (data.new_status === 'paid') {
+                
+                if (data.updated_totals) {
+                    updateSummaryCards(data.updated_totals);
+                }
+                
+                if (data.is_paid) {
                     setTimeout(function() {
                         window.location.href = 'partial_payments.php?success=paid';
                     }, 2000);
@@ -1664,6 +1858,51 @@ include_once '../../components/cashier_sidebar.php';
             btn.disabled = false;
             btn.innerHTML = originalHtml;
         });
+    }
+
+    // ================================================================
+    // UPDATE SUMMARY CARDS
+    // ================================================================
+    function updateSummaryCards(totals) {
+        if (!totals) return;
+        
+        document.getElementById('totalAmountDisplay').textContent = currency + ' ' + Number(totals.subtotal || totals.total_amount || 0).toLocaleString();
+        
+        var discountDisplay = document.getElementById('discountDisplay');
+        if (discountDisplay) {
+            discountDisplay.textContent = currency + ' ' + Number(totals.total_discount || 0).toLocaleString();
+        }
+        
+        var newPaid = Number(totals.total_paid || 0);
+        document.getElementById('paidAmountDisplay').textContent = currency + ' ' + newPaid.toLocaleString();
+        var paidStatus = document.getElementById('paidStatus');
+        if (paidStatus) {
+            if (newPaid > 0) {
+                var newBalance = Number(totals.total_balance || 0);
+                paidStatus.textContent = 'Total Paid: ' + currency + ' ' + newPaid.toLocaleString();
+                if (newBalance <= 0) {
+                    paidStatus.textContent += ' ✅ FULLY PAID';
+                } else {
+                    paidStatus.textContent += ' 🔄 Partial payment';
+                }
+            } else {
+                paidStatus.textContent = 'No payments yet';
+            }
+        }
+        
+        document.getElementById('balanceDisplay').textContent = currency + ' ' + Number(totals.total_balance || 0).toLocaleString();
+        document.getElementById('balanceStatus').textContent = (totals.total_balance || 0) <= 0 ? '✅ Bill fully paid!' : 'Pending payment';
+        
+        // Update global variables
+        subtotal = totals.subtotal || totals.total_amount || 0;
+        paidAmount = totals.total_paid || 0;
+        balance = totals.total_balance || 0;
+        totalDiscount = totals.total_discount || 0;
+        
+        document.getElementById('displayBalanceGrand').textContent = currency + ' ' + Number(balance || 0).toLocaleString();
+        document.getElementById('displayTotalDiscount').textContent = currency + ' ' + Number(totalDiscount || 0).toLocaleString();
+        
+        updateTotals();
     }
 
     // ================================================================
@@ -1727,6 +1966,17 @@ include_once '../../components/cashier_sidebar.php';
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         updateTotals();
+        console.log('✅ Make Payment page loaded (FULLY FIXED - NO LOCKS)');
+        console.log('   Cards: Subtotal | Discount | Paid | Remaining');
+        console.log('   Formula: Remaining = Subtotal - Total_Discount - Paid');
+        console.log('   Subtotal: ' + currency + ' ' + subtotal.toLocaleString());
+        console.log('   Total Discount: ' + currency + ' ' + totalDiscount.toLocaleString());
+        console.log('   Paid (from column): ' + currency + ' ' + paidAmount.toLocaleString());
+        console.log('   Remaining: ' + currency + ' ' + balance.toLocaleString());
+        console.log('   ' + subtotal + ' - ' + totalDiscount + ' - ' + paidAmount + ' = ' + balance);
+        console.log('   ✅ Uses ONLY this bill, NOT all bills');
+        console.log('   ✅ Paid amount ALWAYS shows column value, NOT status');
+        console.log('   ✅ NO DISCOUNT LOCKS - Cashier can add discount anytime');
     });
 
     // ================================================================
@@ -1746,13 +1996,12 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    console.log('%c💰 Braick - Make Payment (FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
-    console.log('%c✅ Partial payment - Correctly sets status to "partial"', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Shows partial banner with remaining balance', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Continue Payment button available for partial bills', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Full payment - Sets status to "paid"', 'font-size:13px; color:#34D399;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#64748B;');
-    console.log('%c💰 Bill ID: <?= $bill_id ?> | Balance: <?= $currency ?> <?= number_format($balance, 0) ?> | Status: <?= $bill_status ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c💰 Braick - Make Payment (NO LOCKS - FULLY FIXED)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ Cards: Subtotal | Discount | Paid | Remaining', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Formula: Remaining = Subtotal - Total_Discount - Paid', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Uses ONLY this bill, NOT all bills', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Paid amount ALWAYS shows column value, NOT status', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ NO DISCOUNT LOCKS - Cashier can add discount anytime', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

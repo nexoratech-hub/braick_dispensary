@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/components/laboratory_sidebar.php
-// LABORATORY - SHARED SIDEBAR (WITH AUTO-UPDATE API)
+// LABORATORY - SHARED SIDEBAR (WITH AJAX AUTO-UPDATE)
 // WITH SIDEBAR TOGGLE BUTTON - SMOOTH SLIDE TRANSITION
 // INCREASED FONT SIZE & SLOWER SLIDE ANIMATION
 // BRAICK DISPENSARY
@@ -74,9 +74,7 @@ try {
             $site_name = $result['setting_value'];
         }
     }
-} catch (Exception $e) {
-    // Keep default
-}
+} catch (Exception $e) {}
 
 // ================================================================
 // GET INITIAL DATA FOR BADGES
@@ -89,7 +87,6 @@ $total_tests = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
-        // Pending
         $stmt = $db->prepare("
             SELECT COUNT(*) as count FROM lab_tests 
             WHERE branch_id = ? AND (status IS NULL OR status = '' OR status = 'pending')
@@ -97,7 +94,6 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $pending_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // In Progress
         $stmt = $db->prepare("
             SELECT COUNT(*) as count FROM lab_tests 
             WHERE branch_id = ? AND status = 'in_progress'
@@ -105,7 +101,6 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $in_progress_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Completed
         $stmt = $db->prepare("
             SELECT COUNT(*) as count FROM lab_tests 
             WHERE branch_id = ? AND status = 'completed'
@@ -113,7 +108,6 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $completed_count = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Today's tests
         $stmt = $db->prepare("
             SELECT COUNT(*) as count FROM lab_tests 
             WHERE branch_id = ? AND status = 'completed' AND DATE(completed_at) = CURDATE()
@@ -121,7 +115,6 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $stmt->execute([$user_branch_id]);
         $today_tests = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
-        // Total tests
         $total_tests = $pending_count + $in_progress_count + $completed_count;
         
     } catch (Exception $e) {
@@ -151,9 +144,6 @@ $profile_pic_url = !empty($profile_pic)
 // ================================================================
 $current_page = basename($_SERVER['PHP_SELF']);
 
-// ================================================================
-// FUNCTION TO CHECK ACTIVE STATE
-// ================================================================
 function isActive($page) {
     global $current_page;
     if ($page === $current_page) {
@@ -183,9 +173,6 @@ $initial_data = [
 ];
 ?>
 
-<!-- ================================================================ -->
-<!-- SIDEBAR CSS -->
-<!-- ================================================================ -->
 <style>
     /* ================================================================
        SIDEBAR STYLES
@@ -229,7 +216,6 @@ $initial_data = [
     
     /* ================================================================
        SIDEBAR TOGGLE BUTTON - FLOATING
-       SHOWS WHEN SIDEBAR IS HIDDEN, HIDES WHEN SIDEBAR IS OPEN
        ================================================================ */
     .sidebar-toggle-float {
         position: fixed;
@@ -239,7 +225,7 @@ $initial_data = [
         width: 40px;
         height: 40px;
         border-radius: 10px;
-        background: var(--primary);
+        background: #0B5ED7;
         color: white;
         border: none;
         font-size: 0.95rem;
@@ -254,7 +240,6 @@ $initial_data = [
         pointer-events: none;
     }
     
-    /* Show button only when sidebar is hidden */
     .sidebar-toggle-float.show {
         display: flex !important;
         opacity: 1;
@@ -281,26 +266,22 @@ $initial_data = [
     }
     
     /* ================================================================
-       RESPONSIVE - SHOW BUTTON ON MOBILE WHEN SIDEBAR IS HIDDEN
+       RESPONSIVE
        ================================================================ */
     @media (max-width: 1024px) {
         .sidebar-toggle-float {
             display: none !important;
         }
-        
         .sidebar-toggle-float.show {
             display: flex !important;
         }
-        
         .sidebar {
             transform: translateX(-100%);
             border-radius: 0 12px 12px 0;
         }
-        
         .sidebar.visible {
             transform: translateX(0) !important;
         }
-        
         .sidebar.hidden {
             transform: translateX(-100%) !important;
         }
@@ -310,11 +291,9 @@ $initial_data = [
         .sidebar-toggle-float {
             display: none !important;
         }
-        
         .sidebar {
             transform: translateX(0) !important;
         }
-        
         .sidebar.hidden {
             transform: translateX(-100%) !important;
         }
@@ -659,9 +638,6 @@ $initial_data = [
         gap: 4px;
     }
     
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
     @media (max-width: 1024px) {
         .sidebar {
             width: 260px;
@@ -786,9 +762,6 @@ $initial_data = [
         }
     }
     
-    /* ================================================================
-       PRINT HIDE
-       ================================================================ */
     @media print {
         .sidebar {
             display: none !important;
@@ -801,9 +774,6 @@ $initial_data = [
         }
     }
     
-    /* ================================================================
-       UTILITY
-       ================================================================ */
     .flex { display: flex; }
     .items-center { align-items: center; }
     .gap-2 { gap: 6px; }
@@ -853,67 +823,48 @@ $initial_data = [
     <!-- ================================================================ -->
     <nav class="sidebar-nav" id="sidebarNav">
         
-        <!-- ============================================================ -->
-        <!-- LABORATORY MENU -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">📋</span> Laboratory</div>
         
-        <!-- Dashboard -->
         <a href="/dispensary_system/frontend/pages/laboratory/dashboard.php" class="sidebar-link <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i>
             <span class="link-text">Dashboard</span>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- LAB TESTS -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">🧪</span> Lab Tests</div>
         
-        <!-- Pending -->
         <a href="/dispensary_system/frontend/pages/laboratory/pending_tests.php" class="sidebar-link <?= isActive('pending_tests.php') ?>" id="sidebarPendingLink">
             <i class="fas fa-clock"></i>
             <span class="link-text">Pending</span>
             <span class="badge <?= $pending_count > 0 ? 'danger' : '' ?>" id="sidebarPendingBadge"><?= $pending_count ?></span>
         </a>
         
-        <!-- In Progress -->
         <a href="/dispensary_system/frontend/pages/laboratory/in_progress_tests.php" class="sidebar-link <?= isActive('in_progress_tests.php') ?>" id="sidebarInProgressLink">
             <i class="fas fa-spinner"></i>
             <span class="link-text">In Progress</span>
             <span class="badge <?= $in_progress_count > 0 ? 'orange' : '' ?>" id="sidebarInProgressBadge"><?= $in_progress_count ?></span>
         </a>
         
-        <!-- Completed -->
         <a href="/dispensary_system/frontend/pages/laboratory/completed_tests.php" class="sidebar-link <?= isActive('completed_tests.php') ?>" id="sidebarCompletedLink">
             <i class="fas fa-check-circle"></i>
             <span class="link-text">Completed</span>
             <span class="badge <?= $completed_count > 0 ? 'green' : '' ?>" id="sidebarCompletedBadge"><?= $completed_count ?></span>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- RESULTS -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">📊</span> Results</div>
         
-        <!-- Results History -->
         <a href="/dispensary_system/frontend/pages/laboratory/results_history.php" class="sidebar-link <?= isActive('results_history.php') ?>" id="sidebarResultsLink">
             <i class="fas fa-history"></i>
             <span class="link-text">Results History</span>
             <span class="badge <?= $today_tests > 0 ? 'green' : '' ?>" id="sidebarTodayTests"><?= $today_tests ?></span>
         </a>
         
-        <!-- ============================================================ -->
-        <!-- ACCOUNT -->
-        <!-- ============================================================ -->
         <div class="nav-label"><span class="label-icon">👤</span> Account</div>
         
-        <!-- Profile -->
         <a href="/dispensary_system/frontend/pages/laboratory/profile.php" class="sidebar-link <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i>
             <span class="link-text">Profile</span>
         </a>
         
-        <!-- Logout -->
         <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
             <i class="fas fa-sign-out-alt"></i>
             <span class="link-text">Logout</span>
@@ -940,7 +891,7 @@ $initial_data = [
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // SIDEBAR TOGGLE - SMOOTH SLIDE TRANSITION (SLOWER)
+    // SIDEBAR TOGGLE - SMOOTH SLIDE TRANSITION
     // ================================================================
     (function() {
         var sidebar = document.getElementById('sidebar');
@@ -961,7 +912,6 @@ $initial_data = [
         
         console.log('✅ Sidebar toggle initialized');
         
-        // Create overlay if not exists
         if (!overlay) {
             overlay = document.createElement('div');
             overlay.id = 'sidebarOverlay';
@@ -980,7 +930,6 @@ $initial_data = [
         }
         
         function openSidebar() {
-            // Remove hidden class, add visible class for smooth slide in
             sidebar.classList.remove('hidden');
             sidebar.classList.add('visible');
             
@@ -990,15 +939,12 @@ $initial_data = [
             }
             document.body.style.overflow = 'hidden';
             
-            // Update icon
             if (toggleIcon) {
                 toggleIcon.className = 'fas fa-times toggle-icon';
             }
             
-            // HIDE toggle button when sidebar is open
             updateToggleButton(false);
             
-            // Update button style
             if (toggleBtn) {
                 toggleBtn.style.background = '#DC2626';
                 toggleBtn.style.boxShadow = '0 4px 16px rgba(220, 38, 38, 0.4)';
@@ -1007,7 +953,6 @@ $initial_data = [
         }
         
         function closeSidebar() {
-            // Add hidden class, remove visible class for smooth slide out
             sidebar.classList.add('hidden');
             sidebar.classList.remove('visible');
             
@@ -1017,15 +962,12 @@ $initial_data = [
             }
             document.body.style.overflow = '';
             
-            // Update icon
             if (toggleIcon) {
                 toggleIcon.className = 'fas fa-bars toggle-icon';
             }
             
-            // SHOW toggle button when sidebar is closed
             updateToggleButton(true);
             
-            // Update button style
             if (toggleBtn) {
                 toggleBtn.style.background = '';
                 toggleBtn.style.boxShadow = '';
@@ -1041,9 +983,6 @@ $initial_data = [
             }
         }
         
-        // ================================================================
-        // TOGGLE BUTTON CLICK
-        // ================================================================
         toggleBtn.addEventListener('click', function(e) {
             e.preventDefault();
             e.stopPropagation();
@@ -1051,9 +990,6 @@ $initial_data = [
             toggleSidebar();
         });
         
-        // ================================================================
-        // CLOSE BUTTON (X)
-        // ================================================================
         if (closeBtn) {
             closeBtn.addEventListener('click', function(e) {
                 e.preventDefault();
@@ -1062,9 +998,6 @@ $initial_data = [
             });
         }
         
-        // ================================================================
-        // OVERLAY CLICK
-        // ================================================================
         if (overlay) {
             overlay.addEventListener('click', function(e) {
                 if (e.target === overlay) {
@@ -1073,21 +1006,14 @@ $initial_data = [
             });
         }
         
-        // ================================================================
-        // ESC KEY
-        // ================================================================
         document.addEventListener('keydown', function(e) {
             if (e.key === 'Escape' && !sidebar.classList.contains('hidden')) {
                 closeSidebar();
             }
         });
         
-        // ================================================================
-        // WINDOW RESIZE
-        // ================================================================
         window.addEventListener('resize', function() {
             if (window.innerWidth > 1024) {
-                // On desktop, always show sidebar
                 sidebar.classList.remove('hidden');
                 sidebar.classList.add('visible');
                 if (overlay) {
@@ -1097,24 +1023,15 @@ $initial_data = [
                 if (toggleIcon) {
                     toggleIcon.className = 'fas fa-times toggle-icon';
                 }
-                // Hide toggle button on desktop
                 updateToggleButton(false);
             } else {
-                // On mobile, if sidebar is not visible and not hidden, hide it
                 if (!sidebar.classList.contains('hidden') && !sidebar.classList.contains('visible')) {
                     sidebar.classList.add('hidden');
-                }
-                if (sidebar.classList.contains('visible')) {
-                    // Keep it as is
                 }
             }
         });
         
-        // ================================================================
-        // CHECK INITIAL STATE
-        // ================================================================
         if (window.innerWidth > 1024) {
-            // Desktop: show sidebar, hide button
             sidebar.classList.remove('hidden');
             sidebar.classList.add('visible');
             if (toggleIcon) {
@@ -1122,7 +1039,6 @@ $initial_data = [
             }
             updateToggleButton(false);
         } else {
-            // Mobile: hide sidebar, show button
             sidebar.classList.add('hidden');
             sidebar.classList.remove('visible');
             if (toggleIcon) {
@@ -1142,9 +1058,9 @@ $initial_data = [
     // CONFIGURATION
     // ================================================================
     var SIDEBAR_CONFIG = {
-        API_URL: '/dispensary_system/backend/api/get_lab_sidebar_stats.php',
+        AJAX_URL: '/dispensary_system/backend/api/laboratory_sidebar_ajax.php',
         CHECK_INTERVAL: 2000,
-        FORCE_INTERVAL: 10000,
+        FORCE_INTERVAL: 5000,
         BRANCH_ID: <?= json_encode($user_branch_id) ?>,
         INITIAL_HASH: '<?= $initial_hash ?>'
     };
@@ -1170,7 +1086,6 @@ $initial_data = [
         
         var hasChanges = false;
         
-        // Pending Badge
         var pendingBadge = document.getElementById('sidebarPendingBadge');
         if (pendingBadge && data.pending !== undefined) {
             var oldVal = pendingBadge.textContent;
@@ -1182,10 +1097,10 @@ $initial_data = [
                 pendingBadge.classList.remove('badge-update');
                 void pendingBadge.offsetWidth;
                 pendingBadge.classList.add('badge-update');
+                console.log('🔄 Pending: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // In Progress Badge
         var inProgressBadge = document.getElementById('sidebarInProgressBadge');
         if (inProgressBadge && data.in_progress !== undefined) {
             var oldVal = inProgressBadge.textContent;
@@ -1197,10 +1112,10 @@ $initial_data = [
                 inProgressBadge.classList.remove('badge-update');
                 void inProgressBadge.offsetWidth;
                 inProgressBadge.classList.add('badge-update');
+                console.log('🔄 In Progress: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // Completed Badge
         var completedBadge = document.getElementById('sidebarCompletedBadge');
         if (completedBadge && data.completed !== undefined) {
             var oldVal = completedBadge.textContent;
@@ -1212,10 +1127,10 @@ $initial_data = [
                 completedBadge.classList.remove('badge-update');
                 void completedBadge.offsetWidth;
                 completedBadge.classList.add('badge-update');
+                console.log('🔄 Completed: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // Today Tests Badge
         var todayBadge = document.getElementById('sidebarTodayTests');
         if (todayBadge && data.today_tests !== undefined) {
             var oldVal = todayBadge.textContent;
@@ -1227,10 +1142,10 @@ $initial_data = [
                 todayBadge.classList.remove('badge-update');
                 void todayBadge.offsetWidth;
                 todayBadge.classList.add('badge-update');
+                console.log('🔄 Today Tests: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // Update timestamp
         var timeEl = document.getElementById('sidebarUpdateTime');
         if (timeEl) {
             var now = new Date();
@@ -1243,7 +1158,6 @@ $initial_data = [
             }
         }
         
-        // Flash sidebar if data changed
         if (hasChanges) {
             var sidebarEl = document.getElementById('sidebar');
             if (sidebarEl) {
@@ -1259,7 +1173,7 @@ $initial_data = [
     }
 
     // ================================================================
-    // FETCH SIDEBAR DATA FROM API
+    // FETCH SIDEBAR DATA - DIRECT AJAX
     // ================================================================
     function fetchSidebarData(forceUpdate) {
         if (sidebarState.isUpdating && !forceUpdate) return;
@@ -1274,7 +1188,9 @@ $initial_data = [
             formData.append('force_update', '1');
         }
         
-        fetch(SIDEBAR_CONFIG.API_URL, {
+        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
+        
+        fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
             body: formData,
             credentials: 'same-origin'
@@ -1289,6 +1205,8 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
+                console.log('📥 AJAX Response: has_changed=' + data.has_changed + ', hash=' + data.hash);
+                
                 if (data.has_changed && data.data) {
                     updateSidebarBadges(data.data);
                     sidebarState.dataHash = data.hash;
@@ -1320,16 +1238,34 @@ $initial_data = [
                     }
                     sidebarState.hasInitialData = true;
                 }
+                
+                var statusDot = document.getElementById('sidebarFooterDot');
+                if (statusDot) {
+                    statusDot.className = 'status-dot online';
+                }
+                var statusText = document.getElementById('sidebarFooterText');
+                if (statusText) {
+                    statusText.textContent = 'Online';
+                }
+                
             } else {
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
+                console.warn('⚠️ AJAX Error:', data.message);
             }
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            if (forceUpdate) {
-                console.warn('Sidebar API error:', error.message);
+            console.warn('❌ Sidebar AJAX error:', error.message);
+            
+            var statusDot = document.getElementById('sidebarFooterDot');
+            if (statusDot) {
+                statusDot.className = 'status-dot offline';
+            }
+            var statusText = document.getElementById('sidebarFooterText');
+            if (statusText) {
+                statusText.textContent = 'Offline';
             }
         });
     }
@@ -1345,19 +1281,16 @@ $initial_data = [
             clearInterval(sidebarState.forceInterval);
         }
         
-        // Initial fetch after 500ms
         setTimeout(function() {
             fetchSidebarData(true);
         }, 500);
         
-        // Regular check for changes (every 2 seconds)
         sidebarState.updateInterval = setInterval(function() {
             if (!sidebarState.isUpdating) {
                 fetchSidebarData(false);
             }
         }, SIDEBAR_CONFIG.CHECK_INTERVAL);
         
-        // Force refresh (every 10 seconds as safety net)
         sidebarState.forceInterval = setInterval(function() {
             if (!sidebarState.isUpdating && sidebarState.hasInitialData) {
                 fetchSidebarData(true);
@@ -1381,17 +1314,11 @@ $initial_data = [
         console.log('🔄 Sidebar auto-update stopped');
     }
 
-    // ================================================================
-    // MANUAL REFRESH
-    // ================================================================
     function refreshSidebarData() {
         fetchSidebarData(true);
         return true;
     }
 
-    // ================================================================
-    // EXPOSE FUNCTIONS
-    // ================================================================
     window.refreshSidebarData = refreshSidebarData;
     window.fetchSidebarData = fetchSidebarData;
     window.startSidebarAutoUpdate = startSidebarAutoUpdate;
@@ -1399,9 +1326,6 @@ $initial_data = [
     window.getSidebarState = function() { return sidebarState; };
     window.getSidebarHash = function() { return sidebarState.dataHash; };
 
-    // ================================================================
-    // VISIBILITY CHANGE - Pause when tab is hidden
-    // ================================================================
     document.addEventListener('visibilitychange', function() {
         if (document.hidden) {
             stopSidebarAutoUpdate();
@@ -1413,19 +1337,13 @@ $initial_data = [
         }
     });
 
-    // ================================================================
-    // DOM READY
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         setTimeout(function() {
             startSidebarAutoUpdate();
         }, 1500);
     });
 
-    // ================================================================
-    // CONSOLE LOG
-    // ================================================================
-    console.log('%c🧪 Braick Dispensary - Laboratory Sidebar (Auto-Update)', 
+    console.log('%c🧪 Braick Dispensary - Laboratory Sidebar (AJAX)', 
         'font-size:16px; font-weight:bold; color:#0AA84F;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
         'font-size:13px; color:#059669;');
@@ -1436,9 +1354,9 @@ $initial_data = [
     console.log('   Completed: <?= $completed_count ?>, Today: <?= $today_tests ?>');
     console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 10s (safety net)', 
+    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
         'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 API: ' + SIDEBAR_CONFIG.API_URL, 
+    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 
         'font-size:12px; color:#94A3B8;');
     console.log('%c📱 Toggle button: Shows when sidebar hidden, hides when open', 
         'font-size:12px; color:#34D399;');

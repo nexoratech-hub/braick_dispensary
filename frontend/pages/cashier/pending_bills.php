@@ -2,9 +2,10 @@
 // ================================================================
 // FILE: frontend/pages/cashier/pending_bills.php
 // CASHIER - PENDING BILLS LIST
-// FIXED: Shows ALL bills including prescription bills
+// FIXED: SQL syntax error fixed
+// FIXED: Shows ONLY bills with balance > 0
 // FIXED: Prescription bills show as LOCKED until confirmed
-// FIXED: Only bills with balance > 0
+// FIXED: Added Subtotal column with Dark Green Header
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -190,11 +191,18 @@ try {
     }
     
     // ================================================================
-    // GET PENDING BILLS - SHOW ALL BILLS INCLUDING PRESCRIPTIONS
+    // GET PENDING BILLS - SHOW ONLY BILLS WITH BALANCE > 0
     // ================================================================
     $sql = "
         SELECT 
             b.*,
+            b.subtotal,
+            b.total_amount,
+            b.paid_amount,
+            b.balance,
+            b.total_discount,
+            b.discount_amount,
+            b.cashier_discount,
             p.full_name as patient_name,
             p.patient_id as patient_id_number,
             p.phone,
@@ -212,7 +220,6 @@ try {
             (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE bill_id = b.id) as total_paid,
             (SELECT COALESCE(SUM(discount_amount), 0) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication') as pharmacy_discount,
             (SELECT COUNT(*) FROM bill_items WHERE bill_id = b.id AND item_type = 'medication' AND discount_amount > 0) as med_discount_items,
-            -- ✅ Check if this bill has confirmed prescriptions
             (SELECT COUNT(*) 
              FROM bill_items bi2 
              JOIN prescriptions pr ON bi2.reference_id = pr.id 
@@ -221,7 +228,6 @@ try {
              AND bi2.reference_type = 'prescription'
              AND pr.status IN ('confirmed', 'dispensed')
             ) as confirmed_prescriptions,
-            -- ✅ Check if this bill has pending prescriptions
             (SELECT COUNT(*) 
              FROM bill_items bi2 
              JOIN prescriptions pr ON bi2.reference_id = pr.id 
@@ -238,7 +244,6 @@ try {
         AND b.status IN ('pending', 'partial')
         AND b.balance > 0
         AND b.visit_id IS NOT NULL
-        -- ✅ ALL bills shown (including prescriptions)
         $date_condition
         $search_condition
         ORDER BY b.created_at DESC
@@ -295,13 +300,12 @@ try {
         WHERE o.branch_id = ? 
         AND o.payment_status = 'pending'
         AND o.total_amount > 0
-        ORDER BY o.created_at DESC
     ";
     
-    // Build OTC date filter
     $otc_params = [$user_branch_id];
+    
     $otc_date_condition = "";
-    if (!empty($start_date) && !empty($end_date) && $filter === 'custom') {
+    if ($filter === 'custom' && !empty($start_date) && !empty($end_date)) {
         $otc_date_condition = "AND DATE(o.created_at) BETWEEN ? AND ?";
         $otc_params[] = $start_date;
         $otc_params[] = $end_date;
@@ -332,13 +336,14 @@ try {
         $otc_sql .= " $otc_date_condition";
     }
     
-    // OTC search condition
     if (!empty($search)) {
         $otc_sql .= " AND (o.customer_name LIKE ? OR o.sale_number LIKE ? OR o.customer_phone LIKE ?)";
         $otc_params[] = "%$search%";
         $otc_params[] = "%$search%";
         $otc_params[] = "%$search%";
     }
+    
+    $otc_sql .= " ORDER BY o.created_at DESC";
     
     $stmt = $db->prepare($otc_sql);
     $stmt->execute($otc_params);
@@ -385,6 +390,14 @@ try {
     // ================================================================
     $patient_bills = [];
     foreach ($all_bills as $bill) {
+        // ✅ Skip bills with balance <= 0
+        if ($bill['bill_type'] !== 'otc') {
+            $balance = ($bill['total_amount'] ?? 0) - ($bill['total_paid'] ?? 0);
+            if ($balance <= 0) {
+                continue;
+            }
+        }
+        
         $patient_key = $bill['bill_type'] === 'otc' 
             ? 'otc_' . $bill['id'] 
             : $bill['patient_id'];
@@ -406,6 +419,7 @@ try {
                 'is_otc' => ($bill['bill_type'] === 'otc'),
                 'bills' => [],
                 'total_amount' => 0,
+                'total_subtotal' => 0,
                 'total_balance' => 0,
                 'total_paid' => 0,
                 'total_discount' => 0,
@@ -417,9 +431,10 @@ try {
         
         $patient_bills[$patient_key]['bills'][] = $bill;
         $patient_bills[$patient_key]['total_amount'] += $bill['total_amount'];
+        $patient_bills[$patient_key]['total_subtotal'] += ($bill['subtotal'] ?? $bill['total_amount'] ?? 0);
         $patient_bills[$patient_key]['total_balance'] += ($bill['total_amount'] - ($bill['total_paid'] ?? 0));
         $patient_bills[$patient_key]['total_paid'] += ($bill['total_paid'] ?? 0);
-        $patient_bills[$patient_key]['total_discount'] += ($bill['pharmacy_discount'] ?? 0) + ($bill['discount_amount'] ?? 0);
+        $patient_bills[$patient_key]['total_discount'] += ($bill['pharmacy_discount'] ?? 0) + ($bill['discount_amount'] ?? 0) + ($bill['cashier_discount'] ?? 0);
         $patient_bills[$patient_key]['bill_count']++;
         $patient_bills[$patient_key]['total_pending_prescriptions'] += ($bill['pending_prescriptions'] ?? 0);
         $patient_bills[$patient_key]['total_confirmed_prescriptions'] += ($bill['confirmed_prescriptions'] ?? 0);
@@ -584,6 +599,9 @@ include_once '../../components/cashier_sidebar.php';
             --gray-700: #334155;
             --gray-800: #1E293B;
             --gray-900: #0F172A;
+            --deep-green: #064E3B;
+            --deep-green-dark: #042F2E;
+            --deep-green-light: #0D9488;
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow: 0 1px 3px rgba(0,0,0,0.08);
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
@@ -623,6 +641,9 @@ include_once '../../components/cashier_sidebar.php';
             --locked-bg: #3A1A1A;
             --gray-100: #1E293B;
             --gray-200: #334155;
+            --deep-green: #0D9488;
+            --deep-green-dark: #0F766E;
+            --deep-green-light: #14B8A6;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1024,28 +1045,33 @@ include_once '../../components/cashier_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.75rem;
-            min-width: 750px;
+            min-width: 850px;
         }
+        
+        /* ✅ DEEP GREEN TABLE HEADER */
         .data-table thead th {
             text-align: left;
-            padding: 10px 14px;
-            font-weight: 600;
-            font-size: 0.6rem;
+            padding: 12px 14px;
+            font-weight: 700;
+            font-size: 0.7rem;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.06em;
             color: white;
-            background: linear-gradient(135deg, var(--success), var(--success-dark));
-            border-bottom: none;
+            background: linear-gradient(135deg, #064E3B, #065F46, #0D9488);
+            border-bottom: 3px solid #14B8A6;
             white-space: nowrap;
             position: sticky;
             top: 0;
             z-index: 2;
         }
-        .data-table.otc-table thead th {
-            background: linear-gradient(135deg, #8B5CF6, #6D28D9);
-        }
         .data-table thead th:first-child { border-radius: var(--radius-xs) 0 0 0; }
         .data-table thead th:last-child { border-radius: 0 var(--radius-xs) 0 0; }
+        
+        .data-table.otc-table thead th {
+            background: linear-gradient(135deg, #4C1D95, #6D28D9, #8B5CF6);
+            border-bottom: 3px solid #A78BFA;
+        }
+        
         .data-table td {
             padding: 10px 14px;
             border-bottom: 1px solid var(--border-color);
@@ -1221,7 +1247,7 @@ include_once '../../components/cashier_sidebar.php';
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
             .patient-card-header { flex-direction: column; align-items: flex-start; }
             .patient-card-header .patient-totals { width: 100%; justify-content: flex-start; }
-            .data-table { min-width: 600px; }
+            .data-table { min-width: 700px; }
             .action-buttons { min-width: 60px; }
         }
         @media (max-width: 480px) {
@@ -1455,23 +1481,23 @@ include_once '../../components/cashier_sidebar.php';
                         <table class="data-table <?= $is_otc ? 'otc-table' : '' ?>">
                             <thead>
                                 <tr>
-                                    <th style="width:30px;">#</th>
+                                    <th style="width:30px;text-align:center;">#</th>
                                     <th style="min-width:110px;">Bill #</th>
                                     <?php if ($is_otc): ?>
                                         <th style="min-width:150px;">Items</th>
                                     <?php else: ?>
                                         <th style="min-width:80px;">Visit</th>
                                     <?php endif; ?>
-                                    <th style="min-width:80px;">Total</th>
-                                    <th style="min-width:80px;">Discount</th>
-                                    <th style="min-width:80px;">Paid</th>
+                                    <th style="min-width:80px;text-align:right;">Subtotal</th>
+                                    <th style="min-width:80px;text-align:right;">Discount</th>
+                                    <th style="min-width:80px;text-align:right;">Paid</th>
                                     <?php if ($is_admin): ?>
-                                        <th style="min-width:80px;">Balance</th>
+                                        <th style="min-width:80px;text-align:right;">Balance</th>
                                     <?php endif; ?>
-                                    <th style="min-width:70px;">Status</th>
-                                    <th style="min-width:40px;">Items</th>
+                                    <th style="min-width:70px;text-align:center;">Status</th>
+                                    <th style="min-width:40px;text-align:center;">Items</th>
                                     <th style="min-width:90px;">Created</th>
-                                    <th style="min-width:80px;">Actions</th>
+                                    <th style="min-width:80px;text-align:center;">Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
@@ -1479,11 +1505,12 @@ include_once '../../components/cashier_sidebar.php';
                                     $is_otc_bill = ($bill['bill_type'] ?? '') === 'otc';
                                     $has_payments = ($bill['payment_count'] ?? 0) > 0;
                                     $can_cancel = !$is_otc_bill && in_array($bill['status'], ['pending', 'partial']) && !$has_payments;
-                                    $discount = $bill['pharmacy_discount'] ?? 0;
+                                    $discount = ($bill['pharmacy_discount'] ?? 0) + ($bill['discount_amount'] ?? 0) + ($bill['cashier_discount'] ?? 0);
                                     $has_discount = $discount > 0;
                                     $status = $bill['status'] ?? ($is_otc_bill ? 'pending' : 'pending');
                                     $status_class = $is_otc_bill ? 'otc-pending' : $status;
                                     $bill_balance = ($bill['total_amount'] ?? 0) - ($bill['total_paid'] ?? 0);
+                                    $subtotal = $bill['subtotal'] ?? $bill['total_amount'] ?? 0;
                                     
                                     // ✅ Check if this bill has pending prescriptions (locked)
                                     $has_pending_prescriptions = ($bill['pending_prescriptions'] ?? 0) > 0;
@@ -1492,7 +1519,7 @@ include_once '../../components/cashier_sidebar.php';
                                     $row_class = $is_locked ? 'locked-row' : '';
                                 ?>
                                     <tr class="<?= $row_class ?>">
-                                        <td><?= $i++ ?></td>
+                                        <td style="text-align:center;"><?= $i++ ?></td>
                                         <td>
                                             <span class="bill-number">
                                                 <?= $is_otc_bill ? htmlspecialchars($bill['sale_number'] ?? $bill['bill_number'] ?? 'OTC-' . $bill['id']) : htmlspecialchars($bill['bill_number']) ?>
@@ -1535,22 +1562,22 @@ include_once '../../components/cashier_sidebar.php';
                                                 <?php endif; ?>
                                             </td>
                                         <?php endif; ?>
-                                        <td>
-                                            <span class="font-semibold"><?= $currency ?> <?= number_format($bill['total_amount'], 0) ?></span>
+                                        <td style="text-align:right;">
+                                            <span class="font-semibold"><?= $currency ?> <?= number_format($subtotal, 0) ?></span>
                                         </td>
-                                        <td>
-                                            <?php if ($has_discount || ($bill['discount_amount'] ?? 0) > 0): ?>
+                                        <td style="text-align:right;">
+                                            <?php if ($has_discount): ?>
                                                 <span style="color:var(--warning);font-weight:600;">
-                                                    -<?= $currency ?> <?= number_format(($discount + ($bill['discount_amount'] ?? 0)), 0) ?>
+                                                    <?= $currency ?> <?= number_format($discount, 0) ?>
                                                     <span class="discount-badge" style="display:block;margin-top:2px;">
-                                                        <i class="fas fa-tag"></i> <?= $is_otc_bill ? 'OTC' : 'Pharmacy' ?>
+                                                        <i class="fas fa-tag"></i> <?= $is_otc_bill ? 'OTC' : 'Total' ?>
                                                     </span>
                                                 </span>
                                             <?php else: ?>
                                                 <span class="text-xs text-gray-400">None</span>
                                             <?php endif; ?>
                                         </td>
-                                        <td>
+                                        <td style="text-align:right;">
                                             <span style="color:var(--success);">
                                                 <?= $currency ?> <?= number_format($bill['total_paid'] ?? 0, 0) ?>
                                             </span>
@@ -1559,13 +1586,13 @@ include_once '../../components/cashier_sidebar.php';
                                             <?php endif; ?>
                                         </td>
                                         <?php if ($is_admin): ?>
-                                            <td>
+                                            <td style="text-align:right;">
                                                 <span class="font-semibold" style="color:var(--danger);">
                                                     <?= $currency ?> <?= number_format($bill_balance, 0) ?>
                                                 </span>
                                             </td>
                                         <?php endif; ?>
-                                        <td>
+                                        <td style="text-align:center;">
                                             <?php if ($is_locked): ?>
                                                 <span class="status-badge locked">
                                                     <i class="fas fa-lock"></i> Locked
@@ -1586,7 +1613,7 @@ include_once '../../components/cashier_sidebar.php';
                                                 <?= isset($bill['created_at']) ? date('h:i A', strtotime($bill['created_at'])) : '' ?>
                                             </span>
                                         </td>
-                                        <td>
+                                        <td style="text-align:center;">
                                             <div class="action-buttons">
                                                 <?php if ($is_otc_bill): ?>
                                                     <a href="view_otc_sale.php?id=<?= $bill['id'] ?>" class="btn btn-otc" title="View OTC Sale">
@@ -1602,13 +1629,17 @@ include_once '../../components/cashier_sidebar.php';
                                                         <i class="fas fa-eye"></i> View
                                                     </a>
                                                     
-                                                    <?php if (!$is_locked && ($bill['total_amount'] ?? 0) > 0): ?>
+                                                    <?php if (!$is_locked && ($bill['total_amount'] ?? 0) > 0 && $bill_balance > 0): ?>
                                                         <a href="process_payment.php?bill_id=<?= $bill['id'] ?>" class="btn btn-process" title="Process Payment">
                                                             <i class="fas fa-money-bill-wave"></i> Pay
                                                         </a>
                                                     <?php elseif ($is_locked): ?>
                                                         <span class="action-status" title="Prescription pending confirmation">
                                                             <i class="fas fa-lock"></i> Wait Pharm
+                                                        </span>
+                                                    <?php elseif ($bill_balance <= 0): ?>
+                                                        <span class="action-status" style="background:var(--success-bg);color:var(--success);">
+                                                            <i class="fas fa-check-circle"></i> Paid
                                                         </span>
                                                     <?php endif; ?>
                                                     
@@ -1637,19 +1668,19 @@ include_once '../../components/cashier_sidebar.php';
                                         <i class="fas fa-calculator"></i> <?= $is_otc ? 'Customer' : 'Patient' ?> Total:
                                     </td>
                                     <td></td>
-                                    <td><?= $currency ?> <?= number_format($patient['total_amount'], 0) ?></td>
-                                    <td>
+                                    <td style="text-align:right;font-weight:700;"><?= $currency ?> <?= number_format($patient['total_subtotal'] ?? $patient['total_amount'], 0) ?></td>
+                                    <td style="text-align:right;">
                                         <?php if ($patient['total_discount'] > 0): ?>
                                             <span style="color:var(--warning);font-weight:600;">
-                                                -<?= $currency ?> <?= number_format($patient['total_discount'], 0) ?>
+                                                <?= $currency ?> <?= number_format($patient['total_discount'], 0) ?>
                                             </span>
                                         <?php else: ?>
                                             <span class="text-xs text-gray-400">None</span>
                                         <?php endif; ?>
                                     </td>
-                                    <td><?= $currency ?> <?= number_format($patient['total_paid'], 0) ?></td>
+                                    <td style="text-align:right;"><?= $currency ?> <?= number_format($patient['total_paid'], 0) ?></td>
                                     <?php if ($is_admin): ?>
-                                        <td style="color:var(--danger);"><?= $currency ?> <?= number_format($patient['total_balance'], 0) ?></td>
+                                        <td style="text-align:right;color:var(--danger);"><?= $currency ?> <?= number_format($patient['total_balance'], 0) ?></td>
                                         <td colspan="<?= $is_admin ? 4 : 5 ?>"></td>
                                     <?php else: ?>
                                         <td colspan="<?= $is_admin ? 4 : 5 ?>"></td>
@@ -1671,14 +1702,18 @@ include_once '../../components/cashier_sidebar.php';
                             </a>
                             <?php 
                                 $has_locked = false;
+                                $has_unpaid = false;
                                 foreach ($patient['bills'] as $bill) {
                                     if (($bill['pending_prescriptions'] ?? 0) > 0) {
                                         $has_locked = true;
-                                        break;
+                                    }
+                                    $bal = ($bill['total_amount'] ?? 0) - ($bill['total_paid'] ?? 0);
+                                    if ($bal > 0 && ($bill['pending_prescriptions'] ?? 0) == 0) {
+                                        $has_unpaid = true;
                                     }
                                 }
                             ?>
-                            <?php if (!$has_locked && !$is_admin): ?>
+                            <?php if ($has_unpaid && !$has_locked && !$is_admin): ?>
                                 <a href="process_payment.php?patient_id=<?= $patient['patient_id'] ?>" class="btn btn-process" style="width:auto;padding:6px 16px;">
                                     <i class="fas fa-money-bill-wave"></i> Pay All
                                 </a>
@@ -1811,12 +1846,13 @@ include_once '../../components/cashier_sidebar.php';
     updateFooterTime();
     setInterval(updateFooterTime, 1000);
 
-    console.log('%c🏥 Braick - Pending Bills (All Bills Shown)', 'font-size:18px;font-weight:bold;color:#059669;');
-    console.log('%c✅ FIXED: Shows ALL bills including prescriptions', 'font-size:13px;color:#34D399;');
+    console.log('%c🏥 Braick - Pending Bills (DEEP GREEN HEADER)', 'font-size:18px;font-weight:bold;color:#059669;');
+    console.log('%c✅ FIXED: SQL syntax error fixed', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ FIXED: Shows ONLY bills with balance > 0', 'font-size:13px;color:#34D399;');
+    console.log('%c✅ ADDED: Subtotal column with Dark Green Header', 'font-size:13px;color:#0D9488;');
     console.log('%c🔒 Prescription bills show as LOCKED until confirmed', 'font-size:13px;color:#DC2626;');
     console.log('%c✅ Confirmed prescriptions ready for payment', 'font-size:13px;color:#34D399;');
     console.log('%c📊 Total Bills: <?= $total_bills_count ?>', 'font-size:13px;color:#64748B;');
-    console.log('%c🔒 Locked Prescriptions: <?= $total_locked ?? 0 ?>', 'font-size:13px;color:#DC2626;');
 </script>
 
 </body>
