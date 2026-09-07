@@ -1,10 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/inventory.php
-// ADMIN - COMPLETE MEDICINE INVENTORY (GROUPED BY NAME WITH BATCHES)
-// WITH VIEW, EDIT, DELETE FUNCTIONALITY
-// WITH CUSTOM HEADER (MATCHES ADMIN DESIGN)
-// FIXED: Branch filter works correctly
+// ADMIN - COMPLETE MEDICINE INVENTORY
+// FIXED: All Branches shows ALL branches data combined
+// FIXED: Same medicine in different branches shown separately
 // ================================================================
 
 // ================================================================
@@ -29,10 +28,10 @@ if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
@@ -68,13 +67,6 @@ function formatMoney($amount) {
         return '0.00';
     }
     return number_format((float)$amount, 2, '.', ',');
-}
-
-function formatMoneyNoDecimal($amount) {
-    if ($amount === null || $amount === '') {
-        return '0';
-    }
-    return number_format((float)$amount, 0, '.', ',');
 }
 
 function formatMoneyShort($amount) {
@@ -115,15 +107,12 @@ try {
 }
 
 // ================================================================
-// GET CATEGORIES - FROM EXISTING DATA
+// GET CATEGORIES
 // ================================================================
 $med_categories = [];
 $stmt = $db->query("SELECT DISTINCT category FROM medications_inventory WHERE category IS NOT NULL AND category != '' ORDER BY category");
 $med_categories = $stmt->fetchAll();
 
-// ================================================================
-// PRE-DEFINED CATEGORIES
-// ================================================================
 $predefined_med_categories = [
     'Antibiotics', 'Painkillers', 'Antipyretics', 'Antihistamines',
     'Antacids', 'Antivirals', 'Antifungals', 'Antimalarials',
@@ -159,6 +148,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $expiry_date = $_POST['expiry_date'] ?? '';
         $batch_number = trim($_POST['batch_number'] ?? '');
         $status = $_POST['status'] ?? 'active';
+        $branch_id = isset($_POST['branch_id']) ? (int)$_POST['branch_id'] : $branch_id_for_query;
         
         if (empty($batch_number)) {
             $batch_number = 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
@@ -184,7 +174,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([
                     $medication_name, $category, $unit, $quantity, $reorder_level,
                     $unit_cost, $selling_price, $supplier, $expiry_date, $batch_number,
-                    $branch_id_for_query, $status
+                    $branch_id, $status
                 ]);
                 
                 $message = "✅ Medicine added successfully! Batch: <strong>$batch_number</strong>";
@@ -339,199 +329,236 @@ try {
 }
 
 // ================================================================
-// BUILD MEDICINE QUERY - FIXED WITH BRANCH FILTER
+// BUILD MEDICINE QUERY - FIXED FOR ALL BRANCHES
+// Shows same medicine in different branches as separate entries
 // ================================================================
 $med_query = "
     SELECT 
-        MIN(id) as id,
-        medication_name,
-        category,
-        unit,
-        branch_id,
+        MIN(m.id) as id,
+        m.medication_name,
+        m.category,
+        m.unit,
+        m.branch_id,
+        b.name as branch_name,
         SUM(CASE 
-            WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) 
-            THEN quantity 
+            WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE()) 
+            THEN m.quantity 
             ELSE 0 
         END) as total_quantity,
-        MIN(reorder_level) as reorder_level,
-        MIN(unit_cost) as unit_cost,
-        MIN(selling_price) as selling_price,
-        MIN(supplier) as supplier,
-        MIN(expiry_date) as expiry_date,
-        GROUP_CONCAT(id) as batch_ids,
-        GROUP_CONCAT(batch_number SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(quantity SEPARATOR '|') as batch_quantities,
-        GROUP_CONCAT(expiry_date SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(status SEPARATOR '|') as batch_statuses,
-        MIN(DATEDIFF(expiry_date, CURDATE())) as days_remaining,
+        MIN(m.reorder_level) as reorder_level,
+        MIN(m.unit_cost) as unit_cost,
+        MIN(m.selling_price) as selling_price,
+        MIN(m.supplier) as supplier,
+        MIN(m.expiry_date) as expiry_date,
+        GROUP_CONCAT(m.id) as batch_ids,
+        GROUP_CONCAT(m.batch_number SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(m.quantity SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(m.expiry_date SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(m.status SEPARATOR '|') as batch_statuses,
+        MIN(DATEDIFF(m.expiry_date, CURDATE())) as days_remaining,
         SUM(CASE 
-            WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) 
-            THEN quantity 
+            WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE()) 
+            THEN m.quantity 
             ELSE 0 
         END) as active_quantity
-    FROM medications_inventory 
+    FROM medications_inventory m
+    LEFT JOIN branches b ON m.branch_id = b.id
     WHERE 1=1
 ";
 
 $med_params = [];
 
-// Branch filter
+// ================================================================
+// CRITICAL FIX: Branch filter - If 'all', NO branch filter
+// Shows ALL branches combined
+// ================================================================
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
-    $med_query .= " AND branch_id = ?";
+    $med_query .= " AND m.branch_id = ?";
     $med_params[] = (int)$selected_branch_id;
-} else {
-    // If all, use user's branch for stats but show all
-    $med_query .= " AND branch_id = ?";
-    $med_params[] = $user_branch_id;
 }
+// If 'all', NO branch filter - shows ALL branches combined
 
 // Search filter
 if (!empty($search)) {
-    $med_query .= " AND medication_name LIKE ?";
+    $med_query .= " AND m.medication_name LIKE ?";
     $med_params[] = "%$search%";
 }
 
 // Category filter
 if (!empty($category_filter)) {
-    $med_query .= " AND category = ?";
+    $med_query .= " AND m.category = ?";
     $med_params[] = $category_filter;
 }
 
-// Expiry filter - must be applied before GROUP BY
+// Expiry filter
 if ($expiry_filter === 'expiring') {
-    $med_query .= " AND expiry_date IS NOT NULL 
-                    AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)";
+    $med_query .= " AND m.expiry_date IS NOT NULL 
+                    AND m.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)";
 }
 if ($expiry_filter === 'expired') {
-    $med_query .= " AND expiry_date IS NOT NULL AND expiry_date < CURDATE()";
+    $med_query .= " AND m.expiry_date IS NOT NULL AND m.expiry_date < CURDATE()";
 }
 
-$med_query .= " GROUP BY medication_name, category, unit, branch_id";
+// ================================================================
+// GROUP BY includes branch_id so same medicine in different branches
+// appears as separate entries
+// ================================================================
+$med_query .= " GROUP BY m.medication_name, m.category, m.unit, m.branch_id";
 
-// HAVING clauses - applied after GROUP BY
+// HAVING clauses
 $having_conditions = [];
 
 if ($status_filter === 'active') {
-    $having_conditions[] = "SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) THEN quantity ELSE 0 END) > 0";
+    $having_conditions[] = "SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE()) THEN m.quantity ELSE 0 END) > 0";
 } elseif ($status_filter === 'inactive') {
-    $having_conditions[] = "SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) THEN quantity ELSE 0 END) <= 0";
+    $having_conditions[] = "SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE()) THEN m.quantity ELSE 0 END) <= 0";
 }
 
 if ($stock_filter === 'low') {
-    $having_conditions[] = "SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) THEN quantity ELSE 0 END) > 0";
-    $having_conditions[] = "SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) THEN quantity ELSE 0 END) <= MIN(reorder_level)";
+    $having_conditions[] = "SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE()) THEN m.quantity ELSE 0 END) > 0";
+    $having_conditions[] = "SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE()) THEN m.quantity ELSE 0 END) <= MIN(m.reorder_level)";
 }
 if ($stock_filter === 'out') {
-    $having_conditions[] = "SUM(CASE WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) THEN quantity ELSE 0 END) = 0";
+    $having_conditions[] = "SUM(CASE WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE()) THEN m.quantity ELSE 0 END) = 0";
 }
 
 if (!empty($having_conditions)) {
     $med_query .= " HAVING " . implode(" AND ", $having_conditions);
 }
 
-$med_query .= " ORDER BY medication_name ASC";
+$med_query .= " ORDER BY m.medication_name ASC, b.name ASC";
 
 $stmt = $db->prepare($med_query);
 $stmt->execute($med_params);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
-// GET STATISTICS - MEDICINES (for selected branch)
+// GET STATISTICS - FOR CARDS (Summary)
+// Counts each branch entry separately
 // ================================================================
+// Build branch condition for stats
+$stats_branch_condition = "";
+$stats_params = [];
 
-// Total Medicines (active items with quantity > 0)
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT medication_name) as count 
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $stats_branch_condition = " AND branch_id = ?";
+    $stats_params[] = (int)$selected_branch_id;
+}
+// If 'all', no branch condition - gets ALL branches combined
+
+// Total Medicines (counts each branch entry separately)
+$sql = "
+    SELECT COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as count 
     FROM medications_inventory 
-    WHERE branch_id = ? 
-    AND status = 'active' 
+    WHERE status = 'active' 
     AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-");
-$stmt->execute([$branch_id_for_query]);
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
 $total_medicines = $stmt->fetch()['count'] ?? 0;
 
-// Medicine In Stock (active quantity > 0)
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT medication_name) as count 
+// Total Quantity (sum of all active quantities)
+$sql = "
+    SELECT COALESCE(SUM(quantity), 0) as total 
     FROM medications_inventory 
-    WHERE branch_id = ? 
-    AND status = 'active' 
+    WHERE status = 'active' 
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
+$total_quantity = $stmt->fetch()['total'] ?? 0;
+
+// In Stock (counts each branch entry separately)
+$sql = "
+    SELECT COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as count 
+    FROM medications_inventory 
+    WHERE status = 'active' 
     AND (expiry_date IS NULL OR expiry_date >= CURDATE())
     AND quantity > 0
-");
-$stmt->execute([$branch_id_for_query]);
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
 $med_in_stock = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Out of Stock (total active quantity = 0)
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT medication_name) as count 
+// Out of Stock (counts each branch entry separately)
+$sql = "
+    SELECT COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as count 
     FROM medications_inventory 
-    WHERE branch_id = ? 
-    AND status = 'active'
+    WHERE status = 'active'
     AND quantity = 0
-");
-$stmt->execute([$branch_id_for_query]);
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
 $med_out_of_stock = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Low Stock
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT medication_name) as count 
+// Low Stock (counts each branch entry separately)
+$sql = "
+    SELECT COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as count 
     FROM medications_inventory 
-    WHERE branch_id = ? 
-    AND status = 'active' 
+    WHERE status = 'active' 
     AND (expiry_date IS NULL OR expiry_date >= CURDATE())
     AND quantity > 0 
     AND quantity <= reorder_level
-");
-$stmt->execute([$branch_id_for_query]);
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
 $med_low_stock = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Expiring Soon
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT medication_name) as count 
+// Expiring Soon (counts each branch entry separately)
+$sql = "
+    SELECT COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as count 
     FROM medications_inventory 
-    WHERE branch_id = ? 
-    AND expiry_date IS NOT NULL 
+    WHERE expiry_date IS NOT NULL 
     AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     AND status = 'active'
-");
-$stmt->execute([$branch_id_for_query]);
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
 $med_expiring = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Expired (but still have active batches)
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT medication_name) as count 
+// Expired (counts each branch entry separately)
+$sql = "
+    SELECT COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as count 
     FROM medications_inventory 
-    WHERE branch_id = ? 
-    AND expiry_date IS NOT NULL 
+    WHERE expiry_date IS NOT NULL 
     AND expiry_date < CURDATE()
-");
-$stmt->execute([$branch_id_for_query]);
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
 $med_expired = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Inactive (no active quantity)
-$stmt = $db->prepare("
-    SELECT COUNT(DISTINCT medication_name) as count 
+// Inactive (counts each branch entry separately)
+$sql = "
+    SELECT COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as count 
     FROM medications_inventory 
-    WHERE branch_id = ? 
-    AND status = 'inactive'
-");
-$stmt->execute([$branch_id_for_query]);
+    WHERE status = 'inactive'
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
 $med_inactive = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Total Value (active quantity only)
-$stmt = $db->prepare("
-    SELECT SUM(quantity * selling_price) as total_value 
+// Total Value
+$sql = "
+    SELECT COALESCE(SUM(quantity * selling_price), 0) as total_value 
     FROM medications_inventory 
-    WHERE branch_id = ? 
-    AND status = 'active' 
+    WHERE status = 'active' 
     AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-");
-$stmt->execute([$branch_id_for_query]);
+    $stats_branch_condition
+";
+$stmt = $db->prepare($sql);
+$stmt->execute($stats_params);
 $med_value = $stmt->fetch(PDO::FETCH_ASSOC)['total_value'] ?? 0;
 
 // ================================================================
-// GET VIEW DATA - WITH ALL BATCHES FOR THE NAME
+// GET VIEW DATA
 // ================================================================
 $view_data = null;
 $view_batches = [];
@@ -555,7 +582,7 @@ if ($view_id > 0) {
 }
 
 // ================================================================
-// GET EDIT DATA - For editing a specific batch
+// GET EDIT DATA
 // ================================================================
 $edit_data = null;
 if ($edit_id > 0) {
@@ -569,12 +596,13 @@ if ($edit_id > 0) {
 // ================================================================
 $all_medicine_names = [];
 try {
-    $stmt = $db->prepare("
+    $sql = "
         SELECT DISTINCT medication_name, category, selling_price 
         FROM medications_inventory 
         WHERE branch_id = ? 
         ORDER BY medication_name
-    ");
+    ";
+    $stmt = $db->prepare($sql);
     $stmt->execute([$branch_id_for_query]);
     $all_medicine_names = $stmt->fetchAll();
 } catch (Exception $e) {
@@ -597,9 +625,10 @@ try {
 // PROFILE & LOGO
 // ================================================================
 $profile_pic_url = !empty($profile_pic) 
-    ? '/assets/uploads/profiles/' . $profile_pic 
-    : '/assets/uploads/profiles/default_avatar.png';
-$logo_path = '/assets/uploads/profiles/braick_logo.png';
+    ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
+    : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.PNG';
 
 // Display branch name
 $display_branch_name = 'All Branches';
@@ -613,18 +642,101 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
 }
 
 // ================================================================
-// SIDEBAR - INLINE FOR THIS PAGE ONLY
+// GET SIDEBAR STATISTICS
 // ================================================================
 $total_employees_sidebar = 0;
 $total_doctors_sidebar = 0;
 $total_branches_sidebar = 0;
+$module_counts = ['pharmacy' => 0, 'reception' => 0, 'laboratory' => 0, 'cashier' => 0];
+$total_patients_sidebar = 0;
+$today_patients_sidebar = 0;
+$total_services_sidebar = 0;
+$today_services_sidebar = 0;
+$pending_prescriptions_sidebar = 0;
+$pending_lab_tests_sidebar = 0;
+
 try {
-    $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
-    $total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-    $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-    $total_doctors_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $stats_branch = $selected_branch_id;
+    
+    if ($stats_branch === 'all') {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active'");
+    } else {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active' AND branch_id = ?");
+        $stmt->execute([(int)$stats_branch]);
+    }
+    $total_employees_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
+    if ($stats_branch === 'all') {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
+    } else {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ?");
+        $stmt->execute([(int)$stats_branch]);
+    }
+    $total_doctors_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
+    $modules = ['pharmacy', 'reception', 'laboratory', 'cashier'];
+    foreach ($modules as $module) {
+        if ($stats_branch === 'all') {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = ? AND status = 'active'");
+            $stmt->execute([$module]);
+        } else {
+            $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = ? AND status = 'active' AND branch_id = ?");
+            $stmt->execute([$module, (int)$stats_branch]);
+        }
+        $module_counts[$module] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    }
+    
+    if ($stats_branch === 'all') {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM patients");
+    } else {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
+        $stmt->execute([(int)$stats_branch]);
+    }
+    $total_patients_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
+    if ($stats_branch === 'all') {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM patients WHERE DATE(created_at) = CURDATE()");
+    } else {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
+        $stmt->execute([(int)$stats_branch]);
+    }
+    $today_patients_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
+    if ($stats_branch === 'all') {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled'");
+    } else {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled'");
+        $stmt->execute([(int)$stats_branch]);
+    }
+    $total_services_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
+    if ($stats_branch === 'all') {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled' AND DATE(created_at) = CURDATE()");
+    } else {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled' AND DATE(created_at) = CURDATE()");
+        $stmt->execute([(int)$stats_branch]);
+    }
+    $today_services_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
+    if ($stats_branch === 'all') {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status IN ('pending', 'confirmed')");
+    } else {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status IN ('pending', 'confirmed')");
+        $stmt->execute([(int)$stats_branch]);
+    }
+    $pending_prescriptions_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
+    if ($stats_branch === 'all') {
+        $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status IN ('pending', 'in_progress')");
+    } else {
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status IN ('pending', 'in_progress')");
+        $stmt->execute([(int)$stats_branch]);
+    }
+    $pending_lab_tests_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
     $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-    $total_branches_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+    $total_branches_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
+    
 } catch (Exception $e) {
     // ignore
 }
@@ -638,7 +750,7 @@ try {
     <title>Medicine Inventory - Braick Dispensary</title>
     
     <!-- ================================================================
-         FAVICON - INAONEKANA 100%
+         FAVICON
          ================================================================ -->
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
@@ -649,7 +761,7 @@ try {
     
     <style>
         /* ================================================================
-           ROOT VARIABLES - DARK MODE SUPPORT
+           ROOT VARIABLES
            ================================================================ */
         :root {
             --primary: #0B5ED7;
@@ -708,9 +820,268 @@ try {
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
         /* ================================================================
-           TOP NAV - SHARED HEADER STYLES
+           EMBEDDED SIDEBAR
            ================================================================ */
-        .top-nav {
+        .sidebar {
+            position: fixed; 
+            top: 0; 
+            left: 0; 
+            bottom: 0;
+            width: 270px; 
+            background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
+            color: white;
+            z-index: 50; 
+            overflow-y: auto;
+            overflow-x: hidden;
+            transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+            transform: translateX(0);
+            box-shadow: 4px 0 20px rgba(0,0,0,0.15);
+            scroll-behavior: smooth;
+        }
+        
+        [data-theme="dark"] .sidebar {
+            background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
+            box-shadow: 4px 0 30px rgba(0,0,0,0.5);
+        }
+        
+        .sidebar::-webkit-scrollbar { width: 5px; }
+        .sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
+        .sidebar::-webkit-scrollbar-thumb { background: #0AA84F; border-radius: 10px; }
+        
+        .sidebar-brand {
+            padding: 18px 16px 14px;
+            border-bottom: 2px solid rgba(255,255,255,0.08);
+            background: rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 5;
+            backdrop-filter: blur(10px);
+        }
+        
+        .sidebar-brand .logo {
+            width: 42px; 
+            height: 42px; 
+            border-radius: 10px;
+            object-fit: cover; 
+            background: white; 
+            padding: 4px;
+            border: 2px solid rgba(255,255,255,0.15);
+            transition: transform 0.3s ease;
+        }
+        
+        .sidebar-brand .brand-text { 
+            color: white; 
+            font-weight: 700; 
+            font-size: 0.95rem; 
+            line-height: 1.2;
+            letter-spacing: 0.5px;
+        }
+        
+        .sidebar-brand .brand-sub { 
+            color: #9EC5FE; 
+            font-size: 0.65rem; 
+            font-weight: 500;
+            letter-spacing: 0.3px;
+        }
+        
+        .sidebar-nav { 
+            padding: 10px 8px 20px; 
+        }
+        
+        .sidebar-nav .nav-label {
+            font-size: 0.5rem; 
+            text-transform: uppercase;
+            letter-spacing: 0.08em; 
+            color: #6EA8FE;
+            padding: 8px 10px 4px;
+            margin: 8px 0 2px; 
+            font-weight: 700;
+            opacity: 0.8;
+        }
+        
+        .sidebar-link {
+            display: flex; 
+            align-items: center; 
+            gap: 10px;
+            padding: 8px 12px; 
+            border-radius: 8px;
+            color: #D2E3FC; 
+            text-decoration: none;
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            font-size: 0.8rem; 
+            font-weight: 500;
+            margin: 1px 0;
+            background: transparent;
+            cursor: pointer;
+            border: none;
+            width: 100%;
+            text-align: left;
+            position: relative;
+        }
+        
+        .sidebar-link:hover {
+            background: rgba(10, 168, 79, 0.4);
+            color: white;
+            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.2);
+            transform: translateX(4px);
+        }
+        
+        .sidebar-link.active {
+            background: rgba(10, 168, 79, 0.5);
+            color: white;
+            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.3);
+        }
+        
+        .sidebar-link.active::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 15%;
+            bottom: 15%;
+            width: 4px;
+            background: #0AA84F;
+            border-radius: 0 4px 4px 0;
+            box-shadow: 0 0 12px rgba(10, 168, 79, 0.5);
+        }
+        
+        .sidebar-link i { 
+            width: 20px; 
+            text-align: center; 
+            font-size: 0.9rem; 
+            flex-shrink: 0;
+            opacity: 0.8;
+        }
+        
+        .sidebar-link .badge {
+            margin-left: auto;
+            background: rgba(255,255,255,0.12);
+            padding: 1px 8px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            font-weight: 600;
+            color: white;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+            min-width: 20px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.05);
+        }
+        
+        .sidebar-link .badge.danger {
+            background: #EF4444;
+            animation: pulse-badge 2s infinite;
+            border-color: #EF4444;
+        }
+        
+        .sidebar-link .badge.success {
+            background: #059669;
+            border-color: #059669;
+        }
+        
+        .sidebar-link.logout-link {
+            border-top: 2px solid rgba(255,255,255,0.06);
+            padding-top: 10px;
+            margin-top: 4px;
+            color: #FCA5A5;
+        }
+        
+        .sidebar-link.logout-link:hover {
+            background: #DC2626;
+            color: white;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
+            transform: translateX(4px);
+        }
+        
+        .sidebar-status {
+            padding: 10px 16px;
+            border-top: 2px solid rgba(255,255,255,0.06);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(0,0,0,0.1);
+            position: sticky;
+            bottom: 0;
+            backdrop-filter: blur(10px);
+        }
+        
+        .sidebar-status .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        
+        .sidebar-status .status-dot.online {
+            background: #34D399;
+            box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+            animation: pulse-dot 1.5s infinite;
+        }
+        
+        .sidebar-status .status-text {
+            font-size: 0.65rem;
+            color: #D2E3FC;
+            font-weight: 500;
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.3; transform: scale(0.8); }
+        }
+        
+        @keyframes pulse-badge {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.08); }
+        }
+        
+        #sidebarOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 45;
+            display: none;
+            backdrop-filter: blur(4px);
+        }
+        
+        #sidebarOverlay.active {
+            display: block !important;
+        }
+        
+        @media (min-width: 1025px) {
+            .sidebar {
+                transform: translateX(0) !important;
+                z-index: 50;
+            }
+            #sidebarOverlay {
+                display: none !important;
+            }
+        }
+        
+        @media (max-width: 1024px) {
+            .sidebar {
+                width: 280px;
+                transform: translateX(-100%);
+                z-index: 9999;
+                border-radius: 0 12px 12px 0;
+            }
+            .sidebar.open {
+                transform: translateX(0) !important;
+            }
+            #sidebarOverlay {
+                display: none;
+                z-index: 9998;
+            }
+            #sidebarOverlay.active {
+                display: block !important;
+            }
+        }
+        
+        /* ================================================================
+           EMBEDDED HEADER
+           ================================================================ */
+        .embedded-header {
             position: fixed;
             top: 0;
             left: 270px;
@@ -728,7 +1099,7 @@ try {
             box-shadow: var(--shadow-sm);
         }
         
-        .top-nav .search-wrapper {
+        .embedded-header .search-wrapper {
             display: flex;
             align-items: center;
             background: var(--bg-body);
@@ -739,12 +1110,12 @@ try {
             max-width: 500px;
         }
         
-        .top-nav .search-wrapper:focus-within {
+        .embedded-header .search-wrapper:focus-within {
             border-color: var(--primary);
             box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
         }
         
-        .top-nav .search-wrapper input {
+        .embedded-header .search-wrapper input {
             border: none;
             background: transparent;
             padding: 8px 14px;
@@ -754,11 +1125,11 @@ try {
             color: var(--text-primary);
         }
         
-        .top-nav .search-wrapper input::placeholder {
+        .embedded-header .search-wrapper input::placeholder {
             color: var(--text-secondary);
         }
         
-        .top-nav .search-wrapper .search-btn {
+        .embedded-header .search-wrapper .search-btn {
             background: var(--primary);
             color: white;
             border: none;
@@ -770,12 +1141,12 @@ try {
             white-space: nowrap;
         }
         
-        .top-nav .search-wrapper .search-btn:hover {
+        .embedded-header .search-wrapper .search-btn:hover {
             background: var(--primary-dark);
             transform: scale(1.02);
         }
         
-        .top-nav .datetime {
+        .embedded-header .datetime {
             font-size: 0.78rem;
             color: var(--text-secondary);
             font-weight: 500;
@@ -784,11 +1155,11 @@ try {
             gap: 6px;
         }
         
-        .top-nav .datetime i {
+        .embedded-header .datetime i {
             color: var(--success);
         }
         
-        .top-nav .avatar {
+        .embedded-header .avatar {
             width: 40px;
             height: 40px;
             border-radius: 50%;
@@ -798,12 +1169,12 @@ try {
             transition: all 0.3s;
         }
         
-        .top-nav .avatar:hover {
+        .embedded-header .avatar:hover {
             border-color: var(--primary);
             transform: scale(1.05);
         }
         
-        .top-nav .icon-btn {
+        .embedded-header .icon-btn {
             width: 38px;
             height: 38px;
             border-radius: 50%;
@@ -818,12 +1189,12 @@ try {
             position: relative;
         }
         
-        .top-nav .icon-btn:hover {
+        .embedded-header .icon-btn:hover {
             background: var(--bg-body);
             color: var(--primary);
         }
         
-        .notif-dot {
+        .embedded-header .notif-dot {
             position: absolute;
             top: 6px;
             right: 6px;
@@ -834,15 +1205,10 @@ try {
             animation: pulse-dot 2s infinite;
         }
         
-        .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--text-muted); animation: none; }
+        .embedded-header .notif-dot.has-notif { background: var(--danger); }
+        .embedded-header .notif-dot.no-notif { background: var(--text-muted); animation: none; }
         
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
-        
-        .dark-toggle-btn {
+        .embedded-header .dark-toggle-btn {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
@@ -856,14 +1222,14 @@ try {
             gap: 6px;
         }
         
-        .dark-toggle-btn:hover {
+        .embedded-header .dark-toggle-btn:hover {
             border-color: var(--primary);
             background: var(--bg-card);
         }
         
-        .dark-toggle-btn i { font-size: 0.9rem; }
+        .embedded-header .dark-toggle-btn i { font-size: 0.9rem; }
         
-        .branch-selector {
+        .embedded-header .branch-selector {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
@@ -875,118 +1241,8 @@ try {
             transition: all 0.3s;
         }
         
-        .branch-selector:focus {
+        .embedded-header .branch-selector:focus {
             border-color: var(--primary);
-        }
-        
-        /* ================================================================
-           SIDEBAR
-           ================================================================ */
-        .sidebar {
-            position: fixed;
-            top: 0;
-            left: 0;
-            bottom: 0;
-            width: 270px;
-            background: #0B4EA8;
-            color: white;
-            z-index: 50;
-            overflow-y: auto;
-            overflow-x: hidden;
-            transition: transform 0.3s ease-in-out;
-            transform: translateX(0);
-            box-shadow: 4px 0 20px rgba(0,0,0,0.15);
-        }
-        
-        .sidebar-brand {
-            padding: 18px 16px 14px;
-            border-bottom: 2px solid #0B3D8A;
-            background: #0B4EA8;
-            position: sticky;
-            top: 0;
-            z-index: 5;
-        }
-        
-        .sidebar-brand .logo {
-            width: 42px;
-            height: 42px;
-            border-radius: 10px;
-            object-fit: cover;
-            background: white;
-            padding: 4px;
-            border: 2px solid rgba(255,255,255,0.1);
-        }
-        
-        .sidebar-brand .brand-text { color: white; font-weight: 700; font-size: 0.95rem; line-height: 1.2; }
-        .sidebar-brand .brand-sub { color: #9EC5FE; font-size: 0.65rem; font-weight: 500; }
-        
-        .sidebar-nav { padding: 10px 8px 20px; }
-        .sidebar-nav .nav-label {
-            font-size: 0.5rem;
-            text-transform: uppercase;
-            letter-spacing: 0.08em;
-            color: #6EA8FE;
-            padding: 0 10px;
-            margin: 12px 0 4px;
-            font-weight: 700;
-        }
-        
-        .sidebar-link {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 8px 12px;
-            border-radius: 8px;
-            color: #D2E3FC;
-            text-decoration: none;
-            transition: all 0.25s ease;
-            font-size: 0.8rem;
-            font-weight: 500;
-            margin: 1px 0;
-            background: transparent;
-            cursor: pointer;
-            border: none;
-            width: 100%;
-            text-align: left;
-            position: relative;
-        }
-        
-        .sidebar-link:hover {
-            background: #0AA84F;
-            color: white;
-            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
-            transform: translateX(4px);
-        }
-        
-        .sidebar-link.active {
-            background: #0AA84F;
-            color: white;
-            box-shadow: 0 4px 12px rgba(10, 168, 79, 0.35);
-        }
-        
-        .sidebar-link.logout-link {
-            border-top: 2px solid rgba(255,255,255,0.08);
-            padding-top: 10px;
-            margin-top: 6px;
-            color: #FCA5A5;
-        }
-        
-        .sidebar-link.logout-link:hover {
-            background: #DC2626;
-            color: white;
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4);
-        }
-        
-        #sidebarOverlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 45;
-            display: none;
-            backdrop-filter: blur(2px);
         }
         
         /* ================================================================
@@ -1167,25 +1423,27 @@ try {
         }
         
         /* ================================================================
-           STATS GRID
+           STATS CARDS - 4 ROWS (2 rows of 4)
            ================================================================ */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(7, 1fr);
-            gap: 12px;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 16px;
             margin-bottom: 24px;
         }
         
         .stat-card {
-            border-radius: 12px;
-            padding: 14px 16px;
+            border-radius: 14px;
+            padding: 18px 20px;
             transition: all 0.3s ease;
             cursor: pointer;
             text-decoration: none;
             display: block;
             color: white;
             box-shadow: 0 2px 10px rgba(0,0,0,0.08);
-            min-height: 80px;
+            min-height: 100px;
+            position: relative;
+            overflow: hidden;
         }
         
         .stat-card:hover {
@@ -1194,29 +1452,64 @@ try {
         }
         
         .stat-card .stat-number {
-            font-size: 1.4rem;
+            font-size: 1.8rem;
             font-weight: 700;
             line-height: 1.2;
         }
         
         .stat-card .stat-label {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.85);
+            font-size: 0.65rem;
+            color: rgba(255,255,255,0.9);
             font-weight: 500;
-            margin-top: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
         }
         
         .stat-card .stat-icon {
-            font-size: 1.2rem;
+            font-size: 1.4rem;
             opacity: 0.8;
             float: right;
+            margin-top: -5px;
         }
         
-        .stat-card .stat-value {
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: rgba(255,255,255,0.7);
+        .stat-card .stat-sub {
+            font-size: 0.6rem;
+            color: rgba(255,255,255,0.75);
             margin-top: 2px;
+        }
+        
+        .stat-card .stat-badge-row {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+        
+        .stat-card .stat-badge {
+            font-size: 0.55rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.15);
+            color: white;
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+        }
+        
+        .stat-card .stat-badge.danger {
+            background: rgba(239, 68, 68, 0.3);
+            color: #FCA5A5;
+        }
+        
+        .stat-card .stat-badge.warning {
+            background: rgba(245, 158, 11, 0.3);
+            color: #FCD34D;
+        }
+        
+        .stat-card .stat-badge.success {
+            background: rgba(52, 211, 153, 0.2);
+            color: #6EE7B7;
         }
         
         .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
@@ -1226,6 +1519,7 @@ try {
         .stat-card.purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
         .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
         .stat-card.pink { background: linear-gradient(135deg, #DB2777, #BE185D); }
+        .stat-card.indigo { background: linear-gradient(135deg, #4F46E5, #4338CA); }
         
         /* ================================================================
            CARD
@@ -1435,7 +1729,7 @@ try {
         
         .data-table {
             width: 100%;
-            min-width: 1200px;
+            min-width: 1300px;
             border-collapse: separate;
             border-spacing: 0;
             font-size: 0.78rem;
@@ -1455,9 +1749,6 @@ try {
             white-space: nowrap;
             text-align: left;
         }
-        
-        .data-table thead th:first-child { border-radius: 8px 0 0 0; }
-        .data-table thead th:last-child { border-radius: 0 8px 0 0; }
         
         .data-table tbody tr:nth-child(even) {
             background: var(--primary-light);
@@ -1486,6 +1777,7 @@ try {
         .col-sno { width: 35px; text-align: center; }
         .col-name { min-width: 160px; }
         .col-category { min-width: 100px; }
+        .col-branch { min-width: 110px; }
         .col-qty { min-width: 60px; text-align: center; }
         .col-reorder { min-width: 70px; text-align: center; }
         .col-stock { min-width: 100px; }
@@ -1626,11 +1918,6 @@ try {
             color: var(--primary);
         }
         
-        [data-theme="dark"] .batch-number {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
         .action-btn {
             padding: 4px 10px;
             border-radius: 4px;
@@ -1706,18 +1993,6 @@ try {
             border: 2px solid #FCA5A5;
         }
         
-        [data-theme="dark"] .message-box.success {
-            background: #1A3A2A;
-            color: #34D399;
-            border-color: #34D399;
-        }
-        
-        [data-theme="dark"] .message-box.error {
-            background: #3A1A1A;
-            color: #F87171;
-            border-color: #F87171;
-        }
-        
         /* ================================================================
            EMPTY STATE
            ================================================================ */
@@ -1733,6 +2008,20 @@ try {
             display: block;
             margin-bottom: 10px;
         }
+        
+        /* ================================================================
+           FOOTER
+           ================================================================ */
+        .footer {
+            padding: 12px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         /* ================================================================
            MODAL
@@ -2035,8 +2324,6 @@ try {
         
         .view-item.full-width { grid-column: 1 / -1; }
         
-        [data-theme="dark"] .view-item { background: #1E293B; }
-        
         .batches-table-wrap {
             overflow-x: auto;
             margin-top: 10px;
@@ -2071,14 +2358,6 @@ try {
             background: var(--success-light);
         }
         
-        [data-theme="dark"] .batches-table tbody tr:nth-child(even) {
-            background: #1E293B;
-        }
-        
-        [data-theme="dark"] .batches-table tbody tr:hover td {
-            background: #1A3A2A;
-        }
-        
         .delete-warning {
             text-align: center;
             padding: 20px;
@@ -2103,84 +2382,51 @@ try {
         }
         
         /* ================================================================
-           FOOTER
-           ================================================================ */
-        .footer {
-            padding: 12px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 20px;
-            text-align: center;
-            font-size: 0.65rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1200px) {
-            .stats-grid { grid-template-columns: repeat(4, 1fr); }
+            .stats-grid { grid-template-columns: repeat(4, 1fr); gap: 12px; }
         }
         
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav { left: 0; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .sidebar { transform: translateX(-100%); }
-            .sidebar.open { transform: translateX(0); }
-            #sidebarOverlay.show { display: block; }
+            .embedded-header { left: 0; }
+            .embedded-header .search-wrapper { max-width: 300px; }
         }
         
         @media (max-width: 992px) {
-            .stats-grid { grid-template-columns: repeat(3, 1fr); }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
-            .stats-grid { grid-template-columns: repeat(2, 1fr); }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 10px; }
+            .stat-card { padding: 14px 16px; min-height: 80px; }
+            .stat-card .stat-number { font-size: 1.3rem; }
             .search-form { flex-direction: column; align-items: stretch; }
             .search-form input, .search-form select { min-width: 100%; }
             .filter-group { justify-content: center; }
             .card { padding: 12px 14px; }
-            .modal-content { padding: 16px; }
+            .page-header-box { flex-direction: column; align-items: stretch !important; }
+            .page-header-box .page-title { font-size: 1.2rem; }
+            .embedded-header .datetime { display: none; }
+            .header-actions { flex-direction: column; align-items: stretch; width: 100%; }
+            .header-actions .btn-add-medicine { width: 100%; justify-content: center; }
             .form-grid { grid-template-columns: 1fr; }
             .form-grid .full-width { grid-column: 1; }
             .category-input-group { flex-direction: column; }
             .batch-input-group { flex-direction: column; }
             .batch-input-group .btn-generate { width: 100%; justify-content: center; }
-            .page-header-box .page-title { font-size: 1.3rem; }
-            .stat-card .stat-number { font-size: 1.1rem; }
-            .stat-card { padding: 10px 12px; min-height: 65px; }
-            .header-actions { flex-direction: column; align-items: stretch; width: 100%; }
-            .header-actions .btn-add-medicine { width: 100%; justify-content: center; }
-            .view-grid { grid-template-columns: 1fr; }
             .form-actions { flex-direction: column; }
             .form-actions .btn-save, .form-actions .btn-cancel { width: 100%; justify-content: center; }
-            .page-header-box { flex-direction: column; align-items: stretch !important; }
-            .top-nav .datetime { display: none; }
         }
         
         @media (max-width: 480px) {
-            .stats-grid { grid-template-columns: 1fr 1fr; }
-            .stat-card .stat-number { font-size: 0.9rem; }
-            .stat-card { padding: 8px 10px; min-height: 55px; }
+            .stats-grid { grid-template-columns: 1fr 1fr; gap: 8px; }
+            .stat-card { padding: 10px 12px; min-height: 65px; }
+            .stat-card .stat-number { font-size: 1rem; }
             .stat-card .stat-icon { font-size: 1rem; }
             .data-table { min-width: 750px; font-size: 0.65rem; }
             .data-table th, .data-table td { padding: 4px 6px; }
-            .col-price { min-width: 90px; font-size: 0.7rem; }
             .modal-content { padding: 12px; }
         }
     </style>
@@ -2188,53 +2434,98 @@ try {
 <body>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR OVERLAY -->
+<!-- SIDEBAR OVERLAY (Mobile) -->
 <!-- ================================================================ -->
 <div id="sidebarOverlay"></div>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR -->
+<!-- EMBEDDED SIDEBAR -->
 <!-- ================================================================ -->
 <aside class="sidebar" id="sidebar">
     <div class="sidebar-brand">
-        <div style="display:flex;align-items:center;gap:12px;">
-            <img src="<?= $logo_path ?>" alt="Braick Logo" class="logo" 
+        <div class="flex items-center gap-3">
+            <img src="<?= $logo_path ?>" alt="Braick Logo" class="logo"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div>
                 <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub">Super Admin</p>
+                <p class="brand-sub">👑 Super Admin</p>
             </div>
         </div>
     </div>
     
     <nav class="sidebar-nav">
-        <div class="nav-label">Main Menu</div>
-        <a href="/pages/admin/dashboard.php" class="sidebar-link"><i class="fas fa-home"></i> Dashboard</a>
-        <a href="/pages/admin/employees.php" class="sidebar-link"><i class="fas fa-users"></i> Employees</a>
-        <a href="/pages/admin/patients.php" class="sidebar-link"><i class="fas fa-user-injured"></i> Patients</a>
+        <div class="nav-label">📋 Main Menu</div>
+        <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-home"></i> <span class="link-text">Dashboard</span>
+        </a>
+        <a href="employees.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-users"></i> <span class="link-text">Employees</span>
+            <span class="badge"><?= $total_employees_sidebar ?></span>
+        </a>
+        <a href="patients.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-user-injured"></i> <span class="link-text">Patients</span>
+            <span class="badge"><?= $total_patients_sidebar ?></span>
+            <?php if ($today_patients_sidebar > 0): ?>
+                <span class="badge success">+<?= $today_patients_sidebar ?></span>
+            <?php endif; ?>
+        </a>
         
-        <div class="nav-label">Modules</div>
-        <a href="/pages/admin/doctors_list.php" class="sidebar-link"><i class="fas fa-user-md"></i> Doctors</a>
-        <a href="/pages/admin/view_pharmacy.php" class="sidebar-link"><i class="fas fa-prescription"></i> Pharmacy</a>
-        <a href="/pages/admin/view_reception.php" class="sidebar-link"><i class="fas fa-headset"></i> Reception</a>
-        <a href="/pages/admin/view_laboratory.php" class="sidebar-link"><i class="fas fa-flask"></i> Laboratory</a>
-        <a href="/pages/admin/view_cashier.php" class="sidebar-link"><i class="fas fa-cash-register"></i> Cashier</a>
+        <div class="nav-label">⚙️ Modules</div>
+        <a href="doctors_list.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-user-md"></i> <span class="link-text">Doctors</span>
+            <span class="badge"><?= $total_doctors_sidebar ?></span>
+        </a>
+        <a href="view_pharmacy.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-prescription"></i> <span class="link-text">Pharmacy</span>
+            <span class="badge"><?= $module_counts['pharmacy'] ?? 0 ?></span>
+            <?php if ($pending_prescriptions_sidebar > 0): ?>
+                <span class="badge danger"><?= $pending_prescriptions_sidebar ?></span>
+            <?php endif; ?>
+        </a>
+        <a href="view_reception.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-headset"></i> <span class="link-text">Reception</span>
+            <span class="badge"><?= $module_counts['reception'] ?? 0 ?></span>
+        </a>
+        <a href="view_laboratory.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-flask"></i> <span class="link-text">Laboratory</span>
+            <span class="badge"><?= $module_counts['laboratory'] ?? 0 ?></span>
+            <?php if ($pending_lab_tests_sidebar > 0): ?>
+                <span class="badge danger"><?= $pending_lab_tests_sidebar ?></span>
+            <?php endif; ?>
+        </a>
+        <a href="view_cashier.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-cash-register"></i> <span class="link-text">Cashier</span>
+            <span class="badge"><?= $module_counts['cashier'] ?? 0 ?></span>
+        </a>
         
-        <div class="nav-label">Management</div>
-        <a href="/pages/admin/branches.php" class="sidebar-link"><i class="fas fa-store-alt"></i> Branches</a>
-        <a href="/pages/admin/departments.php" class="sidebar-link"><i class="fas fa-building"></i> Departments</a>
-        <a href="/pages/admin/reports.php" class="sidebar-link"><i class="fas fa-chart-bar"></i> Reports</a>
+        <div class="nav-label">🏢 Management</div>
+        <a href="branches.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-store-alt"></i> <span class="link-text">Branches</span>
+            <span class="badge"><?= $total_branches_sidebar ?></span>
+        </a>
+        <a href="reports.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
+            <i class="fas fa-chart-bar"></i> <span class="link-text">Reports</span>
+        </a>
         
-        <div class="nav-label">Account</div>
-        <a href="/pages/admin/profile.php" class="sidebar-link"><i class="fas fa-user-circle"></i> Profile</a>
-        <a href="/pages/logout.php" class="sidebar-link logout-link"><i class="fas fa-sign-out-alt"></i> Logout</a>
+        <div class="nav-label">👤 Account</div>
+        <a href="profile.php" class="sidebar-link">
+            <i class="fas fa-user-circle"></i> <span class="link-text">Profile</span>
+        </a>
+        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
+            <i class="fas fa-sign-out-alt"></i> <span class="link-text">Logout</span>
+        </a>
     </nav>
+    
+    <div class="sidebar-status">
+        <span class="status-dot online"></span>
+        <span class="status-text">Online</span>
+    </div>
 </aside>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER STYLE -->
+<!-- EMBEDDED HEADER -->
 <!-- ================================================================ -->
-<nav class="top-nav">
+<header class="embedded-header">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="icon-btn lg:hidden">
             <i class="fas fa-bars text-lg"></i>
@@ -2259,7 +2550,6 @@ try {
             <?php endforeach; ?>
         </select>
         
-        <!-- CLOCK WITH DATE AND TIME -->
         <span class="datetime" id="currentDateTime">
             <i class="fas fa-clock" style="color:#059669;"></i>
             <span id="clockDisplay"><?= date('d M Y • h:i:s A') ?></span>
@@ -2275,13 +2565,12 @@ try {
             <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
-        <!-- PROFILE PICTURE - ADMIN ALIYE LOGIN -->
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
-</nav>
+</header>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
@@ -2305,7 +2594,7 @@ try {
                 </a>
             </h1>
             <p class="page-subtitle">
-                <strong><?= $total_medicines ?></strong> unique medicines
+                <strong><?= $total_medicines ?></strong> entries across branches
                 <span class="header-badge medicines">
                     <i class="fas fa-pills"></i> <?= $med_in_stock ?> In Stock
                 </span>
@@ -2341,47 +2630,68 @@ try {
     <!-- STATS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
+        <!-- Card 1: Total Medicines -->
         <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="stat-card blue">
             <span class="stat-icon"><i class="fas fa-pills"></i></span>
             <div class="stat-number"><?= $total_medicines ?></div>
-            <div class="stat-label">Total Medicines</div>
-            <div class="stat-value">💊 <?= formatMoneyShort($med_value) ?></div>
+            <div class="stat-label">Total Entries</div>
+            <div class="stat-sub">📦 <?= number_format($total_quantity) ?> units</div>
         </a>
+        
+        <!-- Card 2: In Stock -->
+        <a href="inventory.php?tab=medicines&status=active&branch=<?= $selected_branch_id ?>" class="stat-card green">
+            <span class="stat-icon"><i class="fas fa-check-circle"></i></span>
+            <div class="stat-number"><?= $med_in_stock ?></div>
+            <div class="stat-label">In Stock</div>
+            <div class="stat-sub">Available entries</div>
+        </a>
+        
+        <!-- Card 3: Low Stock -->
         <a href="inventory.php?tab=medicines&stock=low&branch=<?= $selected_branch_id ?>" class="stat-card orange">
             <span class="stat-icon"><i class="fas fa-exclamation-triangle"></i></span>
             <div class="stat-number"><?= $med_low_stock ?></div>
             <div class="stat-label">Low Stock</div>
             <div class="stat-sub">Below reorder level</div>
         </a>
+        
+        <!-- Card 4: Out of Stock -->
         <a href="inventory.php?tab=medicines&stock=out&branch=<?= $selected_branch_id ?>" class="stat-card red">
             <span class="stat-icon"><i class="fas fa-times-circle"></i></span>
             <div class="stat-number"><?= $med_out_of_stock ?></div>
             <div class="stat-label">Out of Stock</div>
             <div class="stat-sub">Quantity = 0</div>
         </a>
+        
+        <!-- Card 5: Expiring Soon -->
         <a href="inventory.php?tab=medicines&expiry=expiring&branch=<?= $selected_branch_id ?>" class="stat-card teal">
             <span class="stat-icon"><i class="fas fa-clock"></i></span>
             <div class="stat-number"><?= $med_expiring ?></div>
             <div class="stat-label">Expiring Soon</div>
             <div class="stat-sub">Within 30 days</div>
         </a>
+        
+        <!-- Card 6: Has Expired -->
         <a href="inventory.php?tab=medicines&expiry=expired&branch=<?= $selected_branch_id ?>" class="stat-card red">
             <span class="stat-icon"><i class="fas fa-skull"></i></span>
             <div class="stat-number"><?= $med_expired ?></div>
             <div class="stat-label">Has Expired Batches</div>
             <div class="stat-sub">Some batches expired</div>
         </a>
-        <a href="inventory.php?tab=medicines&status=active&branch=<?= $selected_branch_id ?>" class="stat-card green">
-            <span class="stat-icon"><i class="fas fa-check-circle"></i></span>
-            <div class="stat-number"><?= $med_in_stock ?></div>
-            <div class="stat-label">In Stock</div>
-            <div class="stat-sub">Available</div>
-        </a>
+        
+        <!-- Card 7: Inactive -->
         <a href="inventory.php?tab=medicines&status=inactive&branch=<?= $selected_branch_id ?>" class="stat-card purple">
             <span class="stat-icon"><i class="fas fa-archive"></i></span>
             <div class="stat-number"><?= $med_inactive ?></div>
             <div class="stat-label">Inactive</div>
             <div class="stat-sub">No active batches</div>
+        </a>
+        
+        <!-- Card 8: Total Value -->
+        <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="stat-card indigo">
+            <span class="stat-icon"><i class="fas fa-coins"></i></span>
+            <div class="stat-number">TSh <?= formatMoneyShort($med_value) ?></div>
+            <div class="stat-label">Total Value</div>
+            <div class="stat-sub">Inventory worth</div>
         </a>
     </div>
 
@@ -2406,7 +2716,7 @@ try {
             <?php endif; ?>
         </div>
         
-        <form method="GET" class="search-form">
+        <form method="GET" class="search-form" id="filterForm">
             <input type="hidden" name="tab" value="medicines">
             <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
             <input type="text" name="search" placeholder="🔍 Search medicine..." value="<?= htmlspecialchars($search) ?>">
@@ -2431,13 +2741,12 @@ try {
             <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
                 <h3 class="card-title">
                     <i class="fas fa-list title-blue"></i> Medicine List
-                    <span class="result-count">(<strong><?= count($medicines) ?></strong> unique medicines)</span>
+                    <span class="result-count">(<strong><?= count($medicines) ?></strong> entries)</span>
                     <?php if ($total_medicines > 0): ?>
                         <span class="result-count ml-2">Total Value: <strong>TSh <?= formatMoney($med_value) ?></strong></span>
                     <?php endif; ?>
                 </h3>
             </div>
-            <!-- SLIDING ARROWS -->
             <div class="scroll-arrows">
                 <button class="scroll-arrow-btn" onclick="scrollTable('left')" title="Scroll Left">
                     <i class="fas fa-chevron-left"></i>
@@ -2457,6 +2766,7 @@ try {
                                 <th class="col-sno">#</th>
                                 <th class="col-name">Name</th>
                                 <th class="col-category">Category</th>
+                                <th class="col-branch">Branch</th>
                                 <th class="col-qty">Total Qty</th>
                                 <th class="col-reorder">Reorder</th>
                                 <th class="col-stock">Stock</th>
@@ -2473,8 +2783,8 @@ try {
                             <?php $counter = 1; ?>
                             <?php foreach ($medicines as $item): ?>
                                 <?php
-                                    $total_qty = $item['total_quantity'] ?? 0;
                                     $active_qty = $item['active_quantity'] ?? 0;
+                                    $branch_name = $item['branch_name'] ?? 'Unknown';
                                     
                                     $stock_status = 'ok';
                                     $stock_label = 'In Stock';
@@ -2526,6 +2836,9 @@ try {
                                         <div style="font-size:0.65rem;color:var(--text-secondary);"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
                                     </td>
                                     <td class="col-category"><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
+                                    <td class="col-branch">
+                                        <span style="font-weight:600;color:var(--primary);">🏥 <?= htmlspecialchars($branch_name) ?></span>
+                                    </td>
                                     <td class="col-qty"><strong><?= $active_qty ?></strong></td>
                                     <td class="col-reorder"><?= $item['reorder_level'] ?></td>
                                     <td class="col-stock">
@@ -2619,9 +2932,11 @@ try {
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-400 mx-2">|</span>
-            Medicine Inventory (Grouped by Name)
+            Medicine Inventory
             <span class="text-gray-400 mx-2">|</span>
-            Total Value: <strong>TSh <?= formatMoney($med_value) ?></strong>
+            <strong><?= $total_medicines ?></strong> entries · 
+            <strong><?= number_format($total_quantity) ?></strong> units · 
+            TSh <strong><?= formatMoney($med_value) ?></strong>
             <span class="text-gray-400 mx-2">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
@@ -2643,7 +2958,6 @@ try {
         
         <form method="POST" action="" id="addMedicineForm">
             <input type="hidden" name="action" value="add_medicine">
-            <input type="hidden" name="branch_id" value="<?= $branch_id_for_query ?>">
             
             <div class="form-grid">
                 <div class="full-width form-row">
@@ -2687,6 +3001,18 @@ try {
                         <option value="strip">Strip</option>
                         <option value="vial">Vial</option>
                         <option value="sachet">Sachet</option>
+                    </select>
+                </div>
+                
+                <div class="form-row">
+                    <label class="form-label">Branch <span class="required">*</span></label>
+                    <select name="branch_id" class="form-control" required>
+                        <option value="">Select Branch</option>
+                        <?php foreach ($branches as $b): ?>
+                            <option value="<?= $b['id'] ?>" <?= ($selected_branch_id != 'all' && $selected_branch_id == $b['id']) ? 'selected' : '' ?>>
+                                🏥 <?= htmlspecialchars($b['name']) ?>
+                            </option>
+                        <?php endforeach; ?>
                     </select>
                 </div>
                 
@@ -2755,349 +3081,53 @@ try {
 </div>
 
 <!-- ================================================================ -->
-<!-- EDIT MEDICINE MODAL -->
-<!-- ================================================================ -->
-<?php if ($edit_data): ?>
-<div class="modal-overlay show" id="editMedicineModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-edit"></i> Edit Medicine Batch
-            </div>
-            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="modal-close">&times;</a>
-        </div>
-        
-        <form method="POST" action="" id="editMedicineForm">
-            <input type="hidden" name="action" value="edit_medicine">
-            <input type="hidden" name="id" value="<?= $edit_data['id'] ?>">
-            
-            <div class="form-grid">
-                <div class="full-width form-row">
-                    <label class="form-label">Medicine Name <span class="required">*</span></label>
-                    <input type="text" name="medication_name" class="form-control" 
-                           value="<?= htmlspecialchars($edit_data['medication_name']) ?>" required>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Category</label>
-                    <div class="category-input-group">
-                        <select name="category" id="editMedCategorySelect" class="form-control">
-                            <option value="">Select</option>
-                            <?php foreach ($predefined_med_categories as $cat): ?>
-                                <option value="<?= htmlspecialchars($cat) ?>" <?= $edit_data['category'] == $cat ? 'selected' : '' ?>>
-                                    <?= htmlspecialchars($cat) ?>
-                                </option>
-                            <?php endforeach; ?>
-                            <option value="__other__">+ Other</option>
-                        </select>
-                        <input type="text" name="category_manual" id="editMedCategoryManual" class="form-control" 
-                               placeholder="Custom category..." style="display:none;" value="<?= htmlspecialchars($edit_data['category'] ?? '') ?>">
-                        <button type="button" class="btn-toggle" onclick="toggleCategory('editMed')">
-                            <i class="fas fa-edit"></i> Manual
-                        </button>
-                    </div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Unit</label>
-                    <select name="unit" class="form-control">
-                        <option value="pcs" <?= $edit_data['unit'] == 'pcs' ? 'selected' : '' ?>>Pieces (pcs)</option>
-                        <option value="tablets" <?= $edit_data['unit'] == 'tablets' ? 'selected' : '' ?>>Tablets</option>
-                        <option value="capsules" <?= $edit_data['unit'] == 'capsules' ? 'selected' : '' ?>>Capsules</option>
-                        <option value="ml" <?= $edit_data['unit'] == 'ml' ? 'selected' : '' ?>>Milliliters (ml)</option>
-                        <option value="mg" <?= $edit_data['unit'] == 'mg' ? 'selected' : '' ?>>Milligrams (mg)</option>
-                        <option value="g" <?= $edit_data['unit'] == 'g' ? 'selected' : '' ?>>Grams (g)</option>
-                        <option value="bottle" <?= $edit_data['unit'] == 'bottle' ? 'selected' : '' ?>>Bottle</option>
-                        <option value="box" <?= $edit_data['unit'] == 'box' ? 'selected' : '' ?>>Box</option>
-                        <option value="strip" <?= $edit_data['unit'] == 'strip' ? 'selected' : '' ?>>Strip</option>
-                        <option value="vial" <?= $edit_data['unit'] == 'vial' ? 'selected' : '' ?>>Vial</option>
-                        <option value="sachet" <?= $edit_data['unit'] == 'sachet' ? 'selected' : '' ?>>Sachet</option>
-                    </select>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Quantity <span class="required">*</span></label>
-                    <input type="number" name="quantity" class="form-control" placeholder="0" min="0" 
-                           value="<?= $edit_data['quantity'] ?>" required>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Reorder Level <span class="required">*</span></label>
-                    <input type="number" name="reorder_level" class="form-control" value="<?= $edit_data['reorder_level'] ?>" min="0" required>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Buying Price (TSh)</label>
-                    <input type="text" name="unit_cost" class="form-control money-input" 
-                           value="<?= number_format($edit_data['unit_cost'] ?? 0, 0) ?>">
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                    <input type="text" name="selling_price" class="form-control money-input" 
-                           value="<?= number_format($edit_data['selling_price'] ?? 0, 0) ?>" required>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Supplier</label>
-                    <input type="text" name="supplier" class="form-control" value="<?= htmlspecialchars($edit_data['supplier'] ?? '') ?>">
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Expiry Date</label>
-                    <input type="date" name="expiry_date" class="form-control" 
-                           value="<?= $edit_data['expiry_date'] && $edit_data['expiry_date'] !== '0000-00-00' ? $edit_data['expiry_date'] : '' ?>">
-                    <div class="help-text">Leave empty = No expiry (Active Forever)</div>
-                </div>
-                
-                <div class="full-width form-row">
-                    <label class="form-label">Batch Number</label>
-                    <input type="text" name="batch_number" class="form-control" 
-                           value="<?= htmlspecialchars($edit_data['batch_number'] ?? '') ?>">
-                    <div class="help-text">Batch number</div>
-                </div>
-                
-                <div class="form-row">
-                    <label class="form-label">Status</label>
-                    <select name="status" class="form-control">
-                        <option value="active" <?= $edit_data['status'] == 'active' ? 'selected' : '' ?>>Active</option>
-                        <option value="inactive" <?= $edit_data['status'] == 'inactive' ? 'selected' : '' ?>>Inactive</option>
-                    </select>
-                </div>
-            </div>
-            
-            <div class="form-actions">
-                <button type="submit" class="btn-save"><i class="fas fa-save"></i> Update Batch</button>
-                <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="btn-cancel"><i class="fas fa-times"></i> Cancel</a>
-            </div>
-        </form>
-    </div>
-</div>
-<?php endif; ?>
-
-<!-- ================================================================ -->
-<!-- DELETE CONFIRMATION MODAL -->
-<!-- ================================================================ -->
-<?php if ($delete_id > 0): ?>
-<div class="modal-overlay show" id="deleteModal">
-    <div class="modal-content" style="max-width:500px;">
-        <div class="modal-header">
-            <div class="modal-title" style="color:var(--danger);">
-                <i class="fas fa-exclamation-triangle"></i> Confirm Delete
-            </div>
-            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="modal-close">&times;</a>
-        </div>
-        
-        <form method="POST" action="">
-            <input type="hidden" name="action" value="delete_medicine">
-            <input type="hidden" name="id" value="<?= $delete_id ?>">
-            <input type="hidden" name="confirmed" value="1">
-            
-            <div class="delete-warning">
-                <i class="fas fa-trash-alt"></i>
-                <div class="warning-text">Are you sure you want to delete this batch?</div>
-                <div class="sub-text">This action cannot be undone!</div>
-            </div>
-            
-            <div class="form-actions" style="justify-content:center;">
-                <button type="submit" class="btn-save" style="background:var(--danger);">
-                    <i class="fas fa-trash"></i> Yes, Delete
-                </button>
-                <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="btn-cancel">
-                    <i class="fas fa-times"></i> Cancel
-                </a>
-            </div>
-        </form>
-    </div>
-</div>
-<?php endif; ?>
-
-<!-- ================================================================ -->
-<!-- VIEW MODAL - Shows ALL Batches -->
-<!-- ================================================================ -->
-<?php if ($view_data && !empty($view_batches)): ?>
-<div class="modal-overlay show" id="viewModal">
-    <div class="modal-content">
-        <div class="modal-header">
-            <div class="modal-title">
-                <i class="fas fa-eye"></i> Medicine Details - <?= htmlspecialchars($view_name) ?>
-            </div>
-            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="modal-close">&times;</a>
-        </div>
-        
-        <div class="view-grid">
-            <div class="view-item full-width">
-                <div class="label">Name</div>
-                <div class="value"><?= htmlspecialchars($view_name) ?></div>
-            </div>
-            <div class="view-item">
-                <div class="label">Category</div>
-                <div class="value"><?= htmlspecialchars($view_data['category'] ?? 'N/A') ?></div>
-            </div>
-            <div class="view-item">
-                <div class="label">Unit</div>
-                <div class="value"><?= htmlspecialchars($view_data['unit'] ?? 'pcs') ?></div>
-            </div>
-            <div class="view-item">
-                <div class="label">Total Quantity</div>
-                <div class="value">
-                    <?php 
-                        $total_qty = 0;
-                        foreach ($view_batches as $batch) {
-                            if ($batch['status'] === 'active' && (empty($batch['expiry_date']) || $batch['expiry_date'] >= date('Y-m-d'))) {
-                                $total_qty += $batch['quantity'];
-                            }
-                        }
-                    ?>
-                    <strong><?= $total_qty ?></strong>
-                    <?php if ($total_qty <= 0): ?>
-                        <span class="stock-badge out">Out of Stock</span>
-                    <?php elseif ($total_qty <= $view_data['reorder_level']): ?>
-                        <span class="stock-badge low">Low Stock</span>
-                    <?php else: ?>
-                        <span class="stock-badge ok">In Stock</span>
-                    <?php endif; ?>
-                </div>
-            </div>
-            <div class="view-item">
-                <div class="label">Reorder Level</div>
-                <div class="value"><?= $view_data['reorder_level'] ?></div>
-            </div>
-            <div class="view-item">
-                <div class="label">Selling Price</div>
-                <div class="value">
-                    <?= ($view_data['selling_price'] ?? 0) > 0 ? 'TSh ' . number_format($view_data['selling_price'], 0) : 'FREE' ?>
-                </div>
-            </div>
-            <div class="view-item">
-                <div class="label">Supplier</div>
-                <div class="value"><?= htmlspecialchars($view_data['supplier'] ?? 'N/A') ?></div>
-            </div>
-            <div class="view-item">
-                <div class="label">Status</div>
-                <div class="value">
-                    <span class="status-badge <?= $total_qty > 0 ? 'active' : 'inactive' ?>">
-                        <?= $total_qty > 0 ? 'ACTIVE' : 'INACTIVE' ?>
-                    </span>
-                </div>
-            </div>
-        </div>
-        
-        <div style="margin-top:16px;">
-            <div style="font-size:0.8rem;font-weight:600;margin-bottom:8px;color:var(--text-primary);">
-                <i class="fas fa-layer-group"></i> Batches (<?= count($view_batches) ?>)
-            </div>
-            <div class="batches-table-wrap">
-                <table class="batches-table">
-                    <thead>
-                        <tr>
-                            <th style="width:30%;">Batch</th>
-                            <th style="width:15%;text-align:center;">Quantity</th>
-                            <th style="width:25%;">Expiry</th>
-                            <th style="width:15%;text-align:center;">Days</th>
-                            <th style="width:15%;text-align:center;">Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($view_batches as $batch): 
-                            $batch_expiry = $batch['expiry_date'] ?? '';
-                            $batch_status = $batch['status'] ?? 'active';
-                            $batch_qty = $batch['quantity'] ?? 0;
-                            
-                            $exp_status = 'no-expiry';
-                            $days_left = '-';
-                            $status_label = 'Active';
-                            $status_class = 'active';
-                            
-                            if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00') {
-                                $days_left = (strtotime($batch_expiry) - time()) / 86400;
-                                $days_left = round($days_left);
-                                
-                                if ($days_left < 0) {
-                                    $exp_status = 'expired';
-                                    $status_label = 'Expired';
-                                    $status_class = 'inactive';
-                                } elseif ($days_left <= 30) {
-                                    $exp_status = 'expiring';
-                                    $status_label = 'Expiring Soon';
-                                    $status_class = 'active';
-                                } else {
-                                    $exp_status = 'valid';
-                                    $status_label = 'Valid';
-                                    $status_class = 'active';
-                                }
-                            } else {
-                                $exp_status = 'no-expiry';
-                                $status_label = 'Active';
-                                $status_class = 'active';
-                                $days_left = '∞';
-                            }
-                            
-                            if ($batch_status === 'inactive') {
-                                $status_label = 'Inactive';
-                                $status_class = 'inactive';
-                            }
-                        ?>
-                            <tr>
-                                <td><span class="batch-number"><?= htmlspecialchars($batch['batch_number'] ?? 'N/A') ?></span></td>
-                                <td style="text-align:center;font-weight:600;"><?= $batch_qty ?></td>
-                                <td>
-                                    <?php if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00'): ?>
-                                        <span class="expiry-badge <?= $exp_status ?>">
-                                            <?= date('d/m/Y', strtotime($batch_expiry)) ?>
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="expiry-badge no-expiry">
-                                            <i class="fas fa-infinity"></i> No Expiry
-                                        </span>
-                                    <?php endif; ?>
-                                </td>
-                                <td style="text-align:center;">
-                                    <?php if ($days_left === '∞'): ?>
-                                        <span class="days-remaining forever">
-                                            <i class="fas fa-infinity"></i> ∞
-                                        </span>
-                                    <?php elseif ($days_left !== '-'): ?>
-                                        <span class="days-remaining <?= $days_left < 0 ? 'danger' : ($days_left <= 30 ? 'warning' : 'good') ?>">
-                                            <?php if ($days_left < 0): ?>
-                                                <i class="fas fa-skull"></i> EXP
-                                            <?php elseif ($days_left <= 30): ?>
-                                                <i class="fas fa-clock"></i> <?= $days_left ?>d
-                                            <?php else: ?>
-                                                <i class="fas fa-check"></i> <?= $days_left ?>d
-                                            <?php endif; ?>
-                                        </span>
-                                    <?php else: ?>
-                                        <span class="days-remaining forever">
-                                            <i class="fas fa-infinity"></i> ∞
-                                        </span>
-                                    <?php endif; ?>
-                                </td>
-                                <td style="text-align:center;">
-                                    <span class="status-badge <?= $status_class ?>">
-                                        <?= $status_label ?>
-                                    </span>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <div class="form-actions">
-            <a href="inventory.php?tab=medicines&branch=<?= $selected_branch_id ?>" class="btn-cancel">
-                <i class="fas fa-times"></i> Close
-            </a>
-        </div>
-    </div>
-</div>
-<?php endif; ?>
-
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
+<!-- JAVASCRIPT (Full) -->
 <!-- ================================================================ -->
 <script>
+// ================================================================
+// SIDEBAR TOGGLE
+// ================================================================
+(function() {
+    var sidebar = document.getElementById('sidebar');
+    var toggleBtn = document.getElementById('sidebarToggle');
+    var overlay = document.getElementById('sidebarOverlay');
+    
+    function toggleSidebar() {
+        if (!sidebar) return;
+        sidebar.classList.toggle('open');
+        if (overlay) {
+            if (sidebar.classList.contains('open')) {
+                overlay.style.display = 'block';
+                overlay.classList.add('active');
+                document.body.style.overflow = 'hidden';
+            } else {
+                overlay.style.display = 'none';
+                overlay.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+        }
+    }
+    
+    if (toggleBtn) {
+        toggleBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            toggleSidebar();
+        });
+    }
+    
+    if (overlay) {
+        overlay.addEventListener('click', function() {
+            if (sidebar) {
+                sidebar.classList.remove('open');
+                overlay.style.display = 'none';
+                overlay.classList.remove('active');
+                document.body.style.overflow = '';
+            }
+        });
+    }
+})();
+
 // ================================================================
 // DARK MODE TOGGLE
 // ================================================================
@@ -3108,32 +3138,16 @@ try {
     var htmlElement = document.documentElement;
     
     var savedDarkMode = localStorage.getItem('darkMode');
-    var cookieDarkMode = document.cookie.split('; ').find(function(row) {
-        return row.startsWith('dark_mode=');
-    });
-    
-    var isDark = false;
     if (savedDarkMode === 'true') {
-        isDark = true;
-    } else if (cookieDarkMode) {
-        isDark = cookieDarkMode.split('=')[1] === 'true';
-    }
-    
-    if (isDark) {
         htmlElement.setAttribute('data-theme', 'dark');
         if (darkIcon) darkIcon.className = 'fas fa-sun';
         if (darkText) darkText.textContent = 'Light';
-    } else {
-        htmlElement.removeAttribute('data-theme');
-        if (darkIcon) darkIcon.className = 'fas fa-moon';
-        if (darkText) darkText.textContent = 'Dark';
     }
     
     if (darkModeToggle) {
         darkModeToggle.addEventListener('click', function(e) {
             e.preventDefault();
             var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
-            
             if (isDarkNow) {
                 htmlElement.removeAttribute('data-theme');
                 if (darkIcon) darkIcon.className = 'fas fa-moon';
@@ -3152,7 +3166,7 @@ try {
 })();
 
 // ================================================================
-// CLOCK - UPDATE EVERY SECOND
+// CLOCK
 // ================================================================
 function updateClock() {
     var now = new Date();
@@ -3180,47 +3194,7 @@ function switchBranch(branchId) {
 }
 
 // ================================================================
-// SIDEBAR TOGGLE
-// ================================================================
-var sidebar = document.getElementById('sidebar');
-var sidebarToggle = document.getElementById('sidebarToggle');
-var overlay = document.getElementById('sidebarOverlay');
-
-function toggleSidebar() {
-    sidebar.classList.toggle('open');
-    overlay.classList.toggle('show');
-    document.body.style.overflow = sidebar.classList.contains('open') ? 'hidden' : '';
-}
-
-sidebarToggle?.addEventListener('click', function(e) {
-    e.stopPropagation();
-    toggleSidebar();
-});
-
-overlay?.addEventListener('click', function() {
-    sidebar.classList.remove('open');
-    overlay.classList.remove('show');
-    document.body.style.overflow = '';
-});
-
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-        sidebar.classList.remove('open');
-        overlay.classList.remove('show');
-        document.body.style.overflow = '';
-    }
-});
-
-window.addEventListener('resize', function() {
-    if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-        sidebar.classList.remove('open');
-        overlay.classList.remove('show');
-        document.body.style.overflow = '';
-    }
-});
-
-// ================================================================
-// SEARCH FUNCTIONALITY
+// SEARCH
 // ================================================================
 var searchBtn = document.getElementById('searchBtn');
 var searchInput = document.getElementById('searchInput');
@@ -3238,7 +3212,7 @@ searchInput?.addEventListener('keypress', function(e) {
     if (e.key === 'Enter') performSearch();
 });
 
-// Keyboard shortcut: Ctrl+K to focus search
+// Keyboard shortcut
 document.addEventListener('keydown', function(e) {
     if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
@@ -3250,12 +3224,11 @@ document.addEventListener('keydown', function(e) {
 });
 
 // ================================================================
-// TABLE SCROLL WITH ARROWS
+// TABLE SCROLL
 // ================================================================
 function scrollTable(direction) {
     var container = document.getElementById('tableScrollContainer');
     if (!container) return;
-    
     var scrollAmount = 300;
     if (direction === 'left') {
         container.scrollLeft -= scrollAmount;
@@ -3276,7 +3249,6 @@ function scrollTable(direction) {
     
     input.addEventListener('input', function() {
         var query = this.value.toLowerCase().trim();
-        
         if (query.length < 1) {
             autocomplete.classList.remove('show');
             return;
@@ -3324,7 +3296,6 @@ function scrollTable(direction) {
     var selectedIndex = -1;
     input.addEventListener('keydown', function(e) {
         var items = autocomplete.querySelectorAll('.autocomplete-item');
-        
         if (e.key === 'ArrowDown') {
             e.preventDefault();
             selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
@@ -3504,7 +3475,7 @@ function toggleCategory(type) {
 }
 
 // ================================================================
-// GENERATE BATCH NUMBER
+// GENERATE BATCH
 // ================================================================
 function generateBatch(type) {
     var now = new Date();
@@ -3526,13 +3497,16 @@ function confirmDelete(id, name) {
 }
 
 // ================================================================
-// CONSOLE LOG
+// CONSOLE
 // ================================================================
-console.log('%c💊 Admin - Medicine Inventory (Grouped by Name)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c💊 Admin - Medicine Inventory', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
 console.log('%c✅ Branch Filter: <?= $selected_branch_id ?>', 'font-size:13px; color:#059669;');
-console.log('%c✅ Medicines: <?= $total_medicines ?>', 'font-size:13px; color:#059669;');
+console.log('%c✅ If "all" - shows ALL branches data combined (each branch separate)', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Total Entries: <?= $total_medicines ?>', 'font-size:13px; color:#0891B2;');
+console.log('%c✅ Total Quantity: <?= number_format($total_quantity) ?> units', 'font-size:13px; color:#0891B2;');
 console.log('%c💰 Total Value: TSh <?= formatMoney($med_value) ?>', 'font-size:13px; color:#D97706;');
-console.log('%c✅ Branch filter works correctly!', 'font-size:13px; color:#34D399;');
+console.log('%c🖼️ Logo: <?= $logo_path ?>', 'font-size:12px; color:#6EA8FE;');
+console.log('%c✅ Same medicine in different branches shown separately', 'font-size:13px; color:#34D399; font-weight:bold;');
 </script>
 
 </body>

@@ -217,56 +217,100 @@ $otc_count = $otc_data['count'] ?? 0;
 $otc_total = $otc_data['total'] ?? 0;
 
 // ================================================================
-// ✅ 9. MEDICATION STOCK
+// ✅ 9. MEDICATION STOCK - SHOWS: Total Items, Total Quantity, Low Stock, Out of Stock
 // ================================================================
 $stmt = $db->query("
     SELECT 
-        SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END) as out_of_stock,
-        SUM(CASE WHEN quantity > 0 AND quantity <= reorder_level THEN 1 ELSE 0 END) as low_stock
+        COUNT(DISTINCT medication_name) as total_items,
+        COALESCE(SUM(quantity), 0) as total_quantity,
+        COUNT(DISTINCT CASE 
+            WHEN quantity > 0 AND quantity <= reorder_level 
+            AND status = 'active' 
+            AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+            THEN medication_name 
+        END) as low_stock_items,
+        COUNT(DISTINCT CASE 
+            WHEN quantity <= 0 
+            AND status = 'active'
+            THEN medication_name 
+        END) as out_of_stock_items
     FROM medications_inventory 
     WHERE status = 'active' 
     $branch_filter
 ");
 $stock_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$med_out_of_stock = $stock_data['out_of_stock'] ?? 0;
-$med_low_stock = $stock_data['low_stock'] ?? 0;
+$med_total_items = $stock_data['total_items'] ?? 0;
+$med_total_quantity = $stock_data['total_quantity'] ?? 0;
+$med_low_stock = $stock_data['low_stock_items'] ?? 0;
+$med_out_of_stock = $stock_data['out_of_stock_items'] ?? 0;
 
 // ================================================================
-// ✅ 10. MEDICATION EXPIRY
+// ✅ 10. MEDICATION EXPIRY - HESABU TOTAL UNITS ZILIZO EXPIRE
 // ================================================================
 $today_date = date('Y-m-d');
 $stmt = $db->query("
     SELECT 
-        SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN 1 ELSE 0 END) as expired,
-        SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN 1 ELSE 0 END) as expiring_soon
+        COALESCE(SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN quantity ELSE 0 END), 0) as expired_quantity,
+        COALESCE(SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN quantity ELSE 0 END), 0) as expiring_soon_quantity,
+        COUNT(DISTINCT CASE 
+            WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00'
+            THEN medication_name 
+        END) as expired_items,
+        COUNT(DISTINCT CASE 
+            WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00'
+            THEN medication_name 
+        END) as expiring_soon_items
     FROM medications_inventory 
     WHERE status = 'active' 
     $branch_filter
 ");
 $expiry_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$med_expired = $expiry_data['expired'] ?? 0;
-$med_expiring_soon = $expiry_data['expiring_soon'] ?? 0;
+$med_expired_quantity = $expiry_data['expired_quantity'] ?? 0;
+$med_expiring_quantity = $expiry_data['expiring_soon_quantity'] ?? 0;
+$med_expired_items = $expiry_data['expired_items'] ?? 0;
+$med_expiring_items = $expiry_data['expiring_soon_items'] ?? 0;
 
 // ================================================================
-// ✅ 11. MEDICAL EQUIPMENT - Shows ALL equipment
+// ✅ 11. MEDICAL EQUIPMENT - SHOWS: Total Items, Total Quantity, Low Stock, Out of Stock
 // ================================================================
 $stmt = $db->query("
     SELECT 
-        COUNT(*) as total_equipment,
-        SUM(CASE WHEN quantity <= 0 THEN 1 ELSE 0 END) as out_of_stock,
-        SUM(CASE WHEN quantity > 0 AND quantity <= reorder_level THEN 1 ELSE 0 END) as low_stock,
-        SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN 1 ELSE 0 END) as expired,
-        SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN 1 ELSE 0 END) as expiring_soon
+        COUNT(DISTINCT equipment_name) as total_items,
+        COALESCE(SUM(quantity), 0) as total_quantity,
+        COUNT(DISTINCT CASE 
+            WHEN quantity > 0 AND quantity <= reorder_level 
+            AND status = 'active' 
+            AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+            THEN equipment_name 
+        END) as low_stock_items,
+        COUNT(DISTINCT CASE 
+            WHEN quantity <= 0 
+            AND status = 'active'
+            THEN equipment_name 
+        END) as out_of_stock_items,
+        COALESCE(SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN quantity ELSE 0 END), 0) as expired_quantity,
+        COALESCE(SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN quantity ELSE 0 END), 0) as expiring_soon_quantity,
+        COUNT(DISTINCT CASE 
+            WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00'
+            THEN equipment_name 
+        END) as expired_items,
+        COUNT(DISTINCT CASE 
+            WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00'
+            THEN equipment_name 
+        END) as expiring_soon_items
     FROM medical_equipment 
     WHERE status = 'active' 
     $branch_filter
 ");
 $equipment_data = $stmt->fetch(PDO::FETCH_ASSOC);
-$total_equipment = $equipment_data['total_equipment'] ?? 0;
-$equip_out_of_stock = $equipment_data['out_of_stock'] ?? 0;
-$equip_low_stock = $equipment_data['low_stock'] ?? 0;
-$equip_expired = $equipment_data['expired'] ?? 0;
-$equip_expiring_soon = $equipment_data['expiring_soon'] ?? 0;
+$equip_total_items = $equipment_data['total_items'] ?? 0;
+$equip_total_quantity = $equipment_data['total_quantity'] ?? 0;
+$equip_low_stock = $equipment_data['low_stock_items'] ?? 0;
+$equip_out_of_stock = $equipment_data['out_of_stock_items'] ?? 0;
+$equip_expired_quantity = $equipment_data['expired_quantity'] ?? 0;
+$equip_expiring_quantity = $equipment_data['expiring_soon_quantity'] ?? 0;
+$equip_expired_items = $equipment_data['expired_items'] ?? 0;
+$equip_expiring_items = $equipment_data['expiring_soon_items'] ?? 0;
 
 // ================================================================
 // CHART DATA - Last 7 Days Revenue (uses paid_amount)
@@ -877,12 +921,12 @@ include_once '../../components/admin_sidebar.php';
         }
         
         .stat-card .stat-badge.danger {
-            background: rgba(239, 68, 68, 0.2);
+            background: rgba(239, 68, 68, 0.25);
             color: #FCA5A5;
         }
         
         .stat-card .stat-badge.warning {
-            background: rgba(245, 158, 11, 0.2);
+            background: rgba(245, 158, 11, 0.25);
             color: #FCD34D;
         }
         
@@ -1345,31 +1389,27 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 6. MEDICATION STOCK -> inventory.php -->
+        <!-- 6. MEDICATION STOCK - SHOWS: Total Items, Total Quantity, Low Stock, Out of Stock -->
         <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-stock">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Medication Stock</p>
-                        <p class="stat-number">
-                            <?php 
-                                $total_med_stock_issues = $med_out_of_stock + $med_low_stock;
-                                echo number_format($total_med_stock_issues);
-                            ?>
-                        </p>
+                        <p class="stat-number"><?= number_format($med_total_items) ?></p>
+                        <p class="stat-sub">📦 <?= number_format($med_total_quantity) ?> total units</p>
                         <div class="stat-badge-row">
-                            <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $med_out_of_stock ?> Out</span>
                             <span class="stat-badge warning"><i class="fas fa-exclamation-triangle"></i> <?= $med_low_stock ?> Low</span>
+                            <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $med_out_of_stock ?> Out</span>
                         </div>
                     </div>
                     <div class="stat-icon"><i class="fas fa-pills"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-warehouse"></i> Needs attention</div>
+                <div class="stat-trend"><i class="fas fa-warehouse"></i> <?= $med_total_items ?> unique items</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 7. MEDICATION EXPIRY -> inventory.php?filter=expired -->
+        <!-- 7. MEDICATION EXPIRY - SHOWS: Expired & Expiring Soon -->
         <a href="inventory.php?filter=expired&branch=<?= $selected_branch_id ?>" class="stat-card card-expiry">
             <div class="card-content">
                 <div class="card-top">
@@ -1377,43 +1417,42 @@ include_once '../../components/admin_sidebar.php';
                         <p class="stat-label">Medication Expiry</p>
                         <p class="stat-number">
                             <?php 
-                                $total_med_expiry_issues = $med_expired + $med_expiring_soon;
-                                echo number_format($total_med_expiry_issues);
+                                $total_expired_items = $med_expired_items + $med_expiring_items;
+                                echo number_format($total_expired_items);
                             ?>
                         </p>
+                        <p class="stat-sub">📦 <?= number_format($med_expired_quantity + $med_expiring_quantity) ?> units affected</p>
                         <div class="stat-badge-row">
-                            <span class="stat-badge danger"><i class="fas fa-skull"></i> <?= $med_expired ?> Expired</span>
-                            <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $med_expiring_soon ?> Soon</span>
+                            <span class="stat-badge danger"><i class="fas fa-skull"></i> <?= $med_expired_items ?> Expired</span>
+                            <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $med_expiring_items ?> Soon</span>
                         </div>
                     </div>
                     <div class="stat-icon"><i class="fas fa-calendar-times"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-clock"></i> Needs disposal</div>
+                <div class="stat-trend"><i class="fas fa-clock"></i> <?= $total_expired_items ?> items affected</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 8. MEDICAL EQUIPMENT -> equipment_inventory.php -->
+        <!-- 8. MEDICAL EQUIPMENT - SHOWS: Total Items, Total Quantity, Low Stock, Out of Stock -->
         <a href="equipment_inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-equipment">
             <div class="card-content">
                 <div class="card-top">
                     <div>
                         <p class="stat-label">Medical Equipment</p>
-                        <p class="stat-number">
-                            <?= number_format($total_equipment) ?>
-                        </p>
+                        <p class="stat-number"><?= number_format($equip_total_items) ?></p>
+                        <p class="stat-sub">📦 <?= number_format($equip_total_quantity) ?> total units</p>
                         <div class="stat-badge-row" style="flex-wrap: wrap; gap: 3px;">
-                            <span class="stat-badge" style="background: rgba(255,255,255,0.15);"><i class="fas fa-boxes"></i> Total: <?= $total_equipment ?></span>
-                            <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $equip_out_of_stock ?> Out</span>
                             <span class="stat-badge warning"><i class="fas fa-exclamation-triangle"></i> <?= $equip_low_stock ?> Low</span>
-                            <span class="stat-badge danger"><i class="fas fa-calendar-times"></i> <?= $equip_expired ?> Expired</span>
-                            <span class="stat-badge warning"><i class="fas fa-clock"></i> <?= $equip_expiring_soon ?> Soon</span>
+                            <span class="stat-badge danger"><i class="fas fa-times-circle"></i> <?= $equip_out_of_stock ?> Out</span>
+                            <?php if ($equip_expired_items > 0 || $equip_expiring_items > 0): ?>
+                                <span class="stat-badge danger"><i class="fas fa-calendar-times"></i> <?= $equip_expired_items + $equip_expiring_items ?> Expiry</span>
+                            <?php endif; ?>
                         </div>
-                        <p class="stat-sub" style="margin-top: 3px;">All equipment inventory</p>
                     </div>
                     <div class="stat-icon"><i class="fas fa-microscope"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-tools"></i> <?= $total_equipment ?> items total</div>
+                <div class="stat-trend"><i class="fas fa-tools"></i> <?= $equip_total_items ?> unique items</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1705,23 +1744,22 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c💊 Prescription Revenue (Display Only - Already in Bills): TSh <?= number_format($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c💸 Total Expenses: TSh <?= number_format($total_expenses) ?>', 'font-size:13px; color:#E11D48;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit) ?> (<?= $profit_percentage ?>%)', 'font-size:13px; color:<?= $net_profit >= 0 ? '#059669' : '#EF4444' ?>;');
-    console.log('%c🔬 Medical Equipment: <?= $total_equipment ?> total (Out: <?= $equip_out_of_stock ?>, Low: <?= $equip_low_stock ?>, Expired: <?= $equip_expired ?>, Soon: <?= $equip_expiring_soon ?>)', 'font-size:13px; color:#4F46E5;');
-    console.log('%c✅ FIXED: Revenue uses paid_amount from bills (not final_price)', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Bills with visit_id NOT NULL (consultation bills)', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Lab test status ignored - patient already paid', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: OTC from otc_sales table', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Equipment shows TOTAL <?= $total_equipment ?> items (not issues)', 'font-size:13px; color:#059669;');
-    console.log('%c✅ FIXED: Prescription NOT double-counted in total revenue', 'font-size:13px; color:#059669; font-weight:bold;');
-    console.log('%c📊 Revenue Formula: Total = Bills(paid_amount) + OTC', 'font-size:13px; color:#0B5ED7; font-weight:bold;');
-    console.log('%c🔗 Navigation Links Updated:', 'font-size:13px; color:#4F46E5; font-weight:bold;');
-    console.log('%c   ├─ Revenue → revenue.php', 'font-size:11px; color:#4F46E5;');
-    console.log('%c   ├─ Expenses → expenses.php', 'font-size:11px; color:#4F46E5;');
-    console.log('%c   ├─ Profit → profit.php', 'font-size:11px; color:#4F46E5;');
-    console.log('%c   ├─ Prescriptions → prescriptions.php', 'font-size:11px; color:#4F46E5;');
-    console.log('%c   ├─ OTC → ../pharmacy/otc_sales.php', 'font-size:11px; color:#4F46E5;');
-    console.log('%c   ├─ Stock → inventory.php', 'font-size:11px; color:#4F46E5;');
-    console.log('%c   ├─ Expiry → inventory.php?filter=expired', 'font-size:11px; color:#4F46E5;');
-    console.log('%c   └─ Equipment → equipment_inventory.php', 'font-size:11px; color:#4F46E5;');
+    console.log('%c💊 MEDICATION STOCK:', 'font-size:14px; color:#0891B2; font-weight:bold;');
+    console.log('%c   ├─ Total Items: <?= $med_total_items ?> unique medicines', 'font-size:12px; color:#0891B2;');
+    console.log('%c   ├─ Total Quantity: <?= number_format($med_total_quantity) ?> units', 'font-size:12px; color:#0891B2;');
+    console.log('%c   ├─ Low Stock: <?= $med_low_stock ?> items', 'font-size:12px; color:#FCD34D;');
+    console.log('%c   └─ Out of Stock: <?= $med_out_of_stock ?> items', 'font-size:12px; color:#FCA5A5;');
+    console.log('%c💊 MEDICATION EXPIRY:', 'font-size:14px; color:#DC2626; font-weight:bold;');
+    console.log('%c   ├─ Expired Items: <?= $med_expired_items ?> items (<?= number_format($med_expired_quantity) ?> units)', 'font-size:12px; color:#FCA5A5;');
+    console.log('%c   └─ Expiring Soon: <?= $med_expiring_items ?> items (<?= number_format($med_expiring_quantity) ?> units)', 'font-size:12px; color:#FCD34D;');
+    console.log('%c🔬 MEDICAL EQUIPMENT:', 'font-size:14px; color:#4F46E5; font-weight:bold;');
+    console.log('%c   ├─ Total Items: <?= $equip_total_items ?> unique items', 'font-size:12px; color:#4F46E5;');
+    console.log('%c   ├─ Total Quantity: <?= number_format($equip_total_quantity) ?> units', 'font-size:12px; color:#4F46E5;');
+    console.log('%c   ├─ Low Stock: <?= $equip_low_stock ?> items', 'font-size:12px; color:#FCD34D;');
+    console.log('%c   ├─ Out of Stock: <?= $equip_out_of_stock ?> items', 'font-size:12px; color:#FCA5A5;');
+    console.log('%c   ├─ Expired: <?= $equip_expired_items ?> items (<?= number_format($equip_expired_quantity) ?> units)', 'font-size:12px; color:#FCA5A5;');
+    console.log('%c   └─ Expiring Soon: <?= $equip_expiring_items ?> items (<?= number_format($equip_expiring_quantity) ?> units)', 'font-size:12px; color:#FCD34D;');
+    console.log('%c✅ FIXED: Cards show Total Items, Total Quantity, Low Stock & Out of Stock', 'font-size:13px; color:#34D399; font-weight:bold;');
 </script>
 
 </body>
