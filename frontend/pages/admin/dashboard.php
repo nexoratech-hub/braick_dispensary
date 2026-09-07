@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/dashboard.php
 // SUPER ADMIN DASHBOARD - MODERN DESIGN
 // 8 CARDS: Revenue, Expenses, Profit, Prescriptions, OTC, Stock, Expiry, Equipment
+// FIXED: Same medicine in different branches counted separately
 // ================================================================
 
 // ================================================================
@@ -109,6 +110,7 @@ $branch_filter = "";
 if ($selected_branch_id !== 'all') {
     $branch_filter = " AND branch_id = " . (int)$selected_branch_id;
 }
+// If 'all', NO branch filter - shows ALL branches combined
 
 $today = date('Y-m-d');
 
@@ -116,7 +118,6 @@ $today = date('Y-m-d');
 // ✅ 1. PATIENT BILLS REVENUE - Uses paid_amount from bills
 //    Only bills with visit_id NOT NULL (consultation bills)
 //    Bills with status = 'paid'
-//    Ignores lab test status (pending or paid) because patient has already paid
 //    THIS INCLUDES: Consultation fees + Prescription items + Lab tests
 // ================================================================
 $stmt = $db->query("
@@ -143,7 +144,6 @@ $otc_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 // ================================================================
 // ✅ 3. PRESCRIPTION REVENUE - FOR DISPLAY ONLY (NOT ADDED TO TOTAL)
 //    This is already included in patient_bills_revenue
-//    We keep this for display purposes only
 // ================================================================
 $stmt = $db->query("
     SELECT COALESCE(SUM(pi.total_price), 0) as total 
@@ -156,8 +156,6 @@ $prescription_revenue = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // ================================================================
 // ✅ 4. TOTAL REVENUE = Patient Bills (paid_amount) + OTC
-//     PRESCRIPTIONS ARE ALREADY INCLUDED IN PATIENT BILLS
-//     DO NOT ADD prescription_revenue HERE - IT CAUSES DOUBLE COUNTING!
 // ================================================================
 $total_revenue = $patient_bills_revenue + $otc_revenue;
 
@@ -217,22 +215,23 @@ $otc_count = $otc_data['count'] ?? 0;
 $otc_total = $otc_data['total'] ?? 0;
 
 // ================================================================
-// ✅ 9. MEDICATION STOCK - SHOWS: Total Items, Total Quantity, Low Stock, Out of Stock
+// ✅ 9. MEDICATION STOCK - FIXED: Counts each branch separately
+//    Same medicine in different branches counted as separate items
 // ================================================================
 $stmt = $db->query("
     SELECT 
-        COUNT(DISTINCT medication_name) as total_items,
+        COUNT(DISTINCT CONCAT(medication_name, '-', branch_id)) as total_items,
         COALESCE(SUM(quantity), 0) as total_quantity,
         COUNT(DISTINCT CASE 
             WHEN quantity > 0 AND quantity <= reorder_level 
             AND status = 'active' 
             AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-            THEN medication_name 
+            THEN CONCAT(medication_name, '-', branch_id)
         END) as low_stock_items,
         COUNT(DISTINCT CASE 
             WHEN quantity <= 0 
             AND status = 'active'
-            THEN medication_name 
+            THEN CONCAT(medication_name, '-', branch_id)
         END) as out_of_stock_items
     FROM medications_inventory 
     WHERE status = 'active' 
@@ -245,7 +244,7 @@ $med_low_stock = $stock_data['low_stock_items'] ?? 0;
 $med_out_of_stock = $stock_data['out_of_stock_items'] ?? 0;
 
 // ================================================================
-// ✅ 10. MEDICATION EXPIRY - HESABU TOTAL UNITS ZILIZO EXPIRE
+// ✅ 10. MEDICATION EXPIRY - FIXED: Counts each branch separately
 // ================================================================
 $today_date = date('Y-m-d');
 $stmt = $db->query("
@@ -254,11 +253,11 @@ $stmt = $db->query("
         COALESCE(SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN quantity ELSE 0 END), 0) as expiring_soon_quantity,
         COUNT(DISTINCT CASE 
             WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00'
-            THEN medication_name 
+            THEN CONCAT(medication_name, '-', branch_id)
         END) as expired_items,
         COUNT(DISTINCT CASE 
             WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00'
-            THEN medication_name 
+            THEN CONCAT(medication_name, '-', branch_id)
         END) as expiring_soon_items
     FROM medications_inventory 
     WHERE status = 'active' 
@@ -271,32 +270,32 @@ $med_expired_items = $expiry_data['expired_items'] ?? 0;
 $med_expiring_items = $expiry_data['expiring_soon_items'] ?? 0;
 
 // ================================================================
-// ✅ 11. MEDICAL EQUIPMENT - SHOWS: Total Items, Total Quantity, Low Stock, Out of Stock
+// ✅ 11. MEDICAL EQUIPMENT - FIXED: Counts each branch separately
 // ================================================================
 $stmt = $db->query("
     SELECT 
-        COUNT(DISTINCT equipment_name) as total_items,
+        COUNT(DISTINCT CONCAT(equipment_name, '-', branch_id)) as total_items,
         COALESCE(SUM(quantity), 0) as total_quantity,
         COUNT(DISTINCT CASE 
             WHEN quantity > 0 AND quantity <= reorder_level 
             AND status = 'active' 
             AND (expiry_date IS NULL OR expiry_date >= CURDATE())
-            THEN equipment_name 
+            THEN CONCAT(equipment_name, '-', branch_id)
         END) as low_stock_items,
         COUNT(DISTINCT CASE 
             WHEN quantity <= 0 
             AND status = 'active'
-            THEN equipment_name 
+            THEN CONCAT(equipment_name, '-', branch_id)
         END) as out_of_stock_items,
         COALESCE(SUM(CASE WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN quantity ELSE 0 END), 0) as expired_quantity,
         COALESCE(SUM(CASE WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00' THEN quantity ELSE 0 END), 0) as expiring_soon_quantity,
         COUNT(DISTINCT CASE 
             WHEN expiry_date < '$today_date' AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00'
-            THEN equipment_name 
+            THEN CONCAT(equipment_name, '-', branch_id)
         END) as expired_items,
         COUNT(DISTINCT CASE 
             WHEN expiry_date BETWEEN '$today_date' AND DATE_ADD('$today_date', INTERVAL 30 DAY) AND expiry_date IS NOT NULL AND expiry_date != '0000-00-00'
-            THEN equipment_name 
+            THEN CONCAT(equipment_name, '-', branch_id)
         END) as expiring_soon_items
     FROM medical_equipment 
     WHERE status = 'active' 
@@ -325,7 +324,6 @@ for ($i = 6; $i >= 0; $i--) {
     $daily_total = 0;
     
     // Bills (patient bills with visit_id) - uses paid_amount
-    // This already includes prescriptions
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(b.paid_amount), 0) as total 
         FROM bills b
@@ -348,9 +346,6 @@ for ($i = 6; $i >= 0; $i--) {
     ");
     $stmt->execute([$date]);
     $daily_total += $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-    
-    // DO NOT add prescription sales here separately
-    // They are already included in bills paid_amount above
     
     $chart_values[] = (float)$daily_total;
 }
@@ -1389,7 +1384,7 @@ include_once '../../components/admin_sidebar.php';
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 6. MEDICATION STOCK - SHOWS: Total Items, Total Quantity, Low Stock, Out of Stock -->
+        <!-- 6. MEDICATION STOCK - FIXED: Counts each branch separately -->
         <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-stock">
             <div class="card-content">
                 <div class="card-top">
@@ -1404,12 +1399,12 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-pills"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-warehouse"></i> <?= $med_total_items ?> unique items</div>
+                <div class="stat-trend"><i class="fas fa-warehouse"></i> <?= $med_total_items ?> entries (per branch)</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 7. MEDICATION EXPIRY - SHOWS: Expired & Expiring Soon -->
+        <!-- 7. MEDICATION EXPIRY - FIXED: Counts each branch separately -->
         <a href="inventory.php?filter=expired&branch=<?= $selected_branch_id ?>" class="stat-card card-expiry">
             <div class="card-content">
                 <div class="card-top">
@@ -1429,12 +1424,12 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-calendar-times"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-clock"></i> <?= $total_expired_items ?> items affected</div>
+                <div class="stat-trend"><i class="fas fa-clock"></i> <?= $total_expired_items ?> entries affected</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
         
-        <!-- 8. MEDICAL EQUIPMENT - SHOWS: Total Items, Total Quantity, Low Stock, Out of Stock -->
+        <!-- 8. MEDICAL EQUIPMENT - FIXED: Counts each branch separately -->
         <a href="equipment_inventory.php?branch=<?= $selected_branch_id ?>" class="stat-card card-equipment">
             <div class="card-content">
                 <div class="card-top">
@@ -1452,7 +1447,7 @@ include_once '../../components/admin_sidebar.php';
                     </div>
                     <div class="stat-icon"><i class="fas fa-microscope"></i></div>
                 </div>
-                <div class="stat-trend"><i class="fas fa-tools"></i> <?= $equip_total_items ?> unique items</div>
+                <div class="stat-trend"><i class="fas fa-tools"></i> <?= $equip_total_items ?> entries (per branch)</div>
             </div>
             <i class="fas fa-arrow-right stat-arrow"></i>
         </a>
@@ -1744,22 +1739,23 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c💊 Prescription Revenue (Display Only - Already in Bills): TSh <?= number_format($prescription_revenue) ?>', 'font-size:12px; color:#7C3AED;');
     console.log('%c💸 Total Expenses: TSh <?= number_format($total_expenses) ?>', 'font-size:13px; color:#E11D48;');
     console.log('%c📈 Net Profit: TSh <?= number_format($net_profit) ?> (<?= $profit_percentage ?>%)', 'font-size:13px; color:<?= $net_profit >= 0 ? '#059669' : '#EF4444' ?>;');
-    console.log('%c💊 MEDICATION STOCK:', 'font-size:14px; color:#0891B2; font-weight:bold;');
-    console.log('%c   ├─ Total Items: <?= $med_total_items ?> unique medicines', 'font-size:12px; color:#0891B2;');
+    console.log('%c💊 MEDICATION STOCK (FIXED - Counts per branch):', 'font-size:14px; color:#0891B2; font-weight:bold;');
+    console.log('%c   ├─ Total Entries: <?= $med_total_items ?> (same medicine in different branches counted separately)', 'font-size:12px; color:#0891B2;');
     console.log('%c   ├─ Total Quantity: <?= number_format($med_total_quantity) ?> units', 'font-size:12px; color:#0891B2;');
-    console.log('%c   ├─ Low Stock: <?= $med_low_stock ?> items', 'font-size:12px; color:#FCD34D;');
-    console.log('%c   └─ Out of Stock: <?= $med_out_of_stock ?> items', 'font-size:12px; color:#FCA5A5;');
-    console.log('%c💊 MEDICATION EXPIRY:', 'font-size:14px; color:#DC2626; font-weight:bold;');
-    console.log('%c   ├─ Expired Items: <?= $med_expired_items ?> items (<?= number_format($med_expired_quantity) ?> units)', 'font-size:12px; color:#FCA5A5;');
-    console.log('%c   └─ Expiring Soon: <?= $med_expiring_items ?> items (<?= number_format($med_expiring_quantity) ?> units)', 'font-size:12px; color:#FCD34D;');
-    console.log('%c🔬 MEDICAL EQUIPMENT:', 'font-size:14px; color:#4F46E5; font-weight:bold;');
-    console.log('%c   ├─ Total Items: <?= $equip_total_items ?> unique items', 'font-size:12px; color:#4F46E5;');
+    console.log('%c   ├─ Low Stock: <?= $med_low_stock ?> entries', 'font-size:12px; color:#FCD34D;');
+    console.log('%c   └─ Out of Stock: <?= $med_out_of_stock ?> entries', 'font-size:12px; color:#FCA5A5;');
+    console.log('%c💊 MEDICATION EXPIRY (FIXED - Counts per branch):', 'font-size:14px; color:#DC2626; font-weight:bold;');
+    console.log('%c   ├─ Expired Entries: <?= $med_expired_items ?> (<?= number_format($med_expired_quantity) ?> units)', 'font-size:12px; color:#FCA5A5;');
+    console.log('%c   └─ Expiring Soon Entries: <?= $med_expiring_items ?> (<?= number_format($med_expiring_quantity) ?> units)', 'font-size:12px; color:#FCD34D;');
+    console.log('%c🔬 MEDICAL EQUIPMENT (FIXED - Counts per branch):', 'font-size:14px; color:#4F46E5; font-weight:bold;');
+    console.log('%c   ├─ Total Entries: <?= $equip_total_items ?> (same equipment in different branches counted separately)', 'font-size:12px; color:#4F46E5;');
     console.log('%c   ├─ Total Quantity: <?= number_format($equip_total_quantity) ?> units', 'font-size:12px; color:#4F46E5;');
-    console.log('%c   ├─ Low Stock: <?= $equip_low_stock ?> items', 'font-size:12px; color:#FCD34D;');
-    console.log('%c   ├─ Out of Stock: <?= $equip_out_of_stock ?> items', 'font-size:12px; color:#FCA5A5;');
-    console.log('%c   ├─ Expired: <?= $equip_expired_items ?> items (<?= number_format($equip_expired_quantity) ?> units)', 'font-size:12px; color:#FCA5A5;');
-    console.log('%c   └─ Expiring Soon: <?= $equip_expiring_items ?> items (<?= number_format($equip_expiring_quantity) ?> units)', 'font-size:12px; color:#FCD34D;');
-    console.log('%c✅ FIXED: Cards show Total Items, Total Quantity, Low Stock & Out of Stock', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c   ├─ Low Stock: <?= $equip_low_stock ?> entries', 'font-size:12px; color:#FCD34D;');
+    console.log('%c   ├─ Out of Stock: <?= $equip_out_of_stock ?> entries', 'font-size:12px; color:#FCA5A5;');
+    console.log('%c   ├─ Expired: <?= $equip_expired_items ?> entries (<?= number_format($equip_expired_quantity) ?> units)', 'font-size:12px; color:#FCA5A5;');
+    console.log('%c   └─ Expiring Soon: <?= $equip_expiring_items ?> entries (<?= number_format($equip_expiring_quantity) ?> units)', 'font-size:12px; color:#FCD34D;');
+    console.log('%c✅ FIXED: Same medicine in different branches counted as separate entries', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Using CONCAT(name, \'-\', branch_id) for DISTINCT counting', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>
