@@ -4,8 +4,9 @@
 // DOCTOR - MY PATIENTS LIST
 // FIXED: Removed patient_bills table (use bills instead)
 // FIXED: Added VISITS button to view all visits
-// FIXED: Action buttons equal width (View and Visits same size)
-// FIXED: Removed visit count from button
+// FIXED: Action buttons equal width (View, Visits, Prescribe same size)
+// FIXED: Added PRESCRIBE button
+// FIXED: 3 buttons in a row
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -244,6 +245,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         --warning-bg: #FEF3C7;
         --purple: #7C3AED;
         --purple-bg: #EDE9FE;
+        --purple-dark: #6D28D9;
         --teal: #0D9488;
         --teal-bg: #CCFBF1;
         --white: #FFFFFF;
@@ -342,6 +344,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         display: inline-flex;
         align-items: center;
         gap: 4px;
+    }
+    
+    .page-badge {
+        background: #DC2626;
+        color: white;
+        font-size: 0.65rem;
+        padding: 2px 12px;
+        border-radius: 20px;
+        font-weight: 600;
+        display: inline-block;
     }
     
     /* ================================================================
@@ -550,7 +562,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
     
     /* ================================================================
-       ACTION BUTTONS - EQUAL WIDTH
+       ACTION BUTTONS - EQUAL WIDTH - 3 IN A ROW
        ================================================================ */
     .btn-action-group {
         display: flex;
@@ -591,6 +603,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         flex-shrink: 0;
     }
     
+    /* VIEW Button - Blue */
     .btn-view {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
         color: white;
@@ -607,6 +620,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         transform: translateY(0px);
     }
     
+    /* VISITS Button - Teal/Green */
     .btn-visits {
         background: linear-gradient(135deg, #0D9488, #0F766E);
         color: white;
@@ -623,6 +637,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         transform: translateY(0px);
     }
     
+    /* PRESCRIBE Button - Purple */
+    .btn-prescribe {
+        background: linear-gradient(135deg, #7C3AED, #6D28D9);
+        color: white;
+        box-shadow: 0 2px 8px rgba(124, 58, 237, 0.25);
+    }
+    
+    .btn-prescribe:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 16px rgba(124, 58, 237, 0.4);
+        color: white;
+    }
+    
+    .btn-prescribe:active {
+        transform: translateY(0px);
+    }
+    
+    /* Dark Mode Support */
     [data-theme="dark"] .btn-view {
         background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
         color: white;
@@ -640,6 +672,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     
     [data-theme="dark"] .btn-visits:hover {
         box-shadow: 0 4px 16px rgba(13, 148, 136, 0.3);
+        color: white;
+    }
+    
+    [data-theme="dark"] .btn-prescribe {
+        background: linear-gradient(135deg, #7C3AED, #6D28D9);
+        color: white;
+    }
+    
+    [data-theme="dark"] .btn-prescribe:hover {
+        box-shadow: 0 4px 16px rgba(124, 58, 237, 0.3);
         color: white;
     }
     
@@ -1156,7 +1198,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         <th style="min-width: 70px;">Visits</th>
                         <th style="min-width: 70px;">Presc.</th>
                         <th style="min-width: 110px;">Last Visit</th>
-                        <th style="min-width: 180px;">Actions</th>
+                        <th style="min-width: 250px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody id="tableBody">
@@ -1185,11 +1227,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                            class="btn-action btn-view" title="View Patient Details">
                                             <i class="fas fa-eye"></i> <span>View</span>
                                         </a>
+                                        
                                         <!-- VIEW ALL VISITS -->
                                         <a href="patient_visits.php?id=<?= $patient['id'] ?>" 
                                            class="btn-action btn-visits" title="View All Visits">
                                             <i class="fas fa-clinic-medical"></i> 
                                             <span>Visits</span>
+                                        </a>
+                                        
+                                        <!-- PRESCRIBE MEDICATION -->
+                                        <a href="prescribe.php?patient_id=<?= $patient['id'] ?>" 
+                                           class="btn-action btn-prescribe" title="Prescribe Medication">
+                                            <i class="fas fa-prescription"></i> 
+                                            <span>Prescribe</span>
                                         </a>
                                     </div>
                                 </td>
@@ -1418,8 +1468,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c👤 Total Patients: <?= $total_assigned ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🟢 Active: <?= $active_patients ?> | ⏳ Pending Visits: <?= $pending_visits ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🔍 Real-time table search filter enabled', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c✅ Action buttons: View + Visits (equal width 80px)', 'font-size:13px; color:#059669;');
-    console.log('%c✅ Removed visit count from Visits button', 'font-size:13px; color:#059669;');
+    console.log('%c✅ Action buttons: View + Visits + Prescribe (equal width 80px)', 'font-size:13px; color:#059669;');
+    console.log('%c💊 Prescribe button added - direct link to prescribe.php', 'font-size:13px; color:#7C3AED;');
     console.log('%c🌙 Dark mode synced with header via localStorage', 'font-size:13px; color:#8B5CF6;');
 </script>
 

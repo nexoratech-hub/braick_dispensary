@@ -2,10 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/admin/lab_tests.php
 // ADMIN - VIEW ALL LAB TESTS
-// BRAICK DISPENSARY - USING EXISTING DB TABLES
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
-// FIXED: Added Edit button - clickable only for 'completed' status
-// Action buttons: 3 rows (View, Edit, Delete)
+// BRAICK DISPENSARY
+// WITH FULL DELETE FUNCTIONALITY
 // ================================================================
 
 // ================================================================
@@ -70,11 +68,128 @@ $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 $patient_search = isset($_GET['patient']) ? trim($_GET['patient']) : '';
 
 // ================================================================
+// HANDLE DELETE - POST REQUEST
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['delete_lab_test']) && isset($_POST['delete_id'])) {
+    $delete_id = (int)$_POST['delete_id'];
+    $branch_param = isset($_POST['branch']) ? $_POST['branch'] : 'all';
+    
+    if ($delete_id > 0) {
+        try {
+            // Check if test exists
+            $stmt = $db->prepare("SELECT * FROM lab_tests WHERE id = ?");
+            $stmt->execute([$delete_id]);
+            $test = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$test) {
+                header('Location: lab_tests.php?branch=' . urlencode($branch_param) . '&error=notfound');
+                exit;
+            }
+            
+            // Check if test has paid bill
+            $stmt = $db->prepare("
+                SELECT b.id, b.status 
+                FROM bill_items bi
+                LEFT JOIN bills b ON bi.bill_id = b.id
+                WHERE bi.reference_id = ? AND bi.reference_type = 'lab_test' AND b.status = 'paid'
+                LIMIT 1
+            ");
+            $stmt->execute([$delete_id]);
+            if ($stmt->fetch()) {
+                header('Location: lab_tests.php?branch=' . urlencode($branch_param) . '&error=cannot_delete_paid');
+                exit;
+            }
+            
+            $db->beginTransaction();
+            
+            // Delete bill items
+            $stmt = $db->prepare("DELETE FROM bill_items WHERE reference_id = ? AND reference_type = 'lab_test'");
+            $stmt->execute([$delete_id]);
+            
+            // Delete equipment links
+            $stmt = $db->prepare("DELETE FROM lab_test_equipment WHERE lab_test_id = ?");
+            $stmt->execute([$delete_id]);
+            
+            // Delete the test
+            $stmt = $db->prepare("DELETE FROM lab_tests WHERE id = ?");
+            $stmt->execute([$delete_id]);
+            
+            // Update visit status if needed
+            $visit_id = $test['visit_id'] ?? null;
+            if ($visit_id) {
+                $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+                $remaining = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+                
+                if ($remaining == 0) {
+                    $stmt = $db->prepare("UPDATE visits SET status = 'assigned', updated_at = NOW() WHERE id = ? AND status = 'lab_test'");
+                    $stmt->execute([$visit_id]);
+                }
+            }
+            
+            // Update bill totals
+            if ($visit_id) {
+                $stmt = $db->prepare("SELECT id FROM bills WHERE visit_id = ?");
+                $stmt->execute([$visit_id]);
+                $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+                
+                if ($bill) {
+                    $stmt = $db->prepare("SELECT SUM(total_price) as total FROM bill_items WHERE bill_id = ? AND status != 'cancelled'");
+                    $stmt->execute([$bill['id']]);
+                    $subtotal = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
+                    
+                    $stmt = $db->prepare("SELECT total_discount FROM bills WHERE id = ?");
+                    $stmt->execute([$bill['id']]);
+                    $discount = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total_discount'] ?? 0);
+                    
+                    $total_amount = max(0, $subtotal - $discount);
+                    
+                    $stmt = $db->prepare("SELECT SUM(amount) as payment_total FROM payments WHERE bill_id = ?");
+                    $stmt->execute([$bill['id']]);
+                    $paid_amount = (float)($stmt->fetch(PDO::FETCH_ASSOC)['payment_total'] ?? 0);
+                    
+                    $balance = $total_amount - $paid_amount;
+                    
+                    if ($total_amount == 0) {
+                        $bill_status = 'pending';
+                    } elseif ($balance <= 0 && $total_amount > 0) {
+                        $bill_status = 'paid';
+                    } elseif ($paid_amount > 0 && $balance > 0) {
+                        $bill_status = 'partial';
+                    } else {
+                        $bill_status = 'pending';
+                    }
+                    
+                    $stmt = $db->prepare("UPDATE bills SET subtotal = ?, total_amount = ?, paid_amount = ?, balance = ?, status = ?, updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$subtotal, $total_amount, $paid_amount, $balance, $bill_status, $bill['id']]);
+                }
+            }
+            
+            $db->commit();
+            header('Location: lab_tests.php?branch=' . urlencode($branch_param) . '&error=delete_success');
+            exit;
+            
+        } catch (Exception $e) {
+            if (isset($db) && $db->inTransaction()) {
+                $db->rollBack();
+            }
+            error_log("Delete lab test error: " . $e->getMessage());
+            header('Location: lab_tests.php?branch=' . urlencode($branch_param) . '&error=database_error');
+            exit;
+        }
+    } else {
+        header('Location: lab_tests.php?branch=' . urlencode($branch_param) . '&error=invalid_id');
+        exit;
+    }
+}
+
+// ================================================================
 // GET ERROR MESSAGE FROM URL
 // ================================================================
 $error = $_GET['error'] ?? '';
 $error_message = '';
 $show_error = false;
+$error_message_type = 'error';
 
 if ($error === 'invalid_id') {
     $error_message = '⚠️ Invalid test ID provided.';
@@ -85,10 +200,9 @@ if ($error === 'invalid_id') {
 } elseif ($error === 'database_error') {
     $error_message = '⚠️ Database error occurred. Please try again.';
     $show_error = true;
-} elseif ($error === 'update_success') {
-    $error_message = '✅ Lab test updated successfully!';
+} elseif ($error === 'cannot_delete_paid') {
+    $error_message = '❌ Cannot delete: This lab test is already paid.';
     $show_error = true;
-    $error_message_type = 'success';
 } elseif ($error === 'delete_success') {
     $error_message = '✅ Lab test deleted successfully!';
     $show_error = true;
@@ -800,7 +914,6 @@ include_once '../../components/admin_sidebar.php';
             z-index: 1;
         }
         
-        /* Dark mode - cards remain blue */
         [data-theme="dark"] .stat-card {
             background: linear-gradient(135deg, #1D4ED8, #1E40AF);
             box-shadow: 0 4px 16px rgba(29, 78, 216, 0.3);
@@ -950,9 +1063,14 @@ include_once '../../components/admin_sidebar.php';
             border-bottom: none;
         }
         
+        .data-table tbody tr.deleting {
+            transition: all 0.4s ease;
+            opacity: 0;
+            transform: translateX(30px);
+        }
+        
         /* ================================================================
            ACTION BUTTONS - 3 ROWS (View, Edit, Delete)
-           Edit button: clickable only for 'completed' status
            ================================================================ */
         .action-buttons {
             display: flex;
@@ -997,6 +1115,12 @@ include_once '../../components/admin_sidebar.php';
             transform: scale(0.95);
         }
         
+        .btn-action:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
         /* View Button - Top row (Blue) */
         .btn-view {
             background: var(--primary-bg);
@@ -1036,7 +1160,6 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
         }
         
-        /* Disabled Edit button - Grey, no hover */
         .btn-edit-disabled {
             background: var(--gray-100);
             color: var(--gray-400);
@@ -1094,18 +1217,15 @@ include_once '../../components/admin_sidebar.php';
             color: white;
         }
         
-        /* Hide text on very small screens, show only icons */
         @media (max-width: 480px) {
             .btn-action .btn-label {
                 display: none;
             }
-            
             .btn-action {
                 padding: 3px 5px;
                 min-width: 28px;
                 min-height: 24px;
             }
-            
             .btn-action i {
                 font-size: 0.7rem;
             }
@@ -1182,6 +1302,202 @@ include_once '../../components/admin_sidebar.php';
         }
         
         /* ================================================================
+           DELETE MODAL
+           ================================================================ */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 9999;
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+            animation: fadeInOverlay 0.3s ease;
+        }
+        
+        .modal-overlay.show {
+            display: flex;
+        }
+        
+        @keyframes fadeInOverlay {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        .modal-content {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 32px;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: var(--shadow-xl);
+            border: 2px solid var(--border-color);
+            animation: modalSlideUp 0.3s ease;
+        }
+        
+        @keyframes modalSlideUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px) scale(0.95);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+        
+        [data-theme="dark"] .modal-content {
+            background: var(--bg-card);
+            border-color: var(--border-color);
+        }
+        
+        .modal-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: var(--danger-bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 16px;
+            font-size: 2rem;
+            color: var(--danger);
+        }
+        
+        .modal-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            text-align: center;
+            margin-bottom: 8px;
+        }
+        
+        .modal-message {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            text-align: center;
+            margin-bottom: 4px;
+        }
+        
+        .modal-test-name {
+            font-size: 0.75rem;
+            color: var(--danger);
+            text-align: center;
+            font-weight: 600;
+            margin-top: 8px;
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-top: 20px;
+        }
+        
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            padding: 8px 24px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-danger:hover {
+            background: var(--danger-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 16px rgba(220, 38, 38, 0.3);
+        }
+        
+        /* ================================================================
+           TOAST
+           ================================================================ */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: 12px;
+            z-index: 99999;
+            max-width: 420px;
+            transform: translateY(120px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .toast-custom.show {
+            transform: translateY(0);
+            opacity: 1;
+        }
+        
+        .toast-custom.success {
+            background: #059669;
+        }
+        
+        .toast-custom.error {
+            background: #DC2626;
+        }
+        
+        .toast-custom.warning {
+            background: #D97706;
+        }
+        
+        .toast-custom.info {
+            background: #0B5ED7;
+        }
+        
+        .toast-custom .toast-icon {
+            font-size: 1.1rem;
+            flex-shrink: 0;
+        }
+        
+        .toast-custom .toast-content {
+            flex: 1;
+        }
+        
+        .toast-custom .toast-title {
+            font-weight: 600;
+            font-size: 0.85rem;
+            margin: 0;
+        }
+        
+        .toast-custom .toast-message {
+            font-size: 0.75rem;
+            opacity: 0.9;
+            margin: 0;
+        }
+        
+        .toast-custom .toast-close {
+            background: none;
+            border: none;
+            color: rgba(255,255,255,0.6);
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 0 4px;
+            transition: all 0.3s ease;
+        }
+        
+        .toast-custom .toast-close:hover {
+            color: white;
+            transform: scale(1.1);
+        }
+        
+        /* ================================================================
            FOOTER
            ================================================================ */
         .footer {
@@ -1196,6 +1512,28 @@ include_once '../../components/admin_sidebar.php';
         .footer .footer-brand {
             color: var(--primary);
             font-weight: 600;
+        }
+        
+        /* ================================================================
+           ANIMATIONS
+           ================================================================ */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+        
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+        
+        .stat-card:hover .stat-icon {
+            animation: pulse 0.5s ease;
         }
         
         /* ================================================================
@@ -1223,40 +1561,15 @@ include_once '../../components/admin_sidebar.php';
                 font-size: 0.6rem;
                 min-width: 45px;
             }
-            .btn-action i {
-                font-size: 0.6rem;
-            }
+            .btn-action i { font-size: 0.6rem; }
         }
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .stats-grid { grid-template-columns: 1fr; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
-            .action-buttons {
-                gap: 2px;
-            }
-        }
-        
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        @keyframes pulse {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.05); }
-        }
-        
-        .stat-card:hover .stat-icon {
-            animation: pulse 0.5s ease;
+            .action-buttons { gap: 2px; }
+            .modal-content { padding: 20px; }
         }
         
         /* ================================================================
@@ -1265,7 +1578,9 @@ include_once '../../components/admin_sidebar.php';
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
             .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle, .filter-bar { display: none !important; }
+            .footer, #sidebarToggle, .filter-bar,
+            .action-buttons, .modal-overlay, .toast-custom { display: none !important; }
+            
             .main-content { margin: 0; padding: 20px; }
             .card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
             .data-table thead th {
@@ -1282,7 +1597,7 @@ include_once '../../components/admin_sidebar.php';
             .page-title, .page-subtitle, .role-badge-display, .header-badge {
                 color: white !important;
             }
-            .stat-card { 
+            .stat-card {
                 background: #0B5ED7 !important;
                 color: white !important;
                 -webkit-print-color-adjust: exact !important;
@@ -1303,7 +1618,7 @@ include_once '../../components/admin_sidebar.php';
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1339,7 +1654,7 @@ include_once '../../components/admin_sidebar.php';
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot"></span>
+            <span class="notif-dot has-notif"></span>
         </button>
         
         <a href="profile.php">
@@ -1387,11 +1702,11 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- ERROR MESSAGE -->
+    <!-- ERROR/SUCCESS MESSAGE -->
     <!-- ================================================================ -->
     <?php if ($show_error && !empty($error_message)): ?>
-        <div class="alert <?= (isset($error_message_type) && $error_message_type === 'success') ? 'alert-success' : 'alert-danger' ?> animate-fade-in-up">
-            <i class="fas <?= (isset($error_message_type) && $error_message_type === 'success') ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+        <div class="alert <?= $error_message_type === 'success' ? 'alert-success' : 'alert-danger' ?> animate-fade-in-up">
+            <i class="fas <?= $error_message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <?= $error_message ?>
             <button class="alert-close" onclick="this.parentElement.style.display='none'">
                 <i class="fas fa-times"></i>
@@ -1400,71 +1715,54 @@ include_once '../../components/admin_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS - BLUE BACKGROUND, WHITE TEXT -->
+    <!-- STATS CARDS -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-flask"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-flask"></i></div>
             <div>
                 <p class="stat-label">Total Tests</p>
-                <p class="stat-value"><?= number_format($total_tests) ?></p>
+                <p class="stat-value" id="statTotal"><?= number_format($total_tests) ?></p>
             </div>
         </a>
         
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=completed" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-check-circle"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
             <div>
                 <p class="stat-label">Completed</p>
-                <p class="stat-value"><?= number_format($completed_tests) ?></p>
-                <p class="stat-sub">Tests finalized</p>
+                <p class="stat-value" id="statCompleted"><?= number_format($completed_tests) ?></p>
             </div>
         </a>
         
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=in_progress" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-spinner fa-spin"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-spinner fa-spin"></i></div>
             <div>
                 <p class="stat-label">In Progress</p>
-                <p class="stat-value"><?= number_format($in_progress_tests) ?></p>
-                <p class="stat-sub">Tests running</p>
+                <p class="stat-value" id="statInProgress"><?= number_format($in_progress_tests) ?></p>
             </div>
         </a>
         
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=pending" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-clock"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-clock"></i></div>
             <div>
                 <p class="stat-label">Pending</p>
-                <p class="stat-value"><?= number_format($pending_tests) ?></p>
-                <p class="stat-sub">Tests waiting</p>
+                <p class="stat-value" id="statPending"><?= number_format($pending_tests) ?></p>
             </div>
         </a>
         
         <a href="lab_tests.php?branch=<?= urlencode($selected_branch_id) ?>&status=cancelled" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-times-circle"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
             <div>
                 <p class="stat-label">Cancelled</p>
-                <p class="stat-value"><?= number_format($cancelled_tests) ?></p>
-                <p class="stat-sub">Cancelled tests</p>
+                <p class="stat-value" id="statCancelled"><?= number_format($cancelled_tests) ?></p>
             </div>
         </a>
         
         <a href="reports.php?branch=<?= urlencode($selected_branch_id) ?>&type=lab" class="stat-card">
-            <div class="stat-icon">
-                <i class="fas fa-money-bill-wave"></i>
-            </div>
+            <div class="stat-icon"><i class="fas fa-money-bill-wave"></i></div>
             <div>
                 <p class="stat-label">Total Revenue</p>
                 <p class="stat-value">TSh <?= number_format($total_revenue, 0) ?></p>
-                <p class="stat-sub">Lab fees total</p>
             </div>
         </a>
     </div>
@@ -1506,12 +1804,12 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <!-- LAB TESTS TABLE -->
     <!-- ================================================================ -->
-    <div class="card animate-fade-in-up" style="animation-delay:0.1s;">
+    <div class="card animate-fade-in-up" style="animation-delay:0.1s;" id="labTestsCard">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-list"></i>
                 Lab Tests List
-                <span class="text-xs text-gray-400 font-normal">(<?= $total_tests ?> records)</span>
+                <span class="text-xs text-gray-400 font-normal" id="recordCount">(<?= $total_tests ?> records)</span>
             </h3>
             <a href="add_lab_test.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary" style="padding: 8px 18px; font-size: 0.8rem;">
                 <i class="fas fa-plus"></i> Add New Test
@@ -1519,7 +1817,7 @@ include_once '../../components/admin_sidebar.php';
         </div>
         <div class="overflow-x-auto">
             <?php if (count($lab_tests) > 0): ?>
-                <table class="data-table">
+                <table class="data-table" id="labTestsTable">
                     <thead>
                         <tr>
                             <th>Test Name</th>
@@ -1532,11 +1830,11 @@ include_once '../../components/admin_sidebar.php';
                             <th style="text-align:center; min-width:80px;">Actions</th>
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="labTestsBody">
                         <?php foreach ($lab_tests as $test): 
                             $is_completed = ($test['status'] ?? '') === 'completed';
                         ?>
-                            <tr>
+                            <tr data-test-id="<?= $test['id'] ?>" class="test-row">
                                 <td class="font-medium text-sm"><?= htmlspecialchars($test['test_name'] ?? 'N/A') ?></td>
                                 <td>
                                     <?php if (!empty($test['patient_id']) && !empty($test['patient_name'])): ?>
@@ -1572,19 +1870,16 @@ include_once '../../components/admin_sidebar.php';
                                 <td>
                                     <!-- ================================================================ -->
                                     <!-- ACTION BUTTONS - 3 ROWS -->
-                                    <!-- View (top) - Always clickable -->
-                                    <!-- Edit (middle) - Only clickable if status = 'completed' -->
-                                    <!-- Delete (bottom) - Always clickable -->
                                     <!-- ================================================================ -->
                                     <div class="action-buttons">
-                                        <!-- View - Always clickable -->
+                                        <!-- View -->
                                         <a href="view_lab_result.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                                            class="btn-action btn-view" title="View Test">
                                             <i class="fas fa-eye"></i>
                                             <span class="btn-label">View</span>
                                         </a>
                                         
-                                        <!-- Edit - Clickable only if completed -->
+                                        <!-- Edit - Only if completed -->
                                         <?php if ($is_completed): ?>
                                             <a href="edit_lab_test.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
                                                class="btn-action btn-edit" title="Edit Test">
@@ -1598,13 +1893,14 @@ include_once '../../components/admin_sidebar.php';
                                             </span>
                                         <?php endif; ?>
                                         
-                                        <!-- Delete - Always clickable -->
-                                        <a href="delete_lab_test.php?id=<?= $test['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                                           class="btn-action btn-delete" title="Delete Test" 
-                                           onclick="return confirm('Are you sure you want to delete this lab test?')">
+                                        <!-- Delete -->
+                                        <button type="button" 
+                                                class="btn-action btn-delete" 
+                                                title="Delete Test" 
+                                                onclick="deleteLabTest(<?= $test['id'] ?>, '<?= htmlspecialchars($test['test_name'] ?? 'Unknown') ?>', '<?= urlencode($selected_branch_id) ?>')">
                                             <i class="fas fa-trash"></i>
                                             <span class="btn-label">Delete</span>
-                                        </a>
+                                        </button>
                                     </div>
                                 </td>
                             </tr>
@@ -1648,14 +1944,42 @@ include_once '../../components/admin_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- TOAST / MODAL -->
+<!-- DELETE CONFIRMATION MODAL -->
 <!-- ================================================================ -->
-<div id="toast" class="toast-custom" style="display:none;position:fixed;bottom:24px;right:24px;padding:14px 20px;border-radius:12px;z-index:999;max-width:400px;transform:translateY(100px);opacity:0;transition:all 0.4s cubic-bezier(0.4,0,0.2,1);display:flex;align-items:center;gap:12px;color:white;box-shadow:0 10px 40px rgba(0,0,0,0.15);">
-    <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
-    <div>
-        <p style="font-weight:600;font-size:0.85rem;margin:0;" id="toastTitle">Notification</p>
-        <p style="font-size:0.75rem;opacity:0.9;margin:0;" id="toastMessage"></p>
+<div id="deleteModal" class="modal-overlay">
+    <div class="modal-content">
+        <div class="modal-icon">
+            <i class="fas fa-trash"></i>
+        </div>
+        <h3 class="modal-title">⚠️ Confirm Delete</h3>
+        <p class="modal-message" id="deleteModalMessage">Are you sure you want to delete this lab test?</p>
+        <p class="modal-test-name" id="deleteModalTestName">Test: Unknown</p>
+        
+        <form id="deleteForm" method="POST" action="lab_tests.php">
+            <input type="hidden" name="delete_id" id="deleteId" value="">
+            <input type="hidden" name="branch" id="deleteBranch" value="<?= htmlspecialchars($selected_branch_id) ?>">
+            <div class="modal-actions">
+                <button type="button" class="btn btn-outline" onclick="closeDeleteModal()" style="padding:8px 24px;">
+                    <i class="fas fa-times"></i> Cancel
+                </button>
+                <button type="submit" name="delete_lab_test" class="btn-danger">
+                    <i class="fas fa-trash"></i> Delete Permanently
+                </button>
+            </div>
+        </form>
     </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- TOAST -->
+<!-- ================================================================ -->
+<div id="toast" class="toast-custom" style="display:none;">
+    <i class="fas fa-info-circle toast-icon"></i>
+    <div class="toast-content">
+        <p class="toast-title" id="toastTitle">Notification</p>
+        <p class="toast-message" id="toastMessage"></p>
+    </div>
+    <button class="toast-close" onclick="closeToast()">&times;</button>
 </div>
 
 <!-- ================================================================ -->
@@ -1695,12 +2019,10 @@ include_once '../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // DOM ELEMENTS
+    // SIDEBAR TOGGLE
     // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
 
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
@@ -1713,6 +2035,12 @@ include_once '../../components/admin_sidebar.php';
             }
         }
     });
+
+    // ================================================================
+    // SEARCH
+    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
 
     function performSearch() {
         var query = searchInput.value.trim();
@@ -1730,12 +2058,18 @@ include_once '../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
+    // ================================================================
+    // BRANCH SWITCH
+    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
 
+    // ================================================================
+    // DATE/TIME
+    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1746,12 +2080,47 @@ include_once '../../components/admin_sidebar.php';
         });
         var dtEl = document.getElementById('currentDateTime');
         if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
+
+    // ================================================================
+    // DELETE MODAL
+    // ================================================================
+    function openDeleteModal(testId, testName, branch) {
+        document.getElementById('deleteId').value = testId;
+        document.getElementById('deleteModalTestName').textContent = 'Test: ' + testName;
+        document.getElementById('deleteModalMessage').textContent = 'Are you sure you want to delete this lab test?\n\nThis will also remove:\n• Bill items linked to this test\n• Equipment linked to this test\n• Update visit status if no tests remain';
+        document.getElementById('deleteBranch').value = branch || 'all';
+        document.getElementById('deleteModal').classList.add('show');
+        document.body.style.overflow = 'hidden';
+    }
+    
+    function closeDeleteModal() {
+        document.getElementById('deleteModal').classList.remove('show');
+        document.body.style.overflow = '';
+    }
+    
+    function deleteLabTest(testId, testName, branch) {
+        // Check if test is paid (we'll check via AJAX)
+        openDeleteModal(testId, testName, branch);
+    }
+    
+    // Close modal on overlay click
+    document.getElementById('deleteModal')?.addEventListener('click', function(e) {
+        if (e.target === this) {
+            closeDeleteModal();
+        }
+    });
+    
+    // Close modal on Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeDeleteModal();
+        }
+    });
 
     // ================================================================
     // TOAST
@@ -1760,31 +2129,57 @@ include_once '../../components/admin_sidebar.php';
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
+        var toastIcon = toast.querySelector('.toast-icon');
         
         toast.className = 'toast-custom ' + type;
+        toastIcon.className = 'fas ' + (type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-exclamation-circle' : 'fa-info-circle') + ' toast-icon';
         toastTitle.textContent = title;
         toastMessage.textContent = message;
         toast.style.display = 'flex';
         
-        toast.classList.add('show');
+        setTimeout(function() {
+            toast.classList.add('show');
+        }, 50);
+        
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
             setTimeout(function() {
                 toast.style.display = 'none';
             }, 400);
-        }, 3500);
+        }, 4000);
+    }
+    
+    function closeToast() {
+        var toast = document.getElementById('toast');
+        toast.classList.remove('show');
+        setTimeout(function() {
+            toast.style.display = 'none';
+        }, 400);
     }
 
-    console.log('%c🧪 Braick Dispensary - Lab Tests (BLUE THEME)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    // ================================================================
+    // KEYBOARD SHORTCUTS
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+            e.preventDefault();
+            searchInput?.focus();
+        }
+    });
+
+    // ================================================================
+    // CONSOLE LOGS
+    // ================================================================
+    console.log('%c🧪 Braick Dispensary - Lab Tests (FULL FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Tests: <?= $total_tests ?>', 'font-size:13px; color:#059669;');
     console.log('%c✅ Completed: <?= $completed_tests ?>', 'font-size:13px; color:#059669;');
     console.log('%c⏳ In Progress: <?= $in_progress_tests ?>', 'font-size:13px; color:#F59E0B;');
     console.log('%c⏰ Pending: <?= $pending_tests ?>', 'font-size:13px; color:#DC2626;');
     console.log('%c💰 Total Revenue: TSh <?= number_format($total_revenue, 0) ?>', 'font-size:13px; color:#0D9488;');
-    console.log('%c🔘 Action buttons: 3 rows (View ↑, Edit (green, only if completed), Delete ↓)', 'font-size:13px; color:#34D399;');
-    console.log('%c📊 Tables: lab_tests, visits, patients, users, branches', 'font-size:13px; color:#34D399;');
+    console.log('%c🗑️ Delete: Working with modal confirmation', 'font-size:13px; color:#EF4444; font-weight:bold;');
+    console.log('%c🔘 Action buttons: View ↑, Edit (green, only if completed), Delete ↓', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

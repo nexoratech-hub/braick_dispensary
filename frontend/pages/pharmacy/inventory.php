@@ -1,9 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/pharmacy/inventory.php
-// PHARMACY - COMPLETE INVENTORY (MEDICINE + EQUIPMENT)
-// GROUPED BY NAME WITH BATCHES
-// AUTO-SEARCH & AUTO-MONEY FORMAT
+// PHARMACY - COMPLETE INVENTORY WITH PURCHASE INTEGRATION
+// WITH JOIN OR CREATE LOGIC
+// FIXED: Equipment without expiry date now display correctly
 // ================================================================
 
 // ================================================================
@@ -103,14 +103,153 @@ try {
 }
 
 // ================================================================
-// GET CATEGORIES - FROM EXISTING DATA
+// CHECK AND ADD COLUMNS IF NOT EXISTS
+// ================================================================
+
+// Check if added_by exists in medications_inventory
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM medications_inventory LIKE 'added_by'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `medications_inventory` ADD COLUMN `added_by` INT NULL AFTER `status`");
+        $db->exec("ALTER TABLE `medications_inventory` ADD COLUMN `added_by_name` VARCHAR(100) NULL AFTER `added_by`");
+    }
+} catch (Exception $e) {
+    // Column might already exist or table doesn't exist
+}
+
+// Check if added_by exists in medical_equipment
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM medical_equipment LIKE 'added_by'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `medical_equipment` ADD COLUMN `added_by` INT NULL AFTER `status`");
+        $db->exec("ALTER TABLE `medical_equipment` ADD COLUMN `added_by_name` VARCHAR(100) NULL AFTER `added_by`");
+    }
+} catch (Exception $e) {
+    // Column might already exist or table doesn't exist
+}
+
+// Check if joined_users exists in purchases
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'joined_users'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` ADD COLUMN `joined_users` TEXT NULL AFTER `created_by`");
+    }
+} catch (Exception $e) {
+    // Table might not exist
+}
+
+// ================================================================
+// CREATE PURCHASE TABLES IF NOT EXISTS
+// ================================================================
+try {
+    $stmt = $db->query("SHOW TABLES LIKE 'purchases'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("
+            CREATE TABLE `purchases` (
+                `id` INT(11) NOT NULL AUTO_INCREMENT,
+                `invoice_number` VARCHAR(50) NOT NULL,
+                `purchase_type` ENUM('medicine', 'equipment') NOT NULL DEFAULT 'medicine',
+                `created_by` INT(11) NOT NULL,
+                `created_by_name` VARCHAR(100) NOT NULL,
+                `joined_users` TEXT NULL,
+                `status` ENUM('IN_PROGRESS', 'COMPLETED', 'CANCELLED') DEFAULT 'IN_PROGRESS',
+                `total_items` INT(11) DEFAULT 0,
+                `total_quantity` INT(11) DEFAULT 0,
+                `total_cost` DECIMAL(15,2) DEFAULT 0.00,
+                `completed_at` DATETIME NULL,
+                `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                UNIQUE KEY `invoice_number` (`invoice_number`),
+                KEY `created_by` (`created_by`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ");
+    } else {
+        $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'purchase_type'");
+        if ($stmt->rowCount() == 0) {
+            $db->exec("ALTER TABLE `purchases` ADD COLUMN `purchase_type` ENUM('medicine', 'equipment') NOT NULL DEFAULT 'medicine' AFTER `invoice_number`");
+        }
+        $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'joined_users'");
+        if ($stmt->rowCount() == 0) {
+            $db->exec("ALTER TABLE `purchases` ADD COLUMN `joined_users` TEXT NULL AFTER `created_by`");
+        }
+    }
+} catch (Exception $e) {
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS `purchases` (
+            `id` INT(11) NOT NULL AUTO_INCREMENT,
+            `invoice_number` VARCHAR(50) NOT NULL,
+            `purchase_type` ENUM('medicine', 'equipment') NOT NULL DEFAULT 'medicine',
+            `created_by` INT(11) NOT NULL,
+            `created_by_name` VARCHAR(100) NOT NULL,
+            `joined_users` TEXT NULL,
+            `status` ENUM('IN_PROGRESS', 'COMPLETED', 'CANCELLED') DEFAULT 'IN_PROGRESS',
+            `total_items` INT(11) DEFAULT 0,
+            `total_quantity` INT(11) DEFAULT 0,
+            `total_cost` DECIMAL(15,2) DEFAULT 0.00,
+            `completed_at` DATETIME NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            `updated_at` DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            UNIQUE KEY `invoice_number` (`invoice_number`),
+            KEY `created_by` (`created_by`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ");
+}
+
+// Create purchase_items table if not exists
+try {
+    $stmt = $db->query("SHOW TABLES LIKE 'purchase_items'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("
+            CREATE TABLE `purchase_items` (
+                `id` INT(11) NOT NULL AUTO_INCREMENT,
+                `purchase_id` INT(11) NOT NULL,
+                `item_type` ENUM('medicine', 'equipment') NOT NULL DEFAULT 'medicine',
+                `item_id` INT(11) NOT NULL,
+                `quantity` INT(11) NOT NULL,
+                `unit_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+                `total_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+                `added_by` INT(11) NOT NULL,
+                `added_by_name` VARCHAR(100) NOT NULL,
+                `added_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (`id`),
+                KEY `purchase_id` (`purchase_id`),
+                KEY `item_id` (`item_id`),
+                KEY `added_by` (`added_by`)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        ");
+    }
+} catch (Exception $e) {
+    $db->exec("
+        CREATE TABLE IF NOT EXISTS `purchase_items` (
+            `id` INT(11) NOT NULL AUTO_INCREMENT,
+            `purchase_id` INT(11) NOT NULL,
+            `item_type` ENUM('medicine', 'equipment') NOT NULL DEFAULT 'medicine',
+            `item_id` INT(11) NOT NULL,
+            `quantity` INT(11) NOT NULL,
+            `unit_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `total_price` DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+            `added_by` INT(11) NOT NULL,
+            `added_by_name` VARCHAR(100) NOT NULL,
+            `added_at` DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (`id`),
+            KEY `purchase_id` (`purchase_id`),
+            KEY `item_id` (`item_id`),
+            KEY `added_by` (`added_by`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    ");
+}
+
+// ================================================================
+// GET CATEGORIES
 // ================================================================
 $med_categories = [];
-$stmt = $db->query("SELECT DISTINCT category FROM medications_inventory WHERE category IS NOT NULL AND category != '' ORDER BY category");
+$stmt = $db->query("SELECT DISTINCT category FROM medications_inventory WHERE category IS NOT NULL AND category != '' AND category != '__other__' ORDER BY category");
 $med_categories = $stmt->fetchAll();
 
 $equip_categories = [];
-$stmt = $db->query("SELECT DISTINCT category FROM medical_equipment WHERE category IS NOT NULL AND category != '' ORDER BY category");
+$stmt = $db->query("SELECT DISTINCT category FROM medical_equipment WHERE category IS NOT NULL AND category != '' AND category != '__other__' ORDER BY category");
 $equip_categories = $stmt->fetchAll();
 
 // ================================================================
@@ -141,125 +280,98 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     // ================================================================
-    // ADD MEDICINE - Auto-search, new batch if name exists
+    // CREATE PURCHASE - With Join or Create Logic
     // ================================================================
-    if ($action === 'add_medicine') {
-        $medication_name = trim($_POST['medication_name'] ?? '');
-        $category = trim($_POST['category'] ?? '');
-        if (empty($category) && !empty($_POST['category_manual'])) {
-            $category = trim($_POST['category_manual']);
-        }
-        $unit = trim($_POST['unit'] ?? 'pcs');
-        $quantity = (int)($_POST['quantity'] ?? 0);
-        $reorder_level = (int)($_POST['reorder_level'] ?? 10);
-        $unit_cost = getMoney($_POST['unit_cost'] ?? 0);
-        $selling_price = getMoney($_POST['selling_price'] ?? 0);
-        $supplier = trim($_POST['supplier'] ?? '');
-        $expiry_date = $_POST['expiry_date'] ?? '';
-        $batch_number = trim($_POST['batch_number'] ?? '');
-        $status = $_POST['status'] ?? 'active';
+    if ($action === 'create_purchase') {
+        $purchase_type = $_POST['purchase_type'] ?? 'medicine';
         
-        if (empty($batch_number)) {
-            $batch_number = 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
-        }
+        // Check if user is already in an IN_PROGRESS purchase of this type
+        $stmt = $db->prepare("
+            SELECT p.id, p.invoice_number, p.purchase_type, p.created_by, p.created_by_name
+            FROM purchases p
+            WHERE p.status = 'IN_PROGRESS' 
+            AND p.purchase_type = ?
+            AND p.created_by = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$purchase_type, $user_id]);
+        $creator_purchase = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        $errors = [];
-        if (empty($medication_name)) { $errors[] = 'Medicine name is required'; }
-        if ($quantity < 0) { $errors[] = 'Quantity cannot be negative'; }
-        if ($selling_price < 0) { $errors[] = 'Selling price cannot be negative'; }
-        if (!empty($expiry_date) && strtotime($expiry_date) < strtotime(date('Y-m-d'))) {
-            $errors[] = 'Expiry date cannot be in the past';
+        if ($creator_purchase) {
+            // User is creator of an IN_PROGRESS purchase
+            $_SESSION['purchase_message'] = "You already have an IN_PROGRESS purchase: <strong>{$creator_purchase['invoice_number']}</strong>. Continue adding items.";
+            $_SESSION['purchase_message_type'] = 'info';
+            header('Location: purchases.php?id=' . $creator_purchase['id'] . '&type=' . $purchase_type);
+            exit;
         }
         
-        if (empty($errors)) {
-            try {
-                $stmt = $db->prepare("
-                    INSERT INTO medications_inventory (
-                        medication_name, category, unit, quantity, reorder_level,
-                        unit_cost, selling_price, supplier, expiry_date, batch_number,
-                        branch_id, status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-                ");
-                $stmt->execute([
-                    $medication_name, $category, $unit, $quantity, $reorder_level,
-                    $unit_cost, $selling_price, $supplier, $expiry_date, $batch_number,
-                    $user_branch_id, $status
-                ]);
-                
-                $message = "✅ Medicine added successfully! Batch: <strong>$batch_number</strong>";
-                $message_type = 'success';
-                $_SESSION['inventory_message'] = $message;
-                $_SESSION['inventory_message_type'] = $message_type;
-                header('Location: inventory.php?tab=medicines&added=1');
-                exit;
-            } catch (Exception $e) {
-                $message = "❌ Error: " . $e->getMessage();
-                $message_type = 'error';
-            }
-        } else {
-            $message = implode('<br>', $errors);
-            $message_type = 'error';
-        }
-    }
-    
-    // ================================================================
-    // ADD EQUIPMENT - Auto-search, new batch if name exists
-    // ================================================================
-    if ($action === 'add_equipment') {
-        $equipment_name = trim($_POST['equipment_name'] ?? '');
-        $category = trim($_POST['category'] ?? '');
-        if (empty($category) && !empty($_POST['category_manual'])) {
-            $category = trim($_POST['category_manual']);
-        }
-        $unit = trim($_POST['unit'] ?? 'pcs');
-        $quantity = (int)($_POST['quantity'] ?? 0);
-        $reorder_level = (int)($_POST['reorder_level'] ?? 5);
-        $unit_cost = getMoney($_POST['unit_cost'] ?? 0);
-        $selling_price = getMoney($_POST['selling_price'] ?? 0);
-        $supplier = trim($_POST['supplier'] ?? '');
-        $expiry_date = $_POST['expiry_date'] ?? '';
-        $batch_number = trim($_POST['batch_number'] ?? '');
-        $status = $_POST['status'] ?? 'active';
+        // Check if user has already joined an IN_PROGRESS purchase
+        $stmt = $db->prepare("
+            SELECT DISTINCT p.id, p.invoice_number, p.purchase_type, p.created_by, p.created_by_name
+            FROM purchases p
+            JOIN purchase_items pi ON p.id = pi.purchase_id
+            WHERE p.status = 'IN_PROGRESS' 
+            AND p.purchase_type = ?
+            AND pi.added_by = ?
+            LIMIT 1
+        ");
+        $stmt->execute([$purchase_type, $user_id]);
+        $joined_purchase = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        if (empty($batch_number)) {
-            $batch_number = 'EQP-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
+        if ($joined_purchase) {
+            // User has already joined an IN_PROGRESS purchase
+            $_SESSION['purchase_message'] = "You have already joined purchase: <strong>{$joined_purchase['invoice_number']}</strong>. Continue adding items.";
+            $_SESSION['purchase_message_type'] = 'info';
+            header('Location: purchases.php?id=' . $joined_purchase['id'] . '&type=' . $purchase_type);
+            exit;
         }
         
-        $errors = [];
-        if (empty($equipment_name)) { $errors[] = 'Equipment name is required'; }
-        if ($quantity < 0) { $errors[] = 'Quantity cannot be negative'; }
-        if ($selling_price < 0) { $errors[] = 'Selling price cannot be negative'; }
-        if (!empty($expiry_date) && strtotime($expiry_date) < strtotime(date('Y-m-d'))) {
-            $errors[] = 'Expiry date cannot be in the past';
+        // Check if there's any IN_PROGRESS purchase of this type (for joining)
+        $stmt = $db->prepare("
+            SELECT id, invoice_number, created_by, created_by_name, 
+                   (SELECT COUNT(*) FROM purchase_items WHERE purchase_id = purchases.id) as items_count
+            FROM purchases 
+            WHERE status = 'IN_PROGRESS' AND purchase_type = ?
+        ");
+        $stmt->execute([$purchase_type]);
+        $in_progress_exists = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        
+        if (count($in_progress_exists) > 0) {
+            // There is an IN_PROGRESS purchase, user can join or create new
+            $_SESSION['purchase_join_options'] = [
+                'purchases' => $in_progress_exists,
+                'type' => $purchase_type
+            ];
+            $_SESSION['purchase_message'] = "There is an IN_PROGRESS purchase. You can join it or create a new one.";
+            $_SESSION['purchase_message_type'] = 'info';
+            header('Location: purchases.php?action=choose');
+            exit;
         }
         
-        if (empty($errors)) {
-            try {
-                $stmt = $db->prepare("
-                    INSERT INTO medical_equipment (
-                        equipment_name, category, unit, quantity, reorder_level,
-                        unit_cost, selling_price, supplier, expiry_date, batch_number,
-                        branch_id, status, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-                ");
-                $stmt->execute([
-                    $equipment_name, $category, $unit, $quantity, $reorder_level,
-                    $unit_cost, $selling_price, $supplier, $expiry_date, $batch_number,
-                    $user_branch_id, $status
-                ]);
-                
-                $message = "✅ Equipment added successfully! Batch: <strong>$batch_number</strong>";
-                $message_type = 'success';
-                $_SESSION['inventory_message'] = $message;
-                $_SESSION['inventory_message_type'] = $message_type;
-                header('Location: inventory.php?tab=equipment&added=1');
-                exit;
-            } catch (Exception $e) {
-                $message = "❌ Error: " . $e->getMessage();
-                $message_type = 'error';
-            }
-        } else {
-            $message = implode('<br>', $errors);
+        // No IN_PROGRESS purchases, create new one
+        $date = date('Ymd');
+        $prefix = $purchase_type === 'medicine' ? 'INV-MED' : 'INV-EQP';
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM purchases WHERE DATE(created_at) = CURDATE() AND purchase_type = ?");
+        $stmt->execute([$purchase_type]);
+        $count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $invoice_number = $prefix . '-' . $date . '-' . str_pad($count + 1, 4, '0', STR_PAD_LEFT);
+        
+        try {
+            $stmt = $db->prepare("
+                INSERT INTO purchases (invoice_number, purchase_type, created_by, created_by_name, status, created_at)
+                VALUES (?, ?, ?, ?, 'IN_PROGRESS', NOW())
+            ");
+            $stmt->execute([$invoice_number, $purchase_type, $user_id, $user_full_name]);
+            
+            $new_purchase_id = $db->lastInsertId();
+            
+            $_SESSION['purchase_message'] = "✅ New " . ucfirst($purchase_type) . " purchase created! Invoice: <strong>$invoice_number</strong>";
+            $_SESSION['purchase_message_type'] = 'success';
+            header('Location: purchases.php?id=' . $new_purchase_id . '&type=' . $purchase_type);
+            exit;
+            
+        } catch (Exception $e) {
+            $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
         }
     }
@@ -268,6 +380,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ================================================================
 // CHECK SESSION MESSAGES
 // ================================================================
+if (isset($_SESSION['purchase_message'])) {
+    $message = $_SESSION['purchase_message'];
+    $message_type = $_SESSION['purchase_message_type'] ?? 'success';
+    unset($_SESSION['purchase_message']);
+    unset($_SESSION['purchase_message_type']);
+}
+
 if (isset($_SESSION['inventory_message'])) {
     $message = $_SESSION['inventory_message'];
     $message_type = $_SESSION['inventory_message_type'] ?? 'success';
@@ -292,51 +411,61 @@ $stock_filter = isset($_GET['stock']) ? trim($_GET['stock']) : '';
 $expiry_filter = isset($_GET['expiry']) ? trim($_GET['expiry']) : '';
 
 // ================================================================
-// BUILD MEDICINE QUERY - GROUPED BY NAME WITH ACTIVE QUANTITY ONLY
+// BUILD MEDICINE QUERY WITH ADDED BY - FIXED FOR NO EXPIRY
 // ================================================================
 $med_query = "
     SELECT 
-        MIN(id) as id,
-        medication_name,
-        category,
-        unit,
-        branch_id,
+        MIN(m.id) as id,
+        m.medication_name,
+        m.category,
+        m.unit,
+        m.branch_id,
+        m.added_by,
+        m.added_by_name,
+        u.full_name as added_by_full_name,
         SUM(CASE 
-            WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) 
-            THEN quantity 
+            WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') 
+            THEN m.quantity 
             ELSE 0 
         END) as total_quantity,
-        MIN(reorder_level) as reorder_level,
-        MIN(unit_cost) as unit_cost,
-        MIN(selling_price) as selling_price,
-        MIN(supplier) as supplier,
-        MIN(expiry_date) as expiry_date,
-        GROUP_CONCAT(id) as batch_ids,
-        GROUP_CONCAT(batch_number SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(quantity SEPARATOR '|') as batch_quantities,
-        GROUP_CONCAT(expiry_date SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(status SEPARATOR '|') as batch_statuses,
-        MIN(DATEDIFF(expiry_date, CURDATE())) as days_remaining,
+        MIN(m.reorder_level) as reorder_level,
+        MIN(m.unit_cost) as unit_cost,
+        MIN(m.selling_price) as selling_price,
+        MIN(m.supplier) as supplier,
+        MIN(m.expiry_date) as expiry_date,
+        GROUP_CONCAT(m.id) as batch_ids,
+        GROUP_CONCAT(m.batch_number SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(m.quantity SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(m.expiry_date SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(m.status SEPARATOR '|') as batch_statuses,
+        MIN(DATEDIFF(
+            CASE 
+                WHEN m.expiry_date = '0000-00-00' THEN NULL 
+                ELSE m.expiry_date 
+            END, 
+            CURDATE()
+        )) as days_remaining,
         CASE 
             WHEN SUM(CASE 
-                WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) 
-                THEN quantity 
+                WHEN m.status = 'active' AND (m.expiry_date IS NULL OR m.expiry_date >= CURDATE() OR m.expiry_date = '0000-00-00') 
+                THEN m.quantity 
                 ELSE 0 
             END) > 0 THEN 'active'
             ELSE 'inactive'
         END as computed_status
-    FROM medications_inventory 
-    WHERE branch_id = ?
+    FROM medications_inventory m
+    LEFT JOIN users u ON m.added_by = u.id
+    WHERE m.branch_id = ?
 ";
 
 $med_params = [$user_branch_id];
 
 if (!empty($search)) {
-    $med_query .= " AND medication_name LIKE ?";
+    $med_query .= " AND m.medication_name LIKE ?";
     $med_params[] = "%$search%";
 }
 if (!empty($category_filter)) {
-    $med_query .= " AND category = ?";
+    $med_query .= " AND m.category = ?";
     $med_params[] = $category_filter;
 }
 if ($status_filter === 'active') {
@@ -350,65 +479,78 @@ if ($stock_filter === 'low') {
     $med_query .= " HAVING total_quantity = 0";
 }
 if ($expiry_filter === 'expiring') {
-    $med_query .= " AND expiry_date IS NOT NULL 
-                    AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)";
+    $med_query .= " AND m.expiry_date IS NOT NULL 
+                    AND m.expiry_date != '0000-00-00'
+                    AND m.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)";
 }
 if ($expiry_filter === 'expired') {
-    $med_query .= " AND expiry_date IS NOT NULL AND expiry_date < CURDATE()";
+    $med_query .= " AND m.expiry_date IS NOT NULL 
+                    AND m.expiry_date != '0000-00-00'
+                    AND m.expiry_date < CURDATE()";
 }
 
-$med_query .= " GROUP BY medication_name, category, unit, branch_id ORDER BY medication_name ASC";
+$med_query .= " GROUP BY m.medication_name, m.category, m.unit, m.branch_id ORDER BY m.medication_name ASC";
 
 $stmt = $db->prepare($med_query);
 $stmt->execute($med_params);
 $medicines = $stmt->fetchAll();
 
 // ================================================================
-// BUILD EQUIPMENT QUERY - GROUPED BY NAME WITH ACTIVE QUANTITY ONLY
+// BUILD EQUIPMENT QUERY WITH ADDED BY - FIXED FOR NO EXPIRY
 // ================================================================
 $equip_query = "
     SELECT 
-        MIN(id) as id,
-        equipment_name,
-        category,
-        unit,
-        branch_id,
+        MIN(e.id) as id,
+        e.equipment_name,
+        e.category,
+        e.unit,
+        e.branch_id,
+        e.added_by,
+        e.added_by_name,
+        u.full_name as added_by_full_name,
         SUM(CASE 
-            WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) 
-            THEN quantity 
+            WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') 
+            THEN e.quantity 
             ELSE 0 
         END) as total_quantity,
-        MIN(reorder_level) as reorder_level,
-        MIN(unit_cost) as unit_cost,
-        MIN(selling_price) as selling_price,
-        MIN(supplier) as supplier,
-        MIN(expiry_date) as expiry_date,
-        GROUP_CONCAT(id) as batch_ids,
-        GROUP_CONCAT(batch_number SEPARATOR '|') as batch_numbers,
-        GROUP_CONCAT(quantity SEPARATOR '|') as batch_quantities,
-        GROUP_CONCAT(expiry_date SEPARATOR '|') as batch_expiries,
-        GROUP_CONCAT(status SEPARATOR '|') as batch_statuses,
-        MIN(DATEDIFF(expiry_date, CURDATE())) as days_remaining,
+        MIN(e.reorder_level) as reorder_level,
+        MIN(e.unit_cost) as unit_cost,
+        MIN(e.selling_price) as selling_price,
+        MIN(e.supplier) as supplier,
+        MIN(e.expiry_date) as expiry_date,
+        GROUP_CONCAT(e.id) as batch_ids,
+        GROUP_CONCAT(e.batch_number SEPARATOR '|') as batch_numbers,
+        GROUP_CONCAT(e.quantity SEPARATOR '|') as batch_quantities,
+        GROUP_CONCAT(e.expiry_date SEPARATOR '|') as batch_expiries,
+        GROUP_CONCAT(e.status SEPARATOR '|') as batch_statuses,
+        MIN(DATEDIFF(
+            CASE 
+                WHEN e.expiry_date = '0000-00-00' THEN NULL 
+                ELSE e.expiry_date 
+            END, 
+            CURDATE()
+        )) as days_remaining,
         CASE 
             WHEN SUM(CASE 
-                WHEN status = 'active' AND (expiry_date IS NULL OR expiry_date >= CURDATE()) 
-                THEN quantity 
+                WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE() OR e.expiry_date = '0000-00-00') 
+                THEN e.quantity 
                 ELSE 0 
             END) > 0 THEN 'active'
             ELSE 'inactive'
         END as computed_status
-    FROM medical_equipment 
-    WHERE branch_id = ?
+    FROM medical_equipment e
+    LEFT JOIN users u ON e.added_by = u.id
+    WHERE e.branch_id = ?
 ";
 
 $equip_params = [$user_branch_id];
 
 if (!empty($search)) {
-    $equip_query .= " AND equipment_name LIKE ?";
+    $equip_query .= " AND e.equipment_name LIKE ?";
     $equip_params[] = "%$search%";
 }
 if (!empty($category_filter)) {
-    $equip_query .= " AND category = ?";
+    $equip_query .= " AND e.category = ?";
     $equip_params[] = $category_filter;
 }
 if ($status_filter === 'active') {
@@ -422,94 +564,92 @@ if ($stock_filter === 'low') {
     $equip_query .= " HAVING total_quantity = 0";
 }
 if ($expiry_filter === 'expiring') {
-    $equip_query .= " AND expiry_date IS NOT NULL 
-                    AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)";
+    $equip_query .= " AND e.expiry_date IS NOT NULL 
+                    AND e.expiry_date != '0000-00-00'
+                    AND e.expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)";
 }
 if ($expiry_filter === 'expired') {
-    $equip_query .= " AND expiry_date IS NOT NULL AND expiry_date < CURDATE()";
+    $equip_query .= " AND e.expiry_date IS NOT NULL 
+                    AND e.expiry_date != '0000-00-00'
+                    AND e.expiry_date < CURDATE()";
 }
 
-$equip_query .= " GROUP BY equipment_name, category, unit, branch_id ORDER BY equipment_name ASC";
+$equip_query .= " GROUP BY e.equipment_name, e.category, e.unit, e.branch_id ORDER BY e.equipment_name ASC";
 
 $stmt = $db->prepare($equip_query);
 $stmt->execute($equip_params);
 $equipment = $stmt->fetchAll();
 
 // ================================================================
-// GET STATISTICS - MEDICINES (Based on active quantity only)
+// GET STATISTICS - MEDICINES - FIXED
 // ================================================================
-
-// Total Medicines (active items with quantity > 0)
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT medication_name) as count 
     FROM medications_inventory 
     WHERE branch_id = ? 
     AND status = 'active' 
-    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
 ");
 $stmt->execute([$user_branch_id]);
 $total_medicines = $stmt->fetch()['count'] ?? 0;
 
-// Medicine In Stock (active quantity > 0)
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT medication_name) as count 
     FROM medications_inventory 
     WHERE branch_id = ? 
     AND status = 'active' 
-    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
     AND quantity > 0
 ");
 $stmt->execute([$user_branch_id]);
 $med_in_stock = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Out of Stock (total active quantity = 0)
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT medication_name) as count 
     FROM medications_inventory 
     WHERE branch_id = ? 
     AND status = 'active'
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
     AND quantity = 0
 ");
 $stmt->execute([$user_branch_id]);
 $med_out_of_stock = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Low Stock
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT medication_name) as count 
     FROM medications_inventory 
     WHERE branch_id = ? 
     AND status = 'active' 
-    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
     AND quantity > 0 
     AND quantity <= reorder_level
 ");
 $stmt->execute([$user_branch_id]);
 $med_low_stock = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Expiring Soon
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT medication_name) as count 
     FROM medications_inventory 
     WHERE branch_id = ? 
     AND expiry_date IS NOT NULL 
+    AND expiry_date != '0000-00-00'
     AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     AND status = 'active'
 ");
 $stmt->execute([$user_branch_id]);
 $med_expiring = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Expired (but still have active batches)
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT medication_name) as count 
     FROM medications_inventory 
     WHERE branch_id = ? 
     AND expiry_date IS NOT NULL 
+    AND expiry_date != '0000-00-00'
     AND expiry_date < CURDATE()
 ");
 $stmt->execute([$user_branch_id]);
 $med_expired = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Inactive (no active quantity)
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT medication_name) as count 
     FROM medications_inventory 
@@ -519,92 +659,86 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $med_inactive = $stmt->fetch()['count'] ?? 0;
 
-// Medicine Total Value (active quantity only)
 $stmt = $db->prepare("
-    SELECT SUM(quantity * selling_price) as total_value 
+    SELECT COALESCE(SUM(quantity * selling_price), 0) as total_value 
     FROM medications_inventory 
     WHERE branch_id = ? 
     AND status = 'active' 
-    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
 ");
 $stmt->execute([$user_branch_id]);
 $med_value = $stmt->fetch(PDO::FETCH_ASSOC)['total_value'] ?? 0;
 
 // ================================================================
-// GET STATISTICS - EQUIPMENT (Based on active quantity only)
+// GET STATISTICS - EQUIPMENT - FIXED
 // ================================================================
-
-// Total Equipment
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT equipment_name) as count 
     FROM medical_equipment 
     WHERE branch_id = ? 
     AND status = 'active' 
-    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
 ");
 $stmt->execute([$user_branch_id]);
 $total_equipment = $stmt->fetch()['count'] ?? 0;
 
-// Equipment In Stock
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT equipment_name) as count 
     FROM medical_equipment 
     WHERE branch_id = ? 
     AND status = 'active' 
-    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
     AND quantity > 0
 ");
 $stmt->execute([$user_branch_id]);
 $equip_in_stock = $stmt->fetch()['count'] ?? 0;
 
-// Equipment Out of Stock
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT equipment_name) as count 
     FROM medical_equipment 
     WHERE branch_id = ? 
     AND status = 'active'
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
     AND quantity = 0
 ");
 $stmt->execute([$user_branch_id]);
 $equip_out_of_stock = $stmt->fetch()['count'] ?? 0;
 
-// Equipment Low Stock
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT equipment_name) as count 
     FROM medical_equipment 
     WHERE branch_id = ? 
     AND status = 'active' 
-    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
     AND quantity > 0 
     AND quantity <= reorder_level
 ");
 $stmt->execute([$user_branch_id]);
 $equip_low_stock = $stmt->fetch()['count'] ?? 0;
 
-// Equipment Expiring Soon
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT equipment_name) as count 
     FROM medical_equipment 
     WHERE branch_id = ? 
     AND expiry_date IS NOT NULL 
+    AND expiry_date != '0000-00-00'
     AND expiry_date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL 30 DAY)
     AND status = 'active'
 ");
 $stmt->execute([$user_branch_id]);
 $equip_expiring = $stmt->fetch()['count'] ?? 0;
 
-// Equipment Expired
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT equipment_name) as count 
     FROM medical_equipment 
     WHERE branch_id = ? 
     AND expiry_date IS NOT NULL 
+    AND expiry_date != '0000-00-00'
     AND expiry_date < CURDATE()
 ");
 $stmt->execute([$user_branch_id]);
 $equip_expired = $stmt->fetch()['count'] ?? 0;
 
-// Equipment Inactive
 $stmt = $db->prepare("
     SELECT COUNT(DISTINCT equipment_name) as count 
     FROM medical_equipment 
@@ -614,22 +748,33 @@ $stmt = $db->prepare("
 $stmt->execute([$user_branch_id]);
 $equip_inactive = $stmt->fetch()['count'] ?? 0;
 
-// Equipment Total Value
 $stmt = $db->prepare("
-    SELECT SUM(quantity * selling_price) as total_value 
+    SELECT COALESCE(SUM(quantity * selling_price), 0) as total_value 
     FROM medical_equipment 
     WHERE branch_id = ? 
     AND status = 'active' 
-    AND (expiry_date IS NULL OR expiry_date >= CURDATE())
+    AND (expiry_date IS NULL OR expiry_date >= CURDATE() OR expiry_date = '0000-00-00')
 ");
 $stmt->execute([$user_branch_id]);
 $equip_value = $stmt->fetch(PDO::FETCH_ASSOC)['total_value'] ?? 0;
 
-// Total Inventory Value
 $total_inventory_value = $med_value + $equip_value;
 
 // ================================================================
-// GET VIEW DATA - WITH ALL BATCHES FOR THE NAME
+// GET IN_PROGRESS PURCHASES FOR CURRENT USER
+// ================================================================
+$in_progress_purchases = [];
+$stmt = $db->prepare("
+    SELECT id, invoice_number, purchase_type, status, total_items, total_quantity, total_cost, created_at, created_by
+    FROM purchases 
+    WHERE created_by = ? AND status = 'IN_PROGRESS'
+    ORDER BY created_at DESC
+");
+$stmt->execute([$user_id]);
+$in_progress_purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// ================================================================
+// GET VIEW DATA WITH ADDED BY
 // ================================================================
 $view_data = null;
 $view_batches = [];
@@ -637,39 +782,45 @@ $view_name = '';
 
 if ($view_id > 0) {
     if ($view_type === 'medicine') {
-        // Get the medicine name first
-        $stmt = $db->prepare("SELECT medication_name FROM medications_inventory WHERE id = ? AND branch_id = ?");
+        $stmt = $db->prepare("
+            SELECT medication_name, added_by, added_by_name 
+            FROM medications_inventory 
+            WHERE id = ? AND branch_id = ?
+        ");
         $stmt->execute([$view_id, $user_branch_id]);
         $name_row = $stmt->fetch();
         if ($name_row) {
             $view_name = $name_row['medication_name'];
-            // Get all batches for this medicine name
             $stmt = $db->prepare("
-                SELECT * FROM medications_inventory 
-                WHERE medication_name = ? AND branch_id = ?
-                ORDER BY id ASC
+                SELECT m.*, u.full_name as added_by_full_name
+                FROM medications_inventory m
+                LEFT JOIN users u ON m.added_by = u.id
+                WHERE m.medication_name = ? AND m.branch_id = ?
+                ORDER BY m.id ASC
             ");
             $stmt->execute([$view_name, $user_branch_id]);
             $view_batches = $stmt->fetchAll();
-            // Set view_data as the first batch (for summary)
             $view_data = $view_batches[0] ?? null;
         }
     } else {
-        // Get the equipment name first
-        $stmt = $db->prepare("SELECT equipment_name FROM medical_equipment WHERE id = ? AND branch_id = ?");
+        $stmt = $db->prepare("
+            SELECT equipment_name, added_by, added_by_name 
+            FROM medical_equipment 
+            WHERE id = ? AND branch_id = ?
+        ");
         $stmt->execute([$view_id, $user_branch_id]);
         $name_row = $stmt->fetch();
         if ($name_row) {
             $view_name = $name_row['equipment_name'];
-            // Get all batches for this equipment name
             $stmt = $db->prepare("
-                SELECT * FROM medical_equipment 
-                WHERE equipment_name = ? AND branch_id = ?
-                ORDER BY id ASC
+                SELECT e.*, u.full_name as added_by_full_name
+                FROM medical_equipment e
+                LEFT JOIN users u ON e.added_by = u.id
+                WHERE e.equipment_name = ? AND e.branch_id = ?
+                ORDER BY e.id ASC
             ");
             $stmt->execute([$view_name, $user_branch_id]);
             $view_batches = $stmt->fetchAll();
-            // Set view_data as the first batch (for summary)
             $view_data = $view_batches[0] ?? null;
         }
     }
@@ -692,9 +843,6 @@ try {
     $all_medicine_names = [];
 }
 
-// ================================================================
-// GET ALL EQUIPMENT NAMES FOR AUTO-SEARCH
-// ================================================================
 $all_equipment_names = [];
 try {
     $stmt = $db->prepare("
@@ -794,7 +942,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* Page Header */
         .page-header {
             background: linear-gradient(135deg, var(--primary), var(--primary-dark));
             border-radius: 16px;
@@ -834,10 +981,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             z-index: 1;
         }
         
-        .page-header .page-title i {
-            font-size: 2rem;
-            opacity: 0.9;
-        }
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
         
         .page-header .page-subtitle {
             color: rgba(255,255,255,0.85);
@@ -873,7 +1017,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             z-index: 1;
         }
         
-        /* Buttons */
         .btn-add-medicine {
             background: var(--success);
             color: white;
@@ -940,10 +1083,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             background: rgba(255,255,255,0.1);
         }
         
-        .btn-save {
-            background: var(--primary);
+        .btn-purchase-history {
+            background: var(--warning);
             color: white;
-            padding: 10px 28px;
+            padding: 10px 24px;
             border-radius: 10px;
             font-weight: 600;
             font-size: 0.9rem;
@@ -953,143 +1096,63 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             display: inline-flex;
             align-items: center;
             gap: 8px;
-        }
-        
-        .btn-save:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-cancel {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-            padding: 10px 24px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.25);
             text-decoration: none;
         }
         
-        .btn-cancel:hover {
-            border-color: var(--danger);
-            color: var(--danger);
+        .btn-purchase-history:hover {
+            background: #B45309;
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(217, 119, 6, 0.35);
         }
         
-        .btn-search {
-            padding: 8px 20px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            border: none;
-            background: var(--primary);
-            color: white;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .btn-search:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-reset {
-            padding: 8px 16px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            border: 2px solid var(--border-color);
-            background: transparent;
-            color: var(--text-secondary);
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-        }
-        
-        .btn-reset:hover {
-            border-color: var(--danger);
-            color: var(--danger);
-        }
-        
-        .btn-generate {
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            padding: 8px 14px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            white-space: nowrap;
-            height: 42px;
-            display: inline-flex;
+        .purchase-banner {
+            background: var(--success-light);
+            border: 2px solid var(--success);
+            border-radius: 12px;
+            padding: 12px 18px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
             align-items: center;
-            gap: 4px;
+            flex-wrap: wrap;
+            gap: 10px;
         }
         
-        .btn-generate:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        [data-theme="dark"] .purchase-banner {
+            background: #1A3A2A;
+            border-color: #34D399;
         }
         
-        /* Auto-search styles */
-        .autocomplete-container {
-            position: relative;
-            width: 100%;
-        }
-        
-        .autocomplete-list {
-            position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
-            background: var(--bg-card);
-            border: 2px solid var(--border-color);
-            border-top: none;
-            border-radius: 0 0 8px 8px;
-            z-index: 100;
-            max-height: 200px;
-            overflow-y: auto;
-            display: none;
-            box-shadow: var(--shadow-md);
-        }
-        
-        .autocomplete-list.show {
-            display: block;
-        }
-        
-        .autocomplete-item {
-            padding: 8px 14px;
-            cursor: pointer;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 0.82rem;
-            transition: all 0.2s ease;
+        .purchase-banner .banner-text {
+            font-size: 0.85rem;
+            font-weight: 500;
             color: var(--text-primary);
         }
         
-        .autocomplete-item:hover {
-            background: var(--primary-light);
-            color: var(--primary);
-        }
+        .purchase-banner .banner-text i { color: var(--success); }
         
-        .autocomplete-item.active {
-            background: var(--primary);
+        .purchase-banner .btn-go-to-purchase {
+            background: var(--success);
             color: white;
+            padding: 6px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.8rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
         }
         
-        .autocomplete-item .item-detail {
-            font-size: 0.65rem;
-            color: var(--text-muted);
-            display: block;
+        .purchase-banner .btn-go-to-purchase:hover {
+            background: var(--success-dark);
+            transform: translateY(-2px);
         }
         
-        /* Tabs */
         .tabs-container {
             display: flex;
             gap: 4px;
@@ -1144,7 +1207,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .tab-content { display: none; }
         .tab-content.active { display: block; }
         
-        /* Stats Cards */
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(7, 1fr);
@@ -1169,36 +1231,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             box-shadow: 0 8px 25px rgba(0,0,0,0.15);
         }
         
-        .stat-card .stat-number {
-            font-size: 1.4rem;
-            font-weight: 700;
-            line-height: 1.2;
-        }
-        
-        .stat-card .stat-label {
-            font-size: 0.6rem;
-            color: rgba(255,255,255,0.85);
-            font-weight: 500;
-            margin-top: 2px;
-        }
-        
-        .stat-card .stat-icon {
-            font-size: 1.2rem;
-            opacity: 0.8;
-            float: right;
-        }
-        
-        .stat-card .stat-value {
-            font-size: 0.7rem;
-            font-weight: 600;
-            color: rgba(255,255,255,0.7);
-            margin-top: 2px;
-        }
-        
-        .stat-card .stat-sub {
-            font-size: 0.55rem;
-            color: rgba(255,255,255,0.5);
-        }
+        .stat-card .stat-number { font-size: 1.4rem; font-weight: 700; line-height: 1.2; }
+        .stat-card .stat-label { font-size: 0.6rem; color: rgba(255,255,255,0.85); font-weight: 500; margin-top: 2px; }
+        .stat-card .stat-icon { font-size: 1.2rem; opacity: 0.8; float: right; }
+        .stat-card .stat-value { font-size: 0.7rem; font-weight: 600; color: rgba(255,255,255,0.7); margin-top: 2px; }
+        .stat-card .stat-sub { font-size: 0.55rem; color: rgba(255,255,255,0.5); }
         
         .stat-card.blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
         .stat-card.green { background: linear-gradient(135deg, #059669, #047857); }
@@ -1208,7 +1245,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .stat-card.teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
         .stat-card.pink { background: linear-gradient(135deg, #DB2777, #BE185D); }
         
-        /* Card */
         .card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -1240,17 +1276,15 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .card-title .title-blue { color: var(--primary); }
         .card-title .title-purple { color: var(--purple); }
+        .card-title .title-added-by { color: var(--success); }
         
         .result-count {
             font-size: 0.8rem;
             color: var(--text-secondary);
         }
         
-        .result-count strong {
-            color: var(--primary);
-        }
+        .result-count strong { color: var(--primary); }
         
-        /* Filters */
         .filter-group {
             display: flex;
             flex-wrap: wrap;
@@ -1319,10 +1353,45 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
         }
         
-        /* Table */
+        .btn-search {
+            padding: 8px 20px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            border: none;
+            background: var(--primary);
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .btn-search:hover {
+            background: var(--primary-dark);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .btn-reset {
+            padding: 8px 16px;
+            border-radius: 10px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            border: 2px solid var(--border-color);
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+        
+        .btn-reset:hover {
+            border-color: var(--danger);
+            color: var(--danger);
+        }
+        
         .table-wrap {
             overflow-x: auto;
-            max-height: 450px;
+            max-height: 500px;
             overflow-y: auto;
         }
         
@@ -1343,7 +1412,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .data-table {
             width: 100%;
-            min-width: 1100px;
+            min-width: 1200px;
             border-collapse: separate;
             border-spacing: 0;
             font-size: 0.78rem;
@@ -1402,9 +1471,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .col-days { min-width: 70px; text-align: center; }
         .col-batch { min-width: 130px; }
         .col-status { min-width: 70px; text-align: center; }
+        .col-added-by { min-width: 120px; }
         .col-actions { min-width: 60px; text-align: center; }
         
-        /* Badges */
+        .added-by-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            background: var(--purple-light);
+            color: var(--purple);
+        }
+        
+        [data-theme="dark"] .added-by-tag {
+            background: #2D1B4E;
+            color: #C4B5FD;
+        }
+        
         .status-badge {
             padding: 2px 8px;
             border-radius: 10px;
@@ -1485,7 +1571,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
         
         .expiry-badge.no-expiry {
-            background: var(--gray-200);
+            background: #E2E8F0;
             color: var(--text-muted);
         }
         
@@ -1517,7 +1603,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
         
         .days-remaining.forever {
-            background: var(--gray-200);
+            background: #E2E8F0;
             color: var(--text-muted);
         }
         
@@ -1560,7 +1646,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             transform: scale(1.05);
         }
         
-        /* Message */
         .message-box {
             padding: 12px 18px;
             border-radius: 10px;
@@ -1589,6 +1674,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             border: 2px solid #FCA5A5;
         }
         
+        .message-box.info {
+            background: var(--primary-light);
+            color: #0A4CA8;
+            border: 2px solid #6EA8FE;
+        }
+        
         [data-theme="dark"] .message-box.success {
             background: #1A3A2A;
             color: #34D399;
@@ -1601,7 +1692,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             border-color: #F87171;
         }
         
-        /* Empty State */
+        [data-theme="dark"] .message-box.info {
+            background: #1A2A4A;
+            color: #6EA8FE;
+            border-color: #6EA8FE;
+        }
+        
         .empty-state {
             text-align: center;
             padding: 40px 20px;
@@ -1615,239 +1711,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             margin-bottom: 10px;
         }
         
-        /* Modal */
-        .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-            animation: fadeIn 0.3s ease;
-        }
-        
-        .modal-overlay.show {
-            display: flex;
-        }
-        
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-        
-        .modal-content {
-            background: var(--bg-card);
-            border-radius: 16px;
-            padding: 24px 28px;
-            max-width: 850px;
-            width: 95%;
-            max-height: 90vh;
-            overflow-y: auto;
-            border: 2px solid var(--border-color);
-            box-shadow: var(--shadow-lg);
-            animation: slideUp 0.3s ease;
-        }
-        
-        @keyframes slideUp {
-            from { transform: translateY(30px); opacity: 0; }
-            to { transform: translateY(0); opacity: 1; }
-        }
-        
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-bottom: 12px;
-            border-bottom: 2px solid var(--border-color);
-            margin-bottom: 16px;
-        }
-        
-        .modal-title {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .modal-title i { color: var(--primary); }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            font-size: 1.4rem;
-            cursor: pointer;
-            color: var(--text-secondary);
-            transition: all 0.3s ease;
-        }
-        
-        .modal-close:hover {
-            color: var(--danger);
-            transform: rotate(90deg);
-        }
-        
-        .form-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 14px;
-        }
-        
-        .form-grid .full-width { grid-column: 1 / -1; }
-        
-        .form-label {
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 3px;
-            display: block;
-        }
-        
-        .form-label .required {
-            color: var(--danger);
-            margin-left: 2px;
-        }
-        
-        .form-control {
-            width: 100%;
-            padding: 7px 12px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
+        .empty-state .sub {
             font-size: 0.8rem;
-            transition: all 0.3s ease;
-            outline: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
+            margin-top: 4px;
         }
         
-        .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-        }
-        
-        .help-text {
-            font-size: 0.6rem;
-            color: var(--text-muted);
-            margin-top: 2px;
-        }
-        
-        .form-actions {
-            display: flex;
-            gap: 10px;
-            margin-top: 18px;
-            padding-top: 14px;
-            border-top: 2px solid var(--border-color);
-            flex-wrap: wrap;
-        }
-        
-        .category-input-group {
-            display: flex;
-            gap: 6px;
-            align-items: center;
-        }
-        
-        .category-input-group .form-control { flex: 1; }
-        
-        .batch-input-group {
-            display: flex;
-            gap: 6px;
-            align-items: center;
-        }
-        
-        .batch-input-group .form-control { flex: 1; }
-        
-        /* View Modal - Batches Table */
-        .view-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            margin-bottom: 14px;
-        }
-        
-        .view-item {
-            padding: 8px 12px;
-            background: var(--bg-body);
-            border-radius: 6px;
-            border: 1px solid var(--border-color);
-        }
-        
-        .view-item .label {
-            font-size: 0.55rem;
-            text-transform: uppercase;
-            color: var(--text-secondary);
-            font-weight: 600;
-            letter-spacing: 0.05em;
-        }
-        
-        .view-item .value {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-top: 2px;
-        }
-        
-        .view-item .value .money-amount {
-            font-size: 0.95rem;
-        }
-        
-        .view-item .value .money-amount .currency-symbol {
-            font-size: 0.65rem;
-        }
-        
-        .view-item.full-width { grid-column: 1 / -1; }
-        
-        [data-theme="dark"] .view-item {
-            background: #1E293B;
-        }
-        
-        /* Batches table inside view modal */
-        .batches-table-wrap {
-            overflow-x: auto;
-            margin-top: 10px;
-        }
-        
-        .batches-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.75rem;
-        }
-        
-        .batches-table thead th {
-            background: var(--primary);
-            color: white;
-            padding: 6px 10px;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            font-weight: 700;
-            text-align: left;
-        }
-        
-        .batches-table tbody td {
-            padding: 5px 10px;
-            border-bottom: 1px solid var(--border-color);
-        }
-        
-        .batches-table tbody tr:nth-child(even) {
-            background: var(--primary-light);
-        }
-        
-        .batches-table tbody tr:hover td {
-            background: var(--success-light);
-        }
-        
-        [data-theme="dark"] .batches-table tbody tr:nth-child(even) {
-            background: #1E293B;
-        }
-        
-        [data-theme="dark"] .batches-table tbody tr:hover td {
-            background: #1A3A2A;
-        }
-        
-        /* Footer */
         .footer {
             padding: 12px 0;
             border-top: 1px solid var(--border-color);
@@ -1859,7 +1727,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* Animations */
         .animate-fade-in-up {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
@@ -1878,7 +1745,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             to { opacity: 1; transform: translateY(0); }
         }
         
-        /* Responsive */
         @media (max-width: 1200px) {
             .stats-grid { grid-template-columns: repeat(4, 1fr); }
         }
@@ -1897,12 +1763,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .search-form input, .search-form select { min-width: 100%; }
             .filter-group { justify-content: center; }
             .card { padding: 12px 14px; }
-            .modal-content { padding: 16px; }
-            .form-grid { grid-template-columns: 1fr; }
-            .form-grid .full-width { grid-column: 1; }
-            .category-input-group { flex-direction: column; }
-            .batch-input-group { flex-direction: column; }
-            .batch-input-group .btn-generate { width: 100%; justify-content: center; }
             .tab-btn { font-size: 0.7rem; padding: 8px 12px; }
             .tab-btn .badge { display: none; }
             .page-header .page-title { font-size: 1.3rem; }
@@ -1911,11 +1771,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .header-actions { flex-direction: column; align-items: stretch; width: 100%; }
             .header-actions .btn-add-medicine,
             .header-actions .btn-add-equipment,
-            .header-actions .btn-outline { width: 100%; justify-content: center; }
-            .view-grid { grid-template-columns: 1fr; }
-            .form-actions { flex-direction: column; }
-            .form-actions .btn-save,
-            .form-actions .btn-cancel { width: 100%; justify-content: center; }
+            .header-actions .btn-outline,
+            .header-actions .btn-purchase-history { width: 100%; justify-content: center; }
+            .data-table { min-width: 800px; }
+            .col-added-by { min-width: 100px; }
         }
         
         @media (max-width: 480px) {
@@ -1923,10 +1782,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .stat-card .stat-number { font-size: 0.9rem; }
             .stat-card { padding: 8px 10px; min-height: 55px; }
             .stat-card .stat-icon { font-size: 1rem; }
-            .data-table { min-width: 750px; font-size: 0.65rem; }
+            .data-table { min-width: 650px; font-size: 0.65rem; }
             .data-table th, .data-table td { padding: 4px 6px; }
             .col-price { min-width: 90px; font-size: 0.7rem; }
-            .modal-content { padding: 12px; }
         }
     </style>
 </head>
@@ -1954,12 +1812,29 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </p>
         </div>
         <div class="header-actions">
-            <button onclick="openAddModal('medicine')" class="btn-add-medicine">
-                <i class="fas fa-plus-circle"></i> Add Medicine
-            </button>
-            <button onclick="openAddModal('equipment')" class="btn-add-equipment">
-                <i class="fas fa-plus-circle"></i> Add Equipment
-            </button>
+            <!-- Add Medicine Button -->
+            <form method="POST" style="display:inline;">
+                <input type="hidden" name="action" value="create_purchase">
+                <input type="hidden" name="purchase_type" value="medicine">
+                <button type="submit" class="btn-add-medicine">
+                    <i class="fas fa-plus-circle"></i> Add Medicine
+                </button>
+            </form>
+            
+            <!-- Add Equipment Button -->
+            <form method="POST" style="display:inline;">
+                <input type="hidden" name="action" value="create_purchase">
+                <input type="hidden" name="purchase_type" value="equipment">
+                <button type="submit" class="btn-add-equipment">
+                    <i class="fas fa-plus-circle"></i> Add Equipment
+                </button>
+            </form>
+            
+            <!-- Purchase History Button -->
+            <a href="purchase_history.php" class="btn-purchase-history">
+                <i class="fas fa-history"></i> Purchase History
+            </a>
+            
             <a href="dashboard.php" class="btn-outline">
                 <i class="fas fa-arrow-left"></i> Back
             </a>
@@ -1971,8 +1846,33 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <?php if ($message): ?>
         <div class="message-box <?= $message_type ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'info' ? 'fa-info-circle' : 'fa-exclamation-circle') ?>"></i>
             <?= $message ?>
+        </div>
+    <?php endif; ?>
+
+    <!-- ================================================================ -->
+    <!-- IN PROGRESS PURCHASE BANNER -->
+    <!-- ================================================================ -->
+    <?php if (count($in_progress_purchases) > 0): ?>
+        <div class="purchase-banner animate-fade-in-up">
+            <div class="banner-text">
+                <i class="fas fa-spinner fa-spin"></i>
+                You have <strong><?= count($in_progress_purchases) ?></strong> purchase(s) in progress:
+                <?php foreach ($in_progress_purchases as $p): ?>
+                    <span style="display:inline-block;background:rgba(255,255,255,0.2);padding:2px 12px;border-radius:12px;margin:2px 4px;font-size:0.75rem;">
+                        <?= htmlspecialchars($p['invoice_number']) ?>
+                        (<?= ucfirst($p['purchase_type']) ?>)
+                    </span>
+                <?php endforeach; ?>
+            </div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;">
+                <?php foreach ($in_progress_purchases as $p): ?>
+                    <a href="purchases.php?id=<?= $p['id'] ?>&type=<?= $p['purchase_type'] ?>" class="btn-go-to-purchase">
+                        <i class="fas fa-arrow-right"></i> Continue <?= ucfirst($p['purchase_type']) ?>
+                    </a>
+                <?php endforeach; ?>
+            </div>
         </div>
     <?php endif; ?>
 
@@ -1997,7 +1897,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <div id="tab-medicines" class="tab-content <?= $active_tab === 'medicines' ? 'active' : '' ?>">
         
-        <!-- Medicine Stats -->
         <div class="stats-grid animate-fade-in-up">
             <a href="inventory.php?tab=medicines" class="stat-card blue">
                 <span class="stat-icon"><i class="fas fa-pills"></i></span>
@@ -2078,7 +1977,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </form>
         </div>
 
-        <!-- Medicine Table -->
+        <!-- Medicine Table WITH ADDED BY COLUMN -->
         <div class="card animate-fade-in-up">
             <div class="card-header">
                 <h3 class="card-title">
@@ -2088,6 +1987,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         <span class="result-count ml-2">Total Value: <strong>TSh <?= formatMoney($med_value) ?></strong></span>
                     <?php endif; ?>
                 </h3>
+                <div style="font-size:0.7rem;color:var(--text-muted);">
+                    <i class="fas fa-info-circle"></i> Click "Add Medicine" to create a new purchase
+                </div>
             </div>
             
             <?php if (count($medicines) > 0): ?>
@@ -2106,6 +2008,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 <th class="col-days">Days</th>
                                 <th class="col-batch">Batches</th>
                                 <th class="col-status">Status</th>
+                                <th class="col-added-by">Added By</th>
                                 <th class="col-actions">Action</th>
                             </tr>
                         </thead>
@@ -2148,17 +2051,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     
                                     $display_status = $item['computed_status'] ?? 'active';
                                     $price_display = ($item['selling_price'] ?? 0) > 0 ? number_format($item['selling_price'], 0) : 'FREE';
+                                    
+                                    $added_by_display = !empty($item['added_by_full_name']) ? $item['added_by_full_name'] : ($item['added_by_name'] ?? 'System');
                                 ?>
                                 <tr>
                                     <td class="col-sno"><?= $counter++ ?></td>
                                     <td class="col-name">
                                         <strong><?= htmlspecialchars($item['medication_name']) ?></strong>
                                         <?php if ($batch_count > 1): ?>
-                                            <span class="badge badge-info" style="font-size:0.55rem;margin-left:4px;background:var(--primary-light);color:var(--primary);padding:1px 8px;border-radius:10px;">
+                                            <span style="font-size:0.55rem;margin-left:4px;background:var(--primary-light);color:var(--primary);padding:1px 8px;border-radius:10px;">
                                                 <?= $batch_count ?> batches
                                             </span>
                                         <?php endif; ?>
-                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
+                                        <div style="font-size:0.6rem;color:var(--text-muted);"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
                                     </td>
                                     <td class="col-category"><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
                                     <td class="col-qty"><strong><?= $total_qty ?></strong></td>
@@ -2169,9 +2074,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                             <?= $stock_label ?>
                                         </span>
                                     </td>
-                                    <td class="col-price">
-                                        <?= $price_display ?>
-                                    </td>
+                                    <td class="col-price"><?= $price_display ?></td>
                                     <td class="col-expiry">
                                         <?php if (!empty($expiry_date) && $expiry_date !== '0000-00-00'): ?>
                                             <span class="expiry-badge <?= $expiry_status ?>">
@@ -2207,12 +2110,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                                 <span style="font-size:0.6rem;color:var(--text-muted);">+<?= $batch_count - 1 ?> more</span>
                                             <?php endif; ?>
                                         <?php else: ?>
-                                            <span class="text-muted">N/A</span>
+                                            <span style="color:var(--text-muted);">N/A</span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="col-status">
                                         <span class="status-badge <?= $display_status ?>">
                                             <?= ucfirst($display_status) ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-added-by">
+                                        <span class="added-by-tag">
+                                            <i class="fas fa-user-circle"></i>
+                                            <?= htmlspecialchars($added_by_display) ?>
                                         </span>
                                     </td>
                                     <td class="col-actions">
@@ -2229,7 +2138,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <div class="empty-state">
                     <i class="fas fa-pills"></i>
                     <p>No medicines found</p>
-                    <p class="sub">Click "Add Medicine" to get started</p>
+                    <p class="sub">Click "Add Medicine" to create a new purchase</p>
                 </div>
             <?php endif; ?>
         </div>
@@ -2240,7 +2149,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <!-- ================================================================ -->
     <div id="tab-equipment" class="tab-content <?= $active_tab === 'equipment' ? 'active' : '' ?>">
         
-        <!-- Equipment Stats -->
         <div class="stats-grid animate-fade-in-up">
             <a href="inventory.php?tab=equipment" class="stat-card blue">
                 <span class="stat-icon"><i class="fas fa-tools"></i></span>
@@ -2321,7 +2229,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             </form>
         </div>
 
-        <!-- Equipment Table -->
+        <!-- Equipment Table WITH ADDED BY COLUMN -->
         <div class="card animate-fade-in-up">
             <div class="card-header">
                 <h3 class="card-title">
@@ -2331,6 +2239,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         <span class="result-count ml-2">Total Value: <strong>TSh <?= formatMoney($equip_value) ?></strong></span>
                     <?php endif; ?>
                 </h3>
+                <div style="font-size:0.7rem;color:var(--text-muted);">
+                    <i class="fas fa-info-circle"></i> Click "Add Equipment" to create a new purchase
+                </div>
             </div>
             
             <?php if (count($equipment) > 0): ?>
@@ -2349,6 +2260,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 <th class="col-days">Days</th>
                                 <th class="col-batch">Batches</th>
                                 <th class="col-status">Status</th>
+                                <th class="col-added-by">Added By</th>
                                 <th class="col-actions">Action</th>
                             </tr>
                         </thead>
@@ -2391,17 +2303,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                     
                                     $display_status = $item['computed_status'] ?? 'active';
                                     $price_display = ($item['selling_price'] ?? 0) > 0 ? number_format($item['selling_price'], 0) : 'FREE';
+                                    
+                                    $added_by_display = !empty($item['added_by_full_name']) ? $item['added_by_full_name'] : ($item['added_by_name'] ?? 'System');
                                 ?>
                                 <tr>
                                     <td class="col-sno"><?= $counter++ ?></td>
                                     <td class="col-name">
                                         <strong><?= htmlspecialchars($item['equipment_name']) ?></strong>
                                         <?php if ($batch_count > 1): ?>
-                                            <span class="badge badge-info" style="font-size:0.55rem;margin-left:4px;background:var(--primary-light);color:var(--primary);padding:1px 8px;border-radius:10px;">
+                                            <span style="font-size:0.55rem;margin-left:4px;background:var(--primary-light);color:var(--primary);padding:1px 8px;border-radius:10px;">
                                                 <?= $batch_count ?> batches
                                             </span>
                                         <?php endif; ?>
-                                        <div class="text-xs text-gray-400"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
+                                        <div style="font-size:0.6rem;color:var(--text-muted);"><?= htmlspecialchars($item['unit'] ?? 'pcs') ?></div>
                                     </td>
                                     <td class="col-category"><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
                                     <td class="col-qty"><strong><?= $total_qty ?></strong></td>
@@ -2412,9 +2326,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                             <?= $stock_label ?>
                                         </span>
                                     </td>
-                                    <td class="col-price">
-                                        <?= $price_display ?>
-                                    </td>
+                                    <td class="col-price"><?= $price_display ?></td>
                                     <td class="col-expiry">
                                         <?php if (!empty($expiry_date) && $expiry_date !== '0000-00-00'): ?>
                                             <span class="expiry-badge <?= $expiry_status ?>">
@@ -2450,12 +2362,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                                 <span style="font-size:0.6rem;color:var(--text-muted);">+<?= $batch_count - 1 ?> more</span>
                                             <?php endif; ?>
                                         <?php else: ?>
-                                            <span class="text-muted">N/A</span>
+                                            <span style="color:var(--text-muted);">N/A</span>
                                         <?php endif; ?>
                                     </td>
                                     <td class="col-status">
                                         <span class="status-badge <?= $display_status ?>">
                                             <?= ucfirst($display_status) ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-added-by">
+                                        <span class="added-by-tag">
+                                            <i class="fas fa-user-circle"></i>
+                                            <?= htmlspecialchars($added_by_display) ?>
                                         </span>
                                     </td>
                                     <td class="col-actions">
@@ -2472,43 +2390,42 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <div class="empty-state">
                     <i class="fas fa-tools"></i>
                     <p>No equipment found</p>
-                    <p class="sub">Click "Add Equipment" to get started</p>
+                    <p class="sub">Click "Add Equipment" to create a new purchase</p>
                 </div>
             <?php endif; ?>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- VIEW MODAL - Shows ALL Batches with proper status -->
+    <!-- VIEW MODAL -->
     <!-- ================================================================ -->
     <?php if ($view_data && !empty($view_batches)): ?>
-    <div class="modal-overlay show" id="viewModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title">
+    <div class="modal-overlay show" id="viewModal" style="display:flex;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:1000;justify-content:center;align-items:center;animation:fadeIn 0.3s ease;">
+        <div class="modal-content" style="background:var(--bg-card);border-radius:16px;padding:24px 28px;max-width:850px;width:95%;max-height:90vh;overflow-y:auto;border:2px solid var(--border-color);box-shadow:var(--shadow-lg);animation:slideUp 0.3s ease;">
+            <div class="modal-header" style="display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:2px solid var(--border-color);margin-bottom:16px;">
+                <div class="modal-title" style="font-size:1.1rem;font-weight:700;color:var(--text-primary);display:flex;align-items:center;gap:10px;">
                     <i class="fas fa-eye"></i> 
                     <?= ucfirst($view_type) ?> Details - <?= htmlspecialchars($view_name) ?>
                 </div>
-                <a href="inventory.php?tab=<?= $active_tab ?>" class="modal-close">&times;</a>
+                <a href="inventory.php?tab=<?= $active_tab ?>" class="modal-close" style="background:none;border:none;font-size:1.4rem;cursor:pointer;color:var(--text-secondary);transition:all 0.3s ease;text-decoration:none;">&times;</a>
             </div>
             
-            <!-- Summary Info -->
-            <div class="view-grid">
-                <div class="view-item full-width">
-                    <div class="label">Name</div>
-                    <div class="value"><?= htmlspecialchars($view_name) ?></div>
+            <div class="view-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px;">
+                <div class="view-item full-width" style="grid-column:1/-1;padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Name</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;"><?= htmlspecialchars($view_name) ?></div>
                 </div>
-                <div class="view-item">
-                    <div class="label">Category</div>
-                    <div class="value"><?= htmlspecialchars($view_data['category'] ?? 'N/A') ?></div>
+                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Category</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;"><?= htmlspecialchars($view_data['category'] ?? 'N/A') ?></div>
                 </div>
-                <div class="view-item">
-                    <div class="label">Unit</div>
-                    <div class="value"><?= htmlspecialchars($view_data['unit'] ?? 'pcs') ?></div>
+                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Unit</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;"><?= htmlspecialchars($view_data['unit'] ?? 'pcs') ?></div>
                 </div>
-                <div class="view-item">
-                    <div class="label">Total Quantity</div>
-                    <div class="value">
+                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Total Quantity</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
                         <?php 
                             $total_qty = 0;
                             foreach ($view_batches as $batch) {
@@ -2519,77 +2436,65 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         ?>
                         <strong><?= $total_qty ?></strong>
                         <?php if ($total_qty <= 0): ?>
-                            <span class="stock-badge out">Out of Stock</span>
+                            <span class="stock-badge out" style="padding:2px 8px;border-radius:8px;font-size:0.65rem;font-weight:600;display:inline-flex;align-items:center;gap:3px;background:var(--danger-light);color:var(--danger);animation:pulse 1s infinite;">Out of Stock</span>
                         <?php elseif ($total_qty <= $view_data['reorder_level']): ?>
-                            <span class="stock-badge low">Low Stock</span>
+                            <span class="stock-badge low" style="padding:2px 8px;border-radius:8px;font-size:0.65rem;font-weight:600;display:inline-flex;align-items:center;gap:3px;background:var(--warning-light);color:var(--warning);animation:pulse 1.5s infinite;">Low Stock</span>
                         <?php else: ?>
-                            <span class="stock-badge ok">In Stock</span>
+                            <span class="stock-badge ok" style="padding:2px 8px;border-radius:8px;font-size:0.65rem;font-weight:600;display:inline-flex;align-items:center;gap:3px;background:var(--success-light);color:var(--success);">In Stock</span>
                         <?php endif; ?>
                     </div>
                 </div>
-                <div class="view-item">
-                    <div class="label">Reorder Level</div>
-                    <div class="value"><?= $view_data['reorder_level'] ?></div>
+                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Reorder Level</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;"><?= $view_data['reorder_level'] ?></div>
                 </div>
-                <div class="view-item">
-                    <div class="label">Selling Price</div>
-                    <div class="value">
+                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Selling Price</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
                         <?= ($view_data['selling_price'] ?? 0) > 0 ? 'TSh ' . number_format($view_data['selling_price'], 0) : 'FREE' ?>
                     </div>
                 </div>
-                <div class="view-item">
-                    <div class="label">Supplier</div>
-                    <div class="value"><?= htmlspecialchars($view_data['supplier'] ?? 'N/A') ?></div>
-                </div>
-                <div class="view-item">
-                    <div class="label">Added By</div>
-                    <div class="value">
-                        <?php 
-                            // Get creator name from first batch
-                            $creator_id = $view_data['created_by'] ?? null;
-                            $creator_name = 'Unknown';
-                            if ($creator_id) {
-                                $stmt = $db->prepare("SELECT full_name FROM users WHERE id = ?");
-                                $stmt->execute([$creator_id]);
-                                $user = $stmt->fetch();
-                                if ($user) $creator_name = $user['full_name'];
-                            }
-                            echo htmlspecialchars($creator_name);
-                        ?>
+                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Added By</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
+                        <span class="added-by-tag" style="display:inline-flex;align-items:center;gap:4px;padding:2px 10px;border-radius:12px;font-size:0.65rem;font-weight:600;background:var(--purple-light);color:var(--purple);">
+                            <i class="fas fa-user-circle"></i>
+                            <?= !empty($view_data['added_by_full_name']) ? htmlspecialchars($view_data['added_by_full_name']) : ($view_data['added_by_name'] ?? 'System') ?>
+                        </span>
                     </div>
                 </div>
-                <div class="view-item">
-                    <div class="label">Status</div>
-                    <div class="value">
-                        <span class="status-badge <?= $total_qty > 0 ? 'active' : 'inactive' ?>">
+                <div class="view-item" style="padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Status</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
+                        <span class="status-badge <?= $total_qty > 0 ? 'active' : 'inactive' ?>" style="padding:2px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;display:inline-flex;align-items:center;gap:3px;">
                             <?= $total_qty > 0 ? 'ACTIVE' : 'INACTIVE' ?>
                         </span>
                     </div>
                 </div>
-                <div class="view-item full-width">
-                    <div class="label">Branch</div>
-                    <div class="value">
-                        <span class="branch-tag" style="background:var(--primary-light);color:var(--primary);padding:2px 12px;border-radius:12px;font-size:0.75rem;">
+                <div class="view-item full-width" style="grid-column:1/-1;padding:8px 12px;background:var(--bg-body);border-radius:6px;border:1px solid var(--border-color);">
+                    <div class="label" style="font-size:0.55rem;text-transform:uppercase;color:var(--text-secondary);font-weight:600;letter-spacing:0.05em;">Branch</div>
+                    <div class="value" style="font-size:0.85rem;font-weight:600;color:var(--text-primary);margin-top:2px;">
+                        <span style="background:var(--primary-light);color:var(--primary);padding:2px 12px;border-radius:12px;font-size:0.75rem;">
                             <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
                         </span>
                     </div>
                 </div>
             </div>
             
-            <!-- Batches Table -->
             <div style="margin-top:16px;">
                 <div style="font-size:0.8rem;font-weight:600;margin-bottom:8px;color:var(--text-primary);">
                     <i class="fas fa-layer-group"></i> Batches (<?= count($view_batches) ?>)
                 </div>
-                <div class="batches-table-wrap">
-                    <table class="batches-table">
+                <div style="overflow-x:auto;margin-top:10px;">
+                    <table style="width:100%;border-collapse:collapse;font-size:0.75rem;">
                         <thead>
                             <tr>
-                                <th style="width:30%;">Batch</th>
-                                <th style="width:15%;text-align:center;">Quantity</th>
-                                <th style="width:25%;">Expiry</th>
-                                <th style="width:15%;text-align:center;">Days</th>
-                                <th style="width:15%;text-align:center;">Status</th>
+                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:left;width:25%;">Batch</th>
+                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:center;width:12%;">Quantity</th>
+                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:left;width:20%;">Expiry</th>
+                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:center;width:12%;">Days</th>
+                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:center;width:13%;">Status</th>
+                                <th style="background:var(--primary);color:white;padding:6px 10px;font-size:0.6rem;text-transform:uppercase;font-weight:700;text-align:center;width:18%;">Added By</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -2598,7 +2503,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 $batch_status = $batch['status'] ?? 'active';
                                 $batch_qty = $batch['quantity'] ?? 0;
                                 
-                                // Calculate expiry status
                                 $exp_status = 'no-expiry';
                                 $days_left = '-';
                                 $status_label = 'Active';
@@ -2622,40 +2526,40 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                         $status_class = 'active';
                                     }
                                 } else {
-                                    // No expiry = Active forever
                                     $exp_status = 'no-expiry';
                                     $status_label = 'Active';
                                     $status_class = 'active';
                                     $days_left = '∞';
                                 }
                                 
-                                // If batch status is inactive, override
                                 if ($batch_status === 'inactive') {
                                     $status_label = 'Inactive';
                                     $status_class = 'inactive';
                                 }
+                                
+                                $batch_added_by = !empty($batch['added_by_full_name']) ? $batch['added_by_full_name'] : ($batch['added_by_name'] ?? 'System');
                             ?>
-                                <tr>
-                                    <td><span class="batch-number"><?= htmlspecialchars($batch['batch_number'] ?? 'N/A') ?></span></td>
-                                    <td style="text-align:center;font-weight:600;"><?= $batch_qty ?></td>
-                                    <td>
+                                <tr style="border-bottom:1px solid var(--border-color);">
+                                    <td style="padding:5px 10px;"><span style="font-family:monospace;font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:4px;background:var(--primary-light);color:var(--primary);"><?= htmlspecialchars($batch['batch_number'] ?? 'N/A') ?></span></td>
+                                    <td style="padding:5px 10px;text-align:center;font-weight:600;"><?= $batch_qty ?></td>
+                                    <td style="padding:5px 10px;">
                                         <?php if (!empty($batch_expiry) && $batch_expiry !== '0000-00-00'): ?>
-                                            <span class="expiry-badge <?= $exp_status ?>">
+                                            <span class="expiry-badge <?= $exp_status ?>" style="padding:2px 8px;border-radius:8px;font-size:0.6rem;font-weight:600;display:inline-flex;align-items:center;gap:3px;">
                                                 <?= date('d/m/Y', strtotime($batch_expiry)) ?>
                                             </span>
                                         <?php else: ?>
-                                            <span class="expiry-badge no-expiry">
+                                            <span class="expiry-badge no-expiry" style="padding:2px 8px;border-radius:8px;font-size:0.6rem;font-weight:600;display:inline-flex;align-items:center;gap:3px;background:#E2E8F0;color:var(--text-muted);">
                                                 <i class="fas fa-infinity"></i> No Expiry
                                             </span>
                                         <?php endif; ?>
                                     </td>
-                                    <td style="text-align:center;">
+                                    <td style="padding:5px 10px;text-align:center;">
                                         <?php if ($days_left === '∞'): ?>
-                                            <span class="days-remaining forever">
+                                            <span class="days-remaining forever" style="font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:8px;display:inline-flex;align-items:center;gap:3px;background:#E2E8F0;color:var(--text-muted);">
                                                 <i class="fas fa-infinity"></i> ∞
                                             </span>
                                         <?php elseif ($days_left !== '-'): ?>
-                                            <span class="days-remaining <?= $days_left < 0 ? 'danger' : ($days_left <= 30 ? 'warning' : 'good') ?>">
+                                            <span class="days-remaining <?= $days_left < 0 ? 'danger' : ($days_left <= 30 ? 'warning' : 'good') ?>" style="font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:8px;display:inline-flex;align-items:center;gap:3px;">
                                                 <?php if ($days_left < 0): ?>
                                                     <i class="fas fa-skull"></i> EXP
                                                 <?php elseif ($days_left <= 30): ?>
@@ -2665,14 +2569,20 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                                 <?php endif; ?>
                                             </span>
                                         <?php else: ?>
-                                            <span class="days-remaining forever">
+                                            <span class="days-remaining forever" style="font-size:0.65rem;font-weight:600;padding:1px 6px;border-radius:8px;display:inline-flex;align-items:center;gap:3px;background:#E2E8F0;color:var(--text-muted);">
                                                 <i class="fas fa-infinity"></i> ∞
                                             </span>
                                         <?php endif; ?>
                                     </td>
-                                    <td style="text-align:center;">
-                                        <span class="status-badge <?= $status_class ?>">
+                                    <td style="padding:5px 10px;text-align:center;">
+                                        <span class="status-badge <?= $status_class ?>" style="padding:2px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;display:inline-flex;align-items:center;gap:3px;">
                                             <?= $status_label ?>
+                                        </span>
+                                    </td>
+                                    <td style="padding:5px 10px;text-align:center;">
+                                        <span class="added-by-tag" style="display:inline-flex;align-items:center;gap:4px;padding:1px 8px;border-radius:10px;font-size:0.6rem;font-weight:600;background:var(--purple-light);color:var(--purple);">
+                                            <i class="fas fa-user-circle"></i>
+                                            <?= htmlspecialchars($batch_added_by) ?>
                                         </span>
                                     </td>
                                 </tr>
@@ -2682,256 +2592,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 </div>
             </div>
             
-            <div class="form-actions">
-                <a href="inventory.php?tab=<?= $active_tab ?>" class="btn-cancel">
+            <div style="display:flex;gap:10px;margin-top:18px;padding-top:14px;border-top:2px solid var(--border-color);flex-wrap:wrap;">
+                <a href="inventory.php?tab=<?= $active_tab ?>" class="btn-cancel" style="background:transparent;color:var(--text-secondary);border:2px solid var(--border-color);padding:10px 24px;border-radius:10px;font-weight:600;font-size:0.9rem;cursor:pointer;transition:all 0.3s ease;text-decoration:none;">
                     <i class="fas fa-times"></i> Close
                 </a>
             </div>
         </div>
     </div>
     <?php endif; ?>
-
-    <!-- ================================================================ -->
-    <!-- ADD MEDICINE MODAL with Auto-Search -->
-    <!-- ================================================================ -->
-    <div class="modal-overlay" id="addMedicineModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title">
-                    <i class="fas fa-pills"></i> Add Medicine Batch
-                </div>
-                <button class="modal-close" onclick="closeModal('addMedicineModal')">&times;</button>
-            </div>
-            
-            <form method="POST" action="" id="addMedicineForm">
-                <input type="hidden" name="action" value="add_medicine">
-                
-                <div class="form-grid">
-                    <div class="full-width form-row">
-                        <label class="form-label">Medicine Name <span class="required">*</span></label>
-                        <div class="autocomplete-container">
-                            <input type="text" name="medication_name" id="medicineNameInput" class="form-control" 
-                                   placeholder="e.g. Paracetamol 500mg" required autocomplete="off">
-                            <div class="autocomplete-list" id="medicineAutocomplete"></div>
-                        </div>
-                        <div class="help-text">Type to search existing medicine. If new, it will be created as new batch.</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Category</label>
-                        <div class="category-input-group">
-                            <select name="category" id="medCategorySelect" class="form-control">
-                                <option value="">Select</option>
-                                <?php foreach ($predefined_med_categories as $cat): ?>
-                                    <option value="<?= htmlspecialchars($cat) ?>"><?= htmlspecialchars($cat) ?></option>
-                                <?php endforeach; ?>
-                                <option value="__other__">+ Other</option>
-                            </select>
-                            <input type="text" name="category_manual" id="medCategoryManual" class="form-control" placeholder="Custom category..." style="display:none;">
-                            <button type="button" class="btn-toggle" onclick="toggleCategory('med')" style="background:var(--primary);color:white;border:none;border-radius:10px;padding:8px 12px;font-size:0.7rem;font-weight:600;cursor:pointer;white-space:nowrap;height:42px;display:inline-flex;align-items:center;gap:4px;">
-                                <i class="fas fa-edit"></i> Manual
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Unit</label>
-                        <select name="unit" class="form-control">
-                            <option value="pcs">Pieces (pcs)</option>
-                            <option value="tablets">Tablets</option>
-                            <option value="capsules">Capsules</option>
-                            <option value="ml">Milliliters (ml)</option>
-                            <option value="mg">Milligrams (mg)</option>
-                            <option value="g">Grams (g)</option>
-                            <option value="bottle">Bottle</option>
-                            <option value="box">Box</option>
-                            <option value="strip">Strip</option>
-                            <option value="vial">Vial</option>
-                            <option value="sachet">Sachet</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Quantity <span class="required">*</span></label>
-                        <input type="number" name="quantity" class="form-control" placeholder="0" min="0" required>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Reorder Level <span class="required">*</span></label>
-                        <input type="number" name="reorder_level" class="form-control" value="10" min="0" required>
-                        <div class="help-text">Alert when stock reaches this level</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Buying Price (TSh)</label>
-                        <input type="text" name="unit_cost" class="form-control money-input" placeholder="0" value="0">
-                        <div class="help-text">Auto-format with commas</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                        <input type="text" name="selling_price" class="form-control money-input" placeholder="0" value="0" required>
-                        <div class="help-text">Auto-format with commas | 0 = Free</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Supplier</label>
-                        <input type="text" name="supplier" class="form-control" placeholder="Supplier name">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Expiry Date</label>
-                        <input type="date" name="expiry_date" class="form-control">
-                        <div class="help-text">Leave empty = No expiry (Active Forever)</div>
-                    </div>
-                    
-                    <div class="full-width form-row">
-                        <label class="form-label">Batch Number</label>
-                        <div class="batch-input-group">
-                            <input type="text" name="batch_number" id="medBatchInput" class="form-control" 
-                                   placeholder="BATCH-YYYYMMDD-XXXX" 
-                                   value="<?= 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)) ?>">
-                            <button type="button" class="btn-generate" onclick="generateBatch('med')">
-                                <i class="fas fa-sync-alt"></i> Generate
-                            </button>
-                        </div>
-                        <div class="help-text">Auto-generated. Click "Generate" for a new batch number.</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Status</label>
-                        <select name="status" class="form-control">
-                            <option value="active">Active</option>
-                            <option value="inactive">Inactive</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-actions">
-                    <button type="submit" class="btn-save"><i class="fas fa-save"></i> Add Batch</button>
-                    <button type="button" class="btn-cancel" onclick="closeModal('addMedicineModal')"><i class="fas fa-times"></i> Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- ADD EQUIPMENT MODAL with Auto-Search -->
-    <!-- ================================================================ -->
-    <div class="modal-overlay" id="addEquipmentModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title">
-                    <i class="fas fa-tools"></i> Add Equipment Batch
-                </div>
-                <button class="modal-close" onclick="closeModal('addEquipmentModal')">&times;</button>
-            </div>
-            
-            <form method="POST" action="" id="addEquipmentForm">
-                <input type="hidden" name="action" value="add_equipment">
-                
-                <div class="form-grid">
-                    <div class="full-width form-row">
-                        <label class="form-label">Equipment Name <span class="required">*</span></label>
-                        <div class="autocomplete-container">
-                            <input type="text" name="equipment_name" id="equipmentNameInput" class="form-control" 
-                                   placeholder="e.g. Stethoscope" required autocomplete="off">
-                            <div class="autocomplete-list" id="equipmentAutocomplete"></div>
-                        </div>
-                        <div class="help-text">Type to search existing equipment. If new, it will be created as new batch.</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Category</label>
-                        <div class="category-input-group">
-                            <select name="category" id="equipCategorySelect" class="form-control">
-                                <option value="">Select</option>
-                                <?php foreach ($predefined_equip_categories as $cat): ?>
-                                    <option value="<?= htmlspecialchars($cat) ?>"><?= htmlspecialchars($cat) ?></option>
-                                <?php endforeach; ?>
-                                <option value="__other__">+ Other</option>
-                            </select>
-                            <input type="text" name="category_manual" id="equipCategoryManual" class="form-control" placeholder="Custom category..." style="display:none;">
-                            <button type="button" class="btn-toggle" onclick="toggleCategory('equip')" style="background:var(--primary);color:white;border:none;border-radius:10px;padding:8px 12px;font-size:0.7rem;font-weight:600;cursor:pointer;white-space:nowrap;height:42px;display:inline-flex;align-items:center;gap:4px;">
-                                <i class="fas fa-edit"></i> Manual
-                            </button>
-                        </div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Unit</label>
-                        <select name="unit" class="form-control">
-                            <option value="pcs">Pieces (pcs)</option>
-                            <option value="set">Set</option>
-                            <option value="box">Box</option>
-                            <option value="pack">Pack</option>
-                            <option value="each">Each</option>
-                        </select>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Quantity <span class="required">*</span></label>
-                        <input type="number" name="quantity" class="form-control" placeholder="0" min="0" required>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Reorder Level <span class="required">*</span></label>
-                        <input type="number" name="reorder_level" class="form-control" value="5" min="0" required>
-                        <div class="help-text">Alert when stock reaches this level</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Buying Price (TSh)</label>
-                        <input type="text" name="unit_cost" class="form-control money-input" placeholder="0" value="0">
-                        <div class="help-text">Auto-format with commas</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                        <input type="text" name="selling_price" class="form-control money-input" placeholder="0" value="0" required>
-                        <div class="help-text">Auto-format with commas | 0 = Free</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Supplier</label>
-                        <input type="text" name="supplier" class="form-control" placeholder="Supplier name">
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Expiry Date</label>
-                        <input type="date" name="expiry_date" class="form-control">
-                        <div class="help-text">Leave empty = No expiry (Active Forever)</div>
-                    </div>
-                    
-                    <div class="full-width form-row">
-                        <label class="form-label">Batch Number</label>
-                        <div class="batch-input-group">
-                            <input type="text" name="batch_number" id="equipBatchInput" class="form-control" 
-                                   placeholder="EQP-YYYYMMDD-XXXX" 
-                                   value="<?= 'EQP-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)) ?>">
-                            <button type="button" class="btn-generate" onclick="generateBatch('equip')">
-                                <i class="fas fa-sync-alt"></i> Generate
-                            </button>
-                        </div>
-                        <div class="help-text">Auto-generated. Click "Generate" for a new batch number.</div>
-                    </div>
-                    
-                    <div class="form-row">
-                        <label class="form-label">Status</label>
-                        <select name="status" class="form-control">
-                            <option value="active">Active</option>
-                            <option value="inactive">Inactive</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="form-actions">
-                    <button type="submit" class="btn-save"><i class="fas fa-save"></i> Add Batch</button>
-                    <button type="button" class="btn-cancel" onclick="closeModal('addEquipmentModal')"><i class="fas fa-times"></i> Cancel</button>
-                </div>
-            </form>
-        </div>
-    </div>
 
     <!-- ================================================================ -->
     <!-- FOOTER -->
@@ -2951,289 +2619,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
-<!-- COMPLETE JAVASCRIPT -->
+<!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-// ================================================================
-// AUTO-SEARCH - Medicine Name
-// ================================================================
-(function() {
-    var medicineData = <?= json_encode($all_medicine_names) ?>;
-    var input = document.getElementById('medicineNameInput');
-    var autocomplete = document.getElementById('medicineAutocomplete');
-    
-    if (!input || !autocomplete) return;
-    
-    input.addEventListener('input', function() {
-        var query = this.value.toLowerCase().trim();
-        
-        if (query.length < 1) {
-            autocomplete.classList.remove('show');
-            return;
-        }
-        
-        var matches = medicineData.filter(function(item) {
-            return item.medication_name.toLowerCase().includes(query);
-        });
-        
-        if (matches.length === 0) {
-            autocomplete.classList.remove('show');
-            return;
-        }
-        
-        var html = '';
-        matches.forEach(function(item) {
-            html += `
-                <div class="autocomplete-item" data-name="${escapeHtml(item.medication_name)}">
-                    <strong>${escapeHtml(item.medication_name)}</strong>
-                    <span class="item-detail">
-                        Category: ${escapeHtml(item.category || 'N/A')} | 
-                        Price: TSh ${Number(item.selling_price || 0).toLocaleString()}
-                    </span>
-                </div>
-            `;
-        });
-        
-        autocomplete.innerHTML = html;
-        autocomplete.classList.add('show');
-        
-        autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
-            item.addEventListener('click', function() {
-                input.value = this.dataset.name;
-                autocomplete.classList.remove('show');
-            });
-        });
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (!e.target.closest('.autocomplete-container')) {
-            autocomplete.classList.remove('show');
-        }
-    });
-    
-    var selectedIndex = -1;
-    input.addEventListener('keydown', function(e) {
-        var items = autocomplete.querySelectorAll('.autocomplete-item');
-        
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
-            updateSelection(items);
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            selectedIndex = Math.max(selectedIndex - 1, -1);
-            updateSelection(items);
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            if (selectedIndex >= 0 && items.length > 0) {
-                var selectedItem = items[selectedIndex];
-                input.value = selectedItem.dataset.name;
-                autocomplete.classList.remove('show');
-                selectedIndex = -1;
-            }
-        } else if (e.key === 'Escape') {
-            autocomplete.classList.remove('show');
-            selectedIndex = -1;
-        }
-    });
-    
-    function updateSelection(items) {
-        items.forEach(function(item, index) {
-            if (index === selectedIndex) {
-                item.classList.add('active');
-            } else {
-                item.classList.remove('active');
-            }
-        });
-        if (selectedIndex >= 0 && items.length > 0) {
-            items[selectedIndex].scrollIntoView({ block: 'nearest' });
-        }
-    }
-})();
-
-// ================================================================
-// AUTO-SEARCH - Equipment Name
-// ================================================================
-(function() {
-    var equipmentData = <?= json_encode($all_equipment_names) ?>;
-    var input = document.getElementById('equipmentNameInput');
-    var autocomplete = document.getElementById('equipmentAutocomplete');
-    
-    if (!input || !autocomplete) return;
-    
-    input.addEventListener('input', function() {
-        var query = this.value.toLowerCase().trim();
-        
-        if (query.length < 1) {
-            autocomplete.classList.remove('show');
-            return;
-        }
-        
-        var matches = equipmentData.filter(function(item) {
-            return item.equipment_name.toLowerCase().includes(query);
-        });
-        
-        if (matches.length === 0) {
-            autocomplete.classList.remove('show');
-            return;
-        }
-        
-        var html = '';
-        matches.forEach(function(item) {
-            html += `
-                <div class="autocomplete-item" data-name="${escapeHtml(item.equipment_name)}">
-                    <strong>${escapeHtml(item.equipment_name)}</strong>
-                    <span class="item-detail">
-                        Category: ${escapeHtml(item.category || 'N/A')} | 
-                        Price: TSh ${Number(item.selling_price || 0).toLocaleString()}
-                    </span>
-                </div>
-            `;
-        });
-        
-        autocomplete.innerHTML = html;
-        autocomplete.classList.add('show');
-        
-        autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
-            item.addEventListener('click', function() {
-                input.value = this.dataset.name;
-                autocomplete.classList.remove('show');
-            });
-        });
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (!e.target.closest('.autocomplete-container')) {
-            autocomplete.classList.remove('show');
-        }
-    });
-    
-    var selectedIndex = -1;
-    input.addEventListener('keydown', function(e) {
-        var items = autocomplete.querySelectorAll('.autocomplete-item');
-        
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
-            updateSelection(items);
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            selectedIndex = Math.max(selectedIndex - 1, -1);
-            updateSelection(items);
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            if (selectedIndex >= 0 && items.length > 0) {
-                var selectedItem = items[selectedIndex];
-                input.value = selectedItem.dataset.name;
-                autocomplete.classList.remove('show');
-                selectedIndex = -1;
-            }
-        } else if (e.key === 'Escape') {
-            autocomplete.classList.remove('show');
-            selectedIndex = -1;
-        }
-    });
-    
-    function updateSelection(items) {
-        items.forEach(function(item, index) {
-            if (index === selectedIndex) {
-                item.classList.add('active');
-            } else {
-                item.classList.remove('active');
-            }
-        });
-        if (selectedIndex >= 0 && items.length > 0) {
-            items[selectedIndex].scrollIntoView({ block: 'nearest' });
-        }
-    }
-})();
-
-function escapeHtml(text) {
-    if (!text) return '';
-    var div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-// ================================================================
-// AUTO MONEY FORMAT
-// ================================================================
-(function() {
-    'use strict';
-    
-    function formatWithCommas(value) {
-        if (!value) return '';
-        var clean = value.toString().replace(/[^0-9.]/g, '');
-        var parts = clean.split('.');
-        var integerPart = parts[0] || '0';
-        var decimalPart = parts.length > 1 ? '.' + parts[1] : '';
-        
-        if (integerPart.length > 3) {
-            var formatted = '';
-            var counter = 0;
-            for (var i = integerPart.length - 1; i >= 0; i--) {
-                counter++;
-                formatted = integerPart[i] + formatted;
-                if (counter % 3 === 0 && i !== 0) {
-                    formatted = ',' + formatted;
-                }
-            }
-            integerPart = formatted;
-        }
-        return integerPart + decimalPart;
-    }
-    
-    function autoFormat(input) {
-        if (!input) return;
-        var cursorPos = input.selectionStart;
-        var lengthBefore = input.value.length;
-        var formatted = formatWithCommas(input.value);
-        if (formatted !== input.value) {
-            input.value = formatted;
-            var lengthAfter = formatted.length;
-            var diff = lengthAfter - lengthBefore;
-            input.setSelectionRange(cursorPos + diff, cursorPos + diff);
-        }
-    }
-    
-    function initMoneyInputs() {
-        var moneyInputs = document.querySelectorAll('.money-input');
-        moneyInputs.forEach(function(input) {
-            if (input.dataset.moneyInitialized) return;
-            input.dataset.moneyInitialized = 'true';
-            
-            input.addEventListener('input', function() { autoFormat(this); });
-            input.addEventListener('focus', function() {
-                var raw = this.value.replace(/,/g, '');
-                this.value = raw;
-                this.select();
-            });
-            input.addEventListener('blur', function() {
-                if (this.value) {
-                    this.value = formatWithCommas(this.value);
-                } else {
-                    this.value = '0';
-                }
-            });
-        });
-    }
-    
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initMoneyInputs);
-    } else {
-        initMoneyInputs();
-    }
-    
-    document.addEventListener('modalOpened', function() {
-        setTimeout(initMoneyInputs, 150);
-    });
-    
-    var observer = new MutationObserver(function() {
-        setTimeout(initMoneyInputs, 100);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-})();
-
 // ================================================================
 // TAB SWITCHING
 // ================================================================
@@ -3250,75 +2638,14 @@ function switchTab(tab) {
 }
 
 // ================================================================
-// MODAL FUNCTIONS
+// CLOSE MESSAGE
 // ================================================================
-function openAddModal(type) {
-    var modalId = type === 'medicine' ? 'addMedicineModal' : 'addEquipmentModal';
-    var modal = document.getElementById(modalId);
-    if (modal) {
-        modal.classList.add('show');
-        document.body.style.overflow = 'hidden';
-        var event = new CustomEvent('modalOpened');
-        document.dispatchEvent(event);
+setTimeout(function() {
+    var messageBox = document.querySelector('.message-box');
+    if (messageBox) {
+        messageBox.style.display = 'none';
     }
-}
-
-function closeModal(id) {
-    var modal = document.getElementById(id);
-    if (modal) {
-        modal.classList.remove('show');
-        document.body.style.overflow = 'auto';
-    }
-}
-
-document.querySelectorAll('.modal-overlay').forEach(function(modal) {
-    modal.addEventListener('click', function(e) {
-        if (e.target === this) {
-            this.classList.remove('show');
-            document.body.style.overflow = 'auto';
-        }
-    });
-});
-
-// ================================================================
-// CATEGORY TOGGLE
-// ================================================================
-function toggleCategory(type) {
-    var select, manual;
-    if (type === 'med') {
-        select = document.getElementById('medCategorySelect');
-        manual = document.getElementById('medCategoryManual');
-    } else {
-        select = document.getElementById('equipCategorySelect');
-        manual = document.getElementById('equipCategoryManual');
-    }
-    if (!select || !manual) return;
-    if (manual.style.display === 'none') {
-        manual.style.display = 'block';
-        select.style.display = 'none';
-        manual.focus();
-    } else {
-        manual.style.display = 'none';
-        select.style.display = 'block';
-        select.value = '';
-    }
-}
-
-// ================================================================
-// GENERATE BATCH NUMBER
-// ================================================================
-function generateBatch(type) {
-    var now = new Date();
-    var dateStr = now.getFullYear() + 
-                  String(now.getMonth() + 1).padStart(2, '0') + 
-                  String(now.getDate()).padStart(2, '0');
-    var random = Math.random().toString(36).substring(2, 8).toUpperCase();
-    var prefix = type === 'med' ? 'BATCH' : 'EQP';
-    var batch = prefix + '-' + dateStr + '-' + random;
-    var inputId = type === 'med' ? 'medBatchInput' : 'equipBatchInput';
-    var input = document.getElementById(inputId);
-    if (input) input.value = batch;
-}
+}, 5000);
 
 // ================================================================
 // KEYBOARD SHORTCUTS
@@ -3332,33 +2659,21 @@ document.addEventListener('keydown', function(e) {
     }
     if (e.key === 'Escape') {
         document.querySelectorAll('.modal-overlay.show').forEach(function(modal) {
-            modal.classList.remove('show');
-            document.body.style.overflow = 'auto';
+            modal.style.display = 'none';
         });
-    }
-});
-
-// ================================================================
-// DARK MODE
-// ================================================================
-document.addEventListener('darkModeChanged', function(e) {
-    var isDark = e.detail && e.detail.isDark;
-    if (isDark) {
-        document.documentElement.setAttribute('data-theme', 'dark');
-    } else {
-        document.documentElement.removeAttribute('data-theme');
     }
 });
 
 // ================================================================
 // CONSOLE LOG
 // ================================================================
-console.log('%c💊 Braick - Complete Inventory (Grouped by Name)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c💊 Braick - Pharmacy Inventory (FIXED)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ FIXED: Equipment without expiry date now display correctly', 'font-size:13px; color:#34D399; font-weight:bold;');
 console.log('%c✅ Medicines: <?= $total_medicines ?> | Equipment: <?= $total_equipment ?>', 'font-size:13px; color:#059669;');
 console.log('%c💰 Total Value: TSh <?= formatMoney($total_inventory_value) ?>', 'font-size:13px; color:#D97706;');
-console.log('%c✅ View shows ALL batches with proper status', 'font-size:13px; color:#34D399;');
-console.log('%c✅ No Expiry = Active Forever', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Expired batches shown as EXPIRED, but other batches remain ACTIVE', 'font-size:13px; color:#34D399;');
+console.log('%c👤 Added By column visible in both Medicine and Equipment tables', 'font-size:13px; color:#7C3AED;');
+console.log('%c✅ Add Medicine → Creates Medicine Purchase', 'font-size:13px; color:#34D399;');
+console.log('%c✅ Add Equipment → Creates Equipment Purchase', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

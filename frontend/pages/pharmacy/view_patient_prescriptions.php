@@ -5,6 +5,9 @@
 // ✅ FIXED: Discount uses discount_amount column (NOT pharmacy_discount)
 // ✅ FIXED: total_discount accumulates all discounts
 // ✅ FIXED: total_amount = subtotal - total_discount
+// ✅ ADDED: Premium Card (left) - Additional charge
+// ✅ ADDED: Discount Card (right) - Discount amount
+// ✅ ADDED: Final row shows Subtotal → Premium → Discount → Final Amount
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -89,12 +92,12 @@ try {
     $currency = $settings['currency'] ?? 'TSh';
     
     // ================================================================
-    // ✅ FIXED: HANDLE SAVE - Discount uses discount_amount column
+    // ✅ FIXED: HANDLE SAVE - Premium & Discount
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'save_and_confirm') {
         $patient_id = isset($_POST['patient_id']) ? (int)$_POST['patient_id'] : 0;
+        $premium_amount = isset($_POST['premium_amount']) ? (float)str_replace(',', '', $_POST['premium_amount']) : 0;
         $discount_amount = isset($_POST['discount_amount']) ? (float)str_replace(',', '', $_POST['discount_amount']) : 0;
-        $total_amount = isset($_POST['total_amount']) ? (float)str_replace(',', '', $_POST['total_amount']) : 0;
         
         // Update each item with editable fields
         if (isset($_POST['items'])) {
@@ -164,6 +167,7 @@ try {
                 // ================================================================
                 // ✅ FIXED: Check if bill exists and update with CORRECT discount
                 // ✅ Uses discount_amount column (NOT pharmacy_discount)
+                // ✅ Premium is added to subtotal
                 // ================================================================
                 $stmt = $db->prepare("
                     SELECT id, total_amount, paid_amount, balance, discount_amount, 
@@ -212,18 +216,24 @@ try {
                     $other_total = $other_data['other_total'] ?? 0;
                     
                     // ================================================================
-                    // ✅ FIXED: APPLY DISCOUNT TO MEDICATION ITEMS (pro-rata)
+                    // ✅ FIXED: APPLY PREMIUM AND DISCOUNT TO MEDICATION ITEMS
                     // ================================================================
+                    // Premium per item (added)
+                    $premium_per_item = ($premium_amount > 0 && $med_count > 0) 
+                        ? $premium_amount / $med_count 
+                        : 0;
+                    
+                    // Discount per item (subtracted)
                     $discount_per_item = ($discount_amount > 0 && $med_count > 0) 
                         ? $discount_amount / $med_count 
                         : 0;
                     
-                    // Update each medication item with discount
+                    // Update each medication item with premium and discount
                     $stmt_update_items = $db->prepare("
                         UPDATE bill_items 
                         SET discount_amount = ?,
-                            total_price = total_price - ?,
-                            final_price = total_price - ?,
+                            total_price = total_price + ? - ?,
+                            final_price = total_price + ? - ?,
                             updated_at = NOW()
                         WHERE bill_id = ? 
                         AND item_type = 'medication'
@@ -231,16 +241,19 @@ try {
                     ");
                     $stmt_update_items->execute([
                         $discount_per_item,
+                        $premium_per_item,
                         $discount_per_item,
+                        $premium_per_item,
                         $discount_per_item,
                         $bill_id
                     ]);
                     
                     // ================================================================
-                    // GET NEW MEDICATION TOTAL FROM BILL_ITEMS (with discount applied)
+                    // GET NEW MEDICATION TOTAL FROM BILL_ITEMS
                     // ================================================================
                     $stmt_new_med = $db->prepare("
-                        SELECT SUM(total_price) as med_total, SUM(discount_amount) as med_discount
+                        SELECT SUM(total_price) as med_total, 
+                               SUM(discount_amount) as med_discount
                         FROM bill_items
                         WHERE bill_id = ? AND item_type = 'medication' AND status != 'cancelled'
                     ");
@@ -250,7 +263,7 @@ try {
                     $new_med_discount = $new_med_data['med_discount'] ?? 0;
                     
                     // ================================================================
-                    // ✅ FIXED: CALCULATE NEW BILL TOTAL - DISCOUNT SUBTRACTS
+                    // ✅ FIXED: CALCULATE NEW BILL TOTAL
                     // NEW TOTAL = (NEW MEDICATION TOTAL) + OTHER ITEMS
                     // ================================================================
                     $new_total = $new_med_total + $other_total;
@@ -282,7 +295,7 @@ try {
                             balance = ?,
                             status = ?,
                             updated_at = NOW(),
-                            notes = CONCAT(COALESCE(notes, ''), ' | Pharmacy discount: ', ?, ' at ', NOW())
+                            notes = CONCAT(COALESCE(notes, ''), ' | Pharmacy: Premium TSh ', ?, ' Discount TSh ', ?, ' at ', NOW())
                         WHERE id = ? AND patient_id = ? AND visit_id = ?
                     ");
                     $stmt_update_bill->execute([
@@ -291,6 +304,7 @@ try {
                         $new_total,
                         $new_balance,
                         $new_status,
+                        number_format($premium_amount, 0),
                         number_format($discount_amount, 0),
                         $bill_id,
                         $patient_id,
@@ -298,9 +312,14 @@ try {
                     ]);
                     
                     $message = "✅ Prescription(s) confirmed! Bill updated.<br>";
-                    $message .= "Medication discount: " . $currency . " " . number_format($discount_amount, 0) . "<br>";
-                    $message .= "New bill total: " . $currency . " " . number_format($new_total, 0) . " (was " . $currency . " " . number_format($current_total, 0) . ")<br>";
-                    $message .= "Total discount: " . $currency . " " . number_format($new_total_discount, 0) . " (was " . $currency . " " . number_format($current_total_discount, 0) . ")<br>";
+                    $message .= "Subtotal: " . $currency . " " . number_format($current_subtotal, 0) . "<br>";
+                    if ($premium_amount > 0) {
+                        $message .= "➕ Premium: " . $currency . " " . number_format($premium_amount, 0) . "<br>";
+                    }
+                    if ($discount_amount > 0) {
+                        $message .= "➖ Discount: " . $currency . " " . number_format($discount_amount, 0) . "<br>";
+                    }
+                    $message .= "✅ New bill total: " . $currency . " " . number_format($new_total, 0) . "<br>";
                     $message .= "New balance: " . $currency . " " . number_format($new_balance, 0);
                     $message_type = 'success';
                     
@@ -321,8 +340,8 @@ try {
                     $item_total = $stmt_items->fetch(PDO::FETCH_ASSOC);
                     $med_total = $item_total['med_total'] ?? 0;
                     
-                    // ✅ FIXED: Subtract discount
-                    $final_total = $med_total - $discount_amount;
+                    // ✅ FIXED: Add premium and subtract discount
+                    $final_total = $med_total + $premium_amount - $discount_amount;
                     if ($final_total < 0) $final_total = 0;
                     
                     // ✅ Use discount_amount column (NOT pharmacy_discount)
@@ -342,7 +361,7 @@ try {
                         $final_total,        // total_amount
                         0,                   // paid_amount
                         $final_total,        // balance
-                        "Prescription confirmed - Discount: " . number_format($discount_amount, 2)
+                        "Prescription confirmed - Premium: " . number_format($premium_amount, 2) . " Discount: " . number_format($discount_amount, 2)
                     ]);
                     $bill_id = $db->lastInsertId();
                     
@@ -356,11 +375,16 @@ try {
                     $stmt_items->execute([$patient_id, $user_branch_id]);
                     $items = $stmt_items->fetchAll(PDO::FETCH_ASSOC);
                     
+                    $total_items = count($items);
+                    
                     foreach ($items as $item) {
-                        $item_discount = ($discount_amount > 0 && count($items) > 0) 
-                            ? $discount_amount / count($items) 
+                        $premium_per_item = ($premium_amount > 0 && $total_items > 0) 
+                            ? $premium_amount / $total_items 
                             : 0;
-                        $final_price = $item['total_price'] - $item_discount;
+                        $discount_per_item = ($discount_amount > 0 && $total_items > 0) 
+                            ? $discount_amount / $total_items 
+                            : 0;
+                        $final_price = $item['total_price'] + $premium_per_item - $discount_per_item;
                         
                         $stmt = $db->prepare("
                             INSERT INTO bill_items (
@@ -374,7 +398,7 @@ try {
                             $bill_id, $patient_id, $user_branch_id,
                             $item['medication_name'] . ' (' . $item['dosage'] . ')',
                             $item['quantity'], $item['unit_price'], $item['total_price'],
-                            $item_discount,
+                            $discount_per_item,
                             0, 
                             $final_price, 
                             $item['id']
@@ -383,8 +407,13 @@ try {
                     
                     $message = "✅ Prescription(s) confirmed! New bill created.<br>";
                     $message .= "Subtotal: " . $currency . " " . number_format($med_total, 0) . "<br>";
-                    $message .= "Discount: " . $currency . " " . number_format($discount_amount, 0) . "<br>";
-                    $message .= "Final Total: " . $currency . " " . number_format($final_total, 0);
+                    if ($premium_amount > 0) {
+                        $message .= "➕ Premium: " . $currency . " " . number_format($premium_amount, 0) . "<br>";
+                    }
+                    if ($discount_amount > 0) {
+                        $message .= "➖ Discount: " . $currency . " " . number_format($discount_amount, 0) . "<br>";
+                    }
+                    $message .= "✅ Final Total: " . $currency . " " . number_format($final_total, 0);
                     $message_type = 'success';
                 }
                 
@@ -1068,7 +1097,7 @@ include_once '../../components/pharmacy_sidebar.php';
         .summary-card.amount .summary-number { color: var(--success); }
         
         /* ================================================================
-           DISCOUNT SECTION
+           PREMIUM & DISCOUNT CARDS
            ================================================================ */
         .discount-section {
             background: var(--bg-card);
@@ -1086,79 +1115,184 @@ include_once '../../components/pharmacy_sidebar.php';
             display: flex;
             align-items: center;
             gap: 8px;
-            margin-bottom: 12px;
+            margin-bottom: 16px;
         }
         
         .discount-section .discount-title i {
             color: var(--warning);
         }
         
-        .discount-section .discount-grid {
+        .discount-grid {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 16px;
-            align-items: end;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 16px;
         }
         
-        .discount-section .discount-grid .field {
+        .discount-grid-card {
+            background: var(--bg-body);
+            border-radius: var(--radius-lg);
+            padding: 16px 20px;
+            border: 2px solid var(--border-color);
+            transition: var(--transition);
             display: flex;
-            flex-direction: column;
+            align-items: flex-start;
+            gap: 14px;
         }
         
-        .discount-section .discount-grid .field label {
-            font-size: 0.6rem;
+        .discount-grid-card:hover {
+            border-color: var(--primary-light);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .discount-grid-card .card-icon {
+            width: 44px;
+            height: 44px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        
+        .discount-grid-card.premium-card .card-icon {
+            background: linear-gradient(135deg, #F59E0B, #D97706);
+            color: white;
+        }
+        
+        .discount-grid-card.discount-card .card-icon {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+        }
+        
+        .discount-grid-card .card-content {
+            flex: 1;
+        }
+        
+        .discount-grid-card .card-label {
+            font-size: 0.7rem;
             font-weight: 600;
             color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 0.04em;
-            margin-bottom: 4px;
+            margin-bottom: 6px;
         }
         
-        .discount-section .discount-grid .field .value-display {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: var(--text-primary);
-            padding: 6px 0;
-            min-height: var(--field-height);
+        .discount-grid-card .card-input-group {
             display: flex;
             align-items: center;
-        }
-        
-        .discount-section .discount-grid .field input {
-            padding: 8px 12px;
+            gap: 4px;
+            background: var(--bg-card);
             border: 2px solid var(--border-color);
             border-radius: var(--radius);
-            font-size: 0.9rem;
-            background: var(--bg-body);
-            color: var(--text-primary);
+            padding: 0 10px;
             transition: var(--transition);
-            width: 100%;
-            height: var(--field-height);
+            height: 40px;
         }
         
-        .discount-section .discount-grid .field input:focus {
+        .discount-grid-card .card-input-group:focus-within {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-            outline: none;
         }
         
-        .discount-section .discount-grid .field input.discount-input {
-            border-color: var(--warning);
-        }
-        
-        .discount-section .discount-grid .field input.discount-input:focus {
-            border-color: var(--warning);
+        .discount-grid-card.premium-card .card-input-group:focus-within {
+            border-color: #D97706;
             box-shadow: 0 0 0 3px rgba(217, 119, 6, 0.1);
         }
         
-        .discount-section .discount-grid .field .final-amount {
-            font-size: 1.5rem;
-            font-weight: 800;
-            color: var(--success);
-            padding: 4px 0;
-            min-height: var(--field-height);
-            display: flex;
-            align-items: center;
+        .discount-grid-card .card-input-group .currency-symbol {
+            font-weight: 700;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+        
+        .discount-grid-card .card-input-group input {
+            flex: 1;
+            border: none;
+            background: transparent;
+            padding: 6px 0;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            outline: none;
+            height: 100%;
+            min-width: 60px;
+        }
+        
+        .discount-grid-card .card-input-group input::placeholder {
+            color: var(--text-muted);
+            font-weight: 400;
+        }
+        
+        .discount-grid-card.premium-card .card-input-group input {
+            color: #D97706;
+        }
+        
+        .discount-grid-card.discount-card .card-input-group input {
+            color: var(--primary);
+        }
+        
+        .discount-grid-card .card-help {
+            font-size: 0.55rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+        
+        /* FINAL ROW */
+        .final-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr 1fr;
+            gap: 12px;
+            padding-top: 16px;
+            border-top: 2px solid var(--border-color);
+            margin-top: 4px;
+        }
+        
+        .final-item {
+            text-align: center;
+            padding: 8px 12px;
+            border-radius: var(--radius);
+            background: var(--bg-body);
+        }
+        
+        .final-item .final-label {
+            font-size: 0.55rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            display: block;
+        }
+        
+        .final-item .final-value {
+            font-size: 1.1rem;
+            font-weight: 700;
+            display: block;
+            margin-top: 2px;
+            color: var(--text-primary);
+        }
+        
+        .final-item .final-value.premium-value {
+            color: #D97706;
+        }
+        
+        .final-item .final-value.discount-value {
+            color: var(--primary);
+        }
+        
+        .final-item.final-total {
+            background: linear-gradient(135deg, var(--success), var(--success-dark));
+            border-radius: var(--radius);
+        }
+        
+        .final-item.final-total .final-label {
+            color: rgba(255,255,255,0.8);
+        }
+        
+        .final-item.final-total .final-value {
+            color: white;
+            font-size: 1.3rem;
         }
         
         /* ================================================================
@@ -1284,19 +1418,117 @@ include_once '../../components/pharmacy_sidebar.php';
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
         /* ================================================================
+           PDF MODAL
+           ================================================================ */
+        .pdf-modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+            backdrop-filter: blur(4px);
+        }
+        
+        .pdf-modal-overlay.active {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .pdf-modal {
+            background: white;
+            border-radius: var(--radius-lg);
+            max-width: 900px;
+            width: 100%;
+            max-height: 90vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+        }
+        
+        .pdf-modal-header {
+            padding: 16px 20px;
+            border-bottom: 2px solid #E2E8F0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 8px;
+            background: #0B5ED7;
+            border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+        }
+        
+        .pdf-modal-header .modal-title {
+            color: white;
+            font-weight: 700;
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .pdf-modal-header .modal-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .pdf-modal-header .modal-actions .btn {
+            background: rgba(255,255,255,0.15);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 6px 14px;
+            border-radius: var(--radius);
+            font-size: 0.75rem;
+        }
+        
+        .pdf-modal-header .modal-actions .btn:hover {
+            background: rgba(255,255,255,0.25);
+        }
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal {
+            background: rgba(239, 68, 68, 0.3);
+            border-color: rgba(239, 68, 68, 0.3);
+        }
+        
+        .pdf-modal-header .modal-actions .btn-danger-modal:hover {
+            background: rgba(239, 68, 68, 0.5);
+        }
+        
+        .pdf-modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+            background: #f8f9fa;
+            border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+        }
+        
+        .pdf-content {
+            background: white;
+            padding: 20px;
+            border-radius: var(--radius);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        }
+        
+        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 14px; }
             .items-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
-            .discount-section .discount-grid { grid-template-columns: 1fr 1fr; }
+            .discount-grid { grid-template-columns: 1fr 1fr; }
         }
         
         @media (max-width: 768px) {
             .page-header { padding: 14px 16px; }
             .page-header .page-title { font-size: 1.1rem; }
             .items-grid { grid-template-columns: 1fr; }
-            .discount-section .discount-grid { grid-template-columns: 1fr; }
+            .discount-grid { grid-template-columns: 1fr; }
+            .final-row { grid-template-columns: 1fr 1fr; gap: 8px; }
             .summary-section { grid-template-columns: 1fr 1fr; }
             .patient-card { flex-direction: column; text-align: center; }
             .patient-info .patient-details { justify-content: center; }
@@ -1306,6 +1538,9 @@ include_once '../../components/pharmacy_sidebar.php';
         @media (max-width: 480px) {
             .main-content { padding: 8px; }
             .summary-section { grid-template-columns: 1fr; }
+            .final-row { grid-template-columns: 1fr; }
+            .discount-section { padding: 12px 14px; }
+            .discount-grid-card { padding: 12px 14px; }
         }
     </style>
 </head>
@@ -1319,7 +1554,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-prescription"></i>
                 Patient Prescriptions
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;font-weight:600;text-transform:uppercase;">PHARMACY</span>
+                <span style="background:rgba(255,255,255,0.2);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;font-weight:600;text-transform:uppercase;">PHARMACY</span>
                 <span class="live-badge">
                     <span class="live-update-indicator"></span>
                     Live Update
@@ -1329,15 +1564,12 @@ include_once '../../components/pharmacy_sidebar.php';
                 <i class="fas fa-user"></i>
                 View and manage all prescriptions for this patient
                 <?php if ($patient): ?>
-                    <span class="header-badge" style="background:rgba(255,255,255,0.12);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;">
+                    <span style="background:rgba(255,255,255,0.12);color:white;padding:2px 10px;border-radius:20px;font-size:0.55rem;">
                         <?= htmlspecialchars($patient['full_name']) ?>
                     </span>
                 <?php endif; ?>
-                <span class="header-badge" style="background:rgba(52,211,153,0.12);color:#34D399;padding:2px 10px;border-radius:20px;font-size:0.5rem;">
+                <span style="background:rgba(52,211,153,0.12);color:#34D399;padding:2px 10px;border-radius:20px;font-size:0.5rem;">
                     <i class="fas fa-sync-alt fa-spin"></i> Auto-update
-                </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.12);color:#D97706;padding:2px 10px;border-radius:20px;font-size:0.5rem;">
-                    <i class="fas fa-edit"></i> Select + Manual
                 </span>
             </p>
         </div>
@@ -1400,7 +1632,7 @@ include_once '../../components/pharmacy_sidebar.php';
         </div>
         <div class="summary-card amount">
             <span class="summary-number" id="totalAmountDisplay"><?= $currency ?> <?= formatMoney($total_amount) ?></span>
-            <span class="summary-label">💰 Total Amount</span>
+            <span class="summary-label">💰 Subtotal</span>
         </div>
     </div>
 
@@ -1409,6 +1641,8 @@ include_once '../../components/pharmacy_sidebar.php';
         <input type="hidden" name="action" value="save_and_confirm">
         <input type="hidden" name="patient_id" value="<?= $patient_id ?>">
         <input type="hidden" name="total_amount" id="totalAmountHidden" value="<?= $total_amount ?>">
+        <input type="hidden" name="premium_amount" id="premiumAmountHidden" value="0">
+        <input type="hidden" name="discount_amount" id="discountAmountHidden" value="0">
         
         <div class="items-grid" id="itemsGrid">
             <?php foreach ($items as $index => $item): ?>
@@ -1541,27 +1775,64 @@ include_once '../../components/pharmacy_sidebar.php';
             <?php endforeach; ?>
         </div>
 
-        <!-- DISCOUNT SECTION -->
+        <!-- ================================================================ -->
+        <!-- PREMIUM & DISCOUNT SECTION -->
+        <!-- ================================================================ -->
         <div class="discount-section">
             <div class="discount-title">
                 <i class="fas fa-tag"></i>
-                Discount & Final Amount <span class="live-update-badge" style="font-size:0.6rem;"><i class="fas fa-sync-alt fa-spin"></i> Live</span>
+                Premium & Discount <span class="live-update-badge" style="font-size:0.6rem;"><i class="fas fa-sync-alt fa-spin"></i> Live</span>
             </div>
+            
             <div class="discount-grid">
-                <div class="field">
-                    <label>💰 Subtotal Amount</label>
-                    <div class="value-display" id="subtotalDisplay"><?= $currency ?> <?= formatMoney($total_amount) ?></div>
+                <!-- PREMIUM CARD - Left -->
+                <div class="discount-grid-card premium-card">
+                    <div class="card-icon"><i class="fas fa-star"></i></div>
+                    <div class="card-content">
+                        <div class="card-label">⭐ Premium Amount</div>
+                        <div class="card-input-group">
+                            <span class="currency-symbol"><?= $currency ?></span>
+                            <input type="text" class="premium-input" id="premiumAmount" 
+                                   placeholder="0" value="0" 
+                                   oninput="calculateFinal()">
+                        </div>
+                        <div class="card-help">Additional charge for premium service</div>
+                    </div>
                 </div>
-                <div class="field">
-                    <label><i class="fas fa-percentage" style="color:var(--warning);"></i> Discount Amount (<?= $currency ?>)</label>
-                    <input type="text" class="discount-input" id="discountAmount" name="discount_amount" 
-                           placeholder="Enter discount amount e.g. 5,000" 
-                           value="0" 
-                           oninput="calculateFinal()">
+                
+                <!-- DISCOUNT CARD - Right -->
+                <div class="discount-grid-card discount-card">
+                    <div class="card-icon"><i class="fas fa-percentage"></i></div>
+                    <div class="card-content">
+                        <div class="card-label">🎯 Discount Amount</div>
+                        <div class="card-input-group">
+                            <span class="currency-symbol"><?= $currency ?></span>
+                            <input type="text" class="discount-input" id="discountAmount" 
+                                   placeholder="0" value="0" 
+                                   oninput="calculateFinal()">
+                        </div>
+                        <div class="card-help">Discount applied to subtotal</div>
+                    </div>
                 </div>
-                <div class="field">
-                    <label>✅ Final Amount</label>
-                    <div class="final-amount" id="finalAmount"><?= $currency ?> <?= formatMoney($total_amount) ?></div>
+            </div>
+            
+            <!-- FINAL AMOUNT ROW -->
+            <div class="final-row">
+                <div class="final-item">
+                    <span class="final-label">💰 Subtotal</span>
+                    <span class="final-value" id="subtotalDisplay"><?= $currency ?> <?= formatMoney($total_amount) ?></span>
+                </div>
+                <div class="final-item">
+                    <span class="final-label">➕ Premium</span>
+                    <span class="final-value premium-value" id="premiumDisplay"><?= $currency ?> 0</span>
+                </div>
+                <div class="final-item">
+                    <span class="final-label">➖ Discount</span>
+                    <span class="final-value discount-value" id="discountDisplay"><?= $currency ?> 0</span>
+                </div>
+                <div class="final-item final-total">
+                    <span class="final-label">✅ Final Amount</span>
+                    <span class="final-value final-amount" id="finalAmount"><?= $currency ?> <?= formatMoney($total_amount) ?></span>
                 </div>
             </div>
         </div>
@@ -1571,7 +1842,7 @@ include_once '../../components/pharmacy_sidebar.php';
             <a href="pending_prescriptions.php" class="btn btn-outline">
                 <i class="fas fa-arrow-left"></i> Cancel
             </a>
-            <button type="submit" class="btn btn-success" onclick="return confirm('Confirm this prescription?\n\n✅ Status will change to: Confirmed\n💳 Discount will be applied to existing bill.\n\n👤 Patient: <?= addslashes($patient['full_name'] ?? 'Unknown') ?>\n📦 Total Items: <?= $total_items ?>\n📊 Total Quantity: <?= $total_quantity ?>\n💰 Subtotal: <?= $currency ?> <?= formatMoney($total_amount) ?>\n\n⚠️ After payment, status will auto-change to: Dispensed');">
+            <button type="submit" class="btn btn-success" onclick="return confirmPrescription()">
                 <i class="fas fa-check-circle"></i> Save & Confirm
             </button>
         </div>
@@ -1809,24 +2080,86 @@ include_once '../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
-    // CALCULATE FINAL AMOUNT WITH DISCOUNT
+    // CALCULATE FINAL AMOUNT WITH PREMIUM & DISCOUNT
     // ================================================================
     function calculateFinal() {
         var totalAmount = parseFloat(document.getElementById('totalAmountHidden').value) || 0;
+        var premiumInput = document.getElementById('premiumAmount');
         var discountInput = document.getElementById('discountAmount');
+        
         var finalDisplay = document.getElementById('finalAmount');
+        var premiumDisplay = document.getElementById('premiumDisplay');
+        var discountDisplay = document.getElementById('discountDisplay');
+        var subtotalDisplay = document.getElementById('subtotalDisplay');
+        var premiumHidden = document.getElementById('premiumAmountHidden');
+        var discountHidden = document.getElementById('discountAmountHidden');
         
-        var discountValue = unformatMoney(discountInput.value);
+        var premiumValue = unformatMoney(premiumInput.value) || 0;
+        var discountValue = unformatMoney(discountInput.value) || 0;
         
+        if (premiumValue < 0) {
+            premiumValue = 0;
+            premiumInput.value = '0';
+        }
         if (discountValue < 0) {
             discountValue = 0;
             discountInput.value = '0';
         }
         
-        var finalAmount = totalAmount - discountValue;
+        var subtotal = totalAmount;
+        var withPremium = subtotal + premiumValue;
+        var finalAmount = withPremium - discountValue;
         if (finalAmount < 0) finalAmount = 0;
         
-        finalDisplay.textContent = '<?= $currency ?> ' + formatMoney(finalAmount);
+        // Update hidden fields
+        if (premiumHidden) premiumHidden.value = premiumValue;
+        if (discountHidden) discountHidden.value = discountValue;
+        
+        // Update displays
+        if (subtotalDisplay) {
+            subtotalDisplay.textContent = '<?= $currency ?> ' + formatMoney(subtotal);
+        }
+        if (premiumDisplay) {
+            premiumDisplay.textContent = '<?= $currency ?> ' + formatMoney(premiumValue);
+        }
+        if (discountDisplay) {
+            discountDisplay.textContent = '<?= $currency ?> ' + formatMoney(discountValue);
+        }
+        if (finalDisplay) {
+            finalDisplay.textContent = '<?= $currency ?> ' + formatMoney(finalAmount);
+        }
+    }
+
+    // ================================================================
+    // CONFIRM PRESCRIPTION
+    // ================================================================
+    function confirmPrescription() {
+        var patientName = '<?= addslashes($patient['full_name'] ?? 'Unknown') ?>';
+        var totalItems = document.getElementById('totalItems').textContent;
+        var totalQty = document.getElementById('totalQty').textContent;
+        var subtotal = document.getElementById('subtotalDisplay').textContent;
+        var finalAmount = document.getElementById('finalAmount').textContent;
+        var premiumInput = document.getElementById('premiumAmount');
+        var discountInput = document.getElementById('discountAmount');
+        var premiumValue = unformatMoney(premiumInput.value) || 0;
+        var discountValue = unformatMoney(discountInput.value) || 0;
+        
+        var message = 'Confirm this prescription?\n\n';
+        message += '✅ Status will change to: Confirmed\n';
+        if (premiumValue > 0) {
+            message += '⭐ Premium: <?= $currency ?> ' + formatMoney(premiumValue) + '\n';
+        }
+        if (discountValue > 0) {
+            message += '🎯 Discount: <?= $currency ?> ' + formatMoney(discountValue) + '\n';
+        }
+        message += '\n👤 Patient: ' + patientName + '\n';
+        message += '📦 Total Items: ' + totalItems + '\n';
+        message += '📊 Total Quantity: ' + totalQty + '\n';
+        message += '💰 Subtotal: ' + subtotal + '\n';
+        message += '✅ Final Amount: ' + finalAmount + '\n\n';
+        message += '⚠️ After payment, status will auto-change to: Dispensed';
+        
+        return confirm(message);
     }
 
     // ================================================================
@@ -1838,6 +2171,34 @@ include_once '../../components/pharmacy_sidebar.php';
         syncField('.duration-select', '.duration-manual', 'data-item-id');
         syncField('.route-select', '.route-manual', 'data-item-id');
         
+        // Premium input - Auto format with commas
+        var premiumInput = document.getElementById('premiumAmount');
+        if (premiumInput) {
+            premiumInput.addEventListener('input', function(e) {
+                var start = this.selectionStart;
+                var end = this.selectionEnd;
+                
+                var raw = this.value.replace(/,/g, '');
+                var num = parseFloat(raw);
+                
+                if (!isNaN(num) && raw.length > 0) {
+                    var formatted = formatMoney(num);
+                    this.value = formatted;
+                    var diff = formatted.length - raw.length;
+                    this.setSelectionRange(start + diff, end + diff);
+                } else if (raw.length === 0) {
+                    this.value = '0';
+                }
+                
+                calculateFinal();
+            });
+            
+            premiumInput.addEventListener('focus', function() {
+                this.select();
+            });
+        }
+        
+        // Discount input - Auto format with commas
         var discountInput = document.getElementById('discountAmount');
         if (discountInput) {
             discountInput.addEventListener('input', function(e) {
@@ -1984,9 +2345,9 @@ include_once '../../components/pharmacy_sidebar.php';
             `;
         });
         
-        var discountValue = document.getElementById('discountAmount')?.value || '0';
-        var discountNum = unformatMoney(discountValue);
-        var finalAmount = totalAmount - discountNum;
+        var premiumValue = unformatMoney(document.getElementById('premiumAmount')?.value) || 0;
+        var discountValue = unformatMoney(document.getElementById('discountAmount')?.value) || 0;
+        var finalAmount = totalAmount + premiumValue - discountValue;
         if (finalAmount < 0) finalAmount = 0;
         
         var html = `
@@ -2027,8 +2388,8 @@ include_once '../../components/pharmacy_sidebar.php';
                     ${itemsHtml}
                 </div>
                 
-                <!-- SUMMARY with Discount -->
-                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin:16px 0;padding:12px 16px;background:#E8F0FE;border-radius:8px;">
+                <!-- SUMMARY with Premium & Discount -->
+                <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:10px;margin:16px 0;padding:12px 16px;background:#E8F0FE;border-radius:8px;">
                     <div style="text-align:center;">
                         <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">Total Items</div>
                         <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;">${totalItems}</div>
@@ -2042,9 +2403,13 @@ include_once '../../components/pharmacy_sidebar.php';
                         <div style="font-size:1.2rem;font-weight:700;color:#0B5ED7;"><?= $currency ?> ${formatMoney(totalAmount)}</div>
                     </div>
                     <div style="text-align:center;">
+                        <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">${premiumValue > 0 ? '⭐ Premium' : 'Premium'}</div>
+                        <div style="font-size:1.2rem;font-weight:700;color:#D97706;"><?= $currency ?> ${formatMoney(premiumValue)}</div>
+                    </div>
+                    <div style="text-align:center;">
                         <div style="font-size:0.6rem;font-weight:600;color:#64748B;text-transform:uppercase;">💰 Final Amount</div>
                         <div style="font-size:1.2rem;font-weight:700;color:#059669;"><?= $currency ?> ${formatMoney(finalAmount)}</div>
-                        ${discountNum > 0 ? `<div style="font-size:0.6rem;color:#D97706;">Discount: <?= $currency ?> ${formatMoney(discountNum)}</div>` : ''}
+                        ${discountValue > 0 ? `<div style="font-size:0.6rem;color:#0B5ED7;">Discount: <?= $currency ?> ${formatMoney(discountValue)}</div>` : ''}
                     </div>
                 </div>
                 
@@ -2113,12 +2478,13 @@ include_once '../../components/pharmacy_sidebar.php';
         }
     });
 
-    console.log('%c💊 Braick - Patient Prescriptions View (FIXED)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - Patient Prescriptions View', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Premium Card added (left) - Additional charge', 'font-size:13px; color:#F59E0B;');
+    console.log('%c✅ Discount Card (right) - Discount amount', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Final row: Subtotal → Premium → Discount → Final Amount', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Fixed: Discount uses discount_amount column (NOT pharmacy_discount)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ total_discount accumulates all discounts', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ total_amount = subtotal - total_discount', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ pharmacy_discount column is NOT used', 'font-size:13px; color:#F59E0B;');
-    console.log('%c✅ Other items (consultation, lab tests, procedures) are preserved', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ total_amount = subtotal + premium - discount', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

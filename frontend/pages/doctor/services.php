@@ -1,11 +1,9 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/services.php
-// SERVICES MANAGEMENT - SINGLE PAGE WITH TABS
-// Procedures, Medical Equipment, Lab Tests
-// AUTO-SEARCH: Procedures, Equipment, Lab Tests
-// LAB TESTS: Equipment selection (FREE - no price added)
-// BRAICK DISPENSARY - TUNAJARI AFYA YAKO
+// SERVICES MANAGEMENT - FIXED VERSION
+// ONLY: Procedures & Lab Tests (Equipment removed)
+// Lab Tests: Equipment selection (FREE) - shows ALL equipment
 // ================================================================
 
 // Start session
@@ -107,33 +105,6 @@ function generateProcedureCode() {
 }
 
 // ================================================================
-// FUNCTION TO GENERATE EQUIPMENT BATCH NUMBER
-// ================================================================
-function generateEquipmentBatch($db, $equipment_name, $branch_id) {
-    try {
-        $stmt = $db->prepare("
-            SELECT batch_number FROM medical_equipment 
-            WHERE equipment_name = ? AND branch_id = ? 
-            ORDER BY id DESC LIMIT 1
-        ");
-        $stmt->execute([$equipment_name, $branch_id]);
-        $last = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if ($last && !empty($last['batch_number'])) {
-            $parts = explode('-', $last['batch_number']);
-            if (count($parts) >= 2) {
-                $last_num = intval(end($parts));
-                $new_num = str_pad($last_num + 1, 4, '0', STR_PAD_LEFT);
-                return 'EQP-' . date('Ymd') . '-' . $new_num;
-            }
-        }
-        return 'EQP-' . date('Ymd') . '-0001';
-    } catch (Exception $e) {
-        return 'EQP-' . date('Ymd') . '-' . rand(1000, 9999);
-    }
-}
-
-// ================================================================
 // ADD PROCEDURE
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_procedure'])) {
@@ -188,80 +159,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_procedure'])) {
 }
 
 // ================================================================
-// ADD MEDICAL EQUIPMENT
-// ================================================================
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_equipment'])) {
-    $equipment_name = trim($_POST['equipment_name'] ?? '');
-    $category_id = isset($_POST['category_id']) ? (int)$_POST['category_id'] : 0;
-    $category_name = trim($_POST['category_name'] ?? '');
-    $unit = trim($_POST['unit'] ?? 'pcs');
-    $quantity = (int)($_POST['quantity'] ?? 0);
-    $reorder_level = (int)($_POST['reorder_level'] ?? 5);
-    $selling_price = formatMoneyInput($_POST['selling_price'] ?? 0);
-    $supplier = trim($_POST['supplier'] ?? '');
-    $expiry_date = $_POST['expiry_date'] ?? '';
-    $batch_number = trim($_POST['batch_number'] ?? '');
-    $status = 'active';
-    
-    $final_category = '';
-    if ($category_id > 0) {
-        foreach ($service_categories as $cat) {
-            if ($cat['id'] == $category_id) {
-                $final_category = $cat['category_name'];
-                break;
-            }
-        }
-    } elseif (!empty($category_name)) {
-        $final_category = $category_name;
-    }
-    
-    $stmt = $db->prepare("SELECT id FROM medical_equipment WHERE equipment_name = ? AND branch_id = ? LIMIT 1");
-    $stmt->execute([$equipment_name, $doctor_branch_id]);
-    $existing = $stmt->fetch(PDO::FETCH_ASSOC);
-    
-    if (empty($batch_number)) {
-        $batch_number = generateEquipmentBatch($db, $equipment_name, $doctor_branch_id);
-    }
-    
-    $errors = [];
-    if (empty($equipment_name)) { $errors[] = 'Equipment name is required'; }
-    if ($quantity < 0) { $errors[] = 'Quantity cannot be negative'; }
-    if ($selling_price < 0) { $errors[] = 'Selling price cannot be negative'; }
-    if (!empty($expiry_date) && strtotime($expiry_date) < strtotime(date('Y-m-d'))) {
-        $errors[] = 'Expiry date cannot be in the past';
-    }
-    
-    if (empty($errors)) {
-        try {
-            $stmt = $db->prepare("
-                INSERT INTO medical_equipment (
-                    equipment_name, category, unit, quantity, reorder_level,
-                    selling_price, supplier, expiry_date, batch_number,
-                    branch_id, status, created_by, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-            ");
-            $stmt->execute([
-                $equipment_name, $final_category, $unit, $quantity, $reorder_level,
-                $selling_price, $supplier, $expiry_date, $batch_number,
-                $doctor_branch_id, $status, $doctor_id
-            ]);
-            
-            $message = "✅ Equipment added successfully! Batch: <strong>$batch_number</strong>";
-            if ($existing) {
-                $message .= " (New batch for existing equipment)";
-            }
-            $message_type = 'success';
-        } catch (Exception $e) {
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
-        }
-    } else {
-        $message = implode('<br>', $errors);
-        $message_type = 'error';
-    }
-}
-
-// ================================================================
 // ADD LAB TEST - With Equipment Selection (FREE)
 // ================================================================
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
@@ -312,18 +209,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_lab_test'])) {
             ]);
             $test_id = $db->lastInsertId();
             
-            // Link equipment to lab test (FREE)
+            // ✅ Link equipment to lab test (FREE) - with branch check
             if (!empty($equipment_ids)) {
                 $equipment_ids = array_map('intval', $equipment_ids);
                 foreach ($equipment_ids as $equip_id) {
-                    $stmt = $db->prepare("SELECT id FROM medical_equipment WHERE id = ? AND branch_id = ?");
+                    // Verify equipment exists and belongs to branch
+                    $stmt = $db->prepare("
+                        SELECT id FROM medical_equipment 
+                        WHERE id = ? AND branch_id = ? AND status = 'active'
+                    ");
                     $stmt->execute([$equip_id, $doctor_branch_id]);
                     if ($stmt->fetch()) {
-                        $stmt = $db->prepare("
-                            INSERT INTO lab_test_equipment (lab_test_id, equipment_id, branch_id, created_at)
-                            VALUES (?, ?, ?, NOW())
+                        // Check if link already exists
+                        $stmt_check = $db->prepare("
+                            SELECT id FROM lab_test_equipment 
+                            WHERE lab_test_id = ? AND equipment_id = ? AND branch_id = ?
                         ");
-                        $stmt->execute([$test_id, $equip_id, $doctor_branch_id]);
+                        $stmt_check->execute([$test_id, $equip_id, $doctor_branch_id]);
+                        if (!$stmt_check->fetch()) {
+                            $stmt = $db->prepare("
+                                INSERT INTO lab_test_equipment (lab_test_id, equipment_id, branch_id, created_at)
+                                VALUES (?, ?, ?, NOW())
+                            ");
+                            $stmt->execute([$test_id, $equip_id, $doctor_branch_id]);
+                        }
                     }
                 }
             }
@@ -356,7 +265,7 @@ try {
         SELECT p.*, u.full_name as created_by_name 
         FROM procedures_catalog p
         LEFT JOIN users u ON p.created_by = u.id
-        WHERE p.branch_id = ? OR p.branch_id IS NULL 
+        WHERE (p.branch_id = ? OR p.branch_id IS NULL) 
         ORDER BY p.procedure_name
     ");
     $stmt->execute([$doctor_branch_id]);
@@ -365,76 +274,76 @@ try {
     $procedures = []; 
 }
 
-// Medical Equipment - GROUPED BY EQUIPMENT NAME (ONE ROW PER EQUIPMENT)
-$equipment = [];
+// ✅ MEDICAL EQUIPMENT - ALL ACTIVE EQUIPMENT (for lab test linking)
+$all_equipment = [];
 try {
     $stmt = $db->prepare("
         SELECT 
-            MIN(e.id) as equipment_id,
-            e.equipment_name,
-            e.category,
-            e.unit,
-            e.branch_id,
-            SUM(e.quantity) as total_quantity,
-            MIN(e.reorder_level) as reorder_level,
-            MIN(e.selling_price) as selling_price,
-            MIN(e.supplier) as supplier,
-            MIN(e.expiry_date) as expiry_date,
-            GROUP_CONCAT(e.id) as batch_ids,
-            GROUP_CONCAT(e.batch_number SEPARATOR '|') as batch_numbers,
-            GROUP_CONCAT(e.quantity SEPARATOR '|') as batch_quantities,
-            GROUP_CONCAT(e.expiry_date SEPARATOR '|') as batch_expiries,
-            GROUP_CONCAT(e.status SEPARATOR '|') as batch_statuses,
-            MIN(DATEDIFF(e.expiry_date, CURDATE())) as days_remaining,
-            u.full_name as created_by_name,
-            CASE 
-                WHEN SUM(e.quantity) <= 0 THEN 'inactive'
-                WHEN MIN(e.expiry_date) IS NULL OR MIN(e.expiry_date) = '0000-00-00' THEN 'active'
-                WHEN SUM(CASE WHEN e.status = 'active' AND (e.expiry_date IS NULL OR e.expiry_date >= CURDATE()) THEN 1 ELSE 0 END) > 0 THEN 'active'
-                ELSE 'inactive'
-            END as computed_status
-        FROM medical_equipment e
-        LEFT JOIN users u ON e.created_by = u.id
-        WHERE (e.branch_id = ? OR e.branch_id IS NULL)
-        GROUP BY e.equipment_name, e.category, e.unit, e.branch_id
-        ORDER BY e.equipment_name
+            id,
+            equipment_name,
+            category,
+            unit,
+            quantity,
+            selling_price,
+            batch_number,
+            expiry_date,
+            status
+        FROM medical_equipment 
+        WHERE branch_id = ? AND status = 'active'
+        ORDER BY equipment_name
     ");
     $stmt->execute([$doctor_branch_id]);
-    $equipment = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $all_equipment = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { 
-    $equipment = []; 
+    $all_equipment = []; 
 }
 
-// Lab Tests with linked equipment
+// ✅ LAB TESTS with linked equipment - FIXED QUERY
 $lab_tests = [];
 try {
     $stmt = $db->prepare("
-        SELECT l.*, u.full_name as created_by_name,
-               GROUP_CONCAT(DISTINCT e.equipment_name SEPARATOR ', ') as equipment_names,
-               GROUP_CONCAT(DISTINCT e.id SEPARATOR ',') as equipment_ids
+        SELECT 
+            l.id,
+            l.test_name,
+            l.test_code,
+            l.category,
+            l.price,
+            l.description,
+            l.is_active,
+            l.branch_id,
+            l.created_at,
+            u.full_name as created_by_name,
+            GROUP_CONCAT(DISTINCT e.id SEPARATOR ',') as equipment_ids,
+            GROUP_CONCAT(DISTINCT e.equipment_name SEPARATOR '|') as equipment_names
         FROM lab_tests_catalog l
         LEFT JOIN users u ON l.created_by = u.id
-        LEFT JOIN lab_test_equipment le ON l.id = le.lab_test_id
-        LEFT JOIN medical_equipment e ON le.equipment_id = e.id
-        WHERE l.branch_id = ? OR l.branch_id IS NULL 
+        LEFT JOIN lab_test_equipment le ON l.id = le.lab_test_id AND l.branch_id = le.branch_id
+        LEFT JOIN medical_equipment e ON le.equipment_id = e.id AND e.branch_id = l.branch_id
+        WHERE (l.branch_id = ? OR l.branch_id IS NULL)
         GROUP BY l.id
         ORDER BY l.test_name
     ");
     $stmt->execute([$doctor_branch_id]);
     $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { 
+    // Fallback query if JOIN fails
     try {
         $stmt = $db->prepare("
-            SELECT l.*, u.full_name as created_by_name,
-                   '' as equipment_names, '' as equipment_ids
+            SELECT 
+                l.*,
+                u.full_name as created_by_name,
+                '' as equipment_ids,
+                '' as equipment_names
             FROM lab_tests_catalog l
             LEFT JOIN users u ON l.created_by = u.id
-            WHERE l.branch_id = ? OR l.branch_id IS NULL 
+            WHERE (l.branch_id = ? OR l.branch_id IS NULL)
             ORDER BY l.test_name
         ");
         $stmt->execute([$doctor_branch_id]);
         $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    } catch (Exception $e2) { $lab_tests = []; }
+    } catch (Exception $e2) { 
+        $lab_tests = []; 
+    }
 }
 
 // ================================================================
@@ -592,7 +501,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(2, 1fr);
             gap: 16px;
             margin-bottom: 28px;
         }
@@ -622,7 +531,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 1.2rem;
         }
         .stat-icon.purple { background: var(--purple-bg); color: var(--purple); }
-        .stat-icon.orange { background: var(--warning-bg); color: var(--warning); }
         .stat-icon.teal { background: var(--teal-bg); color: var(--teal); }
         
         .stat-number {
@@ -743,18 +651,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transform: translateY(-50%) scale(1.1);
         }
         
-        .slide-arrow.left {
-            left: 8px;
-        }
-        
-        .slide-arrow.right {
-            right: 8px;
-        }
-        
-        .slide-arrow.visible {
-            opacity: 1;
-            pointer-events: auto;
-        }
+        .slide-arrow.left { left: 8px; }
+        .slide-arrow.right { right: 8px; }
+        .slide-arrow.visible { opacity: 1; pointer-events: auto; }
         
         .table-container {
             background: #ffffff;
@@ -795,7 +694,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             width: 100%;
             border-collapse: collapse;
             font-size: 0.85rem;
-            min-width: 900px;
+            min-width: 800px;
             font-family: 'Inter', 'Arial', sans-serif;
         }
         
@@ -971,7 +870,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-color: var(--gray-600);
         }
         
-        /* AUTO-SEARCH */
         .autocomplete-container {
             position: relative;
             width: 100%;
@@ -996,10 +894,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             background: var(--gray-800);
             border-color: var(--gray-600);
         }
-        
-        .autocomplete-list.show {
-            display: block;
-        }
+        .autocomplete-list.show { display: block; }
         
         .autocomplete-item {
             padding: 8px 14px;
@@ -1012,17 +907,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         [data-theme="dark"] .autocomplete-item {
             border-color: var(--gray-600);
         }
-        
         .autocomplete-item:hover {
             background: var(--primary-bg);
             color: var(--primary);
         }
-        
         .autocomplete-item.active {
             background: var(--primary);
             color: white;
         }
-        
         .autocomplete-item .item-detail {
             font-size: 0.65rem;
             color: var(--gray-400);
@@ -1132,90 +1024,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             border-color: var(--gray-600);
         }
         
-        .batch-number {
-            font-family: monospace;
-            font-size: 0.65rem;
-            font-weight: 600;
-            padding: 1px 8px;
-            border-radius: 4px;
-            background: var(--primary-bg);
-            color: var(--primary);
-        }
-        [data-theme="dark"] .batch-number {
-            background: #1E3A5F;
-            color: #6EA8FE;
-        }
-        
-        .status-badge {
-            padding: 2px 8px;
-            border-radius: 10px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-            font-family: 'Inter', 'Arial', sans-serif;
-        }
-        .status-badge.active { background: var(--success-bg); color: var(--success); }
-        .status-badge.inactive { background: var(--danger-bg); color: var(--danger); }
-        
-        .stock-badge {
-            padding: 2px 8px;
-            border-radius: 8px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-            font-family: 'Inter', 'Arial', sans-serif;
-        }
-        .stock-badge.ok { background: var(--success-bg); color: var(--success); }
-        .stock-badge.low { background: var(--warning-bg); color: var(--warning); animation: pulse 1.5s infinite; }
-        .stock-badge.out { background: var(--danger-bg); color: var(--danger); animation: pulse 1s infinite; }
-        
-        .expiry-badge {
-            padding: 2px 8px;
-            border-radius: 8px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-            font-family: 'Inter', 'Arial', sans-serif;
-        }
-        .expiry-badge.valid { background: var(--success-bg); color: var(--success); }
-        .expiry-badge.expiring { background: var(--warning-bg); color: var(--warning); animation: pulse 1.5s infinite; }
-        .expiry-badge.expired { background: var(--danger-bg); color: var(--danger); animation: pulse 1s infinite; }
-        .expiry-badge.no-expiry { background: var(--gray-200); color: var(--gray-500); }
-        
-        .days-remaining {
-            font-size: 0.6rem;
-            font-weight: 600;
-            padding: 1px 6px;
-            border-radius: 8px;
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-            font-family: 'Inter', 'Arial', sans-serif;
-        }
-        .days-remaining.good { background: var(--success-bg); color: var(--success); }
-        .days-remaining.warning { background: var(--warning-bg); color: var(--warning); animation: pulse 1.5s infinite; }
-        .days-remaining.danger { background: var(--danger-bg); color: var(--danger); animation: pulse 1s infinite; }
-        .days-remaining.forever { background: var(--gray-200); color: var(--gray-500); }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.6; }
-        }
-        
-        /* Equipment selection in lab test */
         .equipment-checkbox-group {
             display: grid;
             grid-template-columns: 1fr 1fr;
             gap: 6px;
-            max-height: 150px;
+            max-height: 180px;
             overflow-y: auto;
-            padding: 8px;
+            padding: 10px;
             border: 2px solid var(--gray-200);
             border-radius: 8px;
             background: var(--gray-50);
@@ -1228,20 +1043,24 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             display: flex;
             align-items: center;
             gap: 6px;
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.75rem;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 0.78rem;
             cursor: pointer;
             font-family: 'Inter', 'Arial', sans-serif;
+            border: 1px solid transparent;
+            transition: all 0.2s ease;
         }
         .equipment-checkbox-item:hover {
             background: var(--primary-bg);
+            border-color: var(--primary-light);
         }
         .equipment-checkbox-item input[type="checkbox"] {
             accent-color: var(--primary);
-            width: 14px;
-            height: 14px;
+            width: 16px;
+            height: 16px;
             cursor: pointer;
+            flex-shrink: 0;
         }
         .equipment-checkbox-item .equip-qty {
             font-size: 0.6rem;
@@ -1252,6 +1071,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.55rem;
             color: var(--success);
             font-weight: 600;
+            background: var(--success-bg);
+            padding: 0 6px;
+            border-radius: 8px;
+        }
+        .equipment-checkbox-item.selected {
+            background: var(--primary-bg);
+            border-color: var(--primary);
         }
         
         .equipment-tags {
@@ -1264,8 +1090,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             font-size: 0.6rem;
             background: var(--teal-bg);
             color: var(--teal);
-            padding: 1px 8px;
-            border-radius: 10px;
+            padding: 2px 10px;
+            border-radius: 12px;
             border: 1px solid var(--teal);
             font-family: 'Inter', 'Arial', sans-serif;
         }
@@ -1281,10 +1107,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .page-header { flex-direction: column; align-items: flex-start; }
             .equipment-checkbox-group { grid-template-columns: 1fr; }
             .modal { padding: 16px; }
-            .slide-arrow { display: none !important; }
-        }
-        
-        @media (max-width: 480px) {
             .slide-arrow { display: none !important; }
         }
     </style>
@@ -1303,7 +1125,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <?php endif; ?>
             </h1>
             <p class="page-subtitle">
-                Manage <strong>Procedures</strong>, <strong>Medical Equipment</strong> and <strong>Lab Tests</strong>
+                Manage <strong>Procedures</strong> and <strong>Lab Tests</strong>
                 <span class="branch-badge">
                     <i class="fas fa-store"></i> <?php echo htmlspecialchars($branch_name); ?>
                 </span>
@@ -1332,13 +1154,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             </div>
         </div>
         <div class="stat-card">
-            <div class="stat-icon orange"><i class="fas fa-tools"></i></div>
-            <div>
-                <div class="stat-number"><?php echo count($equipment); ?></div>
-                <div class="stat-label">Medical Equipment</div>
-            </div>
-        </div>
-        <div class="stat-card">
             <div class="stat-icon teal"><i class="fas fa-microscope"></i></div>
             <div>
                 <div class="stat-number"><?php echo count($lab_tests); ?></div>
@@ -1359,9 +1174,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <div class="tabs">
         <button class="tab-btn <?php echo $active_tab === 'procedures' ? 'active' : ''; ?>" data-tab="procedures">
             <i class="fas fa-syringe"></i> Procedures (<?php echo count($procedures); ?>)
-        </button>
-        <button class="tab-btn <?php echo $active_tab === 'equipment' ? 'active' : ''; ?>" data-tab="equipment">
-            <i class="fas fa-tools"></i> Medical Equipment (<?php echo count($equipment); ?>)
         </button>
         <button class="tab-btn <?php echo $active_tab === 'lab_tests' ? 'active' : ''; ?>" data-tab="lab_tests">
             <i class="fas fa-microscope"></i> Lab Tests (<?php echo count($lab_tests); ?>)
@@ -1393,11 +1205,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <tr>
                                     <th style="width:5%;">#</th>
                                     <th style="width:22%;">Procedure Name</th>
-                                    <th style="width:12%;">Code</th>
+                                    <th style="width:14%;">Code</th>
                                     <th style="width:18%;">Category</th>
-                                    <th style="width:12%;text-align:right;">Price (TSh)</th>
+                                    <th style="width:14%;text-align:right;">Price (TSh)</th>
                                     <th style="width:10%;text-align:center;">Status</th>
-                                    <th style="width:16%;">Added By</th>
+                                    <th style="width:12%;">Added By</th>
                                     <th style="width:5%;text-align:center;">View</th>
                                 </tr>
                             </thead>
@@ -1444,178 +1256,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- TAB 2: MEDICAL EQUIPMENT - GROUPED BY EQUIPMENT NAME -->
-    <!-- ================================================================ -->
-    <div class="tab-content <?php echo $active_tab === 'equipment' ? 'active' : ''; ?>" id="tab-equipment">
-        <div class="table-container">
-            <div class="table-header">
-                <h3><i class="fas fa-tools"></i> Medical Equipment - <?php echo htmlspecialchars($branch_name); ?></h3>
-                <button class="btn btn-primary btn-sm" onclick="openModal('equipmentModal')">
-                    <i class="fas fa-plus"></i> Add Equipment
-                </button>
-            </div>
-            <div class="table-wrapper">
-                <button class="slide-arrow left" onclick="slideTable('equipmentTable', 'left')">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <button class="slide-arrow right" onclick="slideTable('equipmentTable', 'right')">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
-                <div class="table-scroll" id="equipmentTable">
-                    <?php if (count($equipment) > 0): ?>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th style="width:4%;">#</th>
-                                    <th style="width:16%;">Equipment Name</th>
-                                    <th style="width:10%;">Category</th>
-                                    <th style="width:8%;text-align:center;">Total Qty</th>
-                                    <th style="width:8%;text-align:center;">Reorder</th>
-                                    <th style="width:10%;">Stock</th>
-                                    <th style="width:10%;text-align:right;">Price</th>
-                                    <th style="width:10%;">Expiry</th>
-                                    <th style="width:8%;text-align:center;">Days</th>
-                                    <th style="width:10%;">Batches</th>
-                                    <th style="width:6%;text-align:center;">Status</th>
-                                    <th style="width:5%;text-align:center;">View</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <?php $i = 1; foreach ($equipment as $item): 
-                                    $stock_status = 'ok';
-                                    $stock_label = 'In Stock';
-                                    $total_qty = $item['total_quantity'] ?? 0;
-                                    $reorder = $item['reorder_level'] ?? 5;
-                                    
-                                    if ($total_qty <= 0) {
-                                        $stock_status = 'out';
-                                        $stock_label = 'Out of Stock';
-                                    } elseif ($total_qty <= $reorder) {
-                                        $stock_status = 'low';
-                                        $stock_label = 'Low Stock';
-                                    }
-                                    
-                                    $expiry_status = 'no-expiry';
-                                    $days = '-';
-                                    $days_class = 'forever';
-                                    $expiry_date = $item['expiry_date'] ?? '';
-                                    // If no expiry date OR empty OR 0000-00-00, it's FOREVER ACTIVE
-                                    if (empty($expiry_date) || $expiry_date === '0000-00-00') {
-                                        $expiry_status = 'no-expiry';
-                                        $days = '∞';
-                                        $days_class = 'forever';
-                                    } else {
-                                        $days = $item['days_remaining'] ?? 0;
-                                        if ($days < 0) {
-                                            $expiry_status = 'expired';
-                                            $days_class = 'danger';
-                                        } elseif ($days <= 30) {
-                                            $expiry_status = 'expiring';
-                                            $days_class = 'warning';
-                                        } else {
-                                            $expiry_status = 'valid';
-                                            $days_class = 'good';
-                                        }
-                                    }
-                                    
-                                    $batch_numbers = $item['batch_numbers'] ?? '';
-                                    $batch_count = $batch_numbers ? count(explode('|', $batch_numbers)) : 0;
-                                    $first_batch = $batch_numbers ? explode('|', $batch_numbers)[0] : '';
-                                    $display_status = $item['computed_status'] ?? 'active';
-                                    $price_display = ($item['selling_price'] ?? 0) > 0 ? number_format($item['selling_price'], 0) : 'FREE';
-                                ?>
-                                    <tr>
-                                        <td><?php echo $i++; ?></td>
-                                        <td>
-                                            <strong><?php echo htmlspecialchars($item['equipment_name']); ?></strong>
-                                            <?php if ($batch_count > 1): ?>
-                                                <span class="badge badge-info" style="font-size:0.55rem;margin-left:4px;">
-                                                    <?php echo $batch_count; ?> batches
-                                                </span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td><?php echo htmlspecialchars($item['category'] ?? 'N/A'); ?></td>
-                                        <td style="text-align:center;"><strong><?php echo number_format($total_qty); ?></strong></td>
-                                        <td style="text-align:center;"><?php echo $reorder; ?></td>
-                                        <td>
-                                            <span class="stock-badge <?php echo $stock_status; ?>">
-                                                <i class="fas <?php echo $stock_status === 'ok' ? 'fa-check-circle' : ($stock_status === 'low' ? 'fa-exclamation-triangle' : 'fa-times-circle'); ?>"></i>
-                                                <?php echo $stock_label; ?>
-                                            </span>
-                                        </td>
-                                        <td style="text-align:right;font-weight:600;color:var(--success);">
-                                            <?php echo $price_display; ?>
-                                        </td>
-                                        <td>
-                                            <?php if (empty($expiry_date) || $expiry_date === '0000-00-00'): ?>
-                                                <span class="expiry-badge no-expiry">
-                                                    <i class="fas fa-infinity"></i> No Expiry
-                                                </span>
-                                            <?php else: ?>
-                                                <span class="expiry-badge <?php echo $expiry_status; ?>">
-                                                    <?php echo date('d/m/Y', strtotime($expiry_date)); ?>
-                                                </span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td style="text-align:center;">
-                                            <?php if (empty($expiry_date) || $expiry_date === '0000-00-00'): ?>
-                                                <span class="days-remaining forever">
-                                                    <i class="fas fa-infinity"></i> ∞
-                                                </span>
-                                            <?php elseif ($days !== '-'): ?>
-                                                <span class="days-remaining <?php echo $days_class; ?>">
-                                                    <?php if ($days < 0): ?>
-                                                        <i class="fas fa-skull"></i> EXP
-                                                    <?php elseif ($days <= 30): ?>
-                                                        <i class="fas fa-clock"></i> <?php echo $days; ?>d
-                                                    <?php else: ?>
-                                                        <i class="fas fa-check"></i> <?php echo $days; ?>d
-                                                    <?php endif; ?>
-                                                </span>
-                                            <?php else: ?>
-                                                <span class="days-remaining forever">
-                                                    <i class="fas fa-infinity"></i> ∞
-                                                </span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td>
-                                            <?php if (!empty($first_batch)): ?>
-                                                <span class="batch-number"><?php echo htmlspecialchars($first_batch); ?></span>
-                                                <?php if ($batch_count > 1): ?>
-                                                    <span style="font-size:0.6rem;color:var(--gray-400);">+<?php echo $batch_count - 1; ?> more</span>
-                                                <?php endif; ?>
-                                            <?php else: ?>
-                                                <span class="text-muted">N/A</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td style="text-align:center;">
-                                            <span class="status-badge <?php echo $display_status === 'active' ? 'active' : 'inactive'; ?>">
-                                                <?php echo ucfirst($display_status); ?>
-                                            </span>
-                                        </td>
-                                        <td style="text-align:center;">
-                                            <button class="btn-view" onclick="viewEquipment(<?php echo htmlspecialchars(json_encode($item)); ?>)">
-                                                <i class="fas fa-eye"></i>
-                                            </button>
-                                        </td>
-                                    </tr>
-                                <?php endforeach; ?>
-                            </tbody>
-                        </table>
-                    <?php else: ?>
-                        <div class="empty-state">
-                            <i class="fas fa-tools"></i>
-                            <p>No equipment added yet.</p>
-                            <p class="sub-text">Click "Add Equipment" to add your first equipment.</p>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-        </div>
-    </div>
-    
-    <!-- ================================================================ -->
-    <!-- TAB 3: LAB TESTS -->
+    <!-- TAB 2: LAB TESTS -->
     <!-- ================================================================ -->
     <div class="tab-content <?php echo $active_tab === 'lab_tests' ? 'active' : ''; ?>" id="tab-lab_tests">
         <div class="table-container">
@@ -1639,18 +1280,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                 <tr>
                                     <th style="width:5%;">#</th>
                                     <th style="width:20%;">Test Name</th>
-                                    <th style="width:15%;">Category</th>
+                                    <th style="width:14%;">Category</th>
                                     <th style="width:12%;text-align:right;">Price (TSh)</th>
-                                    <th style="width:20%;">Equipment (FREE)</th>
+                                    <th style="width:25%;">Equipment (FREE)</th>
                                     <th style="width:10%;text-align:center;">Status</th>
-                                    <th style="width:13%;">Added By</th>
+                                    <th style="width:9%;">Added By</th>
                                     <th style="width:5%;text-align:center;">View</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php $i = 1; foreach ($lab_tests as $test): 
                                     $equipment_names = $test['equipment_names'] ?? '';
-                                    $equipment_names_arr = !empty($equipment_names) ? explode(', ', $equipment_names) : [];
+                                    $equipment_names_arr = !empty($equipment_names) ? explode('|', $equipment_names) : [];
                                 ?>
                                     <tr>
                                         <td><?php echo $i++; ?></td>
@@ -1669,9 +1310,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                                             <?php if (!empty($equipment_names_arr)): ?>
                                                 <div class="equipment-tags">
                                                     <?php foreach ($equipment_names_arr as $eq_name): ?>
-                                                        <span class="equipment-tag">
-                                                            <i class="fas fa-tools"></i> <?php echo htmlspecialchars($eq_name); ?>
-                                                        </span>
+                                                        <?php if (!empty(trim($eq_name))): ?>
+                                                            <span class="equipment-tag">
+                                                                <i class="fas fa-tools"></i> <?php echo htmlspecialchars(trim($eq_name)); ?>
+                                                            </span>
+                                                        <?php endif; ?>
                                                     <?php endforeach; ?>
                                                 </div>
                                             <?php else: ?>
@@ -1776,95 +1419,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 </div>
 
 <!-- ================================================================ -->
-<!-- ADD EQUIPMENT MODAL -->
-<!-- ================================================================ -->
-<div class="modal-overlay" id="equipmentModal">
-    <div class="modal">
-        <h3 class="modal-title">
-            <i class="fas fa-tools"></i> Add Medical Equipment
-            <span style="font-size:0.7rem;font-weight:400;color:var(--gray-500);margin-left:8px;">
-                by <?php echo htmlspecialchars($doctor_name); ?>
-            </span>
-        </h3>
-        <form method="POST" id="equipmentForm">
-            <div class="form-group">
-                <label class="form-label">Equipment Name <span style="color:red;">*</span></label>
-                <div class="autocomplete-container">
-                    <input type="text" name="equipment_name" id="equipmentNameInput" class="form-control" required placeholder="e.g. Sindano (Syringe)" autocomplete="off">
-                    <div class="autocomplete-list" id="equipmentAutocomplete"></div>
-                </div>
-            </div>
-            <div class="form-group">
-                <label class="form-label">Category <span style="color:red;">*</span></label>
-                <select name="category_id" class="form-control" required>
-                    <option value="">-- Select Category --</option>
-                    <?php foreach ($service_categories as $cat): ?>
-                        <option value="<?php echo $cat['id']; ?>">
-                            <?php echo htmlspecialchars($cat['category_name']); ?>
-                        </option>
-                    <?php endforeach; ?>
-                    <option value="0">-- Other (Type manually) --</option>
-                </select>
-                <input type="text" name="category_name" class="form-control" style="margin-top:4px;display:none;" placeholder="Enter custom category...">
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label class="form-label">Unit</label>
-                    <select name="unit" class="form-control">
-                        <option value="pcs">Pieces (pcs)</option>
-                        <option value="box">Box</option>
-                        <option value="pack">Pack</option>
-                        <option value="set">Set</option>
-                        <option value="each">Each</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Quantity <span style="color:red;">*</span></label>
-                    <input type="number" name="quantity" class="form-control" required min="0" placeholder="0">
-                </div>
-            </div>
-            <div class="form-row-3">
-                <div class="form-group">
-                    <label class="form-label">Reorder Level <span style="color:red;">*</span></label>
-                    <input type="number" name="reorder_level" class="form-control" required min="0" value="5" placeholder="5">
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Selling Price (TSh)</label>
-                    <input type="text" name="selling_price" class="form-control money-input" min="0" value="0" placeholder="0 = FREE">
-                    <div class="help-text" style="font-size:0.6rem;color:var(--gray-400);">0 = Free</div>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Supplier</label>
-                    <input type="text" name="supplier" class="form-control" placeholder="Supplier name">
-                </div>
-            </div>
-            <div class="form-row">
-                <div class="form-group">
-                    <label class="form-label">Expiry Date</label>
-                    <input type="date" name="expiry_date" class="form-control">
-                    <div class="help-text" style="font-size:0.6rem;color:var(--gray-400);">Leave empty for no expiry (Active Forever)</div>
-                </div>
-                <div class="form-group">
-                    <label class="form-label">Batch Number</label>
-                    <input type="text" name="batch_number" class="form-control" 
-                           placeholder="Auto-generated if left empty" value="">
-                    <div class="help-text" style="font-size:0.6rem;color:var(--gray-400);">Leave empty to auto-generate</div>
-                </div>
-            </div>
-            <div style="font-size:0.7rem;color:var(--gray-400);margin-bottom:12px;">
-                <i class="fas fa-user-md"></i> Will be added by: <strong><?php echo htmlspecialchars($doctor_name); ?></strong>
-                <i class="fas fa-info-circle ml-3"></i> Status will be <strong>Active</strong> by default
-            </div>
-            <div class="modal-actions">
-                <button type="button" class="btn btn-danger" onclick="closeModal('equipmentModal')">Cancel</button>
-                <button type="submit" name="add_equipment" class="btn btn-primary">Add Equipment</button>
-            </div>
-        </form>
-    </div>
-</div>
-
-<!-- ================================================================ -->
-<!-- ADD LAB TEST MODAL - With Auto-Search & Equipment Selection (GROUPED) -->
+<!-- ADD LAB TEST MODAL - With Equipment Selection (FREE) -->
 <!-- ================================================================ -->
 <div class="modal-overlay" id="labTestModal">
     <div class="modal">
@@ -1904,26 +1459,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <textarea name="description" class="form-control" rows="2" placeholder="Optional description"></textarea>
             </div>
             
-            <!-- Equipment Selection - FREE - GROUPED BY EQUIPMENT NAME (ONE PER EQUIPMENT) -->
+            <!-- ✅ Equipment Selection - Shows ALL active equipment -->
             <div class="form-group">
                 <label class="form-label">
                     <i class="fas fa-tools"></i> Select Equipment (FREE)
                     <span style="font-size:0.6rem;font-weight:400;color:var(--gray-400);">Equipment price is NOT added to test price</span>
                 </label>
-                <?php if (count($equipment) > 0): ?>
-                    <div class="equipment-checkbox-group">
-                        <?php foreach ($equipment as $eq): ?>
-                            <?php 
-                                // Use the equipment_id from the query (MIN id from grouped data)
-                                $eq_id = $eq['equipment_id'] ?? 0;
-                                $total_qty = $eq['total_quantity'] ?? 0;
-                                $batch_count = $eq['batch_numbers'] ? count(explode('|', $eq['batch_numbers'])) : 0;
-                            ?>
-                            <?php if ($eq_id > 0): ?>
-                                <label class="equipment-checkbox-item">
-                                    <input type="checkbox" name="equipment_ids[]" value="<?php echo $eq_id; ?>">
+                <?php if (count($all_equipment) > 0): ?>
+                    <div class="equipment-checkbox-group" id="equipmentCheckboxGroup">
+                        <?php foreach ($all_equipment as $eq): ?>
+                            <?php if ($eq['id'] > 0): ?>
+                                <label class="equipment-checkbox-item" data-equip-id="<?php echo $eq['id']; ?>">
+                                    <input type="checkbox" name="equipment_ids[]" value="<?php echo $eq['id']; ?>">
                                     <?php echo htmlspecialchars($eq['equipment_name']); ?>
-                                    <span class="equip-qty">(<?php echo $total_qty; ?> in stock, <?php echo $batch_count; ?> batch<?php echo $batch_count > 1 ? 'es' : ''; ?>)</span>
+                                    <span class="equip-qty">(<?php echo $eq['quantity'] ?? 0; ?> in stock)</span>
                                     <span class="equip-free">FREE</span>
                                 </label>
                             <?php endif; ?>
@@ -1934,7 +1483,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                 <?php else: ?>
                     <div style="padding:10px;background:var(--warning-bg);border-radius:8px;color:var(--warning);font-size:0.8rem;">
-                        <i class="fas fa-exclamation-triangle"></i> No equipment available. Please add equipment first.
+                        <i class="fas fa-exclamation-triangle"></i> No equipment available. Please add equipment first in the main system.
                     </div>
                 <?php endif; ?>
             </div>
@@ -2028,148 +1577,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 autocomplete.classList.remove('show');
             }
         });
-        
-        var selectedIndex = -1;
-        input.addEventListener('keydown', function(e) {
-            var items = autocomplete.querySelectorAll('.autocomplete-item');
-            
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
-                updateSelection(items);
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                selectedIndex = Math.max(selectedIndex - 1, -1);
-                updateSelection(items);
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (selectedIndex >= 0 && items.length > 0) {
-                    var selectedItem = items[selectedIndex];
-                    input.value = selectedItem.dataset.name;
-                    autocomplete.classList.remove('show');
-                    selectedIndex = -1;
-                }
-            } else if (e.key === 'Escape') {
-                autocomplete.classList.remove('show');
-                selectedIndex = -1;
-            }
-        });
-        
-        function updateSelection(items) {
-            items.forEach(function(item, index) {
-                if (index === selectedIndex) {
-                    item.classList.add('active');
-                } else {
-                    item.classList.remove('active');
-                }
-            });
-            if (selectedIndex >= 0 && items.length > 0) {
-                items[selectedIndex].scrollIntoView({ block: 'nearest' });
-            }
-        }
-    })();
-
-    // ================================================================
-    // AUTO-SEARCH - Equipment Name
-    // ================================================================
-    (function() {
-        var equipmentData = <?php echo json_encode($equipment); ?>;
-        var input = document.getElementById('equipmentNameInput');
-        var autocomplete = document.getElementById('equipmentAutocomplete');
-        
-        if (!input || !autocomplete) return;
-        
-        input.addEventListener('input', function() {
-            var query = this.value.toLowerCase().trim();
-            
-            if (query.length < 1) {
-                autocomplete.classList.remove('show');
-                return;
-            }
-            
-            var matches = equipmentData.filter(function(item) {
-                return item.equipment_name.toLowerCase().includes(query);
-            });
-            
-            if (matches.length === 0) {
-                autocomplete.classList.remove('show');
-                return;
-            }
-            
-            var html = '';
-            matches.forEach(function(item) {
-                var batchCount = item.batch_numbers ? item.batch_numbers.split('|').length : 0;
-                var status = item.computed_status || 'active';
-                var statusColor = status === 'active' ? '#059669' : '#DC2626';
-                html += `
-                    <div class="autocomplete-item" data-name="${escapeHtml(item.equipment_name)}">
-                        <strong>${escapeHtml(item.equipment_name)}</strong>
-                        <span class="item-detail">
-                            ${escapeHtml(item.category || 'N/A')} | 
-                            Qty: ${item.total_quantity || 0} | 
-                            ${batchCount} batch(es) | 
-                            <span style="color:${statusColor};">${status}</span>
-                        </span>
-                    </div>
-                `;
-            });
-            
-            autocomplete.innerHTML = html;
-            autocomplete.classList.add('show');
-            
-            autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
-                item.addEventListener('click', function() {
-                    var name = this.dataset.name;
-                    input.value = name;
-                    autocomplete.classList.remove('show');
-                });
-            });
-        });
-        
-        document.addEventListener('click', function(e) {
-            if (!e.target.closest('.autocomplete-container')) {
-                autocomplete.classList.remove('show');
-            }
-        });
-        
-        var selectedIndex = -1;
-        input.addEventListener('keydown', function(e) {
-            var items = autocomplete.querySelectorAll('.autocomplete-item');
-            
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
-                updateSelection(items);
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                selectedIndex = Math.max(selectedIndex - 1, -1);
-                updateSelection(items);
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (selectedIndex >= 0 && items.length > 0) {
-                    var selectedItem = items[selectedIndex];
-                    input.value = selectedItem.dataset.name;
-                    autocomplete.classList.remove('show');
-                    selectedIndex = -1;
-                }
-            } else if (e.key === 'Escape') {
-                autocomplete.classList.remove('show');
-                selectedIndex = -1;
-            }
-        });
-        
-        function updateSelection(items) {
-            items.forEach(function(item, index) {
-                if (index === selectedIndex) {
-                    item.classList.add('active');
-                } else {
-                    item.classList.remove('active');
-                }
-            });
-            if (selectedIndex >= 0 && items.length > 0) {
-                items[selectedIndex].scrollIntoView({ block: 'nearest' });
-            }
-        }
     })();
 
     // ================================================================
@@ -2202,7 +1609,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             var html = '';
             matches.forEach(function(item) {
                 var equipmentNames = item.equipment_names || '';
-                var equipDisplay = equipmentNames ? '🔧 ' + equipmentNames.substring(0, 30) + (equipmentNames.length > 30 ? '...' : '') : 'No equipment';
+                var equipDisplay = equipmentNames ? '🔧 ' + equipmentNames.replace(/\|/g, ', ').substring(0, 30) + (equipmentNames.length > 30 ? '...' : '') : 'No equipment';
                 html += `
                     <div class="autocomplete-item" data-name="${escapeHtml(item.test_name)}">
                         <strong>${escapeHtml(item.test_name)}</strong>
@@ -2231,45 +1638,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 autocomplete.classList.remove('show');
             }
         });
-        
-        var selectedIndex = -1;
-        input.addEventListener('keydown', function(e) {
-            var items = autocomplete.querySelectorAll('.autocomplete-item');
-            
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
-                updateSelection(items);
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                selectedIndex = Math.max(selectedIndex - 1, -1);
-                updateSelection(items);
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (selectedIndex >= 0 && items.length > 0) {
-                    var selectedItem = items[selectedIndex];
-                    input.value = selectedItem.dataset.name;
-                    autocomplete.classList.remove('show');
-                    selectedIndex = -1;
-                }
-            } else if (e.key === 'Escape') {
-                autocomplete.classList.remove('show');
-                selectedIndex = -1;
-            }
-        });
-        
-        function updateSelection(items) {
-            items.forEach(function(item, index) {
-                if (index === selectedIndex) {
-                    item.classList.add('active');
-                } else {
-                    item.classList.remove('active');
-                }
-            });
-            if (selectedIndex >= 0 && items.length > 0) {
-                items[selectedIndex].scrollIntoView({ block: 'nearest' });
-            }
-        }
     })();
 
     // ================================================================
@@ -2283,15 +1651,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         var currentScroll = container.scrollLeft;
         
         if (direction === 'left') {
-            container.scrollTo({
-                left: currentScroll - scrollAmount,
-                behavior: 'smooth'
-            });
+            container.scrollTo({ left: currentScroll - scrollAmount, behavior: 'smooth' });
         } else {
-            container.scrollTo({
-                left: currentScroll + scrollAmount,
-                behavior: 'smooth'
-            });
+            container.scrollTo({ left: currentScroll + scrollAmount, behavior: 'smooth' });
         }
     }
     
@@ -2307,35 +1669,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         
         function checkArrows() {
             if (!container) return;
-            
             var scrollLeft = container.scrollLeft;
             var maxScroll = container.scrollWidth - container.clientWidth;
-            
             if (leftArrow) {
-                if (scrollLeft > 10) {
-                    leftArrow.classList.add('visible');
-                } else {
-                    leftArrow.classList.remove('visible');
-                }
+                leftArrow.classList.toggle('visible', scrollLeft > 10);
             }
-            
             if (rightArrow) {
-                if (scrollLeft < maxScroll - 10) {
-                    rightArrow.classList.add('visible');
-                } else {
-                    rightArrow.classList.remove('visible');
-                }
+                rightArrow.classList.toggle('visible', scrollLeft < maxScroll - 10);
             }
         }
         
         container.addEventListener('scroll', checkArrows);
         setTimeout(checkArrows, 300);
         window.addEventListener('resize', checkArrows);
-        
-        var observer = new MutationObserver(function() {
-            setTimeout(checkArrows, 300);
-        });
-        observer.observe(container, { childList: true, subtree: true });
     });
 
     // ================================================================
@@ -2378,11 +1724,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         function initMoneyInputs() {
-            var inputs = document.querySelectorAll('.money-input');
-            inputs.forEach(function(input) {
+            document.querySelectorAll('.money-input').forEach(function(input) {
                 if (input.dataset.moneyInitialized) return;
                 input.dataset.moneyInitialized = 'true';
-                
                 input.addEventListener('input', function() { autoFormatMoney(this); });
                 input.addEventListener('focus', function() {
                     var raw = this.value.replace(/,/g, '');
@@ -2390,11 +1734,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     this.select();
                 });
                 input.addEventListener('blur', function() {
-                    if (this.value) {
-                        this.value = formatWithCommas(this.value);
-                    } else {
-                        this.value = '0';
-                    }
+                    this.value = this.value ? formatWithCommas(this.value) : '0';
                 });
             });
         }
@@ -2402,17 +1742,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         document.addEventListener('DOMContentLoaded', function() {
             setTimeout(initMoneyInputs, 100);
         });
-        
         document.addEventListener('modalOpened', function() {
             setTimeout(initMoneyInputs, 200);
         });
-        
-        var observer = new MutationObserver(function() {
-            setTimeout(initMoneyInputs, 100);
-        });
-        observer.observe(document.body, { childList: true, subtree: true });
-        
-        window.moneyFormat = { format: formatWithCommas, init: initMoneyInputs };
     })();
 
     // ================================================================
@@ -2425,7 +1757,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 if (this.value === '0') {
                     manualInput.style.display = 'block';
                     manualInput.required = true;
-                    manualInput.focus();
                 } else {
                     manualInput.style.display = 'none';
                     manualInput.required = false;
@@ -2442,13 +1773,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         btn.addEventListener('click', function() {
             document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
             this.classList.add('active');
-            
             var tab = this.dataset.tab;
             document.querySelectorAll('.tab-content').forEach(function(content) {
                 content.classList.remove('active');
             });
             document.getElementById('tab-' + tab).classList.add('active');
-            
             var url = new URL(window.location.href);
             url.searchParams.set('tab', tab);
             window.history.pushState({}, '', url);
@@ -2517,127 +1846,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         openModal('viewModal');
     }
     
-    function viewEquipment(data) {
-        var stockStatus = 'ok';
-        var stockLabel = 'In Stock';
-        var totalQty = data.total_quantity || 0;
-        var reorder = data.reorder_level || 5;
-        
-        if (totalQty <= 0) {
-            stockStatus = 'out';
-            stockLabel = 'Out of Stock';
-        } else if (totalQty <= reorder) {
-            stockStatus = 'low';
-            stockLabel = 'Low Stock';
-        }
-        
-        var batchNumbers = data.batch_numbers ? data.batch_numbers.split('|') : [];
-        var batchQuantities = data.batch_quantities ? data.batch_quantities.split('|') : [];
-        var batchExpiries = data.batch_expiries ? data.batch_expiries.split('|') : [];
-        var batchStatuses = data.batch_statuses ? data.batch_statuses.split('|') : [];
-        
-        var batchesHtml = '';
-        if (batchNumbers.length > 0) {
-            batchesHtml = '<div style="margin-top:8px;"><table style="width:100%;font-size:0.7rem;border-collapse:collapse;">';
-            batchesHtml += '<thead><tr style="background:var(--gray-100);">';
-            batchesHtml += '<th style="padding:4px 8px;text-align:left;">Batch</th>';
-            batchesHtml += '<th style="padding:4px 8px;text-align:center;">Quantity</th>';
-            batchesHtml += '<th style="padding:4px 8px;text-align:center;">Expiry</th>';
-            batchesHtml += '<th style="padding:4px 8px;text-align:center;">Status</th>';
-            batchesHtml += '</tr></thead><tbody>';
-            
-            for (var i = 0; i < batchNumbers.length; i++) {
-                var expiry = batchExpiries[i] || 'No Expiry';
-                var expiryDisplay = (expiry && expiry !== 'No Expiry' && expiry !== '0000-00-00') ? new Date(expiry).toLocaleDateString() : '∞ No Expiry';
-                var batchStatus = batchStatuses[i] || 'active';
-                var statusClass = batchStatus === 'active' ? 'badge-success' : 'badge-danger';
-                var statusLabel = batchStatus === 'active' ? 'Active' : 'Inactive';
-                batchesHtml += '<tr style="border-bottom:1px solid var(--border-color);">';
-                batchesHtml += '<td style="padding:4px 8px;"><span class="batch-number">' + escapeHtml(batchNumbers[i]) + '</span></td>';
-                batchesHtml += '<td style="padding:4px 8px;text-align:center;font-weight:600;">' + (batchQuantities[i] || 0) + '</td>';
-                batchesHtml += '<td style="padding:4px 8px;text-align:center;">' + expiryDisplay + '</td>';
-                batchesHtml += '<td style="padding:4px 8px;text-align:center;"><span class="badge ' + statusClass + '" style="font-size:0.55rem;">' + statusLabel + '</span></td>';
-                batchesHtml += '</tr>';
-            }
-            batchesHtml += '</tbody></table></div>';
-        }
-        
-        var expiryHtml = '';
-        var expiryDate = data.expiry_date || '';
-        if (expiryDate && expiryDate !== '0000-00-00') {
-            var days = data.days_remaining || 0;
-            if (days < 0) {
-                expiryHtml = '<span class="expiry-badge expired">' + new Date(expiryDate).toLocaleDateString() + ' <i class="fas fa-skull"></i></span>';
-            } else if (days <= 30) {
-                expiryHtml = '<span class="expiry-badge expiring">' + new Date(expiryDate).toLocaleDateString() + '</span>';
-            } else {
-                expiryHtml = '<span class="expiry-badge valid">' + new Date(expiryDate).toLocaleDateString() + '</span>';
-            }
-        } else {
-            expiryHtml = '<span class="expiry-badge no-expiry"><i class="fas fa-infinity"></i> No Expiry</span>';
-        }
-        
-        var displayStatus = data.computed_status || 'active';
-        var statusColor = displayStatus === 'active' ? '#059669' : '#DC2626';
-        
-        document.getElementById('viewModalTitle').innerHTML = '<i class="fas fa-tools"></i> Equipment Details - ' + escapeHtml(data.equipment_name);
-        document.getElementById('viewModalContent').innerHTML = `
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Equipment Name</div>
-                <div style="font-size:1rem;font-weight:600;">${escapeHtml(data.equipment_name)}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Category</div>
-                <div>${escapeHtml(data.category || 'N/A')}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Total Quantity</div>
-                <div><strong>${data.total_quantity || 0}</strong> <span class="stock-badge ${stockStatus}">${stockLabel}</span></div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Reorder Level</div>
-                <div>${data.reorder_level || 5}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Unit</div>
-                <div>${escapeHtml(data.unit || 'pcs')}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Selling Price</div>
-                <div style="font-size:1.2rem;font-weight:700;color:${data.selling_price > 0 ? 'var(--success)' : 'var(--gray-500)'};">${data.selling_price > 0 ? 'TSh ' + Number(data.selling_price).toLocaleString() : 'FREE'}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Supplier</div>
-                <div>${escapeHtml(data.supplier || 'N/A')}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Expiry Date</div>
-                <div>${expiryHtml}</div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Status</div>
-                <div><span class="status-badge ${displayStatus === 'active' ? 'active' : 'inactive'}" style="color:${statusColor};">${displayStatus.toUpperCase()}</span></div>
-            </div>
-            <div style="padding:8px 0;border-bottom:1px solid var(--gray-200);">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Added By</div>
-                <div><span class="doctor-name-tag"><i class="fas fa-user-md"></i> ${escapeHtml(data.created_by_name || 'Unknown')}</span></div>
-            </div>
-            <div style="padding:8px 0;">
-                <div style="font-size:0.7rem;color:var(--gray-500);">Batches (${batchNumbers.length})</div>
-                <div>${batchesHtml}</div>
-            </div>
-        `;
-        openModal('viewModal');
-    }
-    
     function viewLabTest(data) {
         var equipmentNames = data.equipment_names || '';
         var equipmentHtml = '';
         if (equipmentNames) {
-            var names = equipmentNames.split(', ');
+            var names = equipmentNames.split('|');
             equipmentHtml = '<div class="equipment-tags">';
             names.forEach(function(name) {
-                equipmentHtml += '<span class="equipment-tag"><i class="fas fa-tools"></i> ' + escapeHtml(name) + ' <span style="color:var(--success);font-weight:600;">FREE</span></span>';
+                if (name.trim()) {
+                    equipmentHtml += '<span class="equipment-tag"><i class="fas fa-tools"></i> ' + escapeHtml(name.trim()) + ' <span style="color:var(--success);font-weight:600;">FREE</span></span>';
+                }
             });
             equipmentHtml += '</div>';
         } else {
@@ -2692,12 +1910,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         document.documentElement.setAttribute('data-theme', 'dark');
     }
     
-    console.log('%c⚙️ Services Management - GROUPED FIXED VERSION', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c⚙️ Services Management - FIXED VERSION', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c👤 User: <?php echo htmlspecialchars($doctor_name); ?>', 'font-size:12px; color:#64748B;');
-    console.log('%c✅ Equipment grouped by name (ONE per equipment name)', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Total quantity = SUM of all batches for that equipment', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ No expiry = Active forever', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Equipment selection in Lab Test shows ONE equipment per name', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Tab ya Equipment imeondolewa', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Lab Tests inaonyesha ALL equipment zilizopo', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Linking inakubalika na inaonekana kwenye database', 'font-size:12px; color:#34D399;');
     console.log('%c❤️ Braick Dispensary - Tunajari Afya Yako', 'font-size:12px; color:#DC2626;');
 </script>
 

@@ -7,6 +7,7 @@
 // ✅ "Pay Now (Self)" = Deduct stock immediately
 // ✅ Auto-format money with commas
 // ✅ Instructions with suggestions
+// ✅ NEW: Premium/Extra Bill feature
 // ================================================================
 
 session_start();
@@ -124,7 +125,7 @@ try {
 }
 
 // ================================================================
-// PROCESS OTC SALE - WITH STOCK DEDUCTION
+// PROCESS OTC SALE - WITH STOCK DEDUCTION & PREMIUM
 // ================================================================
 $message = '';
 $message_type = '';
@@ -139,6 +140,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     $payment_option = $_POST['payment_option'] ?? 'cashier';
     $items = json_decode($_POST['items_json'] ?? '[]', true);
     
+    // ================================================================
+    // PREMIUM / EXTRA BILL
+    // ================================================================
+    $premium_amount = (float)str_replace(',', '', $_POST['premium_amount'] ?? 0);
+    $premium_note = trim($_POST['premium_note'] ?? '');
+    
+    // Premium cannot be negative
+    if ($premium_amount < 0) {
+        $premium_amount = 0;
+    }
+    
     $subtotal = 0;
     foreach ($items as &$item) {
         $item['total'] = $item['quantity'] * $item['price'];
@@ -148,7 +160,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
     if ($discount_amount > $subtotal) {
         $discount_amount = $subtotal;
     }
-    $grand_total = $subtotal - $discount_amount;
+    
+    // Grand Total = Subtotal - Discount + Premium
+    $grand_total = $subtotal - $discount_amount + $premium_amount;
     if ($grand_total < 0) $grand_total = 0;
     
     $errors = [];
@@ -214,7 +228,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $balance,
                 $bill_status,
                 $payment_method,
-                'OTC Sale - ' . ($payment_option === 'self' ? 'Paid by Pharmacy' : 'Pending Cashier Payment') . ' - Customer: ' . $customer_name
+                'OTC Sale - ' . ($payment_option === 'self' ? 'Paid by Pharmacy' : 'Pending Cashier Payment') . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
             ]);
             $bill_id = $db->lastInsertId();
             
@@ -243,16 +257,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 ]);
             }
             
-            // CREATE OTC SALE
+            // CREATE OTC SALE WITH PREMIUM
             $otc_payment_status = ($payment_option === 'self') ? 'paid' : 'pending';
             $payment_notes = ($payment_option === 'self') ? 'Paid by Pharmacy (Self)' : 'OTC Sale - Bill sent to Cashier';
             
             $stmt = $db->prepare("
                 INSERT INTO otc_sales (
                     sale_number, customer_name, customer_phone, 
-                    patient_id, subtotal, discount_amount, total_amount, bill_id,
+                    patient_id, subtotal, discount_amount, premium_amount, premium_note, total_amount, bill_id,
                     payment_method, payment_status, sold_by, branch_id, notes, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
             ");
             $stmt->execute([
                 $sale_number,
@@ -261,13 +275,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                 $patient_id,
                 $subtotal,
                 $discount_amount,
+                $premium_amount,
+                $premium_note,
                 $grand_total,
                 $bill_id,
                 $payment_method,
                 $otc_payment_status,
                 $user_id,
                 $user_branch_id,
-                $payment_notes . ' - Customer: ' . $customer_name
+                $payment_notes . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) . ' - ' . $premium_note : '')
             ]);
             $sale_id = $db->lastInsertId();
             
@@ -341,7 +357,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             $sale_id,
                             $user_id,
                             $user_branch_id,
-                            'OTC Sale - PAID: ' . $sale_number . ' - Customer: ' . $customer_name
+                            'OTC Sale - PAID: ' . $sale_number . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
                         ]);
                         
                         $remaining_qty -= $deduct_qty;
@@ -399,7 +415,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                             $sale_id,
                             $user_id,
                             $user_branch_id,
-                            'OTC Sale - PENDING: ' . $sale_number . ' - Customer: ' . $customer_name
+                            'OTC Sale - PENDING: ' . $sale_number . ' - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
                         ]);
                         
                         $remaining_qty -= $reserve_qty;
@@ -430,7 +446,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     $payment_method,
                     $user_id,
                     $user_branch_id,
-                    'OTC Sale - Paid by Pharmacy (Self) - Customer: ' . $customer_name
+                    'OTC Sale - Paid by Pharmacy (Self) - Customer: ' . $customer_name . ($premium_amount > 0 ? ' | Premium: TSh ' . number_format($premium_amount) : '')
                 ]);
                 
                 $stmt = $db->prepare("
@@ -453,9 +469,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
             // MESSAGES
             if ($payment_option === 'self') {
                 $message = "✅ OTC Sale completed successfully! Stock deducted. Bill Paid.";
+                if ($premium_amount > 0) {
+                    $message .= " Premium TSh " . number_format($premium_amount) . " added.";
+                }
                 $message_type = 'success';
             } else {
                 $message = "✅ OTC Sale completed successfully! Stock reserved. Bill sent to Cashier.";
+                if ($premium_amount > 0) {
+                    $message .= " Premium TSh " . number_format($premium_amount) . " added.";
+                }
                 $message_type = 'success';
             }
             
@@ -1309,6 +1331,179 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
         
         /* ================================================================
+           PREMIUM SECTION
+           ================================================================ */
+        .premium-section {
+            background: var(--bg-body);
+            border-radius: 12px;
+            padding: 18px 22px;
+            border: 2px solid var(--border-color);
+            margin-top: 12px;
+            transition: all 0.3s ease;
+        }
+        
+        .premium-section:hover {
+            border-color: var(--purple);
+        }
+        
+        .premium-section .premium-row {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 14px;
+        }
+        
+        .premium-section .premium-label {
+            font-weight: 700;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            min-width: 140px;
+        }
+        
+        .premium-section .premium-label i {
+            color: var(--purple);
+            font-size: 1.1rem;
+        }
+        
+        .premium-section .premium-input-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex: 1;
+            flex-wrap: wrap;
+        }
+        
+        .premium-section .premium-input-group .premium-input {
+            width: 200px;
+            max-width: 350px;
+            padding: 10px 16px;
+            font-size: 1.2rem;
+            font-weight: 700;
+            text-align: right;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.3s ease;
+            font-family: 'Courier New', monospace;
+            letter-spacing: 1px;
+        }
+        
+        .premium-section .premium-input-group .premium-input:focus {
+            border-color: var(--purple);
+            box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.15);
+        }
+        
+        .premium-section .premium-input-group .premium-input::placeholder {
+            font-weight: 400;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            letter-spacing: 0;
+        }
+        
+        .btn-add-premium {
+            background: linear-gradient(135deg, #7C3AED, #6D28D9);
+            color: white;
+            padding: 10px 24px;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            white-space: nowrap;
+        }
+        
+        .btn-add-premium:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(124, 58, 237, 0.35);
+        }
+        
+        .btn-add-premium:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        
+        .btn-remove-premium {
+            background: var(--danger);
+            color: white;
+            padding: 10px 18px;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.85rem;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            white-space: nowrap;
+        }
+        
+        .btn-remove-premium:hover {
+            background: #B91C1C;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.3);
+        }
+        
+        .premium-display {
+            display: none;
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 2px dashed var(--border-color);
+        }
+        
+        .premium-display .premium-info {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .premium-display .premium-info .premium-label-display {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--purple);
+        }
+        
+        .premium-display .premium-info .premium-amount {
+            font-weight: 700;
+            color: var(--purple);
+            font-size: 1.1rem;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .premium-display .premium-info .premium-note-display {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            background: var(--bg-body);
+            padding: 2px 12px;
+            border-radius: 6px;
+        }
+        
+        .premium-display .premium-info .btn-remove-premium-small {
+            background: transparent;
+            border: none;
+            color: var(--danger);
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        
+        .premium-display .premium-info .btn-remove-premium-small:hover {
+            color: #B91C1C;
+            transform: scale(1.1);
+        }
+        
+        /* ================================================================
            PAYMENT OPTIONS
            ================================================================ */
         .payment-options {
@@ -1630,6 +1825,10 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .payment-methods { justify-content: center; }
             .instructions-section .instr-suggestions { gap: 3px; }
             .instructions-section .instr-suggestions .suggestion-btn { font-size: 0.55rem; padding: 2px 8px; }
+            .premium-section .premium-row { flex-direction: column; align-items: stretch; }
+            .premium-section .premium-input-group { flex-wrap: wrap; }
+            .premium-section .premium-input-group .premium-input { width: 100%; max-width: 100%; }
+            .premium-display .premium-info { flex-direction: column; align-items: flex-start; }
         }
         
         @media (max-width: 480px) {
@@ -1723,6 +1922,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 <span class="stat-chip" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);color:#FCD34D;">
                     <i class="fas fa-boxes"></i> Stock Deduction: <span id="stockModeDisplay">Reserve/Held</span>
                 </span>
+                <span class="stat-chip" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.2);color:#C084FC;">
+                    <i class="fas fa-star"></i> Premium: Optional
+                </span>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1776,6 +1978,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <input type="hidden" name="items_json" id="itemsJson" value="[]">
             <input type="hidden" name="discount_amount" id="discountAmountHidden" value="0">
             <input type="hidden" name="payment_option" id="paymentOptionHidden" value="cashier">
+            <input type="hidden" name="premium_amount" id="premiumAmountHidden" value="0">
+            <input type="hidden" name="premium_note" id="premiumNoteHidden" value="">
             
             <!-- Customer Information -->
             <div class="section-title">
@@ -1888,9 +2092,66 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         <span class="label">Discount:</span>
                         <span class="value discount-value" id="displayDiscount">TSh 0</span>
                     </div>
+                    <div class="info-item" style="border-color: var(--purple); background: var(--purple-light);">
+                        <span class="label" style="font-weight:700; color:var(--purple);">
+                            <i class="fas fa-star"></i> Premium:
+                        </span>
+                        <span class="value" id="displayPremium" style="color:var(--purple); font-weight:700; font-family:'Courier New',monospace;">TSh 0</span>
+                    </div>
                     <div class="info-item" style="border-color: var(--success); background: var(--success-light);">
                         <span class="label" style="font-weight:700;">Grand Total:</span>
                         <span class="value grand-total" id="displayGrandTotal">TSh 0</span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- ================================================================ -->
+            <!-- PREMIUM SECTION - NEW -->
+            <!-- ================================================================ -->
+            <div class="premium-section">
+                <div class="premium-row">
+                    <span class="premium-label">
+                        <i class="fas fa-plus-circle"></i>
+                        Premium / Extra Bill
+                        <span style="font-size:0.55rem; background:var(--purple-light); color:var(--purple); padding:1px 10px; border-radius:10px; font-weight:600;">Optional</span>
+                    </span>
+                    <div class="premium-input-group">
+                        <span class="currency-prefix" style="font-weight:700;color:var(--text-secondary);font-size:1rem;font-family:'Courier New',monospace;">TSh</span>
+                        <input type="text" id="premiumAmountInput" class="form-control premium-input" 
+                               placeholder="0" value="0"
+                               oninput="formatMoneyInput(this)" 
+                               onfocus="this.select()"
+                               autocomplete="off">
+                    </div>
+                    <button type="button" class="btn-add-premium" onclick="applyPremium()">
+                        <i class="fas fa-plus"></i> Add Premium
+                    </button>
+                    <button type="button" class="btn-remove-premium" onclick="removePremium()">
+                        <i class="fas fa-times"></i> Remove
+                    </button>
+                </div>
+                
+                <!-- Premium Note -->
+                <div style="margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;">
+                    <span style="font-size:0.75rem; color:var(--text-secondary); font-weight:500; min-width:100px;">
+                        <i class="fas fa-pen"></i> Note:
+                    </span>
+                    <input type="text" id="premiumNoteInput" class="form-control" 
+                           placeholder="e.g. Premium consultation, Extra service, Lab fees..."
+                           style="flex:1; min-width:200px; padding: 8px 14px; border: 2px solid var(--border-color); border-radius: 8px; font-size:0.85rem; background: var(--bg-card); color: var(--text-primary); outline: none; transition: all 0.3s ease;">
+                </div>
+                
+                <!-- Premium Display -->
+                <div class="premium-display" id="premiumDisplay">
+                    <div class="premium-info">
+                        <span class="premium-label-display">
+                            <i class="fas fa-star"></i> Premium Added:
+                        </span>
+                        <span class="premium-amount" id="premiumDisplayAmount">TSh 0</span>
+                        <span class="premium-note-display" id="premiumDisplayNote"></span>
+                        <button type="button" class="btn-remove-premium-small" onclick="removePremium()">
+                            <i class="fas fa-times-circle"></i> Remove
+                        </button>
                     </div>
                 </div>
             </div>
@@ -1998,6 +2259,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <span class="text-gray-300 mx-2">|</span>
             New OTC Sale
             <span class="text-gray-300 mx-2">|</span>
+            <span style="color:var(--purple);font-size:0.6rem;">
+                <i class="fas fa-star"></i> Premium: Optional
+            </span>
             <span class="text-gray-300 mx-2">|</span>
             <span style="color:var(--warning);font-size:0.6rem;">
                 <i class="fas fa-boxes"></i> Stock: 
@@ -2105,6 +2369,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     var subtotal = 0;
     var grandTotal = 0;
     var selectedPaymentOption = 'cashier';
+    
+    // ================================================================
+    // PREMIUM DATA
+    // ================================================================
+    var currentPremiumAmount = 0;
+    var currentPremiumNote = '';
 
     // ================================================================
     // MEDICINE SELECT - UPDATE PRICE
@@ -2453,6 +2723,66 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
 
     // ================================================================
+    // PREMIUM FUNCTIONS
+    // ================================================================
+    function applyPremium() {
+        var input = document.getElementById('premiumAmountInput');
+        var noteInput = document.getElementById('premiumNoteInput');
+        var premium = getRawNumber(input.value);
+        
+        if (premium < 0) {
+            showToast('Error', 'Premium cannot be negative', 'error');
+            return;
+        }
+        if (premium === 0) {
+            showToast('Warning', 'Enter a valid amount', 'warning');
+            return;
+        }
+        
+        currentPremiumAmount = premium;
+        currentPremiumNote = noteInput.value.trim() || 'Premium added';
+        
+        // Show premium display
+        var display = document.getElementById('premiumDisplay');
+        display.style.display = 'block';
+        document.getElementById('premiumDisplayAmount').textContent = 'TSh ' + premium.toLocaleString();
+        document.getElementById('premiumDisplayNote').textContent = currentPremiumNote;
+        
+        // Disable input and buttons
+        input.disabled = true;
+        document.querySelector('.btn-add-premium').disabled = true;
+        noteInput.disabled = true;
+        
+        // Update hidden fields
+        document.getElementById('premiumAmountHidden').value = premium;
+        document.getElementById('premiumNoteHidden').value = currentPremiumNote;
+        
+        updateTotals();
+        showToast('Success', 'Premium TSh ' + premium.toLocaleString() + ' added!', 'success');
+    }
+
+    function removePremium() {
+        currentPremiumAmount = 0;
+        currentPremiumNote = '';
+        
+        var input = document.getElementById('premiumAmountInput');
+        var noteInput = document.getElementById('premiumNoteInput');
+        
+        input.value = '0';
+        input.disabled = false;
+        noteInput.value = '';
+        noteInput.disabled = false;
+        document.querySelector('.btn-add-premium').disabled = false;
+        
+        document.getElementById('premiumDisplay').style.display = 'none';
+        document.getElementById('premiumAmountHidden').value = 0;
+        document.getElementById('premiumNoteHidden').value = '';
+        
+        updateTotals();
+        showToast('Info', 'Premium removed', 'info');
+    }
+
+    // ================================================================
     // UPDATE TOTALS
     // ================================================================
     function updateTotals() {
@@ -2470,11 +2800,29 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }
         
         currentDiscountAmount = discountAmount;
-        grandTotal = subtotal - discountAmount;
+        
+        // PREMIUM
+        var premiumAmount = currentPremiumAmount || 0;
+        
+        // Calculate grand total: Subtotal - Discount + Premium
+        grandTotal = subtotal - discountAmount + premiumAmount;
         if (grandTotal < 0) grandTotal = 0;
         
         document.getElementById('displaySubtotal').textContent = 'TSh ' + subtotal.toLocaleString();
         document.getElementById('displayDiscount').textContent = 'TSh ' + discountAmount.toLocaleString();
+        
+        // Show premium in display
+        var premiumDisplayEl = document.getElementById('displayPremium');
+        if (premiumDisplayEl) {
+            if (premiumAmount > 0) {
+                premiumDisplayEl.textContent = 'TSh ' + premiumAmount.toLocaleString();
+                premiumDisplayEl.style.display = 'inline';
+            } else {
+                premiumDisplayEl.textContent = 'TSh 0';
+                premiumDisplayEl.style.display = 'inline';
+            }
+        }
+        
         document.getElementById('displayGrandTotal').textContent = 'TSh ' + grandTotal.toLocaleString();
         
         var itemsForJson = cart.map(function(item) {
@@ -2488,6 +2836,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         });
         document.getElementById('itemsJson').value = JSON.stringify(itemsForJson);
         document.getElementById('discountAmountHidden').value = discountAmount;
+        
+        // Premium hidden fields already updated in applyPremium/removePremium
     }
 
     // ================================================================
@@ -2577,13 +2927,18 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             e.preventDefault();
             applyDiscount();
         }
+        if (e.key === 'Enter' && document.activeElement?.id === 'premiumAmountInput') {
+            e.preventDefault();
+            applyPremium();
+        }
     });
 
-    console.log('%c💊 Braick - New OTC Sale (STOCK DEDUCTION FIXED)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
+    console.log('%c💊 Braick - New OTC Sale (STOCK DEDUCTION FIXED + PREMIUM)', 'font-size:18px; font-weight:bold; color:#7C3AED;');
     console.log('%c✅ FIXED: "Send to Cashier" = Stock RESERVED (deducted from inventory)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ FIXED: "Pay Now (Self)" = Stock DEDUCTED immediately', 'font-size:13px; color:#34D399;');
     console.log('%c📝 Instructions: Large text area with suggestions', 'font-size:13px; color:#34D399;');
     console.log('%c💰 Auto-format money with commas', 'font-size:13px; color:#34D399;');
+    console.log('%c⭐ NEW: Premium/Extra Bill feature', 'font-size:13px; color:#C084FC;');
     console.log('%c✅ Messages auto-dismiss after 5 seconds', 'font-size:13px; color:#34D399;');
 </script>
 
