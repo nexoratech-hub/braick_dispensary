@@ -1,8 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/bill_details.php
-// SUPER ADMIN - BILL DETAILS
-// VIEW COMPLETE BILL INFORMATION
+// SUPER ADMIN - BILL DETAILS WITH PREMIUM
+// VIEW COMPLETE BILL INFORMATION INCLUDING PREMIUM
 // BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
 // ================================================================
 
@@ -75,11 +75,13 @@ $stmt = $db->query("SELECT id, name, location FROM branches WHERE status = 'acti
 $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// FETCH BILL DETAILS - FIXED: Using bills table not patient_bills
+// FETCH BILL DETAILS - WITH PREMIUM
 // ================================================================
 $stmt = $db->prepare("
     SELECT 
         b.*,
+        b.premium_amount,
+        b.premium_note,
         p.full_name as patient_name,
         p.patient_id as patient_id_number,
         p.phone as patient_phone,
@@ -164,16 +166,24 @@ if (!empty($bill['visit_id'])) {
 }
 
 // ================================================================
-// CALCULATE TOTALS
+// CALCULATE TOTALS WITH PREMIUM
 // ================================================================
 $total_items_amount = 0;
 foreach ($bill_items as $item) {
     $total_items_amount += $item['total_price'];
 }
 
-$total_paid = $bill['paid_amount'] ?? 0;
-$balance = $bill['balance'] ?? 0;
-$total_amount = $bill['total_amount'] ?? 0;
+$subtotal = (float)($bill['subtotal'] ?? $total_items_amount);
+$total_paid = (float)($bill['paid_amount'] ?? 0);
+$balance = (float)($bill['balance'] ?? 0);
+$total_amount = (float)($bill['total_amount'] ?? 0);
+$discount_amount = (float)($bill['discount_amount'] ?? 0);
+$discount_percent = (float)($bill['discount_percent'] ?? 0);
+$pharmacy_discount = (float)($bill['pharmacy_discount'] ?? 0);
+$cashier_discount = (float)($bill['cashier_discount'] ?? 0);
+$total_discount = (float)($bill['total_discount'] ?? 0);
+$premium_amount = (float)($bill['premium_amount'] ?? 0);
+$premium_note = $bill['premium_note'] ?? '';
 
 // ================================================================
 // GET STATUS BADGE CLASS
@@ -208,18 +218,14 @@ $profile_pic_url = !empty($profile_pic)
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
 // ================================================================
-// INCLUDE SHARED HEADER
+// INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/admin_header.php';
-
-// ================================================================
-// INCLUDE SHARED SIDEBAR
-// ================================================================
 include_once '../../components/admin_sidebar.php';
 ?>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -266,6 +272,11 @@ include_once '../../components/admin_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-file-invoice mr-2"></i> Bill Details
+                <?php if ($premium_amount > 0): ?>
+                    <span class="premium-header-badge">
+                        <i class="fas fa-crown"></i> Premium
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 View complete bill information
@@ -275,6 +286,11 @@ include_once '../../components/admin_sidebar.php';
                 <span class="ml-2 date-badge">
                     <i class="fas fa-calendar-day mr-1"></i> <?= date('F d, Y') ?>
                 </span>
+                <?php if ($premium_amount > 0): ?>
+                    <span class="ml-2 premium-tag">
+                        <i class="fas fa-crown"></i> Premium: TSh <?= number_format($premium_amount, 0) ?>
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap">
@@ -329,9 +345,10 @@ include_once '../../components/admin_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- FINANCIAL SUMMARY -->
+    <!-- FINANCIAL SUMMARY - 5 CARDS WITH PREMIUM -->
     <!-- ================================================================ -->
     <div class="financial-summary-grid mb-5">
+        <!-- Card 1: Total Amount -->
         <div class="financial-card">
             <div class="financial-icon blue">
                 <i class="fas fa-money-bill-wave"></i>
@@ -341,6 +358,50 @@ include_once '../../components/admin_sidebar.php';
                 <p class="financial-value">TSh <?= number_format($total_amount, 2) ?></p>
             </div>
         </div>
+        
+        <!-- Card 2: Discount -->
+        <div class="financial-card">
+            <div class="financial-icon purple">
+                <i class="fas fa-tags"></i>
+            </div>
+            <div>
+                <p class="financial-label">Discount</p>
+                <p class="financial-value" style="color:#7B2FBE;">
+                    - TSh <?= number_format($total_discount, 2) ?>
+                </p>
+                <?php if ($pharmacy_discount > 0 || $cashier_discount > 0): ?>
+                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:2px 0 0 0;">
+                        <?php if ($pharmacy_discount > 0): ?>
+                            Pharm: TSh <?= number_format($pharmacy_discount, 0) ?>
+                        <?php endif; ?>
+                        <?php if ($cashier_discount > 0): ?>
+                            <?php if ($pharmacy_discount > 0): ?> | <?php endif; ?>
+                            Cash: TSh <?= number_format($cashier_discount, 0) ?>
+                        <?php endif; ?>
+                    </p>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <!-- Card 3: PREMIUM (NEW) -->
+        <div class="financial-card premium-card">
+            <div class="financial-icon gold">
+                <i class="fas fa-crown"></i>
+            </div>
+            <div>
+                <p class="financial-label">👑 Premium</p>
+                <p class="financial-value" style="color:#D97706;">
+                    + TSh <?= number_format($premium_amount, 2) ?>
+                </p>
+                <?php if (!empty($premium_note)): ?>
+                    <p style="font-size:0.6rem;color:var(--text-secondary);margin:2px 0 0 0;">
+                        <?= htmlspecialchars($premium_note) ?>
+                    </p>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <!-- Card 4: Paid Amount -->
         <div class="financial-card">
             <div class="financial-icon green">
                 <i class="fas fa-check-circle"></i>
@@ -350,6 +411,8 @@ include_once '../../components/admin_sidebar.php';
                 <p class="financial-value">TSh <?= number_format($total_paid, 2) ?></p>
             </div>
         </div>
+        
+        <!-- Card 5: Balance -->
         <div class="financial-card">
             <div class="financial-icon orange">
                 <i class="fas fa-clock"></i>
@@ -361,16 +424,36 @@ include_once '../../components/admin_sidebar.php';
                 </p>
             </div>
         </div>
-        <div class="financial-card">
-            <div class="financial-icon purple">
-                <i class="fas fa-tags"></i>
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- PREMIUM DETAILS CARD (Only if premium exists) -->
+    <!-- ================================================================ -->
+    <?php if ($premium_amount > 0): ?>
+    <div class="premium-details-card mb-5">
+        <div class="premium-details-header">
+            <i class="fas fa-crown"></i>
+            <span>👑 Premium Charge Applied</span>
+            <span class="premium-amount-badge">TSh <?= number_format($premium_amount, 0) ?></span>
+        </div>
+        <div class="premium-details-body">
+            <div class="premium-detail-item">
+                <span class="label">Premium Amount</span>
+                <span class="value gold">TSh <?= number_format($premium_amount, 2) ?></span>
             </div>
-            <div>
-                <p class="financial-label">Total Items</p>
-                <p class="financial-value"><?= number_format($bill['total_items'] ?? 0) ?></p>
+            <?php if (!empty($premium_note)): ?>
+            <div class="premium-detail-item full">
+                <span class="label">Premium Note</span>
+                <span class="value"><?= htmlspecialchars($premium_note) ?></span>
+            </div>
+            <?php endif; ?>
+            <div class="premium-detail-item">
+                <span class="label">Added to Subtotal</span>
+                <span class="value" style="color:#0891B2;">TSh <?= number_format($subtotal, 2) ?> + TSh <?= number_format($premium_amount, 2) ?> = TSh <?= number_format($subtotal + $premium_amount, 2) ?></span>
             </div>
         </div>
     </div>
+    <?php endif; ?>
 
     <!-- ================================================================ -->
     <!-- BILL ITEMS TABLE -->
@@ -433,19 +516,59 @@ include_once '../../components/admin_sidebar.php';
                 <tfoot>
                     <tr>
                         <td colspan="5" class="text-right font-bold">Subtotal</td>
-                        <td class="text-right font-bold">TSh <?= number_format($total_items_amount, 2) ?></td>
+                        <td class="text-right font-bold">TSh <?= number_format($subtotal, 2) ?></td>
                         <td></td>
                     </tr>
-                    <?php if ($bill['discount_amount'] > 0): ?>
+                    <?php if ($premium_amount > 0): ?>
+                    <tr>
+                        <td colspan="5" class="text-right font-bold" style="color:#D97706;">
+                            👑 Premium Charge
+                        </td>
+                        <td class="text-right font-bold" style="color:#D97706;">
+                            + TSh <?= number_format($premium_amount, 2) ?>
+                        </td>
+                        <td></td>
+                    </tr>
+                    <tr>
+                        <td colspan="5" class="text-right font-bold" style="color:#0891B2;">
+                            Total with Premium
+                        </td>
+                        <td class="text-right font-bold" style="color:#0891B2;">
+                            TSh <?= number_format($subtotal + $premium_amount, 2) ?>
+                        </td>
+                        <td></td>
+                    </tr>
+                    <?php endif; ?>
+                    <?php if ($total_discount > 0): ?>
                         <tr>
-                            <td colspan="5" class="text-right text-red-500">Discount (<?= $bill['discount_percent'] ?>%)</td>
-                            <td class="text-right text-red-500">- TSh <?= number_format($bill['discount_amount'], 2) ?></td>
+                            <td colspan="5" class="text-right" style="color:#7B2FBE;">
+                                Discount
+                                <?php if ($pharmacy_discount > 0): ?>
+                                    (Pharmacy: TSh <?= number_format($pharmacy_discount, 0) ?>)
+                                <?php endif; ?>
+                                <?php if ($cashier_discount > 0): ?>
+                                    (Cashier: TSh <?= number_format($cashier_discount, 0) ?>)
+                                <?php endif; ?>
+                            </td>
+                            <td class="text-right" style="color:#7B2FBE;">
+                                - TSh <?= number_format($total_discount, 2) ?>
+                            </td>
                             <td></td>
                         </tr>
                     <?php endif; ?>
                     <tr class="total-row">
                         <td colspan="5" class="text-right font-bold text-lg">Total</td>
                         <td class="text-right font-bold text-lg text-blue-600">TSh <?= number_format($total_amount, 2) ?></td>
+                        <td></td>
+                    </tr>
+                    <tr>
+                        <td colspan="5" class="text-right font-bold" style="color:#059669;">Paid</td>
+                        <td class="text-right font-bold" style="color:#059669;">TSh <?= number_format($total_paid, 2) ?></td>
+                        <td></td>
+                    </tr>
+                    <tr>
+                        <td colspan="5" class="text-right font-bold" style="color:<?= $balance > 0 ? '#EF4444' : '#059669' ?>;">Balance</td>
+                        <td class="text-right font-bold" style="color:<?= $balance > 0 ? '#EF4444' : '#059669' ?>;">TSh <?= number_format($balance, 2) ?></td>
                         <td></td>
                     </tr>
                 </tfoot>
@@ -606,6 +729,8 @@ include_once '../../components/admin_sidebar.php';
         --shadow-sm: 0 2px 8px rgba(0,0,0,0.06);
         --shadow-md: 0 4px 20px rgba(0,0,0,0.08);
         --radius: 16px;
+        --gold: #D97706;
+        --gold-bg: #FEF3C7;
     }
 
     [data-theme="dark"] {
@@ -618,6 +743,7 @@ include_once '../../components/admin_sidebar.php';
         --table-hover: #1E293B;
         --shadow-sm: 0 2px 8px rgba(0,0,0,0.3);
         --shadow-md: 0 4px 20px rgba(0,0,0,0.4);
+        --gold-bg: #3D2E0A;
     }
 
     /* ================================================================
@@ -639,9 +765,7 @@ include_once '../../components/admin_sidebar.php';
         box-shadow: var(--shadow-sm);
     }
 
-    .card:hover {
-        box-shadow: var(--shadow-md);
-    }
+    .card:hover { box-shadow: var(--shadow-md); }
 
     .card-header {
         padding: 16px 24px;
@@ -652,9 +776,7 @@ include_once '../../components/admin_sidebar.php';
         align-items: center;
     }
 
-    [data-theme="dark"] .card-header {
-        background: #0F172A;
-    }
+    [data-theme="dark"] .card-header { background: #0F172A; }
 
     .card-title {
         font-size: 0.9rem;
@@ -668,6 +790,41 @@ include_once '../../components/admin_sidebar.php';
     .title-blue { color: #0B5ED7; }
     .title-green { color: #059669; }
     .title-purple { color: #7B2FBE; }
+
+    /* ================================================================
+       PREMIUM HEADER BADGE
+       ================================================================ */
+    .premium-header-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: linear-gradient(135deg, #F59E0B, #D97706);
+        color: white;
+        padding: 2px 12px;
+        border-radius: 12px;
+        font-size: 0.65rem;
+        font-weight: 700;
+        margin-left: 8px;
+        animation: pulse 2s infinite;
+    }
+
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.8; }
+    }
+
+    .premium-tag {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        background: var(--gold-bg);
+        color: var(--gold);
+        padding: 2px 12px;
+        border-radius: 12px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        border: 1px solid var(--gold);
+    }
 
     /* ================================================================
        BILL SUMMARY CARD
@@ -695,9 +852,7 @@ include_once '../../components/admin_sidebar.php';
         border-bottom: 1px solid var(--border-color);
     }
 
-    [data-theme="dark"] .bill-summary-header {
-        background: #0F172A;
-    }
+    [data-theme="dark"] .bill-summary-header { background: #0F172A; }
 
     .bill-number .label {
         font-size: 0.65rem;
@@ -746,11 +901,11 @@ include_once '../../components/admin_sidebar.php';
     }
 
     /* ================================================================
-       FINANCIAL SUMMARY
+       FINANCIAL SUMMARY - 5 CARDS
        ================================================================ */
     .financial-summary-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        grid-template-columns: repeat(5, 1fr);
         gap: 16px;
     }
 
@@ -772,6 +927,16 @@ include_once '../../components/admin_sidebar.php';
         border-color: #0B5ED7;
     }
 
+    .financial-card.premium-card {
+        border-color: var(--gold);
+        background: linear-gradient(135deg, var(--bg-card), var(--gold-bg));
+    }
+
+    .financial-card.premium-card:hover {
+        border-color: var(--gold);
+        box-shadow: 0 4px 20px rgba(217, 119, 6, 0.2);
+    }
+
     .financial-icon {
         width: 48px;
         height: 48px;
@@ -788,15 +953,15 @@ include_once '../../components/admin_sidebar.php';
     .financial-icon.green { background: #ECFDF5; color: #059669; }
     .financial-icon.orange { background: #FFFBEB; color: #F59E0B; }
     .financial-icon.purple { background: #F5F3FF; color: #7B2FBE; }
+    .financial-icon.gold { background: var(--gold-bg); color: var(--gold); }
 
     [data-theme="dark"] .financial-icon.blue { background: #1E3A5F; color: #6EA8FE; }
     [data-theme="dark"] .financial-icon.green { background: #1A3A2A; color: #34D399; }
     [data-theme="dark"] .financial-icon.orange { background: #3D2E0A; color: #FBBF24; }
     [data-theme="dark"] .financial-icon.purple { background: #2D1B4E; color: #A78BFA; }
+    [data-theme="dark"] .financial-icon.gold { background: #3D2E0A; color: #FCD34D; }
 
-    .financial-card:hover .financial-icon {
-        transform: scale(1.05);
-    }
+    .financial-card:hover .financial-icon { transform: scale(1.05); }
 
     .financial-label {
         font-size: 0.65rem;
@@ -812,6 +977,84 @@ include_once '../../components/admin_sidebar.php';
         font-weight: 700;
         color: var(--text-primary);
         margin: 2px 0 0 0;
+    }
+
+    /* ================================================================
+       PREMIUM DETAILS CARD
+       ================================================================ */
+    .premium-details-card {
+        background: var(--bg-card);
+        border-radius: var(--radius);
+        border: 2px solid var(--gold);
+        overflow: hidden;
+        transition: all 0.3s ease;
+        box-shadow: 0 4px 20px rgba(217, 119, 6, 0.1);
+    }
+
+    .premium-details-card:hover {
+        box-shadow: 0 6px 30px rgba(217, 119, 6, 0.2);
+    }
+
+    .premium-details-header {
+        background: linear-gradient(135deg, #F59E0B, #D97706);
+        color: white;
+        padding: 12px 24px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        font-size: 0.95rem;
+    }
+
+    .premium-details-header i {
+        font-size: 1.2rem;
+    }
+
+    .premium-amount-badge {
+        margin-left: auto;
+        background: rgba(255,255,255,0.25);
+        padding: 4px 16px;
+        border-radius: 20px;
+        font-size: 0.85rem;
+        font-weight: 800;
+        border: 1px solid rgba(255,255,255,0.3);
+    }
+
+    .premium-details-body {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 16px;
+        padding: 20px 24px;
+    }
+
+    .premium-detail-item {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .premium-detail-item.full {
+        grid-column: 1 / -1;
+    }
+
+    .premium-detail-item .label {
+        font-size: 0.65rem;
+        color: var(--text-secondary);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        font-weight: 600;
+    }
+
+    .premium-detail-item .value {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: var(--text-primary);
+    }
+
+    .premium-detail-item .value.gold {
+        color: var(--gold);
+        font-size: 1.1rem;
+        font-weight: 700;
     }
 
     /* ================================================================
@@ -838,9 +1081,7 @@ include_once '../../components/admin_sidebar.php';
 
     [data-theme="dark"] .badge-warning { color: #1E293B; }
 
-    .badge:hover {
-        transform: scale(1.02);
-    }
+    .badge:hover { transform: scale(1.02); }
 
     .bill-status .badge {
         font-size: 0.8rem;
@@ -901,13 +1142,8 @@ include_once '../../components/admin_sidebar.php';
         white-space: nowrap;
     }
 
-    .data-table thead th:first-child {
-        border-radius: 8px 0 0 0;
-    }
-
-    .data-table thead th:last-child {
-        border-radius: 0 8px 0 0;
-    }
+    .data-table thead th:first-child { border-radius: 8px 0 0 0; }
+    .data-table thead th:last-child { border-radius: 0 8px 0 0; }
 
     .data-table td {
         padding: 12px 16px;
@@ -917,17 +1153,9 @@ include_once '../../components/admin_sidebar.php';
         transition: background 0.2s ease;
     }
 
-    .data-table tbody tr {
-        transition: background 0.2s ease;
-    }
-
-    .data-table tbody tr:hover td {
-        background: var(--table-hover);
-    }
-
-    .data-table tbody tr:last-child td {
-        border-bottom: none;
-    }
+    .data-table tbody tr { transition: background 0.2s ease; }
+    .data-table tbody tr:hover td { background: var(--table-hover); }
+    .data-table tbody tr:last-child td { border-bottom: none; }
 
     .data-table tfoot td {
         padding: 12px 16px;
@@ -943,40 +1171,18 @@ include_once '../../components/admin_sidebar.php';
         font-weight: 700;
     }
 
-    [data-theme="dark"] .data-table .total-row td {
-        background: #0F172A;
-    }
+    [data-theme="dark"] .data-table .total-row td { background: #0F172A; }
 
-    .data-table .text-right {
-        text-align: right;
-    }
-    .data-table .text-center {
-        text-align: center;
-    }
-    .data-table .font-semibold {
-        font-weight: 600;
-    }
-    .data-table .font-bold {
-        font-weight: 700;
-    }
-    .data-table .text-lg {
-        font-size: 1.05rem;
-    }
-    .data-table .text-blue-600 {
-        color: #0B5ED7;
-    }
-    .data-table .text-red-500 {
-        color: #EF4444;
-    }
-    .data-table .font-medium {
-        font-weight: 500;
-    }
-    .data-table .text-xs {
-        font-size: 0.65rem;
-    }
-    .data-table .text-gray-400 {
-        color: var(--text-secondary);
-    }
+    .data-table .text-right { text-align: right; }
+    .data-table .text-center { text-align: center; }
+    .data-table .font-semibold { font-weight: 600; }
+    .data-table .font-bold { font-weight: 700; }
+    .data-table .text-lg { font-size: 1.05rem; }
+    .data-table .text-blue-600 { color: #0B5ED7; }
+    .data-table .text-red-500 { color: #EF4444; }
+    .data-table .font-medium { font-weight: 500; }
+    .data-table .text-xs { font-size: 0.65rem; }
+    .data-table .text-gray-400 { color: var(--text-secondary); }
 
     /* ================================================================
        PAYMENT ITEMS
@@ -1059,9 +1265,7 @@ include_once '../../components/admin_sidebar.php';
         letter-spacing: 0.03em;
     }
 
-    .space-y-3 > * + * {
-        margin-top: 12px;
-    }
+    .space-y-3 > * + * { margin-top: 12px; }
 
     /* ================================================================
        RELATED ITEMS
@@ -1103,13 +1307,8 @@ include_once '../../components/admin_sidebar.php';
         border-bottom: 1px solid var(--border-color);
     }
 
-    .detail-row:last-child {
-        border-bottom: none;
-    }
-
-    .detail-row.full {
-        grid-column: 1 / -1;
-    }
+    .detail-row:last-child { border-bottom: none; }
+    .detail-row.full { grid-column: 1 / -1; }
 
     .detail-row .label {
         font-size: 0.7rem;
@@ -1146,11 +1345,10 @@ include_once '../../components/admin_sidebar.php';
         margin: 0;
         display: flex;
         align-items: center;
+        flex-wrap: wrap;
     }
 
-    .page-title i {
-        color: #0B5ED7;
-    }
+    .page-title i { color: #0B5ED7; }
 
     .page-subtitle {
         font-size: 0.85rem;
@@ -1212,11 +1410,7 @@ include_once '../../components/admin_sidebar.php';
         box-shadow: var(--shadow-md);
     }
 
-    .btn-sm {
-        padding: 5px 12px;
-        font-size: 0.7rem;
-        border-radius: 6px;
-    }
+    .btn-sm { padding: 5px 12px; font-size: 0.7rem; border-radius: 6px; }
 
     .btn-outline {
         background: transparent;
@@ -1257,19 +1451,11 @@ include_once '../../components/admin_sidebar.php';
     /* ================================================================
        GRID
        ================================================================ */
-    .grid {
-        display: grid;
-        gap: 20px;
-    }
-
-    .grid-cols-1 {
-        grid-template-columns: 1fr;
-    }
+    .grid { display: grid; gap: 20px; }
+    .grid-cols-1 { grid-template-columns: 1fr; }
 
     @media (min-width: 1024px) {
-        .lg\:grid-cols-2 {
-            grid-template-columns: 1fr 1fr;
-        }
+        .lg\:grid-cols-2 { grid-template-columns: 1fr 1fr; }
     }
 
     /* ================================================================
@@ -1284,24 +1470,20 @@ include_once '../../components/admin_sidebar.php';
         text-align: center;
     }
 
-    .footer p {
-        margin: 0;
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-
-    .footer-brand {
-        font-weight: 700;
-        color: #0B5ED7;
-    }
+    .footer p { margin: 0; font-size: 0.8rem; color: var(--text-secondary); }
+    .footer-brand { font-weight: 700; color: #0B5ED7; }
 
     /* ================================================================
        RESPONSIVE
        ================================================================ */
+    @media (max-width: 1200px) {
+        .financial-summary-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+
     @media (max-width: 1024px) {
         .main-content { padding: 16px; }
         .bill-summary-grid { grid-template-columns: 1fr 1fr; }
-        .financial-summary-grid { grid-template-columns: 1fr 1fr; }
+        .financial-summary-grid { grid-template-columns: repeat(2, 1fr); }
         .related-details { grid-template-columns: 1fr; }
         .detail-row { flex-direction: column; align-items: flex-start; gap: 2px; }
         .detail-row .value { text-align: left; max-width: 100%; }
@@ -1311,7 +1493,7 @@ include_once '../../components/admin_sidebar.php';
         .main-content { padding: 12px; }
         .bill-summary-header { flex-direction: column; gap: 10px; text-align: center; }
         .bill-summary-grid { grid-template-columns: 1fr 1fr; padding: 16px; }
-        .financial-summary-grid { grid-template-columns: 1fr; }
+        .financial-summary-grid { grid-template-columns: 1fr 1fr; }
         .data-table { font-size: 0.7rem; }
         .data-table td, .data-table th { padding: 8px 10px; }
         .data-table thead th { font-size: 0.55rem; padding: 8px 10px; }
@@ -1324,6 +1506,7 @@ include_once '../../components/admin_sidebar.php';
     @media (max-width: 480px) {
         .main-content { padding: 10px; }
         .bill-summary-grid { grid-template-columns: 1fr; padding: 12px; }
+        .financial-summary-grid { grid-template-columns: 1fr; }
         .bill-summary-header { padding: 12px 16px; }
         .card-header { padding: 12px 16px; flex-direction: column; align-items: flex-start; gap: 8px; }
         .data-table td, .data-table th { padding: 6px 8px; font-size: 0.6rem; }
@@ -1348,6 +1531,7 @@ include_once '../../components/admin_sidebar.php';
         .main-content { padding: 0 !important; background: white !important; }
         .card { box-shadow: none !important; border: 1px solid #ddd !important; break-inside: avoid; }
         .bill-summary-card { box-shadow: none !important; border: 1px solid #ddd !important; }
+        .premium-details-card { box-shadow: none !important; border: 2px solid #D97706 !important; break-inside: avoid; }
         
         .data-table thead th {
             background: #0B5ED7 !important;
@@ -1356,22 +1540,14 @@ include_once '../../components/admin_sidebar.php';
             print-color-adjust: exact !important;
         }
         
-        .badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-        .badge-success { background: #059669 !important; color: white !important; }
-        .badge-warning { background: #F59E0B !important; color: #1E293B !important; }
-        .badge-info { background: #0B5ED7 !important; color: white !important; }
-        .badge-danger { background: #EF4444 !important; color: white !important; }
-        .badge-secondary { background: #64748B !important; color: white !important; }
+        .badge, .premium-details-header, .premium-header-badge, .premium-tag,
+        .financial-icon, .item-type-badge {
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+        }
         
-        .item-type-badge { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-        .financial-icon { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-        .financial-icon.blue { background: #EFF6FF !important; color: #0B5ED7 !important; }
-        .financial-icon.green { background: #ECFDF5 !important; color: #059669 !important; }
-        .financial-icon.orange { background: #FFFBEB !important; color: #F59E0B !important; }
-        .financial-icon.purple { background: #F5F3FF !important; color: #7B2FBE !important; }
-        
-        .branch-tag { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; background: #E8F0FE !important; color: #0B5ED7 !important; }
-        .page-title { color: #0F172A !important; }
+        .premium-details-header { background: #D97706 !important; color: white !important; }
+        .premium-header-badge { background: #D97706 !important; color: white !important; }
     }
 </style>
 
@@ -1470,13 +1646,14 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c📄 Braick Dispensary - Bill Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📄 Braick Dispensary - Bill Details (WITH PREMIUM)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏷️ Bill: <?= htmlspecialchars($bill['bill_number']) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c💰 Total: TSh <?= number_format($total_amount, 2) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Status: <?= ucfirst($bill['status']) ?>', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c✅ Using tables: bills, bill_items, payments, patients, users, branches, visits', 'font-size:13px; color:#059669;');
+    console.log('%c💰 Subtotal: TSh <?= number_format($subtotal, 2) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c🏷️ Discount: TSh <?= number_format($total_discount, 2) ?>', 'font-size:13px; color:#7B2FBE;');
+    console.log('%c👑 Premium: TSh <?= number_format($premium_amount, 2) ?>', 'font-size:13px; color:#D97706;');
+    console.log('%c📊 Total: TSh <?= number_format($total_amount, 2) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c✅ Status: <?= ucfirst($bill['status']) ?>', 'font-size:13px; color:#7B2FBE;');
 </script>
 
 </body>

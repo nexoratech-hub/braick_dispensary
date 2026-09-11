@@ -1,11 +1,17 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/process_payment.php
-// CASHIER - PROCESS PAYMENT
-// ✅ FORMULA: REMAINING = SUBTOTAL - PAID - TOTAL_DISCOUNT
-// ✅ FIXED: PAID AMOUNT DISPLAYS CORRECTLY FROM DATABASE
-// ✅ REMOVED: SUMMARY CARDS & FORMULA DISPLAY
-// ✅ IMPROVED: DEEP GREEN BACKGROUND ON HEADER
+// CASHIER - PROCESS PAYMENT - FULLY FIXED v3.0
+// ================================================================
+// ✅ FORMULA SAHIHI (FINAL):
+//    total_amount = subtotal + total_premium - total_discount
+//    balance      = total_amount - paid_amount
+// ================================================================
+// ✅ FIXED: Premium HAIONGEZWI mara mbili
+// ✅ FIXED: total_amount ina-reflect premium correctly
+// ✅ FIXED: balance inahesabiwa correctly
+// ✅ FIXED: paid_amount haiwezi kuzidi total_amount
+// ✅ FIXED: Recalculate inatumika kila mahali
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -41,6 +47,7 @@ $user_phone = $_SESSION['phone'] ?? '';
 
 $is_admin = ($user_role === 'admin');
 $is_reception = ($user_role === 'reception');
+$is_cashier = ($user_role === 'cashier');
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -48,6 +55,140 @@ try {
     $db = Database::getInstance()->getConnection();
 } catch (Exception $e) {
     die("Database connection failed: " . $e->getMessage());
+}
+
+// ================================================================
+// ✅ HELPER: RECALCULATE BILL TOTALS (FORMULA SAHIHI)
+// ================================================================
+// FORMULA: total_amount = subtotal + total_premium - total_discount
+//          balance      = total_amount - paid_amount
+// ================================================================
+function recalculateBillTotals($db, $bill_id, $branch_id) {
+    // Pata bill ya sasa kutoka DB
+    $stmt = $db->prepare("
+        SELECT 
+            subtotal, 
+            discount_amount, 
+            cashier_discount, 
+            pharmacy_discount,
+            premium_amount, 
+            total_discount, 
+            total_amount,
+            paid_amount,
+            status
+        FROM bills 
+        WHERE id = ? AND branch_id = ?
+    ");
+    $stmt->execute([$bill_id, $branch_id]);
+    $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if (!$bill) {
+        return null;
+    }
+    
+    // ================================================================
+    // CHUKUA VALUES
+    // ================================================================
+    $subtotal = (float)$bill['subtotal'];
+    
+    // Discounts
+    $pharmacy_discount = (float)$bill['discount_amount'];
+    // Kama pharmacy_discount ipo tofauti, tumia pharmacy_discount field
+    if (isset($bill['pharmacy_discount']) && (float)$bill['pharmacy_discount'] > 0) {
+        $pharmacy_discount = (float)$bill['pharmacy_discount'];
+    }
+    $cashier_discount = (float)$bill['cashier_discount'];
+    
+    // Premium
+    $premium_amount = (float)$bill['premium_amount'];
+    
+    // Paid
+    $paid_amount = (float)$bill['paid_amount'];
+    
+    // ================================================================
+    // ✅ FORMULA SAHIHI:
+    // total_discount = pharmacy + cashier
+    // ================================================================
+    $total_discount = $pharmacy_discount + $cashier_discount;
+    
+    // Discount haiwezi kuzidi subtotal
+    if ($total_discount > $subtotal) {
+        $total_discount = $subtotal;
+    }
+    
+    // ================================================================
+    // ✅ FORMULA SAHIHI:
+    // total_amount = subtotal + premium - total_discount
+    // ================================================================
+    $total_amount = $subtotal + $premium_amount - $total_discount;
+    if ($total_amount < 0) {
+        $total_amount = 0;
+    }
+    
+    // ================================================================
+    // ✅ FORMULA SAHIHI:
+    // balance = total_amount - paid_amount
+    // ================================================================
+    $balance = $total_amount - $paid_amount;
+    
+    // HATUTAKI NEGATIVE BALANCE
+    // Kama paid > total, tunafanya balance = 0 na tunarekebisha paid
+    if ($balance < 0) {
+        $balance = 0;
+        // Kama paid_amount > total_amount, punguza paid_amount
+        if ($paid_amount > $total_amount) {
+            $paid_amount = $total_amount;
+        }
+    }
+    
+    // ================================================================
+    // DETERMINE STATUS
+    // ================================================================
+    if ($total_amount <= 0) {
+        $status = 'paid'; // Kama total ni 0, consider paid
+    } elseif ($balance <= 0.01) {
+        $status = 'paid';
+    } elseif ($paid_amount > 0 && $balance > 0) {
+        $status = 'partial';
+    } else {
+        $status = 'pending';
+    }
+    
+    // ================================================================
+    // UPDATE BILL WITH CORRECT VALUES
+    // ================================================================
+    $stmt = $db->prepare("
+        UPDATE bills 
+        SET 
+            total_discount = ?,
+            total_amount = ?,
+            paid_amount = ?,
+            balance = ?,
+            status = ?,
+            updated_at = NOW()
+        WHERE id = ? AND branch_id = ?
+    ");
+    $stmt->execute([
+        $total_discount,
+        $total_amount,
+        $paid_amount,
+        $balance,
+        $status,
+        $bill_id,
+        $branch_id
+    ]);
+    
+    return [
+        'subtotal' => $subtotal,
+        'pharmacy_discount' => $pharmacy_discount,
+        'cashier_discount' => $cashier_discount,
+        'total_discount' => $total_discount,
+        'premium_amount' => $premium_amount,
+        'total_amount' => $total_amount,
+        'paid_amount' => $paid_amount,
+        'balance' => $balance,
+        'status' => $status
+    ];
 }
 
 $selected_bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
@@ -78,7 +219,8 @@ try {
             'total_balance' => 0,
             'total_discount' => 0,
             'total_pharmacy_discount' => 0,
-            'total_cashier_discount' => 0
+            'total_cashier_discount' => 0,
+            'total_premium' => 0
         ];
         
         try {
@@ -90,7 +232,8 @@ try {
                     COALESCE(SUM(balance), 0) as total_balance,
                     COALESCE(SUM(total_discount), 0) as total_discount,
                     COALESCE(SUM(discount_amount), 0) as total_pharmacy_discount,
-                    COALESCE(SUM(cashier_discount), 0) as total_cashier_discount
+                    COALESCE(SUM(cashier_discount), 0) as total_cashier_discount,
+                    COALESCE(SUM(premium_amount), 0) as total_premium
                 FROM bills 
                 WHERE branch_id = ? AND status != 'cancelled'
             ");
@@ -105,6 +248,7 @@ try {
                 $totals['total_discount'] = (float)$result['total_discount'];
                 $totals['total_pharmacy_discount'] = (float)$result['total_pharmacy_discount'];
                 $totals['total_cashier_discount'] = (float)$result['total_cashier_discount'];
+                $totals['total_premium'] = (float)$result['total_premium'];
             }
             
             echo json_encode(['success' => true, 'totals' => $totals]);
@@ -124,6 +268,8 @@ try {
         $item_ids = isset($_POST['item_ids']) ? $_POST['item_ids'] : [];
         $payment_method = isset($_POST['payment_method']) ? $_POST['payment_method'] : 'cash';
         $cashier_discount = isset($_POST['discount_amount']) ? floatval($_POST['discount_amount']) : 0;
+        $cashier_premium = isset($_POST['premium_amount']) ? floatval($_POST['premium_amount']) : 0;
+        $premium_note = isset($_POST['premium_note']) ? trim($_POST['premium_note']) : '';
         $partial_amount = isset($_POST['partial_amount']) ? floatval($_POST['partial_amount']) : 0;
         
         if ($action === 'complete_payment' || $action === 'partial_payment') {
@@ -154,6 +300,8 @@ try {
                         b.discount_amount as pharmacy_discount,
                         b.cashier_discount as existing_cashier_discount,
                         b.total_discount as existing_total_discount,
+                        b.premium_amount as bill_premium,
+                        b.premium_note as bill_premium_note,
                         b.status as bill_status,
                         b.paid_amount as bill_paid
                     FROM bill_items bi
@@ -174,14 +322,24 @@ try {
                 foreach ($selected_items as $item) {
                     $bill_id = $item['bill_id'];
                     if (!isset($bill_map[$bill_id])) {
-                        $stmt_bill = $db->prepare("SELECT paid_amount, balance, subtotal, total_amount, total_discount FROM bills WHERE id = ? AND branch_id = ?");
+                        // Pata bill FRESH kutoka DB
+                        $stmt_bill = $db->prepare("
+                            SELECT 
+                                paid_amount, balance, subtotal, total_amount, 
+                                total_discount, discount_amount, pharmacy_discount,
+                                cashier_discount, premium_amount, premium_note
+                            FROM bills WHERE id = ? AND branch_id = ?
+                        ");
                         $stmt_bill->execute([$bill_id, $user_branch_id]);
                         $current_bill = $stmt_bill->fetch(PDO::FETCH_ASSOC);
-                        $current_paid = (float)($current_bill['paid_amount'] ?? 0);
-                        $current_balance = (float)($current_bill['balance'] ?? 0);
-                        $current_subtotal = (float)($current_bill['subtotal'] ?? 0);
-                        $current_total = (float)($current_bill['total_amount'] ?? 0);
-                        $current_discount = (float)($current_bill['total_discount'] ?? 0);
+                        
+                        // ================================================================
+                        // ✅ FIX: Tumia pharmacy_discount field, na fallback kwa discount_amount
+                        // ================================================================
+                        $pharmacy_discount_val = (float)($current_bill['pharmacy_discount'] ?? 0);
+                        if ($pharmacy_discount_val == 0) {
+                            $pharmacy_discount_val = (float)($current_bill['discount_amount'] ?? 0);
+                        }
                         
                         $bill_map[$bill_id] = [
                             'bill_id' => $bill_id,
@@ -189,13 +347,14 @@ try {
                             'patient_id' => $item['patient_id'],
                             'items' => [],
                             'items_total' => 0,
-                            'bill_balance' => $current_balance,
-                            'bill_subtotal' => $current_subtotal,
-                            'bill_total' => $current_total,
-                            'pharmacy_discount' => (float)($item['pharmacy_discount'] ?? 0),
-                            'existing_cashier_discount' => (float)($item['existing_cashier_discount'] ?? 0),
-                            'existing_total_discount' => $current_discount,
-                            'bill_paid' => $current_paid,
+                            'bill_paid' => (float)($current_bill['paid_amount'] ?? 0),
+                            'bill_subtotal' => (float)($current_bill['subtotal'] ?? 0),
+                            'bill_total' => (float)($current_bill['total_amount'] ?? 0),
+                            'pharmacy_discount' => $pharmacy_discount_val,
+                            'existing_cashier_discount' => (float)($current_bill['cashier_discount'] ?? 0),
+                            'existing_total_discount' => (float)($current_bill['total_discount'] ?? 0),
+                            'bill_premium' => (float)($current_bill['premium_amount'] ?? 0),
+                            'bill_premium_note' => $current_bill['premium_note'] ?? '',
                             'bill_status' => $item['bill_status'] ?? 'pending'
                         ];
                     }
@@ -210,63 +369,122 @@ try {
                 $total_discount_applied = 0;
                 $total_pharmacy_discount = 0;
                 $total_cashier_discount = 0;
+                $total_premium_charged = 0;
                 $processed_bill_ids = [];
+                $bill_recalc_results = [];
                 
                 foreach ($bill_map as $bill_id => $bill_data) {
                     $processed_bill_ids[] = $bill_id;
                     
                     $pharmacy_discount = $bill_data['pharmacy_discount'];
                     $existing_cashier_discount = $bill_data['existing_cashier_discount'];
+                    $existing_premium = $bill_data['bill_premium'];
                     
-                    $bill_portion = $bill_data['items_total'] / $total_original_amount;
+                    // ================================================================
+                    // BILL PORTION (kama kuna bills nyingi kwenye payment moja)
+                    // ================================================================
+                    $bill_portion = ($total_original_amount > 0) 
+                        ? ($bill_data['items_total'] / $total_original_amount) 
+                        : 1;
                     
-                    $bill_cashier_discount = $cashier_discount * $bill_portion;
-                    $bill_cashier_discount = round($bill_cashier_discount, 2);
-                    
+                    // ================================================================
+                    // HESABU CASHIER DISCOUNT PORTION (ADD TO EXISTING)
+                    // ================================================================
+                    $bill_cashier_discount = round($cashier_discount * $bill_portion, 2);
                     $new_cashier_discount = $existing_cashier_discount + $bill_cashier_discount;
-                    $new_total_discount = $pharmacy_discount + $new_cashier_discount;
                     
+                    // ================================================================
+                    // HESABU PREMIUM PORTION (ADD TO EXISTING)
+                    // ================================================================
+                    $bill_premium_new = round($cashier_premium * $bill_portion, 2);
+                    $new_premium = $existing_premium + $bill_premium_new;
+                    
+                    // ================================================================
+                    // HESABU TOTAL DISCOUNT
+                    // ================================================================
+                    $new_total_discount = $pharmacy_discount + $new_cashier_discount;
                     if ($new_total_discount > $bill_data['bill_subtotal']) {
                         $new_total_discount = $bill_data['bill_subtotal'];
                         $new_cashier_discount = $new_total_discount - $pharmacy_discount;
                         if ($new_cashier_discount < 0) $new_cashier_discount = 0;
                     }
                     
-                    $new_total_amount = $bill_data['bill_subtotal'] - $new_total_discount;
+                    // ================================================================
+                    // ✅ FORMULA SAHIHI:
+                    // total_amount = subtotal + total_premium - total_discount
+                    // ================================================================
+                    $new_total_amount = $bill_data['bill_subtotal'] + $new_premium - $new_total_discount;
                     if ($new_total_amount < 0) $new_total_amount = 0;
                     
+                    // ================================================================
+                    // HESABU PAYMENT (FULL AU PARTIAL)
+                    // ================================================================
                     if ($action === 'partial_payment') {
-                        $bill_payment = $partial_amount * $bill_portion;
-                        $bill_payment = round($bill_payment, 2);
+                        $bill_payment = round($partial_amount * $bill_portion, 2);
                         if ($bill_payment > $new_total_amount) {
                             $bill_payment = $new_total_amount;
                         }
                     } else {
-                        $bill_payment = $new_total_amount;
+                        // FULL PAYMENT - lipa kilichobaki
+                        $bill_payment = $new_total_amount - $bill_data['bill_paid'];
+                        if ($bill_payment < 0) $bill_payment = 0;
                     }
-                    
-                    $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
                     
                     $new_paid_amount = $bill_data['bill_paid'] + $bill_payment;
                     
-                    $new_balance = $bill_data['bill_subtotal'] - $new_paid_amount - $new_total_discount;
-                    if ($new_balance < 0) $new_balance = 0;
-                    
-                    $new_status = $bill_data['bill_status'];
-                    if ($new_balance <= 0.01) {
-                        $new_status = 'paid';
-                    } elseif ($bill_payment > 0 && $new_balance > 0) {
-                        $new_status = 'partial';
+                    // ================================================================
+                    // ✅ FORMULA SAHIHI:
+                    // balance = total_amount - paid_amount
+                    // ================================================================
+                    $new_balance = $new_total_amount - $new_paid_amount;
+                    if ($new_balance < 0) {
+                        $new_balance = 0;
+                        // Kama paid_amount > total_amount, punguza paid_amount
+                        if ($new_paid_amount > $new_total_amount) {
+                            $new_paid_amount = $new_total_amount;
+                        }
                     }
                     
+                    // Determine status
+                    if ($new_total_amount <= 0) {
+                        $new_status = 'paid';
+                    } elseif ($new_balance <= 0.01) {
+                        $new_status = 'paid';
+                    } elseif ($new_paid_amount > 0 && $new_balance > 0) {
+                        $new_status = 'partial';
+                    } else {
+                        $new_status = 'pending';
+                    }
+                    
+                    // ================================================================
+                    // BUILD PREMIUM NOTE
+                    // ================================================================
+                    $final_premium_note = '';
+                    if ($new_premium > 0) {
+                        if (!empty($premium_note)) {
+                            $final_premium_note = $premium_note;
+                        } elseif (!empty($bill_data['bill_premium_note'])) {
+                            $final_premium_note = $bill_data['bill_premium_note'];
+                        } else {
+                            $final_premium_note = 'Premium Charge';
+                        }
+                    }
+                    
+                    // ================================================================
+                    // ✅ UPDATE BILL - KWA FORMULA SAHIHI
+                    // ================================================================
                     $stmt = $db->prepare("
                         UPDATE bills 
-                        SET paid_amount = ?,
+                        SET 
+                            paid_amount = ?,
                             balance = ?,
                             total_amount = ?,
                             cashier_discount = ?,
                             total_discount = ?,
                             discount_amount = ?,
+                            pharmacy_discount = ?,
+                            premium_amount = ?,
+                            premium_note = ?,
                             status = ?,
                             updated_at = NOW()
                         WHERE id = ? AND branch_id = ?
@@ -278,11 +496,17 @@ try {
                         $new_cashier_discount,
                         $new_total_discount,
                         $pharmacy_discount,
+                        $pharmacy_discount,     // ✅ FIX: Weka pia kwenye pharmacy_discount field
+                        $new_premium,
+                        $final_premium_note,
                         $new_status,
                         $bill_id,
                         $user_branch_id
                     ]);
                     
+                    // ================================================================
+                    // UPDATE BILL ITEMS TO 'paid'
+                    // ================================================================
                     $item_ids_for_bill = array_column($bill_data['items'], 'id');
                     if (!empty($item_ids_for_bill)) {
                         $placeholders2 = implode(',', array_fill(0, count($item_ids_for_bill), '?'));
@@ -295,8 +519,28 @@ try {
                         $stmt->execute($item_ids_for_bill);
                     }
                     
+                    // ================================================================
+                    // RECEIPT NUMBER NA NOTES
+                    // ================================================================
+                    $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(rand(1000, 9999), 4, '0', STR_PAD_LEFT);
+                    
+                    $notes = 'Payment | Pharm Disc: ' . $currency . ' ' . number_format($pharmacy_discount, 0) . 
+                             ' | Cashier Disc: ' . $currency . ' ' . number_format($new_cashier_discount, 0);
+                    if ($new_premium > 0) {
+                        $notes .= ' | Premium: ' . $currency . ' ' . number_format($new_premium, 0);
+                        if (!empty($final_premium_note)) {
+                            $notes .= ' (' . $final_premium_note . ')';
+                        }
+                    }
+                    
+                    // ================================================================
+                    // INSERT PAYMENT
+                    // ================================================================
                     $stmt = $db->prepare("
-                        INSERT INTO payments (receipt_number, bill_id, patient_id, amount, payment_method, received_by, branch_id, received_at, notes)
+                        INSERT INTO payments (
+                            receipt_number, bill_id, patient_id, amount, 
+                            payment_method, received_by, branch_id, received_at, notes
+                        )
                         VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)
                     ");
                     $stmt->execute([
@@ -307,20 +551,31 @@ try {
                         $payment_method,
                         $user_id,
                         $user_branch_id,
-                        'Payment | Pharm Disc: ' . $currency . ' ' . number_format($pharmacy_discount, 0) . 
-                        ' | Cashier Disc: ' . $currency . ' ' . number_format($bill_cashier_discount, 0)
+                        $notes
                     ]);
+                    
+                    // ================================================================
+                    // ✅ RECALCULATE BILL KWA USALAMA (MARA YA PILI)
+                    // ================================================================
+                    $recalc = recalculateBillTotals($db, $bill_id, $user_branch_id);
+                    if ($recalc) {
+                        $bill_recalc_results[$bill_id] = $recalc;
+                    }
                     
                     $total_amount_paid += $bill_payment;
                     $total_discount_applied += $new_total_discount;
                     $total_pharmacy_discount += $pharmacy_discount;
-                    $total_cashier_discount += $bill_cashier_discount;
+                    $total_cashier_discount += $new_cashier_discount;
+                    $total_premium_charged += $new_premium;
                     $receipt_numbers[] = $receipt_number;
                     $success_count++;
                 }
                 
                 $db->commit();
                 
+                // ================================================================
+                // GET UPDATED TOTALS
+                // ================================================================
                 $updated_totals = [
                     'subtotal' => 0,
                     'total_amount' => 0,
@@ -328,7 +583,8 @@ try {
                     'total_balance' => 0,
                     'total_discount' => 0,
                     'total_pharmacy_discount' => 0,
-                    'total_cashier_discount' => 0
+                    'total_cashier_discount' => 0,
+                    'total_premium' => 0
                 ];
                 
                 $stmt = $db->prepare("
@@ -339,7 +595,8 @@ try {
                         COALESCE(SUM(balance), 0) as total_balance,
                         COALESCE(SUM(total_discount), 0) as total_discount,
                         COALESCE(SUM(discount_amount), 0) as total_pharmacy_discount,
-                        COALESCE(SUM(cashier_discount), 0) as total_cashier_discount
+                        COALESCE(SUM(cashier_discount), 0) as total_cashier_discount,
+                        COALESCE(SUM(premium_amount), 0) as total_premium
                     FROM bills 
                     WHERE branch_id = ? AND status != 'cancelled'
                 ");
@@ -354,6 +611,7 @@ try {
                     $updated_totals['total_discount'] = (float)$result['total_discount'];
                     $updated_totals['total_pharmacy_discount'] = (float)$result['total_pharmacy_discount'];
                     $updated_totals['total_cashier_discount'] = (float)$result['total_cashier_discount'];
+                    $updated_totals['total_premium'] = (float)$result['total_premium'];
                 }
                 
                 $message = $success_count . " bill(s) updated!<br>";
@@ -361,6 +619,9 @@ try {
                 $message .= "Total Discount: " . $currency . " " . number_format($total_discount_applied, 0) . " ";
                 $message .= "(Pharmacy: " . $currency . " " . number_format($total_pharmacy_discount, 0) . 
                            " | Cashier: " . $currency . " " . number_format($total_cashier_discount, 0) . ")";
+                if ($total_premium_charged > 0) {
+                    $message .= "<br>👑 Premium: " . $currency . " " . number_format($total_premium_charged, 0);
+                }
                 
                 echo json_encode([
                     'success' => true,
@@ -370,10 +631,12 @@ try {
                     'total_discount' => $total_discount_applied,
                     'pharmacy_discount' => $total_pharmacy_discount,
                     'cashier_discount' => $total_cashier_discount,
+                    'total_premium' => $total_premium_charged,
                     'count' => $success_count,
                     'payment_type' => $action === 'partial_payment' ? 'partial' : 'full',
                     'updated_totals' => $updated_totals,
-                    'processed_bill_ids' => $processed_bill_ids
+                    'processed_bill_ids' => $processed_bill_ids,
+                    'bill_recalc' => $bill_recalc_results
                 ]);
                 
             } catch (Exception $e) {
@@ -395,12 +658,15 @@ try {
         SELECT 
             b.*,
             b.discount_amount,
+            b.pharmacy_discount,
             b.cashier_discount,
             b.total_discount,
             b.paid_amount,
             b.balance,
             b.subtotal,
             b.total_amount,
+            b.premium_amount,
+            b.premium_note,
             v.visit_number,
             v.visit_type,
             v.visit_date,
@@ -440,6 +706,25 @@ try {
     $stmt = $db->prepare($bills_query);
     $stmt->execute($params);
     $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // ================================================================
+    // ✅ RECALCULATE KILA BILL KABLA YA KUONYESHA (FIX OLD DATA)
+    // ================================================================
+    foreach ($bills as $index => $bill) {
+        $recalc = recalculateBillTotals($db, $bill['id'], $user_branch_id);
+        if ($recalc) {
+            $bills[$index]['subtotal'] = $recalc['subtotal'];
+            $bills[$index]['total_discount'] = $recalc['total_discount'];
+            $bills[$index]['discount_amount'] = $recalc['pharmacy_discount'];
+            $bills[$index]['pharmacy_discount'] = $recalc['pharmacy_discount'];
+            $bills[$index]['cashier_discount'] = $recalc['cashier_discount'];
+            $bills[$index]['premium_amount'] = $recalc['premium_amount'];
+            $bills[$index]['total_amount'] = $recalc['total_amount'];
+            $bills[$index]['paid_amount'] = $recalc['paid_amount'];
+            $bills[$index]['balance'] = $recalc['balance'];
+            $bills[$index]['status'] = $recalc['status'];
+        }
+    }
 
     // ================================================================
     // GET ALL ITEMS FOR EACH BILL
@@ -521,6 +806,7 @@ try {
     $total_cashier_discount = 0;
     $total_discount = 0;
     $total_paid = 0;
+    $total_premium = 0;
 
     foreach ($bills as $bill) {
         $total_subtotal += (float)($bill['subtotal'] ?? 0);
@@ -530,6 +816,7 @@ try {
         $total_cashier_discount += (float)($bill['cashier_discount'] ?? 0);
         $total_discount += (float)($bill['total_discount'] ?? 0);
         $total_balance += (float)($bill['balance'] ?? 0);
+        $total_premium += (float)($bill['premium_amount'] ?? 0);
     }
 
     $has_selected_bill = $selected_bill_id > 0 && !empty($bills);
@@ -557,6 +844,7 @@ try {
     $total_cashier_discount = 0;
     $total_discount = 0;
     $total_paid = 0;
+    $total_premium = 0;
     $has_selected_bill = false;
     $selected_bill = null;
     $currency = 'TSh';
@@ -611,6 +899,9 @@ include_once '../../components/cashier_sidebar.php';
             --blue-bg: #DBEAFE;
             --indigo: #4F46E5;
             --indigo-bg: #E0E7FF;
+            --premium: #D97706;
+            --premium-bg: #FEF3C7;
+            --premium-dark: #B45309;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -656,6 +947,8 @@ include_once '../../components/cashier_sidebar.php';
             --deep-green: #0D9488;
             --deep-green-dark: #0F766E;
             --deep-green-light: #14B8A6;
+            --premium-bg: #3D2E0A;
+            --premium: #F59E0B;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -737,6 +1030,13 @@ include_once '../../components/cashier_sidebar.php';
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
         }
+        .page-header .header-badge.premium-badge-header {
+            background: rgba(251,191,36,0.3);
+            border-color: rgba(251,191,36,0.4);
+            color: #FCD34D;
+            font-weight: 600;
+            animation: premiumPulse 2s ease-in-out infinite;
+        }
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
             color: white;
@@ -760,9 +1060,77 @@ include_once '../../components/cashier_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================ */
-        /* PATIENT CARDS - IMPROVED */
-        /* ================================================================ */
+        .premium-card {
+            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+            border: 2px solid #D97706;
+            border-radius: 12px;
+            padding: 10px 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.25);
+            transition: all 0.3s ease;
+            animation: premiumPulse 2s ease-in-out infinite;
+        }
+        [data-theme="dark"] .premium-card {
+            background: linear-gradient(135deg, #3D2E0A, #4A3A12);
+            border-color: #D97706;
+            box-shadow: 0 4px 16px rgba(217, 119, 6, 0.15);
+        }
+        .premium-card:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 8px 24px rgba(217, 119, 6, 0.35);
+        }
+        .premium-card .premium-icon {
+            width: 42px;
+            height: 42px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        .premium-card .premium-content {
+            display: flex;
+            flex-direction: column;
+        }
+        .premium-card .premium-label {
+            font-size: 0.55rem;
+            text-transform: uppercase;
+            font-weight: 700;
+            color: #92400E;
+            letter-spacing: 0.08em;
+        }
+        [data-theme="dark"] .premium-card .premium-label {
+            color: #FCD34D;
+        }
+        .premium-card .premium-value {
+            font-size: 1.5rem;
+            font-weight: 800;
+            color: #D97706;
+            font-family: monospace;
+            line-height: 1.2;
+        }
+        [data-theme="dark"] .premium-card .premium-value {
+            color: #FCD34D;
+        }
+        .premium-card .premium-sub {
+            font-size: 0.6rem;
+            color: #92400E;
+            opacity: 0.7;
+        }
+        [data-theme="dark"] .premium-card .premium-sub {
+            color: #FCD34D;
+        }
+        
+        @keyframes premiumPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.4); }
+            50% { box-shadow: 0 0 0 12px rgba(217, 119, 6, 0); }
+        }
+        
         .patient-card {
             background: var(--bg-card);
             border-radius: 16px;
@@ -855,9 +1223,6 @@ include_once '../../components/cashier_sidebar.php';
         .patient-card .card-body { padding: 0; }
         .patient-card .card-body.collapsed { display: none; }
         
-        /* ================================================================ */
-        /* TABLE STYLES - DEEP GREEN HEADER */
-        /* ================================================================ */
         .master-table-wrap {
             overflow-x: auto;
             padding: 0;
@@ -889,7 +1254,6 @@ include_once '../../components/cashier_sidebar.php';
             width: 48px; 
         }
         
-        /* Header info row - DEEP GREEN BACKGROUND */
         .master-table .header-info-row {
             background: linear-gradient(135deg, #064E3B, #065F46, #0D9488);
             border-bottom: 3px solid #14B8A6;
@@ -922,6 +1286,10 @@ include_once '../../components/cashier_sidebar.php';
             background: rgba(255,255,255,0.18);
             transform: translateY(-1px);
         }
+        .header-info-content .info-item.premium-info {
+            background: rgba(251,191,36,0.2);
+            border-color: rgba(251,191,36,0.3);
+        }
         .header-info-content .info-item .label {
             font-weight: 600;
             color: rgba(255,255,255,0.7);
@@ -950,6 +1318,10 @@ include_once '../../components/cashier_sidebar.php';
         .header-info-content .info-item .value.discount-value {
             color: #FCD34D;
         }
+        .header-info-content .info-item .value.premium-value {
+            color: #FCD34D;
+            font-weight: 800;
+        }
         .header-info-content .info-item .value .pharm-text {
             color: rgba(255,255,255,0.5);
             font-size: 0.6rem;
@@ -959,7 +1331,6 @@ include_once '../../components/cashier_sidebar.php';
             font-size: 0.6rem;
         }
         
-        /* Table body */
         .master-table tbody td { 
             padding: 10px 16px; 
             border-bottom: 1px solid var(--border-color); 
@@ -1011,9 +1382,32 @@ include_once '../../components/cashier_sidebar.php';
         .bill-header-info .bill-status.paid { background: #D1FAE5; color: #059669; }
         .bill-header-info .bill-status.cancelled { background: #FEE2E2; color: #DC2626; }
         
-        /* ================================================================ */
-        /* OTHER COMPONENTS */
-        /* ================================================================ */
+        .premium-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 12px;
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid #D97706;
+        }
+        [data-theme="dark"] .premium-badge {
+            background: #3D2E0A;
+            color: #FCD34D;
+            border-color: #D97706;
+        }
+        .premium-amount {
+            color: #D97706;
+            font-weight: 700;
+            font-family: monospace;
+        }
+        [data-theme="dark"] .premium-amount {
+            color: #FCD34D;
+        }
+        
         .waiting-badge {
             display: inline-flex;
             align-items: center;
@@ -1133,6 +1527,60 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--danger); 
             font-size: 1.3rem; 
         }
+        .total-display .total-item .value.premium { 
+            color: var(--premium); 
+        }
+        
+        .premium-input {
+            border-color: #D97706 !important;
+            background: #FEF3C7 !important;
+            color: #D97706 !important;
+            font-weight: 700 !important;
+        }
+        [data-theme="dark"] .premium-input {
+            background: #3D2E0A !important;
+            color: #FCD34D !important;
+        }
+        .premium-input:focus {
+            border-color: #D97706 !important;
+            box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.2) !important;
+        }
+        .premium-note-input {
+            padding: 8px 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 0.75rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            outline: none;
+            transition: border-color 0.3s ease;
+            width: 140px;
+        }
+        .premium-note-input:focus {
+            border-color: #D97706;
+            box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.1);
+        }
+        
+        .total-display .total-item.premium-card {
+            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+            border: 2px solid #D97706;
+            border-radius: 10px;
+            padding: 4px 12px;
+            animation: premiumPulse 2s ease-in-out infinite;
+        }
+        [data-theme="dark"] .total-display .total-item.premium-card {
+            background: linear-gradient(135deg, #3D2E0A, #4A3A12);
+            border-color: #D97706;
+        }
+        .total-display .total-item.premium-card .label {
+            color: #D97706;
+            font-weight: 700;
+        }
+        .total-display .total-item.premium-card .value {
+            color: #D97706;
+            font-weight: 800;
+            font-size: 1.2rem;
+        }
         
         .btn {
             display: inline-flex;
@@ -1165,6 +1613,15 @@ include_once '../../components/cashier_sidebar.php';
         }
         .btn-warning:hover { 
             transform: translateY(-3px); 
+            box-shadow: 0 6px 20px rgba(217, 119, 6, 0.4);
+        }
+        .btn-premium {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
+        }
+        .btn-premium:hover {
+            transform: translateY(-3px);
             box-shadow: 0 6px 20px rgba(217, 119, 6, 0.4);
         }
         .btn-outline { 
@@ -1333,12 +1790,42 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-tag"></i>
                     Discount: <?= $currency ?> <?= number_format($total_discount, 0) ?>
                 </span>
+                
+                <?php if ($total_premium > 0): ?>
+                <span class="header-badge premium-badge-header">
+                    <i class="fas fa-crown"></i>
+                    Premium: <?= $currency ?> <?= number_format($total_premium, 0) ?>
+                </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
+        </div>
+    </div>
+
+    <!-- ✅ PREMIUM CARD - DASHBOARD SUMMARY -->
+    <div class="premium-card animate-fade-in-up" style="margin-bottom:20px;animation-delay:0.05s;">
+        <div class="premium-icon">
+            <i class="fas fa-crown"></i>
+        </div>
+        <div class="premium-content">
+            <span class="premium-label">Total Premium Charged</span>
+            <span class="premium-value"><?= $currency ?> <?= number_format($total_premium, 0) ?></span>
+            <span class="premium-sub">
+                <i class="fas fa-info-circle"></i> Premium amount from all bills
+            </span>
+        </div>
+        <div style="flex:1;"></div>
+        <div style="text-align:right;">
+            <div style="font-size:0.65rem;color:#92400E;text-transform:uppercase;font-weight:700;letter-spacing:0.05em;">
+                <i class="fas fa-plus-circle"></i> Add Premium
+            </div>
+            <div style="font-size:0.6rem;color:#92400E;opacity:0.7;">
+                Use the input below to add premium
+            </div>
         </div>
     </div>
 
@@ -1349,9 +1836,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- PATIENT CARDS WITH TABLE -->
-    <!-- ================================================================ -->
     <?php if (count($patient_bills_data) > 0): ?>
         <?php foreach ($patient_bills_data as $patient): 
             $patient_bills = isset($patient['bills']) && is_array($patient['bills']) ? $patient['bills'] : [];
@@ -1362,6 +1847,7 @@ include_once '../../components/cashier_sidebar.php';
             $patient_discount = 0;
             $patient_pharmacy_discount = 0;
             $patient_cashier_discount = 0;
+            $patient_premium = 0;
             $patient_items = 0;
             $patient_med_items = 0;
             $patient_other_items = 0;
@@ -1370,6 +1856,7 @@ include_once '../../components/cashier_sidebar.php';
                 $paid = (float)($bill['paid_amount'] ?? 0);
                 $balance = (float)($bill['balance'] ?? 0);
                 $subtotal = (float)($bill['subtotal'] ?? 0);
+                $premium = (float)($bill['premium_amount'] ?? 0);
                 
                 $patient_total_balance += $balance;
                 $patient_total_subtotal += $subtotal;
@@ -1378,6 +1865,7 @@ include_once '../../components/cashier_sidebar.php';
                 $patient_discount += (float)($bill['total_discount'] ?? 0);
                 $patient_pharmacy_discount += (float)($bill['discount_amount'] ?? 0);
                 $patient_cashier_discount += (float)($bill['cashier_discount'] ?? 0);
+                $patient_premium += $premium;
                 
                 foreach ($bill['items'] as $item) {
                     $patient_items++;
@@ -1422,6 +1910,10 @@ include_once '../../components/cashier_sidebar.php';
                         <span>Balance: <strong class="amount" style="color: <?= $patient_total_balance > 0 ? '#FCD34D' : '#6EE7B7' ?>;">
                             <?= $currency ?> <?= number_format($patient_total_balance, 0) ?>
                         </strong></span>
+                        <?php if ($patient_premium > 0): ?>
+                            <span>|</span>
+                            <span>👑 Premium: <strong style="color:#FCD34D;"><?= $currency ?> <?= number_format($patient_premium, 0) ?></strong></span>
+                        <?php endif; ?>
                     </div>
                     <button class="card-toggle" onclick="event.stopPropagation(); togglePatientCard(this.closest('.card-header'))">
                         <i class="fas fa-chevron-<?= $is_selected_patient ? 'up' : 'down' ?>"></i>
@@ -1476,6 +1968,12 @@ include_once '../../components/cashier_sidebar.php';
                                                 </span>
                                             </span>
                                         </div>
+                                        <?php if ($patient_premium > 0): ?>
+                                        <div class="info-item premium-info">
+                                            <span class="label"><i class="fas fa-crown"></i> Premium</span>
+                                            <span class="value premium-value"><?= $currency ?> <?= number_format($patient_premium, 0) ?></span>
+                                        </div>
+                                        <?php endif; ?>
                                     </div>
                                 </td>
                             </tr>
@@ -1485,6 +1983,8 @@ include_once '../../components/cashier_sidebar.php';
                                 $med_confirmed = $bill['med_confirmed'] ?? true;
                                 $bill_number = $bill['bill_number'] ?? 'N/A';
                                 $bill_status = $bill['status'] ?? 'pending';
+                                $bill_premium = (float)($bill['premium_amount'] ?? 0);
+                                $bill_premium_note = $bill['premium_note'] ?? '';
                                 
                                 $bill_balance = (float)($bill['balance'] ?? 0);
                                 $bill_paid = (float)($bill['paid_amount'] ?? 0);
@@ -1492,6 +1992,7 @@ include_once '../../components/cashier_sidebar.php';
                                 $cashier_discount = (float)($bill['cashier_discount'] ?? 0);
                                 $total_discount = (float)($bill['total_discount'] ?? 0);
                                 $bill_subtotal = (float)($bill['subtotal'] ?? 0);
+                                $bill_total_amount = (float)($bill['total_amount'] ?? 0);
                             ?>
                                 <!-- BILL HEADER ROW -->
                                 <tr class="bill-header-row">
@@ -1503,6 +2004,9 @@ include_once '../../components/cashier_sidebar.php';
                                                 Subtotal: <strong style="color:var(--primary);"><?= $currency ?> <?= number_format($bill_subtotal, 0) ?></strong>
                                             </span>
                                             <span style="color:var(--text-secondary);">
+                                                Total: <strong style="color:var(--danger);"><?= $currency ?> <?= number_format($bill_total_amount, 0) ?></strong>
+                                            </span>
+                                            <span style="color:var(--text-secondary);">
                                                 Paid: <strong style="color:var(--success);"><?= $currency ?> <?= number_format($bill_paid, 0) ?></strong>
                                             </span>
                                             <span style="color:var(--text-secondary);">
@@ -1510,6 +2014,14 @@ include_once '../../components/cashier_sidebar.php';
                                                     <?= $currency ?> <?= number_format($bill_balance, 0) ?>
                                                 </strong>
                                             </span>
+                                            <?php if ($bill_premium > 0): ?>
+                                                <span class="premium-badge">
+                                                    <i class="fas fa-crown"></i> Premium: <?= $currency ?> <?= number_format($bill_premium, 0) ?>
+                                                    <?php if (!empty($bill_premium_note)): ?>
+                                                        <span style="font-size:0.5rem; opacity:0.7;">(<?= htmlspecialchars($bill_premium_note) ?>)</span>
+                                                    <?php endif; ?>
+                                                </span>
+                                            <?php endif; ?>
                                             <?php if ($pharmacy_discount > 0 || $cashier_discount > 0): ?>
                                                 <span style="color:var(--warning);">
                                                     <i class="fas fa-tag"></i> 
@@ -1633,7 +2145,7 @@ include_once '../../components/cashier_sidebar.php';
                                     <?= $patient_items ?> items
                                 </td>
                                 <td style="text-align:right; font-weight:700; color:var(--success); font-family:monospace; font-size:0.95rem;">
-                                    <?= $currency ?> <?= number_format($patient_total_subtotal, 0) ?>
+                                    <?= $currency ?> <?= number_format($patient_total_amount, 0) ?>
                                 </td>
                                 <td style="text-align:center; font-weight:700; color:<?= $patient_total_balance > 0 ? 'var(--danger)' : 'var(--success)' ?>;">
                                     <?= $currency ?> <?= number_format($patient_total_balance, 0) ?>
@@ -1656,9 +2168,7 @@ include_once '../../components/cashier_sidebar.php';
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- PAYMENT CONTROLS -->
-    <!-- ================================================================ -->
+    <!-- PAYMENT CONTROLS - WITH PREMIUM INPUT -->
     <div class="payment-controls" id="paymentControls">
         <div class="control-group">
             <label><i class="fas fa-hand-holding-usd"></i> Method:</label>
@@ -1684,6 +2194,20 @@ include_once '../../components/cashier_sidebar.php';
                 <input type="text" id="discountAmount" class="discount-input" placeholder="0" 
                        value="0" oninput="formatAmount(this); updateSelectedTotal();">
             </div>
+        </div>
+        
+        <div class="divider"></div>
+        
+        <div class="control-group">
+            <label><i class="fas fa-crown"></i> Premium:</label>
+            <div class="amount-input-wrap">
+                <span class="currency-prefix"><?= $currency ?></span>
+                <input type="text" id="premiumAmount" class="premium-input" placeholder="0" 
+                       value="0" oninput="formatAmount(this); updateSelectedTotal();">
+            </div>
+            <input type="text" id="premiumNote" class="premium-note-input" 
+                   placeholder="Premium note..." value="" 
+                   oninput="updateSelectedTotal();">
         </div>
         
         <div class="divider"></div>
@@ -1715,6 +2239,11 @@ include_once '../../components/cashier_sidebar.php';
                 <span class="value" style="color:var(--warning);" id="displayPharmacyDiscount"><?= $currency ?> 0</span>
             </div>
             <div style="color:var(--border-color);">|</div>
+            <div class="total-item premium-card" id="premiumCard" style="display:none;">
+                <span class="label"><i class="fas fa-crown"></i> Premium</span>
+                <span class="value premium" id="displayPremium"><?= $currency ?> 0</span>
+            </div>
+            <div style="color:var(--border-color);" id="premiumDivider" style="display:none;">|</div>
             <div class="total-item">
                 <span class="label">Grand Total</span>
                 <span class="value grand" id="displayGrandTotal"><?= $currency ?> 0</span>
@@ -1771,9 +2300,6 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT - FULLY WORKING -->
-<!-- ================================================================ -->
 <script>
     var currency = '<?= $currency ?>';
     var totalPharmacyDiscount = <?= $total_pharmacy_discount ?>;
@@ -1783,16 +2309,13 @@ include_once '../../components/cashier_sidebar.php';
     var totalAmount = <?= $total_amount ?>;
     var totalPaid = <?= $total_paid ?>;
     var totalBalance = <?= $total_balance ?>;
+    var totalPremium = <?= $total_premium ?>;
 
     console.log('💰 Initial Total Paid Amount: ' + currency + ' ' + totalPaid.toLocaleString());
-    console.log('✅ FORMULA: REMAINING = SUBTOTAL - PAID - TOTAL_DISCOUNT');
-    console.log('✅ FIXED: Paid amount now shows ' + currency + ' ' + totalPaid.toLocaleString());
-    console.log('✅ REMOVED: Summary cards & Formula display');
-    console.log('✅ ADDED: Deep green background on table header');
+    console.log('✅ FORMULA: total_amount = subtotal + total_premium - total_discount');
+    console.log('✅ FORMULA: balance = total_amount - paid_amount');
+    console.log('👑 Premium Amount: ' + currency + ' ' + totalPremium.toLocaleString());
 
-    // ================================================================
-    // DARK MODE
-    // ================================================================
     (function() {
         var htmlElement = document.documentElement;
         function syncDarkMode() {
@@ -1851,9 +2374,6 @@ include_once '../../components/cashier_sidebar.php';
         }
     }
 
-    // ================================================================
-    // SELECT ALL ITEMS
-    // ================================================================
     function selectAllItems(checkbox, patientId) {
         var checkboxes = document.querySelectorAll('.item-select[data-patient-id="' + patientId + '"]');
         checkboxes.forEach(function(cb) {
@@ -1892,7 +2412,9 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // ✅ UPDATE SELECTED TOTAL
+    // ✅ UPDATE SELECTED TOTAL - FIXED FORMULA v3.0
+    // ================================================================
+    // FORMULA: grand_total = subtotal + premium - discount
     // ================================================================
     function updateSelectedTotal() {
         var checkboxes = document.querySelectorAll('.item-select:checked');
@@ -1901,8 +2423,13 @@ include_once '../../components/cashier_sidebar.php';
         
         var discountInput = document.getElementById('discountAmount');
         var partialInput = document.getElementById('partialAmount');
+        var premiumInput = document.getElementById('premiumAmount');
+        var premiumNoteInput = document.getElementById('premiumNote');
+        
         var discount = getRawValue(discountInput);
         var partial = getRawValue(partialInput);
+        var premium = getRawValue(premiumInput);
+        var premiumNote = premiumNoteInput ? premiumNoteInput.value.trim() : '';
         
         checkboxes.forEach(function(cb) {
             var price = parseFloat(cb.dataset.price || 0);
@@ -1911,7 +2438,11 @@ include_once '../../components/cashier_sidebar.php';
             }
         });
         
+        // ================================================================
+        // CHUKUA PHARMACY DISCOUNT & BILL PREMIUM KUTOKA BILLS ZILIZOCHAGULIWA
+        // ================================================================
         var pharmacyDiscount = 0;
+        var billPremium = 0;
         var billIds = new Set();
         checkboxes.forEach(function(cb) {
             var billId = cb.dataset.billId;
@@ -1921,20 +2452,50 @@ include_once '../../components/cashier_sidebar.php';
                 if (row) {
                     var tbody = row.closest('tbody');
                     if (tbody) {
-                        var header = tbody.querySelector('.bill-header-row');
-                        if (header) {
-                            var discText = header.textContent.match(/Pharm: [\d,]+/);
-                            if (discText) {
-                                var num = discText[0].replace(/[^0-9]/g, '');
-                                if (num) pharmacyDiscount += parseFloat(num);
+                        // Tafuta bill-header-row karibu
+                        var allRows = tbody.querySelectorAll('.bill-header-row');
+                        allRows.forEach(function(header) {
+                            var headerText = header.textContent;
+                            if (headerText.indexOf(cb.closest('.item-row').getAttribute('data-bill-id')) === -1) {
+                                // This is not our bill header, skip
+                                // Instead, find header before this item row
                             }
+                        });
+                        
+                        // Njia sahihi: tafuta bill-header-row iliyo KABLA ya item hii
+                        var prevRow = row.previousElementSibling;
+                        while (prevRow) {
+                            if (prevRow.classList.contains('bill-header-row')) {
+                                var headerText = prevRow.textContent;
+                                var discMatch = headerText.match(/Pharm: [\d,]+/);
+                                if (discMatch) {
+                                    var num = discMatch[0].replace(/[^0-9]/g, '');
+                                    if (num) pharmacyDiscount += parseFloat(num);
+                                }
+                                var premiumMatch = headerText.match(/Premium: [\d,]+/);
+                                if (premiumMatch) {
+                                    var num = premiumMatch[0].replace(/[^0-9]/g, '');
+                                    if (num) billPremium += parseFloat(num);
+                                }
+                                break;
+                            }
+                            prevRow = prevRow.previousElementSibling;
                         }
                     }
                 }
             }
         });
         
-        var grand_total = total_price - discount - pharmacyDiscount;
+        // ================================================================
+        // TOTAL PREMIUM = bill premium + new premium (cashier anaongeza)
+        // ================================================================
+        var totalPremiumDisplay = billPremium + premium;
+        
+        // ================================================================
+        // ✅ FORMULA SAHIHI:
+        // grand_total = subtotal + total_premium - discount - pharmacyDiscount
+        // ================================================================
+        var grand_total = total_price + totalPremiumDisplay - discount - pharmacyDiscount;
         if (grand_total < 0) grand_total = 0;
         
         var selectedCountEl = document.getElementById('selectedCountNum');
@@ -1948,6 +2509,23 @@ include_once '../../components/cashier_sidebar.php';
         
         var displayPharmacyDiscountEl = document.getElementById('displayPharmacyDiscount');
         if (displayPharmacyDiscountEl) displayPharmacyDiscountEl.textContent = currency + ' ' + pharmacyDiscount.toFixed(0);
+        
+        var displayPremiumEl = document.getElementById('displayPremium');
+        if (displayPremiumEl) {
+            displayPremiumEl.textContent = currency + ' ' + totalPremiumDisplay.toFixed(0);
+        }
+        
+        var premiumCard = document.getElementById('premiumCard');
+        var premiumDivider = document.getElementById('premiumDivider');
+        if (premiumCard) {
+            if (totalPremiumDisplay > 0) {
+                premiumCard.style.display = 'flex';
+                if (premiumDivider) premiumDivider.style.display = 'block';
+            } else {
+                premiumCard.style.display = 'none';
+                if (premiumDivider) premiumDivider.style.display = 'none';
+            }
+        }
         
         var displayGrandTotalEl = document.getElementById('displayGrandTotal');
         if (displayGrandTotalEl) displayGrandTotalEl.textContent = currency + ' ' + grand_total.toFixed(0);
@@ -1996,7 +2574,7 @@ include_once '../../components/cashier_sidebar.php';
     }
 
     // ================================================================
-    // PROCESS PAYMENT
+    // PROCESS PAYMENT - FIXED FORMULA v3.0
     // ================================================================
     function processPayment(type) {
         var checkboxes = document.querySelectorAll('.item-select:checked');
@@ -2013,6 +2591,8 @@ include_once '../../components/cashier_sidebar.php';
         var paymentMethod = document.getElementById('paymentMethod').value;
         var discount = getRawValue(document.getElementById('discountAmount'));
         var partialAmount = getRawValue(document.getElementById('partialAmount'));
+        var premium = getRawValue(document.getElementById('premiumAmount'));
+        var premiumNote = document.getElementById('premiumNote') ? document.getElementById('premiumNote').value.trim() : '';
         
         var totalPrice = 0;
         checkboxes.forEach(function(cb) {
@@ -2020,6 +2600,7 @@ include_once '../../components/cashier_sidebar.php';
         });
         
         var pharmacyDiscount = 0;
+        var billPremium = 0;
         var billIds = new Set();
         checkboxes.forEach(function(cb) {
             var billId = cb.dataset.billId;
@@ -2027,21 +2608,29 @@ include_once '../../components/cashier_sidebar.php';
                 billIds.add(billId);
                 var row = cb.closest('.item-row');
                 if (row) {
-                    var tbody = row.closest('tbody');
-                    if (tbody) {
-                        var header = tbody.querySelector('.bill-header-row');
-                        if (header) {
-                            var discText = header.textContent.match(/Pharm: [\d,]+/);
-                            if (discText) {
-                                var num = discText[0].replace(/[^0-9]/g, '');
+                    var prevRow = row.previousElementSibling;
+                    while (prevRow) {
+                        if (prevRow.classList.contains('bill-header-row')) {
+                            var headerText = prevRow.textContent;
+                            var discMatch = headerText.match(/Pharm: [\d,]+/);
+                            if (discMatch) {
+                                var num = discMatch[0].replace(/[^0-9]/g, '');
                                 if (num) pharmacyDiscount += parseFloat(num);
                             }
+                            var premiumMatch = headerText.match(/Premium: [\d,]+/);
+                            if (premiumMatch) {
+                                var num = premiumMatch[0].replace(/[^0-9]/g, '');
+                                if (num) billPremium += parseFloat(num);
+                            }
+                            break;
                         }
+                        prevRow = prevRow.previousElementSibling;
                     }
                 }
             }
         });
         
+        var totalPremium = billPremium + premium;
         var totalDiscount = pharmacyDiscount + discount;
         if (totalDiscount > totalPrice) {
             totalDiscount = totalPrice;
@@ -2049,7 +2638,8 @@ include_once '../../components/cashier_sidebar.php';
             if (discount < 0) discount = 0;
         }
         
-        var grandTotal = totalPrice - totalDiscount;
+        // ✅ FORMULA: grand_total = subtotal + premium - discount
+        var grandTotal = totalPrice + totalPremium - totalDiscount;
         if (grandTotal < 0) grandTotal = 0;
         
         if (type === 'partial') {
@@ -2058,7 +2648,7 @@ include_once '../../components/cashier_sidebar.php';
                 return;
             }
             if (partialAmount > grandTotal) {
-                showToast('⚠️ Amount Exceeds', 'Partial amount exceeds grand total (after all discounts)', 'warning');
+                showToast('⚠️ Amount Exceeds', 'Partial amount exceeds grand total', 'warning');
                 return;
             }
             
@@ -2067,6 +2657,8 @@ include_once '../../components/cashier_sidebar.php';
                              'Selected Items Total: ' + currency + ' ' + totalPrice.toFixed(0) + '\n' +
                              'Pharmacy Discount: ' + currency + ' ' + pharmacyDiscount.toFixed(0) + '\n' +
                              (discount > 0 ? 'Cashier Discount: ' + currency + ' ' + discount.toFixed(0) + '\n' : '') +
+                             (premium > 0 ? '👑 New Premium: ' + currency + ' ' + premium.toFixed(0) + '\n' : '') +
+                             (billPremium > 0 ? '👑 Bill Premium: ' + currency + ' ' + billPremium.toFixed(0) + '\n' : '') +
                              '───────────────────────────────\n' +
                              'Grand Total: ' + currency + ' ' + grandTotal.toFixed(0) + '\n' +
                              'Partial Amount: ' + currency + ' ' + partialAmount.toFixed(0) + '\n' +
@@ -2074,9 +2666,7 @@ include_once '../../components/cashier_sidebar.php';
                              'Remaining: ' + currency + ' ' + (grandTotal - partialAmount).toFixed(0) + '\n\n' +
                              'Confirm partial payment for ' + itemIds.length + ' item(s)?';
             
-            if (!confirm(confirmMsg)) {
-                return;
-            }
+            if (!confirm(confirmMsg)) return;
         }
         
         if (type === 'full') {
@@ -2090,13 +2680,14 @@ include_once '../../components/cashier_sidebar.php';
                              'Selected Items Total: ' + currency + ' ' + totalPrice.toFixed(0) + '\n' +
                              'Pharmacy Discount: ' + currency + ' ' + pharmacyDiscount.toFixed(0) + '\n' +
                              (discount > 0 ? 'Cashier Discount: ' + currency + ' ' + discount.toFixed(0) + '\n' : '') +
+                             (premium > 0 ? '👑 New Premium: ' + currency + ' ' + premium.toFixed(0) + '\n' : '') +
+                             (billPremium > 0 ? '👑 Bill Premium: ' + currency + ' ' + billPremium.toFixed(0) + '\n' : '') +
+                             (premiumNote ? '📝 Note: ' + premiumNote + '\n' : '') +
                              '───────────────────────────────\n' +
                              'Amount to Pay: ' + currency + ' ' + grandTotal.toFixed(0) + '\n\n' +
                              'Confirm full payment for ' + itemIds.length + ' item(s)?';
             
-            if (!confirm(confirmMsg)) {
-                return;
-            }
+            if (!confirm(confirmMsg)) return;
         }
         
         var btn = type === 'partial' ? document.getElementById('partialPayBtn') : document.getElementById('fullPayBtn');
@@ -2110,6 +2701,12 @@ include_once '../../components/cashier_sidebar.php';
         formData.append('payment_method', paymentMethod);
         if (discount > 0) {
             formData.append('discount_amount', discount);
+        }
+        if (premium > 0) {
+            formData.append('premium_amount', premium);
+        }
+        if (premiumNote) {
+            formData.append('premium_note', premiumNote);
         }
         if (type === 'partial') {
             formData.append('partial_amount', partialAmount);
@@ -2129,8 +2726,19 @@ include_once '../../components/cashier_sidebar.php';
             if (data.success) {
                 showToast('✅ Success', data.message, 'success');
                 
-                if (data.updated_totals) {
-                    console.log('📊 Updated totals from server:', data.updated_totals);
+                if (data.bill_recalc) {
+                    console.log('📊 Bill Recalculated Results:');
+                    Object.keys(data.bill_recalc).forEach(function(billId) {
+                        var recalc = data.bill_recalc[billId];
+                        console.log('  Bill #' + billId + ':');
+                        console.log('    Subtotal: ' + currency + ' ' + recalc.subtotal.toLocaleString());
+                        console.log('    Premium: ' + currency + ' ' + recalc.premium_amount.toLocaleString());
+                        console.log('    Discount: ' + currency + ' ' + recalc.total_discount.toLocaleString());
+                        console.log('    Total Amount: ' + currency + ' ' + recalc.total_amount.toLocaleString());
+                        console.log('    Paid: ' + currency + ' ' + recalc.paid_amount.toLocaleString());
+                        console.log('    Balance: ' + currency + ' ' + recalc.balance.toLocaleString());
+                        console.log('    Status: ' + recalc.status);
+                    });
                 }
                 
                 setTimeout(function() {
@@ -2196,20 +2804,19 @@ include_once '../../components/cashier_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // DOM READY
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         updateSelectedTotal();
-        console.log('✅ FORMULA: REMAINING = SUBTOTAL - PAID - TOTAL_DISCOUNT');
-        console.log('✅ REMOVED: Summary cards & Formula');
-        console.log('✅ ADDED: Deep green background on table header');
+        console.log('✅ FORMULA: total_amount = subtotal + premium - total_discount');
+        console.log('✅ FORMULA: balance = total_amount - paid_amount');
+        console.log('✅ FIXED: Premium HAIONGEZWI mara mbili');
+        console.log('✅ FIXED: paid_amount haiwezi kuzidi total_amount');
     });
 
-    console.log('%c💰 Braick - Process Payments (DEEP GREEN HEADER)', 'font-size:20px; font-weight:bold; color:#059669;');
-    console.log('%c✅ REMOVED: Summary cards & Formula display', 'font-size:13px; color:#F87171;');
-    console.log('%c✅ ADDED: Deep green background on table header', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ FORMULA: REMAINING = SUBTOTAL - PAID - TOTAL_DISCOUNT', 'font-size:13px; color:#FBBF24;');
+    console.log('%c💰 Braick - Process Payments (FIXED v3.0)', 'font-size:20px; font-weight:bold; color:#059669;');
+    console.log('%c✅ FORMULA: total_amount = subtotal + premium - discount', 'font-size:13px; color:#FCD34D;');
+    console.log('%c✅ FORMULA: balance = total_amount - paid_amount', 'font-size:13px; color:#FCD34D;');
+    console.log('%c✅ FIXED: Premium HAIONGEZWI mara mbili', 'font-size:13px; color:#FCD34D;');
+    console.log('%c✅ FIXED: RecalculateBillTotals inatumika kila mahali', 'font-size:13px; color:#FCD34D;');
 </script>
 
 </body>

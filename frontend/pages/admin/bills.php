@@ -1,10 +1,13 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/bills.php
-// ADMIN - VIEW ALL BILLS (WITH PAID FILTER)
+// ADMIN - VIEW ALL BILLS (WITH PREMIUM COLUMN)
 // BRAICK DISPENSARY - USING EXISTING DB TABLES
 // FIXED: Total Revenue uses paid_amount from paid bills only
 // FIXED: Excludes OTC bills
+// ✅ ADDED: Premium Amount column
+// ✅ ADDED: Premium Note display
+// ✅ ADDED: Total Premium statistics
 // WITH SHARED HEADER, DARK MODE, CLOCK
 // ================================================================
 
@@ -131,7 +134,7 @@ if (count($where_conditions) > 0) {
 }
 
 // ================================================================
-// GET BILLS
+// GET BILLS - ✅ ADDED: premium_amount, premium_note
 // ================================================================
 $sql = "
     SELECT 
@@ -148,6 +151,8 @@ $sql = "
         b.total_amount,
         b.paid_amount,
         b.balance,
+        b.premium_amount,
+        b.premium_note,
         b.status,
         b.payment_method,
         b.notes,
@@ -300,6 +305,53 @@ $stmt = $db->prepare($balance_sql);
 $stmt->execute($balance_params);
 $total_balance = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
+// 9. ✅ NEW: TOTAL PREMIUM
+$premium_sql = "
+    SELECT COALESCE(SUM(b.premium_amount), 0) as total
+    FROM bills b
+    WHERE b.bill_number NOT LIKE 'BILL-OTC-%'
+    AND b.premium_amount > 0
+";
+$premium_params = [];
+if ($selected_branch_id > 0) {
+    $premium_sql .= " AND b.branch_id = ?";
+    $premium_params[] = $selected_branch_id;
+}
+$stmt = $db->prepare($premium_sql);
+$stmt->execute($premium_params);
+$total_premium = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// 10. ✅ NEW: TOTAL DISCOUNT
+$discount_sql = "
+    SELECT COALESCE(SUM(b.total_discount), 0) as total
+    FROM bills b
+    WHERE b.bill_number NOT LIKE 'BILL-OTC-%'
+";
+$discount_params = [];
+if ($selected_branch_id > 0) {
+    $discount_sql .= " AND b.branch_id = ?";
+    $discount_params[] = $selected_branch_id;
+}
+$stmt = $db->prepare($discount_sql);
+$stmt->execute($discount_params);
+$total_discount = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
+// 11. ✅ NEW: Bills with Premium
+$bills_with_premium_sql = "
+    SELECT COUNT(*) as total
+    FROM bills b
+    WHERE b.bill_number NOT LIKE 'BILL-OTC-%'
+    AND b.premium_amount > 0
+";
+$premium_count_params = [];
+if ($selected_branch_id > 0) {
+    $bills_with_premium_sql .= " AND b.branch_id = ?";
+    $premium_count_params[] = $selected_branch_id;
+}
+$stmt = $db->prepare($bills_with_premium_sql);
+$stmt->execute($premium_count_params);
+$bills_with_premium = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+
 $summary = [
     'total_bills' => $total_bills,
     'paid_bills' => $paid_bills,
@@ -308,7 +360,10 @@ $summary = [
     'cancelled_bills' => $cancelled_bills,
     'total_revenue' => $total_revenue,
     'total_paid' => $total_paid_amount,
-    'total_balance' => $total_balance
+    'total_balance' => $total_balance,
+    'total_premium' => $total_premium,
+    'total_discount' => $total_discount,
+    'bills_with_premium' => $bills_with_premium
 ];
 
 // ================================================================
@@ -418,6 +473,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --warning: #D97706;
             --warning-dark: #B45309;
             --warning-bg: #FEF3C7;
+            --premium: #D97706;
+            --premium-dark: #B45309;
+            --premium-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
             --white: #FFFFFF;
@@ -463,6 +521,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --success-bg: #1A3A2A;
             --danger-bg: #3A1A1A;
             --warning-bg: #3D2E0A;
+            --premium-bg: #3D2E0A;
             --gray-100: #1E293B;
             --gray-200: #334155;
             --table-hover: #1E3A5F;
@@ -775,18 +834,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
            ================================================================ */
         .stats-row {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-            gap: 16px;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 14px;
             margin-bottom: 24px;
         }
         
         .stat-card {
             border-radius: 18px;
-            padding: 16px 18px;
+            padding: 14px 16px;
             transition: all 0.3s ease;
             box-shadow: 0 1px 2px rgba(0,0,0,0.05);
             border: none;
             color: white;
+            position: relative;
+            overflow: hidden;
         }
         
         .stat-card:hover {
@@ -795,13 +856,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         .stat-card .stat-number {
-            font-size: 1.4rem;
+            font-size: 1.2rem;
             font-weight: 700;
             color: white;
         }
         
         .stat-card .stat-label {
-            font-size: 0.65rem;
+            font-size: 0.6rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             font-weight: 600;
@@ -811,7 +872,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         .stat-card .stat-icon {
-            font-size: 1.4rem;
+            font-size: 1.2rem;
             margin-bottom: 4px;
         }
         
@@ -919,14 +980,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .data-table {
             width: 100%;
             border-collapse: collapse;
-            font-size: 0.75rem;
+            font-size: 0.72rem;
         }
         
         .data-table thead th {
             text-align: left;
-            padding: 10px 14px;
+            padding: 10px 12px;
             font-weight: 700;
-            font-size: 0.6rem;
+            font-size: 0.58rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             color: #ffffff;
@@ -939,7 +1000,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         .data-table tbody td {
-            padding: 8px 14px;
+            padding: 8px 12px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
@@ -951,6 +1012,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         .data-table tbody tr:last-child td {
             border-bottom: none;
+        }
+        
+        /* Highlight premium rows */
+        .data-table tbody tr.has-premium {
+            background: rgba(254, 243, 199, 0.3);
+        }
+        [data-theme="dark"] .data-table tbody tr.has-premium {
+            background: rgba(61, 46, 10, 0.3);
         }
         
         .badge {
@@ -971,6 +1040,40 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .badge-secondary { background: #64748B; }
         
         [data-theme="dark"] .badge-warning { color: #1E293B; }
+        
+        /* Premium Badge */
+        .premium-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.5rem;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 10px;
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid #D97706;
+        }
+        [data-theme="dark"] .premium-badge {
+            background: #3D2E0A;
+            color: #FCD34D;
+            border-color: #D97706;
+        }
+        
+        .premium-amount {
+            color: #D97706;
+            font-weight: 800;
+            font-family: monospace;
+        }
+        [data-theme="dark"] .premium-amount {
+            color: #FCD34D;
+        }
+        
+        .discount-amount {
+            color: #D97706;
+            font-weight: 600;
+            font-family: monospace;
+        }
         
         .table-footer {
             padding: 10px 16px;
@@ -1013,6 +1116,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             to { opacity: 1; transform: translateY(0); }
         }
         
+        @keyframes premiumPulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(217, 119, 6, 0.4); }
+            50% { box-shadow: 0 0 0 8px rgba(217, 119, 6, 0); }
+        }
+        
         .animate-fade-in-up {
             animation: fadeInUp 0.4s ease forwards;
             opacity: 0;
@@ -1038,7 +1146,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .stats-row { grid-template-columns: 1fr 1fr; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.1rem; }
-            .data-table { font-size: 0.65rem; }
+            .data-table { font-size: 0.6rem; }
             .data-table thead th, .data-table td { padding: 4px 6px; }
         }
         
@@ -1134,6 +1242,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <i class="fas fa-filter"></i> <?= ucfirst($status_filter) ?>
                     </span>
                 <?php endif; ?>
+                <?php if (($summary['total_premium'] ?? 0) > 0): ?>
+                    <span class="role-badge-display" style="background:rgba(251,191,36,0.3);color:#FCD34D;">
+                        <i class="fas fa-crown"></i> Premium: TSh <?= formatMoney($summary['total_premium']) ?>
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-arrow-right"></i>
@@ -1150,6 +1263,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="header-badge" style="background:rgba(248,113,113,0.2);color:#F87171;">
                     <i class="fas fa-times-circle"></i> <?= number_format($summary['cancelled_bills'] ?? 0) ?> Cancelled
                 </span>
+                <?php if (($summary['bills_with_premium'] ?? 0) > 0): ?>
+                    <span class="header-badge" style="background:rgba(251,191,36,0.3);color:#FCD34D;">
+                        <i class="fas fa-crown"></i> <?= number_format($summary['bills_with_premium']) ?> With Premium
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -1201,6 +1319,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="stat-label">Total Revenue (Paid)</div>
         </div>
         
+        <!-- ✅ Premium Stats Card -->
+        <div class="stat-card" style="background: linear-gradient(135deg, #D97706, #B45309);animation: premiumPulse 2s ease-in-out infinite;">
+            <div class="stat-icon"><i class="fas fa-crown"></i></div>
+            <div class="stat-number">TSh <?= formatMoney($summary['total_premium'] ?? 0) ?></div>
+            <div class="stat-label">👑 Total Premium</div>
+        </div>
+        
+        <!-- ✅ Discount Stats Card -->
+        <div class="stat-card" style="background: linear-gradient(135deg, #F59E0B, #D97706);">
+            <div class="stat-icon"><i class="fas fa-tag"></i></div>
+            <div class="stat-number">TSh <?= formatMoney($summary['total_discount'] ?? 0) ?></div>
+            <div class="stat-label">🏷️ Total Discount</div>
+        </div>
+        
     </div>
 
     <!-- Filter Section -->
@@ -1243,7 +1375,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </span>
             </h3>
             <span style="font-size:0.65rem;color:var(--text-secondary);">
-                Total Revenue: TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>
+                Revenue: TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>
+                <?php if (($summary['total_premium'] ?? 0) > 0): ?>
+                    | 👑 Premium: TSh <?= formatMoney($summary['total_premium']) ?>
+                <?php endif; ?>
             </span>
         </div>
         <div class="table-scroll">
@@ -1253,6 +1388,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <th>Bill #</th>
                         <th>Patient</th>
                         <th>Branch</th>
+                        <th style="text-align:right;">Subtotal</th>
+                        <th style="text-align:right;">Discount</th>
+                        <th style="text-align:right;">👑 Premium</th>
                         <th style="text-align:right;">Total</th>
                         <th style="text-align:right;">Paid</th>
                         <th style="text-align:right;">Balance</th>
@@ -1268,36 +1406,89 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             $balance = (float)($bill['balance'] ?? 0);
                             $total = (float)($bill['total_amount'] ?? 0);
                             $paid = (float)($bill['paid_amount'] ?? 0);
+                            $subtotal = (float)($bill['subtotal'] ?? 0);
+                            $discount = (float)($bill['total_discount'] ?? 0);
+                            $premium = (float)($bill['premium_amount'] ?? 0);
+                            $premium_note = $bill['premium_note'] ?? '';
+                            $has_premium = ($premium > 0);
+                            $has_discount = ($discount > 0);
+                            $row_class = $has_premium ? 'has-premium' : '';
                         ?>
-                            <tr>
-                                <td class="font-mono font-semibold text-blue-600" style="font-size:0.65rem;">
+                            <tr class="<?= $row_class ?>">
+                                <td class="font-mono font-semibold text-blue-600" style="font-size:0.6rem;">
                                     <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
+                                    <?php if ($has_premium): ?>
+                                        <span class="premium-badge" style="margin-left:4px;">
+                                            👑 Premium
+                                        </span>
+                                    <?php endif; ?>
                                 </td>
                                 <td>
                                     <?php if (!empty($bill['patient_name'])): ?>
                                         <div style="font-weight:500;"><?= htmlspecialchars($bill['patient_name']) ?></div>
-                                        <div style="font-size:0.55rem;color:var(--text-secondary);">
+                                        <div style="font-size:0.5rem;color:var(--text-secondary);">
                                             <?= htmlspecialchars($bill['patient_code'] ?? '') ?>
                                         </div>
                                     <?php else: ?>
                                         <span style="color:var(--text-secondary);">N/A</span>
                                     <?php endif; ?>
                                 </td>
-                                <td style="font-size:0.6rem;"><?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?></td>
-                                <td class="text-right font-semibold">TSh <?= formatMoney($total) ?></td>
-                                <td class="text-right text-green-600 font-semibold">TSh <?= formatMoney($paid) ?></td>
-                                <td class="text-right <?= $balance > 0 ? 'text-red-600' : 'text-green-600' ?> font-semibold">
+                                <td style="font-size:0.55rem;"><?= htmlspecialchars($bill['branch_name'] ?? 'N/A') ?></td>
+                                
+                                <!-- Subtotal -->
+                                <td class="text-right font-semibold" style="font-size:0.65rem;">
+                                    TSh <?= formatMoney($subtotal) ?>
+                                </td>
+                                
+                                <!-- Discount -->
+                                <td class="text-right discount-amount" style="font-size:0.65rem;">
+                                    <?php if ($has_discount): ?>
+                                        - TSh <?= formatMoney($discount) ?>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-secondary);">-</span>
+                                    <?php endif; ?>
+                                </td>
+                                
+                                <!-- ✅ PREMIUM -->
+                                <td class="text-right" style="font-size:0.65rem;">
+                                    <?php if ($has_premium): ?>
+                                        <span class="premium-amount">
+                                            + TSh <?= formatMoney($premium) ?>
+                                        </span>
+                                        <?php if (!empty($premium_note)): ?>
+                                            <div style="font-size:0.45rem;color:var(--text-secondary);font-weight:400;">
+                                                <?= htmlspecialchars(substr($premium_note, 0, 25)) ?><?= strlen($premium_note) > 25 ? '...' : '' ?>
+                                            </div>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-secondary);">-</span>
+                                    <?php endif; ?>
+                                </td>
+                                
+                                <!-- Total -->
+                                <td class="text-right font-semibold" style="color:#0B5ED7;font-size:0.68rem;">
+                                    TSh <?= formatMoney($total) ?>
+                                </td>
+                                
+                                <!-- Paid -->
+                                <td class="text-right text-green-600 font-semibold" style="font-size:0.65rem;">
+                                    TSh <?= formatMoney($paid) ?>
+                                </td>
+                                
+                                <!-- Balance -->
+                                <td class="text-right <?= $balance > 0 ? 'text-red-600' : 'text-green-600' ?> font-semibold" style="font-size:0.65rem;">
                                     TSh <?= formatMoney($balance) ?>
                                 </td>
+                                
                                 <td><?= getStatusBadge($bill['status'] ?? 'pending') ?></td>
-                                <td style="font-size:0.6rem;">
+                                <td style="font-size:0.55rem;">
                                     <?php if (!empty($bill['payment_method'])): ?>
                                         <?= getPaymentMethodLabel($bill['payment_method']) ?>
                                     <?php else: ?>
                                         <span style="color:var(--text-secondary);">N/A</span>
                                     <?php endif; ?>
                                 </td>
-                                <td style="font-size:0.6rem;white-space:nowrap;">
+                                <td style="font-size:0.55rem;white-space:nowrap;">
                                     <?= date('d/m/Y', strtotime($bill['created_at'])) ?>
                                 </td>
                                 <td style="text-align:center;">
@@ -1316,7 +1507,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <?php endforeach; ?>
                     <?php else: ?>
                         <tr>
-                            <td colspan="10">
+                            <td colspan="13">
                                 <div style="padding:30px;text-align:center;color:var(--text-secondary);">
                                     <i class="fas fa-file-invoice" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:8px;"></i>
                                     <p style="font-size:0.9rem;">No bills found</p>
@@ -1332,7 +1523,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span>
                 <i class="fas fa-list"></i> Showing <strong><?= number_format(count($bills)) ?></strong> bills
                 <span class="text-xs" style="color:var(--text-secondary);">
-                    Total Revenue: TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>
+                    Revenue: TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>
+                    <?php if (($summary['total_premium'] ?? 0) > 0): ?>
+                        | 👑 Premium: TSh <?= formatMoney($summary['total_premium']) ?>
+                    <?php endif; ?>
+                    <?php if (($summary['total_discount'] ?? 0) > 0): ?>
+                        | 🏷️ Discount: TSh <?= formatMoney($summary['total_discount']) ?>
+                    <?php endif; ?>
                 </span>
             </span>
             <span>
@@ -1363,7 +1560,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
-    // DARK MODE TOGGLE - FIXED
+    // DARK MODE TOGGLE
     // ================================================================
     (function() {
         var darkModeToggle = document.getElementById('darkModeToggle');
@@ -1371,13 +1568,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var darkText = document.getElementById('darkText');
         var htmlElement = document.documentElement;
         
-        // Check saved dark mode
         var savedDarkMode = localStorage.getItem('darkMode');
         var cookieDarkMode = document.cookie.split('; ').find(function(row) {
             return row.startsWith('dark_mode=');
         });
         
-        // Determine initial dark mode
         var isDark = false;
         if (savedDarkMode === 'true') {
             isDark = true;
@@ -1385,7 +1580,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             isDark = cookieDarkMode.split('=')[1] === 'true';
         }
         
-        // Apply dark mode
         if (isDark) {
             htmlElement.setAttribute('data-theme', 'dark');
             if (darkIcon) darkIcon.className = 'fas fa-sun';
@@ -1396,7 +1590,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             if (darkText) darkText.textContent = 'Dark';
         }
         
-        // Toggle dark mode
         if (darkModeToggle) {
             darkModeToggle.addEventListener('click', function(e) {
                 e.preventDefault();
@@ -1509,13 +1702,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     // KEYBOARD SHORTCUTS
     // ================================================================
     document.addEventListener('keydown', function(e) {
-        // Ctrl+F to focus search
         if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
             e.preventDefault();
             var searchInput = document.querySelector('input[name="search"]');
             if (searchInput) searchInput.focus();
         }
-        // Ctrl+K to focus search
         if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
             e.preventDefault();
             var searchInput = document.querySelector('input[name="search"]');
@@ -1523,7 +1714,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    console.log('%c📋 Braick - Bills', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Braick - Bills (WITH PREMIUM)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:12px; color:#059669;');
     console.log('%c📊 Total Bills: <?= number_format($summary['total_bills'] ?? 0) ?>', 'font-size:12px; color:#0B5ED7;');
     console.log('%c   ├─ Paid: <?= number_format($summary['paid_bills'] ?? 0) ?>', 'font-size:11px; color:#059669;');
@@ -1531,10 +1722,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c   ├─ Partial: <?= number_format($summary['partial_bills'] ?? 0) ?>', 'font-size:11px; color:#0B5ED7;');
     console.log('%c   └─ Cancelled: <?= number_format($summary['cancelled_bills'] ?? 0) ?>', 'font-size:11px; color:#DC2626;');
     console.log('%c💰 Total Revenue (Paid): TSh <?= formatMoney($summary['total_revenue'] ?? 0) ?>', 'font-size:12px; color:#0891B2;');
-    console.log('%c✅ FIXED: Revenue uses paid_amount from paid bills only', 'font-size:12px; color:#34D399;');
-    console.log('%c✅ Excludes OTC bills (bill_number NOT LIKE "BILL-OTC-%")', 'font-size:12px; color:#34D399;');
-    console.log('%c🌙 Dark Mode Toggle: WORKING', 'font-size:12px; color:#3B82F6;');
-    console.log('%c🕐 Clock: WORKING', 'font-size:12px; color:#3B82F6;');
+    console.log('%c👑 Total Premium: TSh <?= formatMoney($summary['total_premium'] ?? 0) ?>', 'font-size:12px; color:#FCD34D;');
+    console.log('%c🏷️ Total Discount: TSh <?= formatMoney($summary['total_discount'] ?? 0) ?>', 'font-size:12px; color:#F59E0B;');
+    console.log('%c👑 Bills with Premium: <?= number_format($summary['bills_with_premium'] ?? 0) ?>', 'font-size:12px; color:#D97706;');
+    console.log('%c✅ Premium column added to table', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Premium Note displayed', 'font-size:12px; color:#34D399;');
+    console.log('%c✅ Premium Stats cards added', 'font-size:12px; color:#34D399;');
 </script>
 
 </body>

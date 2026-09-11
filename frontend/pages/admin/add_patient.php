@@ -1,20 +1,19 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/reception/new_patient.php
-// RECEPTION - REGISTER NEW PATIENT
-// ✅ EMBEDDED HEADER (matches reception header)
-// ✅ VITAL SIGNS CARDS 6 - 3 TOP + 3 BOTTOM
-// ✅ AUTOCOMPLETE patient names
-// ✅ REMOVED phone/email validation
-// ✅ SAVES created_by, registered_by, registered_by_name
+// FILE: frontend/pages/admin/add_patient.php
+// ADMIN - REGISTER NEW PATIENT
+// ✅ FIXED: Removed isActive() - already defined in admin_sidebar.php
+// ✅ Uses SHARED admin_sidebar.php
+// ✅ SAME LAYOUT AS reception/new_patient.php
+// ✅ SAVES created_by, registered_by, registered_by_name (Admin name)
 // ================================================================
 
 session_start();
 
 // ================================================================
-// CHECK SESSION
+// CHECK SESSION - ADMIN ONLY
 // ================================================================
-if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
+if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'admin') {
     header('Location: /dispensary_system/frontend/pages/login.php');
     exit;
 }
@@ -23,18 +22,20 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
 // GET SESSION DATA
 // ================================================================
 $user_id = $_SESSION['user_id'];
-$user_full_name = $_SESSION['full_name'] ?? 'Receptionist';  // ✅ Jina la reception
-$user_role = $_SESSION['role'] ?? 'reception';
-$branch_id = $_SESSION['branch_id'] ?? 1;
-$branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
-$username = $_SESSION['username'] ?? 'reception';
+$user_full_name = $_SESSION['full_name'] ?? 'Admin';   // ✅ Jina la Admin
+$user_role = $_SESSION['role'] ?? 'admin';
+$full_name = $user_full_name;                           // For header display
+$role = $user_role;
+$user_branch_id = $_SESSION['branch_id'] ?? 1;
+$user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
+$username = $_SESSION['username'] ?? 'admin';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ✅ Keep original session full_name for header display
-$full_name = $user_full_name;
+// ================================================================
+// BRANCH SELECTION (Admin can select any branch)
+// ================================================================
+$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
 
-$user_branch_id = $branch_id;
-$selected_branch_id = $branch_id;
 $message = '';
 $message_type = '';
 
@@ -45,12 +46,37 @@ $offline_doctors = [];
 $online_doctors_count = 0;
 $offline_doctors_count = 0;
 $total_doctors = 0;
+$branches_list = [];
+$current_branch_name = 'All Branches';
 
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
     $db = Database::getInstance()->getConnection();
     
+    // ================================================================
+    // GET BRANCHES LIST
+    // ================================================================
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    // For adding patient, admin must select a specific branch
+    $target_branch_id = $user_branch_id;
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $target_branch_id = (int)$selected_branch_id;
+    }
+    
+    // Get target branch name
+    foreach ($branches_list as $b) {
+        if ($b['id'] == $target_branch_id) {
+            $current_branch_name = $b['name'];
+            break;
+        }
+    }
+    
+    // ================================================================
+    // UNREAD NOTIFICATIONS
+    // ================================================================
     $unread_notifications = 0;
     try {
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM notifications WHERE user_id = ? AND is_read = 0");
@@ -65,7 +91,7 @@ try {
     // ================================================================
     if (isset($_POST['action']) && $_POST['action'] === 'get_doctor_status') {
         header('Content-Type: application/json');
-        $branch_id = isset($_POST['branch_id']) ? (int)$_POST['branch_id'] : $selected_branch_id;
+        $branch_id = isset($_POST['branch_id']) ? (int)$_POST['branch_id'] : $target_branch_id;
         
         $stmt = $db->prepare("
             SELECT id, full_name, specialty, is_online 
@@ -136,7 +162,7 @@ try {
     if (isset($_GET['action']) && $_GET['action'] === 'search_patients') {
         header('Content-Type: application/json');
         $query = isset($_GET['q']) ? trim($_GET['q']) : '';
-        $branch = isset($_GET['branch']) ? (int)$_GET['branch'] : $selected_branch_id;
+        $branch = isset($_GET['branch']) ? (int)$_GET['branch'] : $target_branch_id;
         
         if (strlen($query) < 1) {
             echo json_encode(['success' => true, 'patients' => []]);
@@ -165,7 +191,7 @@ try {
     }
 
     // ================================================================
-    // GET DOCTORS
+    // GET DOCTORS (for selected branch)
     // ================================================================
     $stmt = $db->prepare("
         SELECT id, full_name, specialty, is_online 
@@ -173,7 +199,7 @@ try {
         WHERE role = 'doctor' AND status = 'active' AND branch_id = ?
         ORDER BY is_online DESC, full_name
     ");
-    $stmt->execute([$selected_branch_id]);
+    $stmt->execute([$target_branch_id]);
     $doctors = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     $online_doctors = [];
@@ -214,7 +240,7 @@ try {
                 END,
                 service_name
         ");
-        $stmt->execute([$selected_branch_id]);
+        $stmt->execute([$target_branch_id]);
         $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
     } catch (Exception $e) {
         $consultation_services = [];
@@ -286,46 +312,48 @@ try {
     // ================================================================
     // GENERATE PATIENT ID
     // ================================================================
-    function generateUniquePatientId($db, $branch_id) {
-        $year = date('Y');
-        $branch_code = str_pad($branch_id, 2, '0', STR_PAD_LEFT);
-        $pattern = "P-$year-$branch_code-%";
-        
-        $stmt = $db->prepare("SELECT patient_id FROM patients WHERE branch_id = ? AND patient_id LIKE ? ORDER BY patient_id DESC LIMIT 1");
-        $stmt->execute([$branch_id, $pattern]);
-        $last = $stmt->fetch(PDO::FETCH_ASSOC);
-        
-        if ($last) {
-            $parts = explode('-', $last['patient_id']);
-            $last_number = intval(end($parts));
-            $next_number = $last_number + 1;
-            $new_number = str_pad($next_number, 4, '0', STR_PAD_LEFT);
-        } else {
-            $new_number = '0001';
-        }
-        
-        $patient_id_number = "P-$year-$branch_code-$new_number";
-        
-        $stmt = $db->prepare("SELECT COUNT(*) FROM patients WHERE patient_id = ?");
-        $stmt->execute([$patient_id_number]);
-        $exists = $stmt->fetchColumn();
-        
-        if ($exists > 0) {
-            $counter = 1;
-            while ($exists > 0) {
-                $new_number = str_pad($next_number + $counter, 4, '0', STR_PAD_LEFT);
-                $patient_id_number = "P-$year-$branch_code-$new_number";
-                $stmt = $db->prepare("SELECT COUNT(*) FROM patients WHERE patient_id = ?");
-                $stmt->execute([$patient_id_number]);
-                $exists = $stmt->fetchColumn();
-                $counter++;
+    if (!function_exists('generateUniquePatientId')) {
+        function generateUniquePatientId($db, $branch_id) {
+            $year = date('Y');
+            $branch_code = str_pad($branch_id, 2, '0', STR_PAD_LEFT);
+            $pattern = "P-$year-$branch_code-%";
+            
+            $stmt = $db->prepare("SELECT patient_id FROM patients WHERE branch_id = ? AND patient_id LIKE ? ORDER BY patient_id DESC LIMIT 1");
+            $stmt->execute([$branch_id, $pattern]);
+            $last = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if ($last) {
+                $parts = explode('-', $last['patient_id']);
+                $last_number = intval(end($parts));
+                $next_number = $last_number + 1;
+                $new_number = str_pad($next_number, 4, '0', STR_PAD_LEFT);
+            } else {
+                $new_number = '0001';
             }
+            
+            $patient_id_number = "P-$year-$branch_code-$new_number";
+            
+            $stmt = $db->prepare("SELECT COUNT(*) FROM patients WHERE patient_id = ?");
+            $stmt->execute([$patient_id_number]);
+            $exists = $stmt->fetchColumn();
+            
+            if ($exists > 0) {
+                $counter = 1;
+                while ($exists > 0) {
+                    $new_number = str_pad($next_number + $counter, 4, '0', STR_PAD_LEFT);
+                    $patient_id_number = "P-$year-$branch_code-$new_number";
+                    $stmt = $db->prepare("SELECT COUNT(*) FROM patients WHERE patient_id = ?");
+                    $stmt->execute([$patient_id_number]);
+                    $exists = $stmt->fetchColumn();
+                    $counter++;
+                }
+            }
+            
+            return $patient_id_number;
         }
-        
-        return $patient_id_number;
     }
 
-    $patient_id_number = generateUniquePatientId($db, $selected_branch_id);
+    $patient_id_number = generateUniquePatientId($db, $target_branch_id);
     
     // ================================================================
     // COMMON LISTS
@@ -355,8 +383,7 @@ try {
     // HANDLE FORM SUBMISSION
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['register_patient'])) {
-        // ✅ Patient data
-        $patient_full_name = trim($_POST['full_name'] ?? '');
+        $full_name_input = trim($_POST['full_name'] ?? '');
         $date_of_birth = $_POST['date_of_birth'] ?? null;
         $gender = $_POST['gender'] ?? null;
         $marital_status = $_POST['marital_status'] ?? null;
@@ -366,11 +393,14 @@ try {
         $emergency_contact = trim($_POST['emergency_contact'] ?? '');
         $blood_group = $_POST['blood_group'] ?? null;
         $allergies = trim($_POST['allergies'] ?? '');
-        $branch_id = $selected_branch_id;
         
         // ✅ registration info - MUHIMU!
         $registered_by_id = $user_id;
         $registered_by_name = $user_full_name;
+        
+        // Admin can choose branch
+        $form_branch_id = isset($_POST['branch_id']) ? (int)$_POST['branch_id'] : $target_branch_id;
+        if ($form_branch_id <= 0) $form_branch_id = $target_branch_id;
         
         $assign_doctor = isset($_POST['assign_doctor']) ? 1 : 0;
         $doctor_id = (int)($_POST['doctor_id'] ?? 0);
@@ -417,17 +447,17 @@ try {
         }
         
         $errors = [];
-        if (empty($patient_full_name)) $errors[] = 'Full name is required';
+        if (empty($full_name_input)) $errors[] = 'Full name is required';
         if (empty($gender)) $errors[] = 'Gender is required';
         
-        // Exact duplicate check only
+        // Duplicate check
         $duplicate_error = '';
-        if (empty($errors) && !empty($patient_full_name) && !empty($phone)) {
+        if (empty($errors) && !empty($full_name_input) && !empty($phone)) {
             $stmt = $db->prepare("SELECT id, full_name, patient_id FROM patients WHERE full_name = ? AND phone = ? AND branch_id = ? AND date_of_birth = ?");
-            $stmt->execute([$patient_full_name, $phone, $branch_id, $date_of_birth]);
+            $stmt->execute([$full_name_input, $phone, $form_branch_id, $date_of_birth]);
             $existing = $stmt->fetch(PDO::FETCH_ASSOC);
             if ($existing) {
-                $duplicate_error = "❌ A patient with the same name, phone, and date of birth already exists in <strong>" . htmlspecialchars($branch_name) . "</strong> branch.<br>
+                $duplicate_error = "❌ A patient with the same name, phone, and date of birth already exists.<br>
                                    👤 Name: <strong>" . htmlspecialchars($existing['full_name']) . "</strong><br>
                                    🆔 ID: <strong>" . htmlspecialchars($existing['patient_id']) . "</strong>";
             }
@@ -440,9 +470,9 @@ try {
             try {
                 $db->beginTransaction();
                 
-                $final_patient_id = generateUniquePatientId($db, $branch_id);
+                $final_patient_id = generateUniquePatientId($db, $form_branch_id);
                 
-                // ✅ INSERT PATIENT - Ongeza created_by, registered_by, registered_by_name
+                // ✅ INSERT PATIENT - Ongeza registered_by, registered_by_name
                 $stmt = $db->prepare("
                     INSERT INTO patients (
                         patient_id, full_name, date_of_birth, gender, phone, email, 
@@ -453,7 +483,7 @@ try {
                 ");
                 $stmt->execute([
                     $final_patient_id, 
-                    $patient_full_name, 
+                    $full_name_input, 
                     $date_of_birth, 
                     $gender, 
                     $phone, 
@@ -462,11 +492,11 @@ try {
                     $emergency_contact, 
                     $blood_group, 
                     $allergies, 
-                    $branch_id,
+                    $form_branch_id,
                     $registered_by_id,      // ✅ created_by
                     $marital_status,
                     $registered_by_id,      // ✅ registered_by
-                    $registered_by_name     // ✅ registered_by_name (JINA LA RECEPTION)
+                    $registered_by_name     // ✅ registered_by_name (JINA LA ADMIN)
                 ]);
                 $patient_db_id = $db->lastInsertId();
                 
@@ -485,7 +515,7 @@ try {
                     ) VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
                 ");
                 $stmt->execute([
-                    $visit_number, $patient_db_id, $user_id, $branch_id,
+                    $visit_number, $patient_db_id, $user_id, $form_branch_id,
                     $visit_type_name, $service_id_to_store, $consultation_fee_to_store,
                     $visit_status, $assign_doctor && $doctor_id > 0 ? $doctor_id : null,
                     $symptoms, $complaint, $notes
@@ -502,7 +532,7 @@ try {
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
-                        $patient_db_id, $visit_id, $user_id, $branch_id,
+                        $patient_db_id, $visit_id, $user_id, $form_branch_id,
                         $temperature, $bp_systolic, $bp_diastolic,
                         $pulse_rate, $weight, $height, $bmi, $vital_notes ?: null
                     ]);
@@ -531,7 +561,7 @@ try {
                         $stmt->execute([
                             $bill_number, $patient_db_id, $visit_id,
                             $consultation_fee, $consultation_fee, $consultation_fee,
-                            $user_id, $branch_id
+                            $user_id, $form_branch_id
                         ]);
                         $bill_id = $db->lastInsertId();
                         
@@ -542,7 +572,7 @@ try {
                             ) VALUES (?, ?, ?, 'consultation', ?, 1, ?, ?, 'pending', NOW())
                         ");
                         $stmt->execute([
-                            $bill_id, $patient_db_id, $branch_id,
+                            $bill_id, $patient_db_id, $form_branch_id,
                             $visit_type_name, $consultation_fee, $consultation_fee
                         ]);
                         
@@ -553,7 +583,7 @@ try {
                         
                         try {
                             $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
-                            $stmt->execute([$branch_id]);
+                            $stmt->execute([$form_branch_id]);
                             $cashiers = $stmt->fetchAll(PDO::FETCH_ASSOC);
                             
                             foreach ($cashiers as $cashier) {
@@ -562,8 +592,8 @@ try {
                                     VALUES (?, ?, '💰 New Bill Created', ?, 'bill', 'cashier_dashboard.php', 0, NOW())
                                 ");
                                 $stmt->execute([
-                                    $cashier['id'], $branch_id,
-                                    "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient " . htmlspecialchars($patient_full_name) . " - " . $visit_type_name
+                                    $cashier['id'], $form_branch_id,
+                                    "Consultation bill #$bill_number (TSh " . number_format($consultation_fee) . ") for patient " . htmlspecialchars($full_name_input) . " - " . $visit_type_name
                                 ]);
                             }
                         } catch (Exception $e) {}
@@ -577,6 +607,7 @@ try {
                 $message .= "<br>📋 Visit #: <strong>$visit_number</strong>";
                 $message .= "<br>📋 Visit Type: <strong>" . htmlspecialchars($visit_type_name) . "</strong>";
                 $message .= "<br>📋 Consultation Fee: <strong>TSh " . number_format($consultation_fee, 0) . "</strong>";
+                $message .= "<br>🏥 Branch: <strong>" . htmlspecialchars($current_branch_name) . "</strong>";
                 $message .= "<br>👤 Registered By: <strong>" . htmlspecialchars($registered_by_name) . "</strong>";
                 
                 if ($assign_doctor && $doctor_id > 0) {
@@ -603,7 +634,7 @@ try {
                 
                 echo '<script>
                     setTimeout(function(){ 
-                        window.location.href = "patients.php?registered=1"; 
+                        window.location.href = "patients.php?branch=' . urlencode($selected_branch_id) . '&registered=1"; 
                     }, 4000);
                 </script>';
                 
@@ -635,16 +666,17 @@ $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.pn
 $dark_mode = isset($_COOKIE['dark_mode']) ? $_COOKIE['dark_mode'] : 'false';
 
 // ================================================================
-// INCLUDE SHARED SIDEBAR ONLY (NOT HEADER)
+// ✅ INCLUDE SHARED ADMIN SIDEBAR
+// NOTE: admin_sidebar.php already defines isActive() - DO NOT redefine it here
 // ================================================================
-include_once __DIR__ . '/../../components/reception_sidebar.php';
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= $dark_mode === 'true' ? 'dark' : 'light' ?>">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Register New Patient - Braick Dispensary</title>
+    <title>Add Patient - Braick Dispensary</title>
     
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
@@ -723,6 +755,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
+        /* TOP NAV */
         .top-nav {
             position: fixed;
             top: 0;
@@ -765,10 +798,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--text-primary);
         }
         
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
         .top-nav .search-wrapper .search-btn {
             background: #0B5ED7;
             color: white;
@@ -781,20 +810,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             white-space: nowrap;
         }
         
-        .top-nav .search-wrapper .search-btn:hover {
-            background: #0A4CA8;
-        }
-        
-        .top-nav .branch-badge {
-            background: var(--success-bg);
-            color: var(--success);
-            padding: 4px 14px;
-            border-radius: 20px;
-            font-size: 0.7rem;
+        .top-nav .branch-selector {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            padding: 6px 12px;
+            font-size: 0.78rem;
+            color: var(--text-primary);
+            outline: none;
+            cursor: pointer;
             font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 4px;
         }
         
         .top-nav .datetime {
@@ -806,10 +831,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             gap: 6px;
         }
         
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
-        
         .top-nav .avatar {
             width: 40px;
             height: 40px;
@@ -817,12 +838,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             object-fit: cover;
             border: 2px solid var(--border-color);
             cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: #0B5ED7;
-            transform: scale(1.05);
         }
         
         .top-nav .icon-btn {
@@ -840,11 +855,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             position: relative;
         }
         
-        .top-nav .icon-btn:hover {
-            background: var(--bg-body);
-            color: #0B5ED7;
-        }
-        
         .notif-dot {
             position: absolute;
             top: 6px;
@@ -853,16 +863,10 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             height: 8px;
             border-radius: 50%;
             border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
         }
         
         .notif-dot.has-notif { background: #EF4444; }
-        .notif-dot.no-notif { background: #94A3B8; animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
+        .notif-dot.no-notif { background: #94A3B8; }
         
         .dark-toggle-btn {
             background: var(--bg-body);
@@ -872,19 +876,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             cursor: pointer;
             font-size: 0.8rem;
             color: var(--text-primary);
-            transition: all 0.3s;
             display: flex;
             align-items: center;
             gap: 6px;
         }
         
-        .dark-toggle-btn:hover {
-            border-color: #0B5ED7;
-            background: var(--bg-card);
-        }
-        
-        .dark-toggle-btn i { font-size: 0.85rem; }
-        
+        /* MAIN CONTENT */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -892,6 +889,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
+        /* PAGE HEADER */
         .page-header {
             background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             border-radius: var(--radius-lg);
@@ -994,9 +992,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .page-header .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
             transform: translateY(-2px);
-            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        /* FORM */
         .form-card-modern {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1006,11 +1004,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             max-width: 1200px;
             margin: 0 auto;
             box-shadow: var(--shadow-md);
-        }
-        
-        .form-card-modern:hover {
-            border-color: var(--primary-light);
-            box-shadow: var(--shadow-lg);
         }
         
         .form-card-modern .form-header {
@@ -1033,7 +1026,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: white;
             font-size: 1.2rem;
             flex-shrink: 0;
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.25);
         }
         
         .form-card-modern .form-header .form-title {
@@ -1076,11 +1068,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.08);
         }
         
-        .form-control::placeholder { color: var(--text-secondary); opacity: 0.5; }
-        
         .form-row { margin-bottom: 16px; }
-        .form-row:last-child { margin-bottom: 0; }
-        
         .form-actions {
             display: flex;
             gap: 10px;
@@ -1090,9 +1078,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             flex-wrap: wrap;
         }
         
-        select.form-control { appearance: auto; cursor: pointer; }
-        textarea.form-control { resize: vertical; min-height: 60px; }
-        
+        /* AUTOCOMPLETE */
         .autocomplete-wrapper { position: relative; }
         
         .autocomplete-dropdown {
@@ -1117,13 +1103,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             padding: 8px 14px;
             cursor: pointer;
             border-bottom: 1px solid var(--border-color);
-            transition: background 0.2s ease;
             display: flex;
             align-items: center;
             gap: 10px;
         }
         
-        .autocomplete-item:last-child { border-bottom: none; }
         .autocomplete-item:hover, .autocomplete-item.active { background: var(--primary-bg); }
         
         .autocomplete-item .patient-avatar {
@@ -1141,7 +1125,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
         
         .autocomplete-item .patient-info { flex: 1; min-width: 0; }
-        
         .autocomplete-item .patient-info .patient-name {
             font-weight: 600;
             font-size: 0.8rem;
@@ -1158,30 +1141,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             margin-top: 2px;
         }
         
-        .autocomplete-item .patient-info .patient-meta span {
-            display: flex;
-            align-items: center;
-            gap: 3px;
-        }
-        
-        .autocomplete-item .patient-info .patient-meta .active-visit-badge {
-            background: var(--warning-bg);
-            color: var(--warning);
-            padding: 0 6px;
-            border-radius: 8px;
-            font-size: 0.5rem;
-            font-weight: 600;
-        }
-        
-        .autocomplete-item .patient-info .patient-meta .no-visit-badge {
-            background: var(--gray-200);
-            color: var(--text-secondary);
-            padding: 0 6px;
-            border-radius: 8px;
-            font-size: 0.5rem;
-            font-weight: 600;
-        }
-        
         .autocomplete-empty, .autocomplete-loading {
             padding: 16px;
             text-align: center;
@@ -1189,12 +1148,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             font-size: 0.75rem;
         }
         
-        .allergy-checkbox-group {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-top: 6px;
-        }
+        /* ALLERGY CHIPS */
+        .allergy-checkbox-group { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
         
         .allergy-chip {
             display: inline-flex;
@@ -1211,21 +1166,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             user-select: none;
         }
         
-        .allergy-chip:hover {
-            border-color: var(--primary);
-            background: var(--primary-bg);
-            transform: translateY(-1px);
-        }
-        
+        .allergy-chip:hover { border-color: var(--primary); background: var(--primary-bg); }
         .allergy-chip input[type="checkbox"] { display: none; }
+        .allergy-chip.active { border-color: var(--danger); background: var(--danger-bg); color: var(--danger-dark); }
         
-        .allergy-chip.active {
-            border-color: var(--danger);
-            background: var(--danger-bg);
-            color: var(--danger-dark);
-            box-shadow: 0 2px 8px rgba(220, 38, 38, 0.15);
-        }
-        
+        /* VITAL SIGNS */
         .vital-signs-section {
             margin-top: 20px;
             padding-top: 16px;
@@ -1241,7 +1186,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             margin-bottom: 14px;
         }
         
-        .vital-signs-section .section-header .section-title {
+        .vital-signs-section .section-title {
             font-size: 0.85rem;
             font-weight: 700;
             color: var(--text-primary);
@@ -1250,12 +1195,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             gap: 8px;
         }
         
-        .vital-signs-section .section-header .section-title i {
-            color: #DC2626;
-            font-size: 1rem;
-        }
+        .vital-signs-section .section-title i { color: #DC2626; font-size: 1rem; }
         
-        .vital-signs-section .section-header .section-badge {
+        .vital-signs-section .section-badge {
             font-size: 0.6rem;
             font-weight: 500;
             padding: 2px 12px;
@@ -1265,18 +1207,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             border: 1px solid var(--warning);
         }
         
-        .vital-grid-6 {
+        .vital-grid-6, .vital-grid-6-row2 {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 12px;
             margin-bottom: 12px;
         }
         
-        .vital-grid-6-row2 {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 12px;
-        }
+        .vital-grid-6-row2 { margin-bottom: 0; }
         
         .vital-card {
             background: var(--bg-body);
@@ -1294,24 +1232,13 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .vital-card::before {
             content: '';
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
+            top: 0; left: 0; right: 0;
             height: 4px;
         }
         
-        .vital-card:hover {
-            border-color: var(--primary-light);
-            transform: translateY(-3px);
-            box-shadow: var(--shadow-md);
-        }
+        .vital-card:hover { border-color: var(--primary-light); transform: translateY(-3px); }
         
-        .vital-card .vital-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
+        .vital-card .vital-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
         
         .vital-card .vital-icon {
             width: 32px;
@@ -1359,20 +1286,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             background: var(--bg-card);
             color: var(--text-primary);
             outline: none;
-            transition: all 0.3s ease;
         }
         
-        .vital-card .vital-input-wrap input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.12);
-        }
-        
-        .vital-card .vital-input-wrap input::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.4;
-            font-weight: 400;
-            font-size: 0.75rem;
-        }
+        .vital-card .vital-input-wrap input:focus { border-color: var(--primary); }
         
         .vital-card .vital-unit {
             font-size: 0.55rem;
@@ -1384,9 +1300,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             white-space: nowrap;
         }
         
-        [data-theme="dark"] .vital-card .vital-unit {
-            background: var(--gray-700);
-        }
+        [data-theme="dark"] .vital-card .vital-unit { background: var(--gray-700); }
         
         .vital-card.temperature::before { background: linear-gradient(135deg, #DC2626, #B91C1C); }
         .vital-card.temperature .vital-icon { color: #DC2626; background: rgba(220, 38, 38, 0.1); }
@@ -1405,11 +1319,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         .vital-card.bmi::before { background: linear-gradient(135deg, #0D9488, #0F766E); }
         .vital-card.bmi .vital-icon { color: #0D9488; background: rgba(13, 148, 136, 0.1); }
-        .vital-card.bmi .vital-input-wrap input {
-            background: var(--primary-bg);
-            font-weight: 800;
-            color: var(--primary);
-        }
+        .vital-card.bmi .vital-input-wrap input { background: var(--primary-bg); font-weight: 800; color: var(--primary); }
         
         .vital-bmi-category {
             font-size: 0.5rem;
@@ -1425,35 +1335,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .vital-bmi-category.overweight { background: rgba(217, 119, 6, 0.15); color: #D97706; }
         .vital-bmi-category.obese { background: rgba(220, 38, 38, 0.15); color: #DC2626; }
         
-        .vital-card.bp .vital-input-wrap {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
+        .vital-card.bp .vital-input-wrap input { text-align: center; padding: 8px 4px; }
+        .vital-card.bp .vital-input-wrap .bp-separator { color: var(--text-secondary); font-weight: 700; font-size: 0.8rem; }
         
-        .vital-card.bp .vital-input-wrap input {
-            text-align: center;
-            padding: 8px 4px;
-        }
-        
-        .vital-card.bp .vital-input-wrap .bp-separator {
-            color: var(--text-secondary);
-            font-weight: 700;
-            font-size: 0.8rem;
-        }
-        
+        /* ASSIGN DOCTOR */
         .assign-doctor-section {
             background: var(--primary-bg);
             border-radius: var(--radius);
             padding: 18px 20px;
             border: 2px solid var(--primary-light);
             margin-top: 16px;
-            transition: all 0.3s ease;
-        }
-        
-        .assign-doctor-section:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 16px rgba(11, 94, 215, 0.12);
         }
         
         .assign-doctor-section .section-title {
@@ -1482,8 +1373,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             margin-bottom: 12px;
         }
         
-        .assign-doctor-toggle:hover { border-color: var(--primary); }
-        
         .assign-doctor-toggle input[type="checkbox"] {
             width: 18px;
             height: 18px;
@@ -1496,8 +1385,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--text-primary);
             font-size: 0.8rem;
         }
-        
-        .assign-doctor-toggle .toggle-label i { color: var(--primary); }
         
         .assign-doctor-toggle .toggle-sub {
             font-size: 0.65rem;
@@ -1514,13 +1401,10 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             border-radius: 12px;
         }
         
-        .assign-doctor-fields {
-            display: none;
-            margin-top: 10px;
-        }
+        .assign-doctor-fields { display: none; margin-top: 10px; }
+        .assign-doctor-fields.show { display: block; }
         
-        .assign-doctor-fields.show { display: block; animation: fadeInUp 0.3s ease forwards; }
-        
+        /* BUTTONS */
         .btn {
             display: inline-flex;
             align-items: center;
@@ -1542,12 +1426,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(11, 94, 215, 0.25);
         }
         
-        .btn-primary:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.35);
-        }
-        
-        .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; transform: none; }
+        .btn-primary:hover { transform: translateY(-2px); }
         
         .btn-outline {
             background: transparent;
@@ -1555,12 +1434,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             border: 2px solid var(--border-color);
         }
         
-        .btn-outline:hover {
-            background: var(--bg-body);
-            border-color: var(--primary);
-            color: var(--primary);
-        }
+        .btn-outline:hover { background: var(--bg-body); border-color: var(--primary); color: var(--primary); }
         
+        /* ALERTS */
         .alert {
             padding: 14px 18px;
             border-radius: var(--radius);
@@ -1576,15 +1452,15 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .alert-success { background: var(--success-bg); color: var(--success-dark); border: 1px solid var(--success); }
         .alert-error { background: var(--danger-bg); color: var(--danger-dark); border: 1px solid var(--danger); }
         .alert i { font-size: 1.1rem; margin-top: 2px; }
-        .alert .alert-content { flex: 1; }
         
+        /* TOAST */
         .toast-custom {
             position: fixed;
             bottom: 24px;
             right: 24px;
             padding: 14px 20px;
             border-radius: var(--radius);
-            z-index: 999;
+            z-index: 9999;
             max-width: 400px;
             transform: translateY(100px);
             opacity: 0;
@@ -1600,8 +1476,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .toast-custom.success { background: var(--success); }
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
-        .toast-custom.warning { background: var(--warning); }
         
+        /* FOOTER */
         .footer {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -1613,13 +1489,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
+        /* GRID */
         .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
         .grid-full { grid-column: 1 / -1; }
         
+        /* RESPONSIVE */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
             .form-card-modern { padding: 20px; }
         }
         
@@ -1627,57 +1504,31 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             .top-nav .search-wrapper { max-width: 180px; }
             .top-nav .datetime { display: none; }
             .form-card-modern { padding: 14px; }
-            .form-card-modern .form-header .form-title { font-size: 0.95rem; }
-            .page-header { padding: 14px 16px; }
-            .page-header .page-title { font-size: 1.1rem; }
-            
-            .vital-grid-6, .vital-grid-6-row2 {
-                grid-template-columns: repeat(3, 1fr);
-                gap: 8px;
-            }
-            
-            .vital-card { padding: 10px 10px; min-height: 95px; }
-            .vital-card .vital-icon { width: 26px; height: 26px; font-size: 0.85rem; }
-            .vital-card .vital-label { font-size: 0.55rem; }
-            .vital-card .vital-sublabel { font-size: 0.45rem; }
-            .vital-card .vital-input-wrap input { font-size: 0.8rem; padding: 6px 8px; }
-            
             .grid-2 { grid-template-columns: 1fr; }
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; justify-content: center; }
+            
+            .vital-grid-6, .vital-grid-6-row2 { grid-template-columns: repeat(3, 1fr); gap: 8px; }
+            .vital-card { padding: 10px; min-height: 95px; }
+            .vital-card .vital-icon { width: 26px; height: 26px; font-size: 0.85rem; }
+            .vital-card .vital-label { font-size: 0.55rem; }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 8px; }
             .form-card-modern { padding: 10px; }
-            
-            .vital-grid-6, .vital-grid-6-row2 {
-                grid-template-columns: repeat(2, 1fr);
-                gap: 6px;
-            }
-            
-            .vital-card { padding: 8px 8px; min-height: 85px; }
-            .vital-card .vital-icon { width: 24px; height: 24px; font-size: 0.75rem; }
-            .vital-card .vital-label { font-size: 0.5rem; }
-            .vital-card .vital-input-wrap input { font-size: 0.75rem; padding: 5px 6px; }
+            .vital-grid-6, .vital-grid-6-row2 { grid-template-columns: repeat(2, 1fr); gap: 6px; }
         }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up { animation: fadeInUp 0.5s ease forwards; opacity: 0; }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- ✅ EMBEDDED HEADER -->
+<!-- EMBEDDED HEADER -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
+        <button id="sidebarToggle" class="icon-btn" style="display:none;">
             <i class="fas fa-bars text-lg"></i>
         </button>
         
@@ -1691,11 +1542,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     </div>
     
     <div class="flex items-center gap-3">
-        <span class="branch-badge">
-            <i class="fas fa-store-alt"></i> <?= htmlspecialchars($branch_name) ?>
-        </span>
+        <select class="branch-selector" onchange="window.location.href='add_patient.php?branch='+this.value">
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+            <?php foreach ($branches_list as $branch): ?>
+                <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
+                    🏥 <?= htmlspecialchars($branch['name']) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
         
-        <span class="datetime" id="currentDateTime">
+        <span class="datetime">
             <i class="fas fa-clock"></i>
             <span id="clockDisplay"><?= date('d M Y • h:i:s A') ?></span>
         </span>
@@ -1727,12 +1583,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         <div>
             <h1 class="page-title">
                 <i class="fas fa-user-plus"></i>
-                Register New Patient
-                <span class="role-badge-display">RECEPTION</span>
+                Add New Patient
+                <span class="role-badge-display">ADMIN</span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
-                Create a new patient record in <strong><?= htmlspecialchars($branch_name) ?></strong>
+                Create new patient in <strong><?= htmlspecialchars($current_branch_name) ?></strong>
                 
                 <span class="header-badge">
                     <i class="fas fa-id-card"></i>
@@ -1744,19 +1600,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     Fee: <strong id="headerFeeDisplay">TSh <?= number_format($default_price, 0) ?></strong>
                 </span>
                 
-                <span class="header-badge" style="background:rgba(5,150,105,0.2);border-color:rgba(5,150,105,0.3);color:#34D399;">
-                    <i class="fas fa-users"></i>
-                    Family can share phone
-                </span>
-                
                 <span class="header-badge" style="background:rgba(124,58,237,0.2);border-color:rgba(124,58,237,0.3);color:#C4B5FD;">
-                    <i class="fas fa-user-tie"></i>
+                    <i class="fas fa-user-shield"></i>
                     Registering as: <strong><?= htmlspecialchars($user_full_name) ?></strong>
                 </span>
             </p>
         </div>
         <div class="header-right">
-            <a href="patients.php" class="btn-outline-light">
+            <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Patients
             </a>
         </div>
@@ -1766,12 +1617,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     <?php if ($message): ?>
         <div class="alert <?= $message_type === 'success' ? 'alert-success' : 'alert-error' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
-            <div class="alert-content"><?= $message ?></div>
+            <div><?= $message ?></div>
         </div>
     <?php endif; ?>
 
     <!-- FORM -->
-    <div class="form-card-modern animate-fade-in-up">
+    <div class="form-card-modern">
         <div class="form-header">
             <div class="form-icon">
                 <i class="fas fa-user-plus"></i>
@@ -1781,7 +1632,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <p class="form-subtitle">
                     Fill in the patient details below to complete registration
                     <span style="color:var(--purple);font-weight:600;margin-left:6px;">
-                        <i class="fas fa-user-tie"></i> Registered by: <?= htmlspecialchars($user_full_name) ?>
+                        <i class="fas fa-user-shield"></i> Registered by: <?= htmlspecialchars($user_full_name) ?>
                     </span>
                 </p>
             </div>
@@ -1789,7 +1640,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         <form method="POST" action="" id="registrationForm" autocomplete="off">
             
-            <!-- ROW 1: Full Name with AUTOCOMPLETE -->
+            <input type="hidden" name="branch_id" value="<?= $target_branch_id ?>">
+            <input type="hidden" name="register_patient" value="1">
+            
+            <!-- ✅ Hidden Registered By Info -->
+            <input type="hidden" name="registered_by_id" value="<?= $user_id ?>">
+            <input type="hidden" name="registered_by_name" value="<?= htmlspecialchars($user_full_name) ?>">
+            
+            <!-- ROW 1: Full Name -->
             <div class="form-row grid-full">
                 <label class="form-label">
                     <i class="fas fa-user label-icon"></i> Full Name <span class="required">*</span>
@@ -1814,7 +1672,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- ROW 2: Visit Type + Gender -->
+            <!-- ROW 2: Patient Type + Gender -->
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
@@ -1944,7 +1802,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     <?php foreach ($common_allergies as $key => $label): ?>
                         <label class="allergy-chip" data-allergy="<?= htmlspecialchars($label) ?>">
                             <input type="checkbox" value="<?= htmlspecialchars($label) ?>" class="allergy-checkbox">
-                            <span class="allergy-icon">⚠️</span>
+                            <span>⚠️</span>
                             <?= htmlspecialchars($label) ?>
                         </label>
                     <?php endforeach; ?>
@@ -1952,7 +1810,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <textarea name="allergies" id="allergiesTextarea" class="form-control" style="margin-top:8px;" placeholder="List any known allergies..." rows="2"><?= htmlspecialchars($_POST['allergies'] ?? '') ?></textarea>
             </div>
             
-            <!-- ✅ VITAL SIGNS -->
+            <!-- VITAL SIGNS -->
             <div class="vital-signs-section">
                 <div class="section-header">
                     <div class="section-title">
@@ -1967,7 +1825,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     </span>
                 </div>
                 
-                <!-- ROW 1: Temperature | Blood Pressure | Pulse Rate -->
+                <!-- ROW 1: Temperature | BP | Pulse -->
                 <div class="vital-grid-6">
                     <div class="vital-card temperature">
                         <div class="vital-header">
@@ -1979,8 +1837,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                         </div>
                         <div class="vital-input-wrap">
                             <input type="number" name="temperature" step="0.1" min="30" max="45" 
-                                   placeholder="36.5" id="temperatureInput"
-                                   value="<?= htmlspecialchars($_POST['temperature'] ?? '') ?>">
+                                   placeholder="36.5" value="<?= htmlspecialchars($_POST['temperature'] ?? '') ?>">
                             <span class="vital-unit">°C</span>
                         </div>
                     </div>
@@ -2019,7 +1876,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- ✅ ROW 2: Weight | Height | BMI -->
+                <!-- ROW 2: Weight | Height | BMI -->
                 <div class="vital-grid-6-row2">
                     <div class="vital-card weight">
                         <div class="vital-header">
@@ -2063,8 +1920,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                         </div>
                         <div class="vital-input-wrap">
                             <input type="number" name="bmi" id="bmiOutput" readonly step="0.1" 
-                                   placeholder="22.5" 
-                                   value="<?= htmlspecialchars($_POST['bmi'] ?? '') ?>">
+                                   placeholder="22.5" value="<?= htmlspecialchars($_POST['bmi'] ?? '') ?>">
                             <span class="vital-unit">kg/m²</span>
                         </div>
                         <span class="vital-bmi-category" id="bmiCategory">Auto</span>
@@ -2086,8 +1942,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                         <i class="fas fa-user-md"></i>
                         Assign Doctor <span style="font-weight:400;font-size:0.75rem;color:var(--text-secondary);">(Optional)</span>
                         <span style="margin-left:auto;font-size:0.6rem;color:var(--success);">
-                            <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;margin-right:4px;"></span>
-                            <span id="doctorUpdateStatus">Updating...</span>
+                            <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;margin-right:4px;"></span>
+                            <span id="doctorUpdateStatus">Live</span>
                         </span>
                     </div>
                     
@@ -2099,12 +1955,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             <i class="fas fa-check-circle"></i> Assign doctor after registration
                         </span>
                         <span class="toggle-sub">(Bill will be created with fee)</span>
-                        <span class="fee-info" id="toggleFeeInfo">
+                        <span class="fee-info">
                             💰 TSh <span id="toggleFeeAmount"><?= number_format($default_price, 0) ?></span>
                         </span>
                     </div>
                     
-                    <div class="fee-info-box" id="feeInfoBox" style="background:var(--warning-bg);border:2px solid var(--warning);border-radius:10px;padding:10px 14px;margin-top:10px;display:none;align-items:center;gap:10px;font-size:0.75rem;color:var(--warning);">
+                    <div id="feeInfoBox" style="background:var(--warning-bg);border:2px solid var(--warning);border-radius:10px;padding:10px 14px;margin-top:10px;display:none;align-items:center;gap:10px;font-size:0.75rem;color:var(--warning);">
                         <i class="fas fa-info-circle" style="font-size:1rem;"></i>
                         <span>
                             <strong>Fee: TSh <span id="feeAmountDisplay"><?= number_format($default_price, 0) ?></span></strong>
@@ -2117,26 +1973,24 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             <div class="form-row" style="margin-bottom:0;">
                                 <label class="form-label">
                                     <i class="fas fa-user-md label-icon"></i> Select Doctor 
-                                    <span id="doctorCountBadge" style="font-size:0.6rem;font-weight:400;color:var(--text-secondary);">(<?= $online_doctors_count ?> online, <?= $offline_doctors_count ?> offline)</span>
+                                    <span style="font-size:0.6rem;font-weight:400;color:var(--text-secondary);">(<?= $online_doctors_count ?> online, <?= $offline_doctors_count ?> offline)</span>
                                 </label>
                                 <select name="doctor_id" class="form-control" id="doctorSelect">
                                     <option value="">-- Select Doctor --</option>
-                                    <?php if (!empty($online_doctors) && count($online_doctors) > 0): ?>
+                                    <?php if (!empty($online_doctors)): ?>
                                         <optgroup label="🟢 Online Doctors (<?= $online_doctors_count ?>)" style="font-weight:600;color:#059669;">
                                             <?php foreach ($online_doctors as $doctor): ?>
-                                                <option value="<?= $doctor['id'] ?>" data-online="1" style="font-weight:500;color:#059669;padding:4px;">
+                                                <option value="<?= $doctor['id'] ?>" data-online="1" style="font-weight:500;color:#059669;">
                                                     🟢 Dr. <?= htmlspecialchars($doctor['full_name']) ?>
-                                                    <?php if (!empty($doctor['specialty'])): ?>
-                                                        (<?= htmlspecialchars($doctor['specialty']) ?>)
-                                                    <?php endif; ?>
+                                                    <?php if (!empty($doctor['specialty'])): ?>(<?= htmlspecialchars($doctor['specialty']) ?>)<?php endif; ?>
                                                 </option>
                                             <?php endforeach; ?>
                                         </optgroup>
                                     <?php endif; ?>
-                                    <?php if (!empty($offline_doctors) && count($offline_doctors) > 0): ?>
+                                    <?php if (!empty($offline_doctors)): ?>
                                         <optgroup label="⚪ Offline Doctors (<?= $offline_doctors_count ?>)" style="font-weight:600;color:var(--text-secondary);">
                                             <?php foreach ($offline_doctors as $doctor): ?>
-                                                <option value="<?= $doctor['id'] ?>" data-online="0" style="color:var(--text-secondary);padding:4px;">
+                                                <option value="<?= $doctor['id'] ?>" data-online="0" style="color:var(--text-secondary);">
                                                     ⚪ Dr. <?= htmlspecialchars($doctor['full_name']) ?>
                                                 </option>
                                             <?php endforeach; ?>
@@ -2147,8 +2001,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                     <span style="color:#059669;" id="onlineCountDisplay">🟢 <?= $online_doctors_count ?> online</span>
                                     <span style="margin:0 4px;">|</span>
                                     <span id="offlineCountDisplay">⚪ <?= $offline_doctors_count ?> offline</span>
-                                    <span style="margin:0 4px;">|</span>
-                                    <span id="lastDoctorUpdate">Updated: <?= date('H:i:s') ?></span>
                                 </div>
                             </div>
                             
@@ -2169,7 +2021,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                 <label class="form-label">
                                     <i class="fas fa-notes-medical label-icon"></i> Symptoms
                                 </label>
-                                <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;" id="symptomSelector">
+                                <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;">
                                     <?php foreach ($common_symptoms as $symptom): ?>
                                         <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 10px 2px 6px;border-radius:16px;border:2px solid var(--border-color);background:var(--bg-body);cursor:pointer;transition:all 0.3s ease;font-size:0.65rem;color:var(--text-secondary);user-select:none;" 
                                               class="symptom-chip" data-symptom="<?= htmlspecialchars($symptom) ?>" onclick="toggleSymptom(this)">
@@ -2178,7 +2030,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                                         </span>
                                     <?php endforeach; ?>
                                 </div>
-                                <textarea name="symptoms" class="form-control mt-2" placeholder="Patient symptoms..." rows="2" id="symptomsTextarea" style="font-size:0.7rem;margin-top:8px;"><?= htmlspecialchars($_POST['symptoms'] ?? '') ?></textarea>
+                                <textarea name="symptoms" class="form-control" placeholder="Patient symptoms..." rows="2" id="symptomsTextarea" style="font-size:0.7rem;margin-top:8px;"><?= htmlspecialchars($_POST['symptoms'] ?? '') ?></textarea>
                             </div>
                             <div class="form-row" style="margin-bottom:0;">
                                 <label class="form-label">
@@ -2198,14 +2050,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 </div>
             </div>
             
-            <!-- Hidden Fields -->
-            <input type="hidden" name="branch_id" value="<?= $selected_branch_id ?>">
-            <input type="hidden" name="register_patient" value="1">
-            
-            <!-- ✅ Hidden Registered By Info -->
-            <input type="hidden" name="registered_by_id" value="<?= $user_id ?>">
-            <input type="hidden" name="registered_by_name" value="<?= htmlspecialchars($user_full_name) ?>">
-            
             <!-- FORM ACTIONS -->
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary" id="registerBtn">
@@ -2214,12 +2058,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <button type="reset" class="btn btn-outline" id="resetFormBtn">
                     <i class="fas fa-undo"></i> Reset Form
                 </button>
-                <a href="patients.php" class="btn btn-outline">
+                <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-outline">
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
             
-            <!-- FOOTER INFO -->
             <div style="margin-top:16px;padding-top:12px;font-size:0.6rem;color:var(--text-secondary);text-align:center;border-top:1px solid var(--border-color);">
                 <i class="fas fa-info-circle"></i>
                 Patient ID: <strong><?= $patient_id_number ?></strong>
@@ -2230,7 +2073,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <span style="margin:0 6px;">|</span>
                 <span style="color:var(--success);"><i class="fas fa-heartbeat"></i> Vital signs optional</span>
                 <span style="margin:0 6px;">|</span>
-                <span style="color:var(--purple);"><i class="fas fa-user-tie"></i> Registered by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
+                <span style="color:var(--purple);"><i class="fas fa-user-shield"></i> Registered by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
             </div>
         </form>
     </div>
@@ -2240,11 +2083,11 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="color:var(--gray-300);margin:0 6px;">|</span>
-            Register Patient
+            Add Patient
             <span style="color:var(--gray-300);margin:0 6px;">|</span>
             Logged in as: <strong><?= htmlspecialchars($full_name) ?></strong>
             <span style="color:var(--gray-300);margin:0 6px;">|</span>
-            Branch: <strong><?= htmlspecialchars($branch_name) ?></strong>
+            Branch: <strong><?= htmlspecialchars($current_branch_name) ?></strong>
             <span style="color:var(--gray-300);margin:0 6px;">|</span>
             <span id="footerTimestamp">Last updated: <?= date('H:i:s') ?></span>
             <span style="color:var(--gray-300);margin:0 6px;">|</span>
@@ -2264,18 +2107,15 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
 </div>
 
 <script>
-    var selectedBranchId = <?= (int)$selected_branch_id ?>;
+    var selectedBranchId = <?= (int)$target_branch_id ?>;
 
-    // ================================================================
     // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
     var htmlElement = document.documentElement;
     
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
+    if (localStorage.getItem('darkMode') === 'true') {
         htmlElement.setAttribute('data-theme', 'dark');
         if (darkIcon) darkIcon.className = 'fas fa-sun';
         if (darkText) darkText.textContent = 'Light';
@@ -2288,31 +2128,54 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             darkIcon.className = 'fas fa-moon';
             darkText.textContent = 'Dark';
             localStorage.setItem('darkMode', 'false');
+            document.cookie = "dark_mode=false; path=/";
         } else {
             htmlElement.setAttribute('data-theme', 'dark');
             darkIcon.className = 'fas fa-sun';
             darkText.textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
+            document.cookie = "dark_mode=true; path=/";
         }
     });
 
-    // ================================================================
     // SIDEBAR TOGGLE
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-    sidebarToggle?.addEventListener('click', function() { sidebar.classList.toggle('open'); });
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
+    (function() {
+        function updateToggleVisibility() {
+            var btn = document.getElementById('sidebarToggle');
+            if (!btn) return;
+            btn.style.display = window.innerWidth <= 1024 ? 'flex' : 'none';
         }
-    });
+        updateToggleVisibility();
+        window.addEventListener('resize', updateToggleVisibility);
+        
+        var btn = document.getElementById('sidebarToggle');
+        if (btn && !btn.dataset.wired) {
+            btn.dataset.wired = 'true';
+            btn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var sidebar = document.getElementById('sidebar');
+                var overlay = document.getElementById('sidebarOverlay');
+                if (!sidebar) return;
+                var isOpen = sidebar.classList.contains('open');
+                if (isOpen) {
+                    sidebar.classList.remove('open');
+                    if (overlay) { overlay.classList.remove('active'); overlay.style.display = 'none'; }
+                    document.body.classList.remove('sidebar-open');
+                    document.body.style.overflow = '';
+                    document.body.style.position = '';
+                } else {
+                    sidebar.classList.add('open');
+                    if (overlay) { overlay.classList.add('active'); overlay.style.display = 'block'; }
+                    document.body.classList.add('sidebar-open');
+                    document.body.style.overflow = 'hidden';
+                    document.body.style.position = 'fixed';
+                }
+            });
+        }
+    })();
 
-    // ================================================================
     // AUTOCOMPLETE
-    // ================================================================
     var autocompleteTimeout = null;
     var currentAutocompleteIndex = -1;
     
@@ -2335,28 +2198,28 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             results.innerHTML = '';
             dropdown.classList.add('show');
             
-            fetch('new_patient.php?action=search_patients&q=' + encodeURIComponent(query) + '&branch=' + selectedBranchId)
-                .then(function(response) { return response.json(); })
+            fetch('add_patient.php?action=search_patients&q=' + encodeURIComponent(query) + '&branch=' + selectedBranchId)
+                .then(function(r) { return r.json(); })
                 .then(function(data) {
                     if (loading) loading.style.display = 'none';
                     
                     if (data.success && data.patients && data.patients.length > 0) {
                         var html = '';
-                        data.patients.forEach(function(patient) {
-                            var initial = (patient.full_name || 'U').charAt(0).toUpperCase();
-                            var activeVisit = patient.active_visits > 0;
+                        data.patients.forEach(function(p) {
+                            var initial = (p.full_name || 'U').charAt(0).toUpperCase();
+                            var activeVisit = p.active_visits > 0;
                             var visitBadge = activeVisit 
-                                ? '<span class="active-visit-badge">🔄 Active</span>' 
-                                : '<span class="no-visit-badge">📋 No Visit</span>';
+                                ? '<span style="background:var(--warning-bg);color:var(--warning);padding:0 6px;border-radius:8px;font-size:0.5rem;font-weight:600;">🔄 Active</span>' 
+                                : '<span style="background:var(--gray-200);color:var(--text-secondary);padding:0 6px;border-radius:8px;font-size:0.5rem;font-weight:600;">📋 No Visit</span>';
                             
-                            html += '<div class="autocomplete-item" onclick="selectPatient(' + patient.id + ', \'' + escapeHtml(patient.full_name) + '\', \'' + escapeHtml(patient.phone || '') + '\', \'' + escapeHtml(patient.gender || '') + '\', \'' + escapeHtml(patient.date_of_birth || '') + '\', \'' + escapeHtml(patient.address || '') + '\', \'' + escapeHtml(patient.blood_group || '') + '\', \'' + escapeHtml(patient.allergies || '') + '\', \'' + escapeHtml(patient.emergency_contact || '') + '\', \'' + escapeHtml(patient.marital_status || '') + '\')">' +
+                            html += '<div class="autocomplete-item" onclick="selectPatient(' + p.id + ', \'' + escapeHtml(p.full_name) + '\', \'' + escapeHtml(p.phone || '') + '\', \'' + escapeHtml(p.gender || '') + '\', \'' + escapeHtml(p.date_of_birth || '') + '\', \'' + escapeHtml(p.address || '') + '\', \'' + escapeHtml(p.blood_group || '') + '\', \'' + escapeHtml(p.allergies || '') + '\', \'' + escapeHtml(p.emergency_contact || '') + '\', \'' + escapeHtml(p.marital_status || '') + '\')">' +
                                 '<div class="patient-avatar">' + initial + '</div>' +
                                 '<div class="patient-info">' +
-                                    '<span class="patient-name">' + escapeHtml(patient.full_name) + '</span>' +
+                                    '<span class="patient-name">' + escapeHtml(p.full_name) + '</span>' +
                                     '<div class="patient-meta">' +
-                                        '<span><i class="fas fa-id-card"></i> ' + escapeHtml(patient.patient_id || 'N/A') + '</span>' +
-                                        (patient.phone ? '<span><i class="fas fa-phone"></i> ' + escapeHtml(patient.phone) + '</span>' : '') +
-                                        (patient.gender ? '<span><i class="fas fa-venus-mars"></i> ' + escapeHtml(patient.gender) + '</span>' : '') +
+                                        '<span><i class="fas fa-id-card"></i> ' + escapeHtml(p.patient_id || 'N/A') + '</span>' +
+                                        (p.phone ? '<span><i class="fas fa-phone"></i> ' + escapeHtml(p.phone) + '</span>' : '') +
+                                        (p.gender ? '<span><i class="fas fa-venus-mars"></i> ' + escapeHtml(p.gender) + '</span>' : '') +
                                         visitBadge +
                                     '</div>' +
                                 '</div>' +
@@ -2368,9 +2231,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                         results.innerHTML = '<div class="autocomplete-empty"><i class="fas fa-user-plus" style="font-size:1.2rem;display:block;margin-bottom:4px;color:var(--primary);"></i><p style="font-size:0.75rem;">No existing patient found</p><p style="font-size:0.6rem;color:var(--text-secondary);">Continue typing to register new patient</p></div>';
                     }
                 })
-                .catch(function() {
-                    if (loading) loading.style.display = 'none';
-                });
+                .catch(function() { if (loading) loading.style.display = 'none'; });
         }, 250);
     }
     
@@ -2381,7 +2242,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         if (phoneInput && !phoneInput.value) phoneInput.value = phone;
         
         var genderSelect = document.querySelector('select[name="gender"]');
-        if (genderSelect) {
+        if (genderSelect && gender) {
             for (var i = 0; i < genderSelect.options.length; i++) {
                 if (genderSelect.options[i].value === gender) { genderSelect.selectedIndex = i; break; }
             }
@@ -2394,7 +2255,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         if (addressInput && address) addressInput.value = address;
         
         var bloodSelect = document.querySelector('select[name="blood_group"]');
-        if (bloodSelect) {
+        if (bloodSelect && bloodGroup) {
             for (var i = 0; i < bloodSelect.options.length; i++) {
                 if (bloodSelect.options[i].value === bloodGroup) { bloodSelect.selectedIndex = i; break; }
             }
@@ -2410,7 +2271,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         if (emergencyInput && emergencyContact) emergencyInput.value = emergencyContact;
         
         var maritalSelect = document.querySelector('select[name="marital_status"]');
-        if (maritalSelect) {
+        if (maritalSelect && maritalStatus) {
             for (var i = 0; i < maritalSelect.options.length; i++) {
                 if (maritalSelect.options[i].value === maritalStatus) { maritalSelect.selectedIndex = i; break; }
             }
@@ -2453,9 +2314,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
     });
 
-    // ================================================================
-    // BMI CALCULATOR
-    // ================================================================
+    // BMI
     function calculateBMI() {
         var weightInput = document.getElementById('weightInput');
         var heightInput = document.getElementById('heightInput');
@@ -2469,12 +2328,10 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         
         if (weight && height && height > 0) {
             var heightM = height / 100;
-            var bmi = weight / (heightM * heightM);
-            bmi = Math.round(bmi * 10) / 10;
+            var bmi = Math.round((weight / (heightM * heightM)) * 10) / 10;
             bmiOutput.value = bmi;
             
-            var category = '';
-            var categoryClass = '';
+            var category = '', categoryClass = '';
             if (bmi < 18.5) { category = 'Underweight'; categoryClass = 'underweight'; }
             else if (bmi < 25) { category = 'Normal'; categoryClass = 'normal'; }
             else if (bmi < 30) { category = 'Overweight'; categoryClass = 'overweight'; }
@@ -2489,146 +2346,109 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }
     }
 
-    // ================================================================
     // ALLERGIES
-    // ================================================================
     var allergyChips = document.querySelectorAll('.allergy-chip');
     var allergiesTextarea = document.getElementById('allergiesTextarea');
     
     function syncAllergyChips() {
         if (!allergiesTextarea) return;
-        var currentValue = allergiesTextarea.value;
-        var allergyList = currentValue.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
-        
+        var allergyList = allergiesTextarea.value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
         allergyChips.forEach(function(chip) {
-            var allergyName = chip.dataset.allergy;
-            var checkbox = chip.querySelector('.allergy-checkbox');
-            if (allergyList.includes(allergyName)) {
-                chip.classList.add('active');
-                if (checkbox) checkbox.checked = true;
-            } else {
-                chip.classList.remove('active');
-                if (checkbox) checkbox.checked = false;
-            }
+            var name = chip.dataset.allergy;
+            var cb = chip.querySelector('.allergy-checkbox');
+            if (allergyList.includes(name)) { chip.classList.add('active'); if (cb) cb.checked = true; }
+            else { chip.classList.remove('active'); if (cb) cb.checked = false; }
         });
     }
     
     allergyChips.forEach(function(chip) {
         chip.addEventListener('click', function(e) {
             e.preventDefault();
-            var checkbox = this.querySelector('.allergy-checkbox');
-            var allergyName = this.dataset.allergy;
-            
+            var cb = this.querySelector('.allergy-checkbox');
+            var name = this.dataset.allergy;
             this.classList.toggle('active');
-            if (checkbox) checkbox.checked = !checkbox.checked;
+            if (cb) cb.checked = !cb.checked;
             
-            var currentValue = allergiesTextarea.value;
-            var allergyList = currentValue.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
-            
-            if (checkbox && checkbox.checked) {
-                if (!allergyList.includes(allergyName)) allergyList.push(allergyName);
-            } else {
-                allergyList = allergyList.filter(function(item) { return item !== allergyName; });
-            }
-            
-            allergiesTextarea.value = allergyList.join(', ');
+            var list = allergiesTextarea.value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
+            if (cb && cb.checked) { if (!list.includes(name)) list.push(name); }
+            else { list = list.filter(function(item) { return item !== name; }); }
+            allergiesTextarea.value = list.join(', ');
         });
     });
     
     allergiesTextarea?.addEventListener('input', syncAllergyChips);
     syncAllergyChips();
 
-    // ================================================================
     // SYMPTOMS
-    // ================================================================
-    function toggleSymptom(element) {
-        var symptom = element.dataset.symptom;
+    function toggleSymptom(el) {
+        var symptom = el.dataset.symptom;
         var textarea = document.getElementById('symptomsTextarea');
         if (!textarea) return;
         
-        var currentValue = textarea.value;
-        var symptomList = currentValue.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
+        var list = textarea.value.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s !== ''; });
+        el.classList.toggle('active');
         
-        element.classList.toggle('active');
-        if (element.classList.contains('active')) {
-            element.style.borderColor = 'var(--primary)';
-            element.style.background = 'var(--primary-bg)';
-            element.style.color = 'var(--primary)';
+        if (el.classList.contains('active')) {
+            el.style.borderColor = 'var(--primary)';
+            el.style.background = 'var(--primary-bg)';
+            el.style.color = 'var(--primary)';
+            if (!list.includes(symptom)) list.push(symptom);
         } else {
-            element.style.borderColor = 'var(--border-color)';
-            element.style.background = 'var(--bg-body)';
-            element.style.color = 'var(--text-secondary)';
+            el.style.borderColor = 'var(--border-color)';
+            el.style.background = 'var(--bg-body)';
+            el.style.color = 'var(--text-secondary)';
+            list = list.filter(function(item) { return item !== symptom; });
         }
         
-        if (element.classList.contains('active')) {
-            if (!symptomList.includes(symptom)) symptomList.push(symptom);
-        } else {
-            symptomList = symptomList.filter(function(item) { return item !== symptom; });
-        }
-        
-        textarea.value = symptomList.join(', ');
+        textarea.value = list.join(', ');
     }
 
-    // ================================================================
     // FEE DISPLAY
-    // ================================================================
     function updateFeeDisplay() {
         var select = document.getElementById('visitTypeSelect');
         if (!select) return;
+        var opt = select.options[select.selectedIndex];
+        var price = opt.dataset.price || 0;
+        var name = opt.dataset.serviceName || 'Consultation';
+        var formatted = parseInt(price).toLocaleString();
         
-        var selectedOption = select.options[select.selectedIndex];
-        var price = selectedOption.dataset.price || 0;
-        var serviceName = selectedOption.dataset.serviceName || 'Consultation';
-        var formattedPrice = parseInt(price).toLocaleString();
-        
-        var headerFee = document.getElementById('headerFeeDisplay');
-        if (headerFee) headerFee.textContent = 'TSh ' + formattedPrice;
-        var feeDisplay = document.getElementById('feeDisplay');
-        if (feeDisplay) feeDisplay.textContent = formattedPrice;
-        var toggleFee = document.getElementById('toggleFeeAmount');
-        if (toggleFee) toggleFee.textContent = formattedPrice;
-        var feeAmount = document.getElementById('feeAmountDisplay');
-        if (feeAmount) feeAmount.textContent = formattedPrice;
+        var ids = ['headerFeeDisplay', 'feeDisplay', 'toggleFeeAmount', 'feeAmountDisplay'];
+        ids.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.textContent = formatted;
+        });
         
         var preview = document.getElementById('visitTypePreview');
-        if (preview) preview.textContent = serviceName;
+        if (preview) preview.textContent = name;
     }
 
-    // ================================================================
     // TOGGLE ASSIGN DOCTOR
-    // ================================================================
     function toggleAssignDoctor(event) {
-        var checkbox = document.getElementById('assignDoctorCheckbox');
+        var cb = document.getElementById('assignDoctorCheckbox');
         var fields = document.getElementById('assignDoctorFields');
-        var feeInfoBox = document.getElementById('feeInfoBox');
+        var feeBox = document.getElementById('feeInfoBox');
         
-        if (event && event.target && event.target.tagName !== 'INPUT') {
-            checkbox.checked = !checkbox.checked;
-        }
+        if (event && event.target && event.target.tagName !== 'INPUT') cb.checked = !cb.checked;
         
-        if (checkbox && checkbox.checked) {
+        if (cb && cb.checked) {
             if (fields) fields.classList.add('show');
-            if (feeInfoBox) feeInfoBox.style.display = 'flex';
+            if (feeBox) feeBox.style.display = 'flex';
         } else {
             if (fields) fields.classList.remove('show');
-            if (feeInfoBox) feeInfoBox.style.display = 'none';
+            if (feeBox) feeBox.style.display = 'none';
         }
     }
     
     document.addEventListener('DOMContentLoaded', function() {
-        var checkbox = document.getElementById('assignDoctorCheckbox');
-        var feeInfoBox = document.getElementById('feeInfoBox');
-        if (checkbox && !checkbox.checked && feeInfoBox) feeInfoBox.style.display = 'none';
-        else if (checkbox && checkbox.checked && feeInfoBox) feeInfoBox.style.display = 'flex';
+        var cb = document.getElementById('assignDoctorCheckbox');
+        var feeBox = document.getElementById('feeInfoBox');
+        if (cb && !cb.checked && feeBox) feeBox.style.display = 'none';
+        else if (cb && cb.checked && feeBox) feeBox.style.display = 'flex';
         updateFeeDisplay();
     });
 
-    // ================================================================
-    // DOCTOR STATUS AUTO-UPDATE
-    // ================================================================
-    var doctorUpdateInterval = null;
+    // DOCTOR AUTO-UPDATE
     var isUpdatingDoctors = false;
-
     function fetchDoctorStatus() {
         if (isUpdatingDoctors) return;
         isUpdatingDoctors = true;
@@ -2638,30 +2458,21 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         formData.append('branch_id', selectedBranchId);
         
         fetch(window.location.href, { method: 'POST', body: formData })
-            .then(function(response) { return response.json(); })
+            .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.success) {
                     var onlineCount = document.getElementById('onlineCountDisplay');
                     var offlineCount = document.getElementById('offlineCountDisplay');
-                    var doctorCountBadge = document.getElementById('doctorCountBadge');
-                    var lastUpdate = document.getElementById('lastDoctorUpdate');
-                    var doctorUpdateStatus = document.getElementById('doctorUpdateStatus');
-                    
+                    var status = document.getElementById('doctorUpdateStatus');
                     if (onlineCount) onlineCount.textContent = '🟢 ' + data.online_count + ' online';
                     if (offlineCount) offlineCount.textContent = '⚪ ' + data.offline_count + ' offline';
-                    if (doctorCountBadge) doctorCountBadge.textContent = '(' + data.online_count + ' online, ' + data.offline_count + ' offline)';
-                    if (lastUpdate) lastUpdate.textContent = 'Updated: ' + data.timestamp;
-                    if (doctorUpdateStatus) doctorUpdateStatus.textContent = 'Live ' + data.timestamp;
+                    if (status) status.textContent = 'Live ' + data.timestamp;
                     
-                    var doctorSelect = document.getElementById('doctorSelect');
-                    if (doctorSelect && data.doctor_options) {
-                        var currentValue = doctorSelect.value;
-                        doctorSelect.innerHTML = data.doctor_options;
-                        if (currentValue) {
-                            doctorSelect.querySelectorAll('option').forEach(function(opt) {
-                                if (opt.value == currentValue) doctorSelect.value = currentValue;
-                            });
-                        }
+                    var sel = document.getElementById('doctorSelect');
+                    if (sel && data.doctor_options) {
+                        var current = sel.value;
+                        sel.innerHTML = data.doctor_options;
+                        if (current) sel.value = current;
                     }
                 }
                 isUpdatingDoctors = false;
@@ -2669,30 +2480,20 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             .catch(function() { isUpdatingDoctors = false; });
     }
 
-    function startDoctorAutoUpdate() {
-        if (doctorUpdateInterval) clearInterval(doctorUpdateInterval);
-        setTimeout(function() { fetchDoctorStatus(); }, 1000);
-        doctorUpdateInterval = setInterval(fetchDoctorStatus, 3000);
-    }
-
-    // ================================================================
     // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
         var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
-        var clockDisplay = document.getElementById('clockDisplay');
-        if (clockDisplay) clockDisplay.textContent = dateStr + ' • ' + timeStr;
-        var footerTimestamp = document.getElementById('footerTimestamp');
-        if (footerTimestamp) footerTimestamp.textContent = 'Last updated: ' + timeStr;
+        var clock = document.getElementById('clockDisplay');
+        if (clock) clock.textContent = dateStr + ' • ' + timeStr;
+        var ft = document.getElementById('footerTimestamp');
+        if (ft) ft.textContent = 'Last updated: ' + timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
     // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -2710,31 +2511,21 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
     // FORM VALIDATION
-    // ================================================================
     document.getElementById('registrationForm')?.addEventListener('submit', function(e) {
         var name = document.querySelector('input[name="full_name"]').value.trim();
         var gender = document.querySelector('select[name="gender"]').value;
         var assignDoctor = document.getElementById('assignDoctorCheckbox').checked;
         
-        if (!name) {
-            e.preventDefault();
-            showToast('Error', 'Please enter patient full name', 'error');
-            return false;
-        }
-        if (!gender) {
-            e.preventDefault();
-            showToast('Error', 'Please select gender', 'error');
-            return false;
-        }
+        if (!name) { e.preventDefault(); showToast('Error', 'Please enter patient full name', 'error'); return false; }
+        if (!gender) { e.preventDefault(); showToast('Error', 'Please select gender', 'error'); return false; }
         
         if (assignDoctor) {
-            var doctorSelect = document.getElementById('doctorSelect');
-            if (!doctorSelect.value) {
+            var docSel = document.getElementById('doctorSelect');
+            if (!docSel.value) {
                 e.preventDefault();
                 showToast('Error', 'Please select a doctor', 'error');
-                doctorSelect.focus();
+                docSel.focus();
                 return false;
             }
         }
@@ -2744,20 +2535,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Registering...';
     });
 
-    // ================================================================
-    // RESET FORM
-    // ================================================================
+    // RESET
     document.getElementById('resetFormBtn')?.addEventListener('click', function(e) {
         e.preventDefault();
-        
-        var form = document.getElementById('registrationForm');
-        form.reset();
+        document.getElementById('registrationForm').reset();
         
         if (allergiesTextarea) allergiesTextarea.value = '';
         allergyChips.forEach(function(chip) {
             chip.classList.remove('active');
-            var checkbox = chip.querySelector('.allergy-checkbox');
-            if (checkbox) checkbox.checked = false;
+            var cb = chip.querySelector('.allergy-checkbox');
+            if (cb) cb.checked = false;
         });
         
         document.querySelectorAll('.symptom-chip').forEach(function(chip) {
@@ -2766,42 +2553,33 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             chip.style.background = 'var(--bg-body)';
             chip.style.color = 'var(--text-secondary)';
         });
-        var symptomsTextarea = document.getElementById('symptomsTextarea');
-        if (symptomsTextarea) symptomsTextarea.value = '';
         
-        var bmiOutput = document.getElementById('bmiOutput');
-        var bmiCategory = document.getElementById('bmiCategory');
-        if (bmiOutput) bmiOutput.value = '';
-        if (bmiCategory) {
-            bmiCategory.textContent = 'Auto';
-            bmiCategory.className = 'vital-bmi-category';
-        }
+        var st = document.getElementById('symptomsTextarea');
+        if (st) st.value = '';
         
-        var assignCheckbox = document.getElementById('assignDoctorCheckbox');
-        var assignFields = document.getElementById('assignDoctorFields');
-        var feeInfoBox = document.getElementById('feeInfoBox');
-        if (assignCheckbox) assignCheckbox.checked = false;
-        if (assignFields) assignFields.classList.remove('show');
-        if (feeInfoBox) feeInfoBox.style.display = 'none';
+        var bmiOut = document.getElementById('bmiOutput');
+        var bmiCat = document.getElementById('bmiCategory');
+        if (bmiOut) bmiOut.value = '';
+        if (bmiCat) { bmiCat.textContent = 'Auto'; bmiCat.className = 'vital-bmi-category'; }
         
-        var visitTypeSelect = document.getElementById('visitTypeSelect');
-        if (visitTypeSelect) {
-            var defaultOption = visitTypeSelect.querySelector('option[selected]');
-            if (defaultOption) visitTypeSelect.value = defaultOption.value;
-        }
+        var cb = document.getElementById('assignDoctorCheckbox');
+        var fields = document.getElementById('assignDoctorFields');
+        var feeBox = document.getElementById('feeInfoBox');
+        if (cb) cb.checked = false;
+        if (fields) fields.classList.remove('show');
+        if (feeBox) feeBox.style.display = 'none';
+        
         updateFeeDisplay();
-        
         hideAutocomplete();
-        showToast('🔄 Reset', 'Form has been reset successfully', 'info');
+        showToast('🔄 Reset', 'Form has been reset', 'info');
     });
 
-    // ================================================================
     // INIT
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         calculateBMI();
         updateFeeDisplay();
-        setTimeout(function() { startDoctorAutoUpdate(); }, 2000);
+        setTimeout(fetchDoctorStatus, 2000);
+        setInterval(fetchDoctorStatus, 3000);
         
         document.getElementById('visitTypeSelect')?.addEventListener('change', updateFeeDisplay);
         
@@ -2814,18 +2592,16 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         var searchBtn = document.getElementById('searchBtn');
         var searchInput = document.getElementById('searchInput');
         function performSearch() {
-            var query = searchInput.value.trim();
-            if (query.length > 0) window.location.href = 'search.php?q=' + encodeURIComponent(query);
+            var q = searchInput.value.trim();
+            if (q.length > 0) window.location.href = 'patients.php?branch=<?= urlencode($selected_branch_id) ?>&search=' + encodeURIComponent(q);
         }
         searchBtn?.addEventListener('click', performSearch);
         searchInput?.addEventListener('keypress', function(e) { if (e.key === 'Enter') performSearch(); });
         
-        console.log('%c👤 Braick - New Patient Registration', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-        console.log('%c✅ Embedded Header ADDED', 'font-size:13px; color:#34D399;');
-        console.log('%c✅ Vital Signs: 3 TOP + 3 BOTTOM', 'font-size:13px; color:#DC2626;');
-        console.log('%c✅ Autocomplete enabled', 'font-size:13px; color:#FBBF24;');
-        console.log('%c✅ No phone/email validation', 'font-size:13px; color:#34D399;');
-        console.log('%c✅ REGISTERED BY: Saves receptionist name', 'font-size:13px; color:#7C3AED;');
+        console.log('%c👑 Braick - Admin Add Patient', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+        console.log('%c✅ FIXED: Removed isActive() conflict', 'font-size:13px; color:#34D399; font-weight:bold;');
+        console.log('%c✅ Uses SHARED admin_sidebar.php', 'font-size:13px; color:#34D399;');
+        console.log('%c✅ REGISTERED BY: Saves admin name', 'font-size:13px; color:#7C3AED; font-weight:bold;');
     });
 </script>
 

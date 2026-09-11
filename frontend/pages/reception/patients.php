@@ -2,7 +2,15 @@
 // ================================================================
 // FILE: frontend/pages/reception/patients.php
 // RECEPTION - PATIENT MANAGEMENT
-// ✅ FINAL FIX: No duplicates - Check by ID and Name
+// ✅ AUTO-FILTER: Search & Filter work automatically without button click
+// ✅ No duplicates - Check by ID and Name
+// ✅ NO PAGINATION - Shows all patients
+// ✅ TOP HEADER SEARCH BAR: WHITE background
+// ✅ TABLE SEARCH BAR: BLUE background, LEFT side
+// ✅ # Column showing row numbers
+// ✅ Registered By column
+// ✅ Scroll < > buttons on table header
+// ✅ Patient names in BLACK
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -14,7 +22,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -22,7 +30,7 @@ if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
 }
 
 // ================================================================
-// CHECK IF USER HAS ACCESS (Reception or Admin)
+// CHECK IF USER HAS ACCESS
 // ================================================================
 $allowed_roles = ['reception', 'admin'];
 if (!in_array($_SESSION['role'], $allowed_roles)) {
@@ -38,7 +46,7 @@ if (!in_array($_SESSION['role'], $allowed_roles)) {
 }
 
 // ================================================================
-// GET USER DATA FROM SESSION
+// GET USER DATA
 // ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $full_name = $_SESSION['full_name'] ?? 'User';
@@ -48,19 +56,13 @@ $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// PATH SAHIHI
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 // ================================================================
-// GET PARAMETERS
+// GET PARAMETERS (NO PAGINATION)
 // ================================================================
 $search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
-$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-$limit = 15;
-$offset = ($page - 1) * $limit;
 $selected_patient_id = isset($_GET['patient_id']) ? (int)$_GET['patient_id'] : 0;
 
 $error = isset($_GET['error']) ? $_GET['error'] : '';
@@ -70,12 +72,26 @@ try {
     $db = Database::getInstance()->getConnection();
     
     // ================================================================
-    // ✅ GET ALL PATIENTS - SIMPLE QUERY
+    // CHECK IF registered_by COLUMN EXISTS IN patients TABLE
+    // ================================================================
+    try {
+        $stmt = $db->query("SHOW COLUMNS FROM patients LIKE 'registered_by'");
+        if ($stmt->rowCount() == 0) {
+            $db->exec("ALTER TABLE `patients` ADD COLUMN `registered_by` INT NULL AFTER `assigned_doctor_id`");
+            $db->exec("ALTER TABLE `patients` ADD COLUMN `registered_by_name` VARCHAR(150) NULL AFTER `registered_by`");
+        }
+    } catch (Exception $e) {}
+    
+    // ================================================================
+    // GET ALL PATIENTS (NO LIMIT - SHOW ALL)
     // ================================================================
     $sql = "
-        SELECT DISTINCT p.*, u.full_name as assigned_doctor_name
+        SELECT DISTINCT p.*, 
+               u.full_name as assigned_doctor_name,
+               COALESCE(p.registered_by_name, ru.full_name, 'System') as registered_by_display
         FROM patients p
         LEFT JOIN users u ON p.assigned_doctor_id = u.id
+        LEFT JOIN users ru ON p.registered_by = ru.id
         WHERE p.branch_id = ?
     ";
     $params = [$branch_id];
@@ -100,97 +116,58 @@ try {
         $sql .= " AND NOT EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
     }
     
-    $sql .= " ORDER BY p.created_at DESC LIMIT ? OFFSET ?";
-    $params[] = $limit;
-    $params[] = $offset;
+    // NO LIMIT - SHOW ALL PATIENTS
+    $sql .= " ORDER BY p.created_at DESC";
     
     $stmt = $db->prepare($sql);
     $stmt->execute($params);
     $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // ✅ FIX: REMOVE DUPLICATES BY ID AND NAME
+    // REMOVE DUPLICATES
     // ================================================================
     $unique_patients = [];
     $seen_ids = [];
-    $seen_names = [];
     
     foreach ($patients as $patient) {
         $id = $patient['id'];
-        $name = trim($patient['full_name']);
-        
-        // Check if we've seen this ID before
         if (!in_array($id, $seen_ids)) {
             $seen_ids[] = $id;
-            $seen_names[] = $name;
             $unique_patients[] = $patient;
         }
     }
     $patients = $unique_patients;
     
     // ================================================================
-    // ✅ GET ADDITIONAL DATA FOR EACH PATIENT
+    // GET ADDITIONAL DATA
     // ================================================================
     foreach ($patients as $key => $patient) {
-        // Get total visits
         $stmt = $db->prepare("SELECT COUNT(*) FROM visits WHERE patient_id = ?");
         $stmt->execute([$patient['id']]);
         $patients[$key]['total_visits'] = (int)$stmt->fetchColumn();
         
-        // Get active appointments
         $stmt = $db->prepare("SELECT COUNT(*) FROM appointments WHERE patient_id = ? AND status IN ('scheduled', 'confirmed')");
         $stmt->execute([$patient['id']]);
         $patients[$key]['active_appointments'] = (int)$stmt->fetchColumn();
         
-        // Get patient days
         $stmt = $db->prepare("SELECT DATEDIFF(NOW(), created_at) FROM patients WHERE id = ?");
         $stmt->execute([$patient['id']]);
         $patients[$key]['patient_days'] = (int)$stmt->fetchColumn();
         
-        // Set patient status
         $patients[$key]['patient_status'] = ($patients[$key]['patient_days'] <= 7) ? 'new' : 'existing';
         
-        // Get latest visit
         $stmt = $db->prepare("SELECT id, visit_number, status, created_at FROM visits WHERE patient_id = ? ORDER BY created_at DESC LIMIT 1");
         $stmt->execute([$patient['id']]);
         $patients[$key]['latest_visit'] = $stmt->fetch(PDO::FETCH_ASSOC);
     }
     
     // ================================================================
-    // ✅ GET TOTAL COUNT FOR PAGINATION
+    // TOTAL COUNT
     // ================================================================
-    $count_sql = "
-        SELECT COUNT(DISTINCT p.id) as total 
-        FROM patients p
-        WHERE p.branch_id = ?
-    ";
-    $count_params = [$branch_id];
-    
-    if (!empty($search)) {
-        $count_sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
-        $count_params[] = $search_param;
-        $count_params[] = $search_param;
-        $count_params[] = $search_param;
-    }
-    
-    if ($filter === 'with_doctor') {
-        $count_sql .= " AND p.assigned_doctor_id IS NOT NULL";
-    } elseif ($filter === 'without_doctor') {
-        $count_sql .= " AND p.assigned_doctor_id IS NULL";
-    } elseif ($filter === 'new') {
-        $count_sql .= " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-    } elseif ($filter === 'no_visit') {
-        $count_sql .= " AND NOT EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
-    }
-    
-    $stmt = $db->prepare($count_sql);
-    $stmt->execute($count_params);
-    $total_result = $stmt->fetch(PDO::FETCH_ASSOC);
-    $total_patients = $total_result['total'] ?? 0;
-    $total_pages = ceil($total_patients / $limit);
+    $total_patients = count($patients);
     
     // ================================================================
-    // ✅ GET STATS - COUNT ALL PATIENTS
+    // GET STATS
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
@@ -209,7 +186,6 @@ try {
     $patients = [];
     $stats = ['total' => 0, 'with_doctor' => 0, 'without_doctor' => 0, 'new_patients' => 0];
     $total_patients = 0;
-    $total_pages = 0;
 }
 
 // ================================================================
@@ -337,6 +313,9 @@ include_once '../../components/reception_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
+        /* ================================================================ */
+        /* TOP NAV - WHITE SEARCH BAR (DEFAULT) */
+        /* ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -355,6 +334,7 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: var(--shadow-sm);
         }
         
+        /* ✅ TOP NAV SEARCH BAR - WHITE BACKGROUND */
         .top-nav .search-wrapper {
             display: flex;
             align-items: center;
@@ -363,7 +343,7 @@ include_once '../../components/reception_sidebar.php';
             border: 2px solid var(--border-color);
             transition: all 0.3s;
             flex: 1;
-            max-width: 500px;
+            max-width: 280px;
         }
         
         .top-nav .search-wrapper:focus-within {
@@ -371,30 +351,38 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
         }
         
+        .top-nav .search-wrapper i {
+            color: var(--text-secondary) !important;
+            font-size: 0.75rem;
+            margin-left: 10px;
+        }
+        
         .top-nav .search-wrapper input {
             border: none;
             background: transparent;
-            padding: 8px 14px;
+            padding: 6px 10px;
             width: 100%;
-            font-size: 0.85rem;
+            font-size: 0.78rem;
             outline: none;
             color: var(--text-primary);
         }
         
         .top-nav .search-wrapper input::placeholder {
             color: var(--text-secondary);
+            font-size: 0.75rem;
         }
         
         .top-nav .search-wrapper .search-btn {
             background: var(--primary-gradient);
             color: white;
             border: none;
-            padding: 8px 16px;
+            padding: 6px 12px;
             border-radius: 0 var(--radius) var(--radius) 0;
             cursor: pointer;
-            font-size: 0.85rem;
+            font-size: 0.72rem;
             transition: all 0.3s;
             white-space: nowrap;
+            font-weight: 600;
         }
         
         .top-nav .search-wrapper .search-btn:hover {
@@ -410,9 +398,7 @@ include_once '../../components/reception_sidebar.php';
             gap: 6px;
         }
         
-        .top-nav .datetime i {
-            color: var(--primary-light);
-        }
+        .top-nav .datetime i { color: var(--primary-light); }
         
         .top-nav .avatar {
             width: 40px;
@@ -699,11 +685,49 @@ include_once '../../components/reception_sidebar.php';
             color: var(--primary);
         }
         
+        /* ================================================================ */
+        /* TABLE HEADER SCROLL BUTTONS < > */
+        /* ================================================================ */
+        .table-scroll-controls {
+            display: flex;
+            gap: 4px;
+            align-items: center;
+            margin-left: 10px;
+        }
+        
+        .scroll-btn {
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            border: 2px solid var(--primary);
+            background: var(--bg-card);
+            color: var(--primary);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7rem;
+            transition: all 0.3s;
+            font-weight: 700;
+        }
+        
+        .scroll-btn:hover {
+            background: var(--primary);
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+        }
+        
+        .scroll-btn:active {
+            transform: translateY(0);
+        }
+        
         /* TABLE HEADERS - BLUE BACKGROUND */
         .patient-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.85rem;
+            min-width: 1400px;
         }
         
         .patient-table thead {
@@ -720,6 +744,7 @@ include_once '../../components/reception_sidebar.php';
             letter-spacing: 0.05em;
             color: white;
             border-bottom: none;
+            white-space: nowrap;
         }
         
         .patient-table thead th:first-child {
@@ -730,9 +755,40 @@ include_once '../../components/reception_sidebar.php';
             border-radius: 0 8px 0 0;
         }
         
+        /* ✅ # Column Styling */
+        .patient-table .col-sno {
+            width: 50px;
+            text-align: center;
+            font-weight: 700;
+            color: var(--primary);
+            font-size: 0.8rem;
+        }
+        
         .patient-table tbody td {
             padding: 10px 12px;
             border-bottom: 1px solid var(--border-color);
+            color: #000000 !important;
+        }
+        
+        /* ✅ PATIENT NAME - BLACK TEXT */
+        .patient-table tbody td a.patient-name-link {
+            color: #000000 !important;
+            font-weight: 600;
+            text-decoration: none;
+            transition: color 0.3s;
+        }
+        
+        .patient-table tbody td a.patient-name-link:hover {
+            color: var(--primary) !important;
+            text-decoration: underline;
+        }
+        
+        [data-theme="dark"] .patient-table tbody td {
+            color: #F1F5F9 !important;
+        }
+        
+        [data-theme="dark"] .patient-table tbody td a.patient-name-link {
+            color: #F1F5F9 !important;
         }
         
         .patient-table tbody tr:hover td {
@@ -786,6 +842,25 @@ include_once '../../components/reception_sidebar.php';
         .days-badge-blue.new {
             background: var(--success) !important;
             box-shadow: 0 2px 4px rgba(5, 150, 105, 0.2);
+        }
+        
+        /* ✅ Registered By Badge */
+        .registered-by-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: var(--purple-bg);
+            color: var(--purple);
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 0.62rem;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        
+        [data-theme="dark"] .registered-by-badge {
+            background: #2D1B5F;
+            color: #C4B5FD;
         }
         
         /* Buttons */
@@ -850,36 +925,6 @@ include_once '../../components/reception_sidebar.php';
             box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
         }
         
-        /* Pagination */
-        .pagination {
-            display: flex;
-            gap: 4px;
-            justify-content: center;
-            margin-top: 16px;
-        }
-        .pagination .page-link {
-            padding: 4px 12px;
-            border-radius: 6px;
-            border: 2px solid var(--border-color);
-            color: var(--text-secondary);
-            text-decoration: none;
-            font-size: 0.78rem;
-            transition: all 0.3s;
-        }
-        .pagination .page-link:hover {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        .pagination .page-link.active {
-            background: var(--primary);
-            border-color: var(--primary);
-            color: white;
-        }
-        .pagination .page-link.disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        
         /* Toast */
         .toast-custom {
             position: fixed;
@@ -918,15 +963,212 @@ include_once '../../components/reception_sidebar.php';
             font-weight: 500;
         }
         
+        /* ================================================================ */
+        /* ✅ TABLE SEARCH & FILTER SECTION - BLUE BACKGROUND */
+        /* ================================================================ */
+        .search-filter-wrapper {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            background: var(--primary-gradient);
+            padding: 10px 14px;
+            border-radius: var(--radius);
+            box-shadow: 0 4px 16px rgba(37, 99, 235, 0.2);
+            border: 2px solid var(--primary-dark);
+            margin-left: 0;
+        }
+        
+        /* ✅ Card header layout - search on LEFT */
+        .table-card .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .card-header-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        
+        .card-header-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .filter-input {
+            padding: 8px 14px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: var(--radius);
+            font-size: 0.75rem;
+            background: rgba(255,255,255,0.95);
+            color: #1E293B;
+            outline: none;
+            transition: all 0.3s;
+            min-width: 150px;
+            font-weight: 500;
+        }
+        
+        .filter-input:focus {
+            border-color: white;
+            background: #FFFFFF;
+            box-shadow: 0 0 0 3px rgba(255,255,255,0.3);
+            transform: translateY(-1px);
+        }
+        
+        .filter-input::placeholder {
+            color: #64748B;
+            opacity: 0.7;
+            font-weight: 400;
+            font-size: 0.72rem;
+        }
+        
+        .filter-input option {
+            background: white;
+            color: #1E293B;
+            padding: 8px;
+        }
+        
+        /* ✅ Loading indicator */
+        .auto-filter-loading {
+            display: none;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.65rem;
+            color: white;
+            padding: 5px 12px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.2);
+            border: 1px solid rgba(255,255,255,0.3);
+            backdrop-filter: blur(4px);
+        }
+        
+        .auto-filter-loading.show {
+            display: inline-flex;
+        }
+        
+        .auto-filter-loading .spinner-small {
+            width: 10px;
+            height: 10px;
+            border: 2px solid rgba(255,255,255,0.4);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* ✅ Clear button */
+        .clear-filter-btn {
+            display: none;
+            align-items: center;
+            gap: 4px;
+            padding: 7px 14px;
+            border-radius: var(--radius);
+            font-size: 0.7rem;
+            font-weight: 600;
+            background: rgba(255,255,255,0.95);
+            color: var(--danger);
+            border: 2px solid white;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+        }
+        
+        .clear-filter-btn.show {
+            display: inline-flex;
+        }
+        
+        .clear-filter-btn:hover {
+            background: var(--danger);
+            color: white;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        /* Search wrapper with icon */
+        .search-input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+        
+        .search-input-wrapper i {
+            position: absolute;
+            left: 12px;
+            color: var(--primary);
+            font-size: 0.75rem;
+            pointer-events: none;
+            z-index: 1;
+        }
+        
+        .search-input-wrapper input {
+            padding-left: 34px;
+            min-width: 220px;
+        }
+        
+        /* Status indicator */
+        .filter-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.62rem;
+            color: white;
+            padding: 5px 12px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.2);
+            backdrop-filter: blur(4px);
+            font-weight: 500;
+        }
+        
+        /* ✅ Scroll container with visible scrollbar */
+        .table-scroll-container {
+            overflow-x: auto;
+            overflow-y: visible;
+            position: relative;
+            border-radius: 8px;
+            padding-bottom: 6px;
+        }
+        
+        .table-scroll-container::-webkit-scrollbar {
+            height: 8px;
+        }
+        
+        .table-scroll-container::-webkit-scrollbar-track {
+            background: var(--bg-body);
+            border-radius: 10px;
+        }
+        
+        .table-scroll-container::-webkit-scrollbar-thumb {
+            background: var(--primary);
+            border-radius: 10px;
+        }
+        
+        .table-scroll-container::-webkit-scrollbar-thumb:hover {
+            background: var(--primary-dark);
+        }
+        
         /* Responsive */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
+            .top-nav .search-wrapper { max-width: 220px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .search-wrapper { max-width: 160px; }
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
@@ -935,13 +1177,28 @@ include_once '../../components/reception_sidebar.php';
             .patient-table thead th, 
             .patient-table tbody td { padding: 6px 8px; }
             .card-header { flex-direction: column; align-items: stretch; }
-            .search-filter-wrapper form { flex-direction: column; width: 100%; }
-            .search-filter-wrapper .filter-input { width: 100%; min-width: unset; }
+            .search-filter-wrapper { 
+                flex-direction: column; 
+                width: 100%; 
+                align-items: stretch;
+            }
+            .search-filter-wrapper .filter-input { 
+                width: 100%; 
+                min-width: unset; 
+            }
+            .search-input-wrapper input {
+                min-width: unset;
+                width: 100%;
+            }
+            .card-header-left,
+            .card-header-right {
+                width: 100%;
+            }
         }
         
         @media (max-width: 640px) {
             .main-content { padding: 10px; }
-            .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
+            .top-nav .search-wrapper .search-btn { padding: 6px 8px; font-size: 0.65rem; }
             .page-header .header-badge { font-size: 0.6rem; padding: 2px 10px; }
         }
         
@@ -952,56 +1209,6 @@ include_once '../../components/reception_sidebar.php';
         .animate-fade-in-up {
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
-        }
-        
-        .spinner {
-            display: inline-block;
-            width: 14px;
-            height: 14px;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 0.6s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-        
-        /* Search filter in header */
-        .search-filter-wrapper {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        .search-filter-wrapper .filter-input {
-            padding: 6px 12px;
-            border: 2px solid var(--border-color);
-            border-radius: var(--radius);
-            font-size: 0.78rem;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            outline: none;
-            transition: all 0.3s;
-            min-width: 150px;
-        }
-        .search-filter-wrapper .filter-input:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
-        }
-        .search-filter-wrapper .filter-input::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.6;
-        }
-        
-        .update-badge-light {
-            background: rgba(255,255,255,0.12);
-            color: rgba(255,255,255,0.8);
-            padding: 3px 12px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            backdrop-filter: blur(4px);
         }
         
         .branch-badge-display {
@@ -1027,12 +1234,24 @@ include_once '../../components/reception_sidebar.php';
             animation: pulse-dot 1.5s infinite;
             margin-right: 4px;
         }
+        
+        .update-badge-light {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.8);
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            backdrop-filter: blur(4px);
+        }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION - WHITE SEARCH BAR -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1041,10 +1260,10 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search patients..." value="<?= htmlspecialchars($search) ?>">
+            <i class="fas fa-search"></i>
+            <input type="text" id="searchInput" placeholder="Search..." value="<?= htmlspecialchars($search) ?>">
             <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
+                <i class="fas fa-search"></i>
             </button>
         </div>
     </div>
@@ -1081,9 +1300,7 @@ include_once '../../components/reception_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1125,9 +1342,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- STATS CARDS -->
-    <!-- ================================================================ -->
     <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5 animate-fade-in-up">
         <div class="stat-card">
             <p class="stat-number"><?= $stats['total'] ?? 0 ?></p>
@@ -1147,58 +1362,92 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- TABLE CARD WITH HEADER FILTERS -->
-    <!-- ================================================================ -->
+    <!-- TABLE CARD WITH AUTO-FILTER -->
     <div class="table-card animate-fade-in-up" style="animation-delay:0.1s;">
+        <!-- CARD HEADER - SEARCH ON LEFT -->
         <div class="card-header">
-            <div class="card-title">
-                <i class="fas fa-list"></i> Patient List
-                <span style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:20px;font-size:0.7rem;font-weight:500;"><?= $total_patients ?> patients</span>
+            <!-- LEFT SIDE: SEARCH FILTER -->
+            <div class="card-header-left">
+                <div class="search-filter-wrapper">
+                    <div class="auto-filter-loading" id="filterLoading">
+                        <div class="spinner-small"></div>
+                        <span>Filtering...</span>
+                    </div>
+                    
+                    <!-- Search Input -->
+                    <div class="search-input-wrapper">
+                        <i class="fas fa-search"></i>
+                        <input type="text" 
+                               id="searchFilter" 
+                               class="filter-input" 
+                               placeholder="Search name, ID, phone..." 
+                               value="<?= htmlspecialchars($search) ?>"
+                               oninput="autoFilter()">
+                    </div>
+                    
+                    <!-- Filter Dropdown -->
+                    <select id="filterSelect" class="filter-input" style="min-width:150px;" onchange="autoFilter()">
+                        <option value="all" <?= $filter === 'all' ? 'selected' : '' ?>>👥 All</option>
+                        <option value="new" <?= $filter === 'new' ? 'selected' : '' ?>>🆕 New (7d)</option>
+                        <option value="with_doctor" <?= $filter === 'with_doctor' ? 'selected' : '' ?>>✅ With Doctor</option>
+                        <option value="without_doctor" <?= $filter === 'without_doctor' ? 'selected' : '' ?>>⚠️ No Doctor</option>
+                        <option value="no_visit" <?= $filter === 'no_visit' ? 'selected' : '' ?>>📋 No Visit</option>
+                    </select>
+                    
+                    <!-- Clear Button -->
+                    <a href="patients.php" class="clear-filter-btn <?= (!empty($search) || $filter !== 'all') ? 'show' : '' ?>" id="clearFilterBtn">
+                        <i class="fas fa-times"></i> Clear
+                    </a>
+                    
+                    <!-- Filter Status -->
+                    <span class="filter-status" id="filterStatus">
+                        <i class="fas fa-bolt"></i>
+                        <span id="filterStatusText">Auto-filter</span>
+                    </span>
+                </div>
             </div>
             
-            <!-- SEARCH FILTER IN HEADER -->
-            <div class="search-filter-wrapper">
-                <form action="patients.php" method="GET" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
-                    <input type="text" name="search" class="filter-input" placeholder="Search by name, ID, phone..." value="<?= htmlspecialchars($search) ?>">
-                    <select name="filter" class="filter-input" style="min-width:120px;padding:6px 12px;">
-                        <option value="all" <?= $filter === 'all' ? 'selected' : '' ?>>All Patients</option>
-                        <option value="new" <?= $filter === 'new' ? 'selected' : '' ?>>New (7 days)</option>
-                        <option value="with_doctor" <?= $filter === 'with_doctor' ? 'selected' : '' ?>>With Doctor</option>
-                        <option value="without_doctor" <?= $filter === 'without_doctor' ? 'selected' : '' ?>>No Doctor</option>
-                        <option value="no_visit" <?= $filter === 'no_visit' ? 'selected' : '' ?>>No Visit</option>
-                    </select>
-                    <button type="submit" class="btn btn-primary btn-sm">
-                        <i class="fas fa-search"></i> Filter
+            <!-- RIGHT SIDE: TITLE + COUNT + SCROLL BUTTONS -->
+            <div class="card-header-right">
+                <div class="card-title" style="margin:0;">
+                    <i class="fas fa-list"></i> Patient List
+                    <span id="patientCountBadge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:20px;font-size:0.7rem;font-weight:500;">
+                        <?= $total_patients ?> patients
+                    </span>
+                </div>
+                
+                <!-- ✅ SCROLL < > BUTTONS -->
+                <div class="table-scroll-controls">
+                    <button type="button" class="scroll-btn" onclick="scrollTableLeft()" title="Scroll Left">
+                        <i class="fas fa-chevron-left"></i>
                     </button>
-                    <?php if (!empty($search) || $filter !== 'all'): ?>
-                        <a href="patients.php" class="btn btn-outline btn-sm">
-                            <i class="fas fa-times"></i> Clear
-                        </a>
-                    <?php endif; ?>
-                </form>
+                    <button type="button" class="scroll-btn" onclick="scrollTableRight()" title="Scroll Right">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
             </div>
         </div>
 
-        <!-- ================================================================ -->
-        <!-- PATIENT TABLE - BLUE HEADERS -->
-        <!-- ================================================================ -->
-        <div style="overflow-x:auto;">
+        <!-- PATIENT TABLE -->
+        <div id="tableContainer" class="table-scroll-container">
             <?php if (!empty($patients) && count($patients) > 0): ?>
             <table class="patient-table">
                 <thead>
                     <tr>
+                        <th class="col-sno">#</th>
                         <th><i class="fas fa-user mr-1"></i> Patient</th>
                         <th><i class="fas fa-id-card mr-1"></i> Patient ID</th>
                         <th><i class="fas fa-phone mr-1"></i> Contact</th>
                         <th><i class="fas fa-calendar mr-1"></i> Days</th>
                         <th><i class="fas fa-user-md mr-1"></i> Doctor</th>
                         <th><i class="fas fa-notes-medical mr-1"></i> Visits</th>
+                        <th><i class="fas fa-user-plus mr-1"></i> Registered By</th>
                         <th><i class="fas fa-circle mr-1"></i> Status</th>
                         <th><i class="fas fa-cog mr-1"></i> Action</th>
                     </tr>
                 </thead>
-                <tbody>
+                <tbody id="patientTableBody">
+                    <?php $counter = 1; ?>
                     <?php foreach ($patients as $patient): 
                         $patient_days = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
                         $days_text = $patient_days > 0 ? '<span class="days-badge-blue">📅 ' . $patient_days . ' days</span>' : '<span class="days-badge-blue new">📅 New</span>';
@@ -1206,7 +1455,6 @@ include_once '../../components/reception_sidebar.php';
                         $status_class = $patient['patient_status'] ?? 'existing';
                         $status_text = $status_class === 'new' ? 'New' : 'Existing';
                         
-                        // Show doctor name or "No Doctor" badge
                         if (!empty($patient['assigned_doctor_name'])) {
                             $doctor_status = '<span class="status-badge with_doctor">✅ Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . '</span>';
                         } else {
@@ -1214,33 +1462,49 @@ include_once '../../components/reception_sidebar.php';
                         }
                         
                         $appointment_count = $patient['active_appointments'] ?? 0;
+                        $registered_by = $patient['registered_by_display'] ?? 'System';
                     ?>
-                        <tr>
+                        <tr class="patient-row" 
+                            data-name="<?= strtolower(htmlspecialchars($patient['full_name'] ?? '')) ?>"
+                            data-id="<?= strtolower(htmlspecialchars($patient['patient_id'] ?? '')) ?>"
+                            data-phone="<?= strtolower(htmlspecialchars($patient['phone'] ?? '')) ?>"
+                            data-days="<?= $patient_days ?>"
+                            data-has-doctor="<?= !empty($patient['assigned_doctor_name']) ? '1' : '0' ?>"
+                            data-visits="<?= $patient['total_visits'] ?? 0 ?>"
+                            data-status="<?= $status_class ?>">
+                            <td class="col-sno"><?= $counter++ ?></td>
                             <td>
-                                <a href="view_patient.php?id=<?= (int)$patient['id'] ?>" class="font-medium text-primary hover:underline">
+                                <a href="view_patient.php?id=<?= (int)$patient['id'] ?>" class="patient-name-link">
                                     <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>
                                 </a>
                             </td>
-                            <td style="font-family:monospace;font-size:0.8rem;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
+                            <td style="font-family:monospace;font-size:0.8rem;color:#000000 !important;"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></td>
                             <td>
                                 <?php if (!empty($patient['phone'])): ?>
-                                    <a href="tel:<?= htmlspecialchars($patient['phone']) ?>" class="text-gray-600 hover:text-primary"><?= htmlspecialchars($patient['phone']) ?></a>
+                                    <a href="tel:<?= htmlspecialchars($patient['phone']) ?>" style="color:#000000 !important;text-decoration:none;"><?= htmlspecialchars($patient['phone']) ?></a>
                                 <?php else: ?>
-                                    <span class="text-gray-400">N/A</span>
+                                    <span style="color:#94A3B8;">N/A</span>
                                 <?php endif; ?>
                             </td>
                             <td><?= $days_text ?></td>
                             <td><?= $doctor_status ?></td>
                             <td>
-                                <span class="font-medium text-gray-600"><?= $patient['total_visits'] ?? 0 ?></span>
+                                <span style="font-weight:600;color:#000000 !important;"><?= $patient['total_visits'] ?? 0 ?></span>
                                 <?php if (!empty($patient['latest_visit']['status'])): ?>
-                                    <span class="text-xs text-gray-400 block"><?= ucfirst($patient['latest_visit']['status']) ?></span>
+                                    <span style="font-size:0.65rem;color:#64748B;display:block;"><?= ucfirst($patient['latest_visit']['status']) ?></span>
                                 <?php endif; ?>
+                            </td>
+                            <!-- ✅ REGISTERED BY COLUMN -->
+                            <td>
+                                <span class="registered-by-badge">
+                                    <i class="fas fa-user-circle"></i>
+                                    <?= htmlspecialchars($registered_by) ?>
+                                </span>
                             </td>
                             <td>
                                 <span class="status-badge <?= $status_class ?>"><?= $status_text ?></span>
                                 <?php if ($appointment_count > 0): ?>
-                                    <span class="text-xs text-purple-600 block">📅 <?= $appointment_count ?> appt(s)</span>
+                                    <span style="font-size:0.65rem;color:#7C3AED;display:block;">📅 <?= $appointment_count ?> appt(s)</span>
                                 <?php endif; ?>
                             </td>
                             <td>
@@ -1267,22 +1531,15 @@ include_once '../../components/reception_sidebar.php';
                 </tbody>
             </table>
             
-            <!-- Pagination -->
-            <?php if ($total_pages > 1): ?>
-            <div class="pagination">
-                <a href="?page=1&search=<?= urlencode($search) ?>&filter=<?= $filter ?>" class="page-link <?= $page <= 1 ? 'disabled' : '' ?>">
-                    <i class="fas fa-chevron-left"></i>
-                </a>
-                <?php for ($i = max(1, $page - 2); $i <= min($total_pages, $page + 2); $i++): ?>
-                    <a href="?page=<?= $i ?>&search=<?= urlencode($search) ?>&filter=<?= $filter ?>" class="page-link <?= $i == $page ? 'active' : '' ?>">
-                        <?= $i ?>
-                    </a>
-                <?php endfor; ?>
-                <a href="?page=<?= $total_pages ?>&search=<?= urlencode($search) ?>&filter=<?= $filter ?>" class="page-link <?= $page >= $total_pages ? 'disabled' : '' ?>">
-                    <i class="fas fa-chevron-right"></i>
-                </a>
+            <!-- ✅ No Results Message (shown by JS) -->
+            <div id="noResultsMessage" style="display:none;text-align:center;padding:40px 20px;">
+                <i class="fas fa-search text-4xl text-gray-300 block mb-3"></i>
+                <p class="text-gray-500" style="font-size:0.9rem;">No patients match your search</p>
+                <p class="text-gray-400" style="font-size:0.75rem;">Try adjusting your filter criteria</p>
+                <button onclick="clearFilter()" class="btn btn-primary mt-3">
+                    <i class="fas fa-times"></i> Clear Filter
+                </button>
             </div>
-            <?php endif; ?>
             
             <?php else: ?>
             <div class="text-center py-8">
@@ -1297,9 +1554,7 @@ include_once '../../components/reception_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer-modern">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1314,9 +1569,7 @@ include_once '../../components/reception_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1330,6 +1583,188 @@ include_once '../../components/reception_sidebar.php';
 <!-- ================================================================ -->
 <script>
     // ================================================================
+    // ✅ AUTO-FILTER VARIABLES
+    // ================================================================
+    var filterTimeout = null;
+
+    // ================================================================
+    // ✅ AUTO-FILTER FUNCTION
+    // ================================================================
+    function autoFilter() {
+        var searchValue = document.getElementById('searchFilter').value;
+        var filterValue = document.getElementById('filterSelect').value;
+        
+        var loading = document.getElementById('filterLoading');
+        if (loading) loading.classList.add('show');
+        
+        var clearBtn = document.getElementById('clearFilterBtn');
+        if (clearBtn) {
+            if (searchValue.trim() !== '' || filterValue !== 'all') {
+                clearBtn.classList.add('show');
+            } else {
+                clearBtn.classList.remove('show');
+            }
+        }
+        
+        if (filterTimeout) clearTimeout(filterTimeout);
+        
+        filterTimeout = setTimeout(function() {
+            filterTableRows(searchValue, filterValue);
+            setTimeout(function() {
+                if (loading) loading.classList.remove('show');
+            }, 300);
+        }, 300);
+    }
+
+    // ================================================================
+    // ✅ FILTER TABLE ROWS (CLIENT-SIDE)
+    // ================================================================
+    function filterTableRows(searchValue, filterValue) {
+        var rows = document.querySelectorAll('.patient-row');
+        var visibleCount = 0;
+        var searchLower = searchValue.toLowerCase().trim();
+        
+        rows.forEach(function(row) {
+            var name = row.getAttribute('data-name') || '';
+            var id = row.getAttribute('data-id') || '';
+            var phone = row.getAttribute('data-phone') || '';
+            var days = parseInt(row.getAttribute('data-days')) || 0;
+            var hasDoctor = row.getAttribute('data-has-doctor') === '1';
+            var visits = parseInt(row.getAttribute('data-visits')) || 0;
+            
+            var show = true;
+            
+            if (searchLower !== '') {
+                var matchesSearch = 
+                    name.includes(searchLower) ||
+                    id.includes(searchLower) ||
+                    phone.includes(searchLower);
+                if (!matchesSearch) show = false;
+            }
+            
+            if (filterValue === 'new' && days > 7) show = false;
+            if (filterValue === 'with_doctor' && !hasDoctor) show = false;
+            if (filterValue === 'without_doctor' && hasDoctor) show = false;
+            if (filterValue === 'no_visit' && visits > 0) show = false;
+            
+            if (show) {
+                row.style.display = '';
+                visibleCount++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+        
+        // ✅ RE-NUMBER ROWS
+        updateRowNumbers();
+        
+        var countBadge = document.getElementById('patientCountBadge');
+        if (countBadge) {
+            countBadge.textContent = visibleCount + ' patient' + (visibleCount !== 1 ? 's' : '');
+        }
+        
+        var statusText = document.getElementById('filterStatusText');
+        if (statusText) {
+            if (searchLower !== '' || filterValue !== 'all') {
+                statusText.textContent = 'Filtered: ' + visibleCount + ' result' + (visibleCount !== 1 ? 's' : '');
+            } else {
+                statusText.textContent = 'Auto-filter';
+            }
+        }
+        
+        var noResults = document.getElementById('noResultsMessage');
+        var table = document.querySelector('.patient-table');
+        
+        if (visibleCount === 0 && rows.length > 0) {
+            if (noResults) noResults.style.display = 'block';
+            if (table) table.style.display = 'none';
+        } else {
+            if (noResults) noResults.style.display = 'none';
+            if (table) table.style.display = 'table';
+        }
+    }
+
+    // ================================================================
+    // ✅ RE-NUMBER ROWS (# Column)
+    // ================================================================
+    function updateRowNumbers() {
+        var rows = document.querySelectorAll('.patient-row');
+        var counter = 1;
+        rows.forEach(function(row) {
+            if (row.style.display !== 'none') {
+                var snoCell = row.querySelector('.col-sno');
+                if (snoCell) snoCell.textContent = counter;
+                counter++;
+            }
+        });
+    }
+
+    // ================================================================
+    // ✅ SCROLL TABLE LEFT/RIGHT
+    // ================================================================
+    function scrollTableLeft() {
+        var container = document.getElementById('tableContainer');
+        if (container) {
+            container.scrollBy({ left: -300, behavior: 'smooth' });
+        }
+    }
+    
+    function scrollTableRight() {
+        var container = document.getElementById('tableContainer');
+        if (container) {
+            container.scrollBy({ left: 300, behavior: 'smooth' });
+        }
+    }
+
+    // ================================================================
+    // ✅ CLEAR FILTER
+    // ================================================================
+    function clearFilter() {
+        document.getElementById('searchFilter').value = '';
+        document.getElementById('filterSelect').value = 'all';
+        autoFilter();
+        
+        var url = new URL(window.location.href);
+        url.searchParams.delete('search');
+        url.searchParams.delete('filter');
+        window.history.replaceState({}, '', url.toString());
+        
+        showToast('🔄 Cleared', 'Filters have been cleared', 'info');
+    }
+
+    // ================================================================
+    // ✅ KEYBOARD SHORTCUT
+    // ================================================================
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            var searchInput = document.getElementById('searchFilter');
+            if (searchInput && (searchInput.value !== '' || document.getElementById('filterSelect').value !== 'all')) {
+                clearFilter();
+            }
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            e.preventDefault();
+            document.getElementById('searchFilter').focus();
+        }
+    });
+
+    // ================================================================
+    // ✅ INITIALIZE FILTER ON PAGE LOAD
+    // ================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+        var searchValue = document.getElementById('searchFilter').value;
+        var filterValue = document.getElementById('filterSelect').value;
+        
+        if (searchValue !== '' || filterValue !== 'all') {
+            filterTableRows(searchValue, filterValue);
+        }
+        
+        if (searchValue !== '') {
+            document.getElementById('searchFilter').focus();
+        }
+    });
+
+    // ================================================================
     // CLOCK
     // ================================================================
     function updateClock() {
@@ -1341,13 +1776,9 @@ include_once '../../components/reception_sidebar.php';
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         var el = document.getElementById('clockDisplay');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
+        if (el) el.textContent = dateStr + ' • ' + timeStr;
         var footerTimestamp = document.getElementById('footerTimestamp');
-        if (footerTimestamp) {
-            footerTimestamp.textContent = timeStr;
-        }
+        if (footerTimestamp) footerTimestamp.textContent = timeStr;
     }
     setInterval(updateClock, 1000);
     updateClock();
@@ -1394,30 +1825,32 @@ include_once '../../components/reception_sidebar.php';
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
     });
 
     // ================================================================
-    // SEARCH
+    // TOP NAV SEARCH
     // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
-    function performSearch() {
+    function performTopSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            window.location.href = 'patients.php?search=' + encodeURIComponent(query) + '&filter=<?= $filter ?>';
-        } else {
-            window.location.href = 'patients.php?filter=<?= $filter ?>';
+            document.getElementById('searchFilter').value = query;
+            autoFilter();
+            var url = new URL(window.location.href);
+            url.searchParams.set('search', query);
+            window.history.replaceState({}, '', url.toString());
         }
     }
     
-    searchBtn?.addEventListener('click', performSearch);
+    searchBtn?.addEventListener('click', performTopSearch);
     searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
+        if (e.key === 'Enter') performTopSearch();
     });
 
     // ================================================================
@@ -1451,14 +1884,14 @@ include_once '../../components/reception_sidebar.php';
         showToast('✅ Success', 'Patient updated successfully!', 'success');
     <?php endif; ?>
 
-    console.log('%c👤 Braick - Patients (FULLY FIXED - No Duplicates)', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c👤 Braick - Patients (AUTO-FILTER ENABLED)', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Total Patients: <?= $stats['total'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ FIXED: Removed duplicates by ID and Name', 'font-size:13px; color:#2563EB;');
-    console.log('%c📅 New Patients: <?= $stats['new_patients'] ?? 0 ?>', 'font-size:13px; color:#2563EB;');
-    console.log('%c🔍 Search filter in header', 'font-size:13px; color:#059669;');
-    console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ NO DUPLICATES - Each patient appears once', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Registered By column added', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Search bar on LEFT side', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Scroll < > buttons on table header', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Patient names in BLACK', 'font-size:13px; color:#34D399;');
+    console.log('%c⌨️ Shortcuts: Ctrl+F = focus search, ESC = clear filter', 'font-size:13px; color:#FBBF24;');
 </script>
 
 </body>

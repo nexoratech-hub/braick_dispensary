@@ -9,26 +9,18 @@
 // FIXED: Prescription revenue from prescription_items table
 // 6 CARDS ONLY: Total Revenue, Expenses, Net Profit, Patient Bills, OTC, Prescriptions
 // FIXED: Total Revenue = Patient Bills + OTC ONLY (Prescription is separate display)
+// ✅ FIXED: Recent Bills now have View, Edit, Cancel buttons + status badges
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER IS ADMIN
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -42,9 +34,6 @@ if ($_SESSION['role'] !== 'admin') {
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -53,9 +42,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
@@ -66,12 +52,83 @@ try {
 }
 
 // ================================================================
+// HANDLE CANCEL BILL ACTION
+// ================================================================
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'cancel_bill') {
+    $bill_id = (int)($_POST['bill_id'] ?? 0);
+    $cancel_reason = trim($_POST['cancel_reason'] ?? 'Cancelled by Admin');
+    
+    if ($bill_id > 0) {
+        try {
+            $db->beginTransaction();
+            
+            // Check if bill exists and can be cancelled
+            $stmt = $db->prepare("SELECT id, bill_number, status, paid_amount FROM bills WHERE id = ?");
+            $stmt->execute([$bill_id]);
+            $bill = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            if (!$bill) {
+                throw new Exception('Bill not found');
+            }
+            
+            if ($bill['status'] === 'cancelled') {
+                throw new Exception('Bill is already cancelled');
+            }
+            
+            if ($bill['paid_amount'] > 0) {
+                throw new Exception('Cannot cancel a paid or partially paid bill. Please refund first.');
+            }
+            
+            // Update bill status to cancelled
+            $stmt = $db->prepare("
+                UPDATE bills 
+                SET status = 'cancelled', 
+                    notes = CONCAT(COALESCE(notes, ''), '\n[CANCELLED by Admin: ', ?, ' at ', NOW(), ']'),
+                    updated_at = NOW()
+                WHERE id = ?
+            ");
+            $stmt->execute([$cancel_reason, $bill_id]);
+            
+            // Update bill items to cancelled
+            $stmt = $db->prepare("UPDATE bill_items SET status = 'cancelled', updated_at = NOW() WHERE bill_id = ?");
+            $stmt->execute([$bill_id]);
+            
+            // Log activity
+            try {
+                $log_stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'bill_cancelled', ?, NOW())
+                ");
+                $log_stmt->execute([
+                    $user_id, 
+                    $user_branch_id,
+                    "Bill cancelled: {$bill['bill_number']} - Reason: $cancel_reason"
+                ]);
+            } catch (Exception $e) {}
+            
+            $db->commit();
+            
+            $_SESSION['flash_message'] = "✅ Bill <strong>{$bill['bill_number']}</strong> cancelled successfully!";
+            $_SESSION['flash_type'] = 'success';
+            header('Location: view_cashier.php?id=' . $cashier_id . '&branch=' . urlencode($selected_branch_id));
+            exit;
+            
+        } catch (Exception $e) {
+            $db->rollBack();
+            $_SESSION['flash_message'] = "❌ Error cancelling bill: " . $e->getMessage();
+            $_SESSION['flash_type'] = 'error';
+            header('Location: view_cashier.php?id=' . $cashier_id . '&branch=' . urlencode($selected_branch_id));
+            exit;
+        }
+    }
+}
+
+// ================================================================
 // GET BRANCH ID
 // ================================================================
 $cashier_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
-// If no ID provided, redirect with error
 if ($cashier_id <= 0) {
     header('Location: cashiers.php?branch=' . urlencode($selected_branch_id) . '&error=invalid_id');
     exit;
@@ -112,10 +169,8 @@ try {
 }
 
 // ================================================================
-// REVENUE QUERIES - FIXED: Using paid_amount, excludes OTC, only paid bills
+// REVENUE QUERIES
 // ================================================================
-
-// 1. PATIENT BILLS REVENUE (From bills - paid, excludes OTC)
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(paid_amount), 0) as bills_revenue
@@ -132,7 +187,6 @@ try {
     $patient_bills_revenue = 0;
 }
 
-// 2. OTC REVENUE (from otc_sales table)
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(total_amount), 0) as otc_revenue
@@ -146,7 +200,6 @@ try {
     $otc_revenue = 0;
 }
 
-// 3. PRESCRIPTION REVENUE (from prescription_items table) - FOR DISPLAY ONLY
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(pi.total_price), 0) as prescription_revenue
@@ -161,13 +214,8 @@ try {
     $prescription_revenue = 0;
 }
 
-// ================================================================
-// TOTAL REVENUE = Patient Bills + OTC ONLY (Prescription is separate)
-// FIXED: Removed prescription from total to avoid double counting
-// ================================================================
 $total_revenue = $patient_bills_revenue + $otc_revenue;
 
-// 5. EXPENSES (ONLY SELECTED BRANCH)
 try {
     $stmt = $db->prepare("
         SELECT COALESCE(SUM(amount), 0) as total_expenses
@@ -180,11 +228,10 @@ try {
     $total_expenses = 0;
 }
 
-// 6. NET PROFIT = TOTAL REVENUE - EXPENSES
 $net_profit = $total_revenue - $total_expenses;
 
 // ================================================================
-// GET STAFF FOR THIS BRANCH - CASHIERS + RECEPTIONISTS
+// GET STAFF FOR THIS BRANCH
 // ================================================================
 $staff_list = [];
 try {
@@ -201,7 +248,6 @@ try {
     $staff_list = [];
 }
 
-// Separate counts for display
 $cashier_count = 0;
 $reception_count = 0;
 foreach ($staff_list as $staff) {
@@ -239,7 +285,7 @@ try {
 }
 
 // ================================================================
-// GET RECENT BILLS
+// ✅ GET RECENT BILLS - WITH FULL DETAILS FOR BUTTONS
 // ================================================================
 $recent_bills = [];
 try {
@@ -247,20 +293,33 @@ try {
         SELECT 
             b.id,
             b.bill_number,
+            b.patient_id,
+            b.visit_id,
+            b.subtotal,
+            b.discount_amount,
+            b.total_discount,
             b.total_amount,
             b.paid_amount,
             b.balance,
             b.status,
+            b.payment_method,
+            b.notes,
             b.created_at,
-            pat.full_name as patient_name
+            b.updated_at,
+            pat.full_name as patient_name,
+            pat.patient_id as patient_code,
+            v.visit_number,
+            u.full_name as created_by_name
         FROM bills b
         LEFT JOIN patients pat ON b.patient_id = pat.id
+        LEFT JOIN visits v ON b.visit_id = v.id
+        LEFT JOIN users u ON b.created_by = u.id
         WHERE b.branch_id = ?
         AND b.patient_id IS NOT NULL
         AND b.visit_id IS NOT NULL
         AND b.bill_number NOT LIKE 'BILL-OTC-%'
         ORDER BY b.created_at DESC
-        LIMIT 10
+        LIMIT 15
     ");
     $stmt->execute([$cashier_id]);
     $recent_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -280,7 +339,7 @@ try {
 }
 
 // ================================================================
-// STATUS BADGE CLASS
+// HELPERS
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
@@ -288,7 +347,7 @@ function getStatusBadge($status) {
         'inactive' => 'danger',
         'pending' => 'warning',
         'paid' => 'success',
-        'partial' => 'warning',
+        'partial' => 'info',
         'cancelled' => 'danger'
     ];
     return $classes[$status] ?? 'secondary';
@@ -300,10 +359,20 @@ function getStatusIcon($status) {
         'inactive' => 'fa-times-circle',
         'pending' => 'fa-clock',
         'paid' => 'fa-check-circle',
-        'partial' => 'fa-clock',
+        'partial' => 'fa-hourglass-half',
         'cancelled' => 'fa-times-circle'
     ];
     return $icons[$status] ?? 'fa-circle';
+}
+
+function getStatusLabel($status) {
+    $labels = [
+        'pending' => 'Pending',
+        'paid' => 'Paid',
+        'partial' => 'Partial',
+        'cancelled' => 'Cancelled'
+    ];
+    return $labels[$status] ?? ucfirst($status);
 }
 
 function getRoleBadge($role) {
@@ -314,25 +383,16 @@ function getRoleBadge($role) {
     return $badges[$role] ?? '<span class="badge badge-secondary">' . ucfirst($role) . '</span>';
 }
 
-// ================================================================
-// FORMAT CURRENCY
-// ================================================================
 function formatCurrency($amount) {
     return 'TSh ' . number_format($amount, 0);
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
@@ -342,12 +402,17 @@ try {
     $unread_notifications = 0;
 }
 
+// Flash messages
+$flash_message = $_SESSION['flash_message'] ?? '';
+$flash_type = $_SESSION['flash_type'] ?? '';
+unset($_SESSION['flash_message']);
+unset($_SESSION['flash_type']);
+
 // ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once __DIR__ . '/../../components/admin_header.php';
 
-// Sidebar stats
 $total_employees_sidebar = 0;
 $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin'");
 $total_employees_sidebar = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
@@ -386,6 +451,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --danger-dark: #B91C1C;
             --danger-light: #F87171;
             --danger-bg: #FEE2E2;
+            
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            
+            --info: #0B5ED7;
+            --info-bg: #E8F0FE;
             
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
@@ -447,9 +518,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           TOP NAV - SHARED HEADER STYLES
-           ================================================================ */
+        /* TOP NAV */
         .top-nav {
             position: fixed;
             top: 0;
@@ -494,10 +563,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        .top-nav .search-wrapper input::placeholder {
-            color: var(--text-secondary);
-        }
-        
         .top-nav .search-wrapper .search-btn {
             background: var(--primary-gradient);
             color: white;
@@ -510,10 +575,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             white-space: nowrap;
         }
         
-        .top-nav .search-wrapper .search-btn:hover {
-            transform: scale(1.02);
-        }
-        
         .top-nav .datetime {
             font-size: 0.78rem;
             color: var(--text-secondary);
@@ -521,10 +582,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             display: flex;
             align-items: center;
             gap: 6px;
-        }
-        
-        .top-nav .datetime i {
-            color: var(--primary-light);
         }
         
         .top-nav .avatar {
@@ -535,11 +592,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border: 2px solid var(--border-color);
             cursor: pointer;
             transition: all 0.3s;
-        }
-        
-        .top-nav .avatar:hover {
-            border-color: var(--primary);
-            transform: scale(1.05);
         }
         
         .top-nav .icon-btn {
@@ -570,16 +622,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             height: 8px;
             border-radius: 50%;
             border: 2px solid var(--bg-nav);
-            animation: pulse-dot 2s infinite;
         }
         
         .notif-dot.has-notif { background: var(--danger); }
-        .notif-dot.no-notif { background: var(--gray-400); animation: none; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.2); }
-        }
+        .notif-dot.no-notif { background: var(--gray-400); }
         
         .dark-toggle-btn {
             background: var(--bg-body);
@@ -600,8 +646,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             background: var(--bg-card);
         }
         
-        .dark-toggle-btn i { font-size: 0.9rem; }
-        
         .branch-selector {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
@@ -618,9 +662,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-color: var(--primary);
         }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
+        /* MAIN CONTENT */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -628,15 +670,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-        }
-        
-        /* ================================================================
-           PAGE HEADER - GREEN THEME
-           ================================================================ */
+        /* PAGE HEADER */
         .page-header {
             background: var(--primary-gradient-strong);
             border-radius: var(--radius-lg);
@@ -660,18 +694,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             width: 400px;
             height: 400px;
             background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -5%;
-            width: 300px;
-            height: 300px;
-            background: rgba(255,255,255,0.03);
             border-radius: 50%;
             pointer-events: none;
         }
@@ -736,11 +758,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transition: all 0.3s ease;
         }
         
-        .page-header .header-badge:hover {
-            background: rgba(255,255,255,0.2);
-            transform: translateY(-1px);
-        }
-        
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.12);
             color: white;
@@ -765,9 +782,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           DETAIL CARD
-           ================================================================ */
+        /* DETAIL CARD */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -797,9 +812,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           6 REVENUE CARDS - 3 per row
-           ================================================================ */
+        /* REVENUE CARDS */
         .revenue-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -829,18 +842,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             width: 200px;
             height: 200px;
             background: rgba(255,255,255,0.05);
-            border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .revenue-card::after {
-            content: '';
-            position: absolute;
-            bottom: -40%;
-            left: -10%;
-            width: 150px;
-            height: 150px;
-            background: rgba(255,255,255,0.03);
             border-radius: 50%;
             pointer-events: none;
         }
@@ -905,37 +906,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: rgba(255,255,255,0.9);
         }
         
-        /* ================================================================
-           CARD COLOR CLASSES
-           ================================================================ */
+        /* CARD COLORS */
         .card-blue { background: linear-gradient(135deg, #0B5ED7, #0A4CA8); }
-        .card-blue:hover { box-shadow: 0 8px 25px rgba(11, 94, 215, 0.4); }
-        
         .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        .card-red:hover { box-shadow: 0 8px 25px rgba(220, 38, 38, 0.4); }
-        
         .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        .card-green:hover { box-shadow: 0 8px 25px rgba(5, 150, 105, 0.4); }
-        
         .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        .card-teal:hover { box-shadow: 0 8px 25px rgba(13, 148, 136, 0.4); }
-        
         .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        .card-purple:hover { box-shadow: 0 8px 25px rgba(124, 58, 237, 0.4); }
-        
         .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
-        .card-cyan:hover { box-shadow: 0 8px 25px rgba(8, 145, 178, 0.4); }
         
-        [data-theme="dark"] .card-blue { background: linear-gradient(135deg, #2563EB, #1D4ED8); }
-        [data-theme="dark"] .card-red { background: linear-gradient(135deg, #DC2626, #B91C1C); }
-        [data-theme="dark"] .card-green { background: linear-gradient(135deg, #059669, #047857); }
-        [data-theme="dark"] .card-teal { background: linear-gradient(135deg, #0D9488, #0F766E); }
-        [data-theme="dark"] .card-purple { background: linear-gradient(135deg, #7C3AED, #6D28D9); }
-        [data-theme="dark"] .card-cyan { background: linear-gradient(135deg, #0891B2, #0E7490); }
-        
-        /* ================================================================
-           DATA TABLE
-           ================================================================ */
+        /* TABLE CONTAINER */
         .table-container {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -966,10 +945,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             gap: 8px;
         }
         
-        .table-container .card-header .card-title i {
-            color: rgba(255,255,255,0.8);
-        }
-        
         .table-container .card-header .card-action {
             color: rgba(255,255,255,0.7);
             font-size: 0.65rem;
@@ -981,6 +956,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: white;
         }
         
+        /* DATA TABLE */
         .data-table {
             width: 100%;
             border-collapse: separate;
@@ -1005,7 +981,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         
         .data-table td {
-            padding: 8px 14px;
+            padding: 10px 14px;
             border-bottom: 1px solid var(--border-color);
             color: var(--text-primary);
             vertical-align: middle;
@@ -1019,28 +995,181 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-bottom: none;
         }
         
+        /* BADGES */
         .badge {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            padding: 2px 10px;
+            padding: 3px 12px;
             border-radius: 20px;
             font-size: 0.6rem;
-            font-weight: 600;
-            color: white;
+            font-weight: 700;
             letter-spacing: 0.02em;
         }
         
-        .badge-success { background: #059669; }
-        .badge-danger { background: #DC2626; }
-        .badge-warning { background: #D97706; color: #1E293B; }
-        .badge-info { background: #0B5ED7; }
-        .badge-secondary { background: #64748B; }
-        .badge-purple { background: #7C3AED; }
-        .badge-teal { background: #0D9488; }
+        /* ✅ STATUS BADGES - Clear & Visible */
+        .status-badge-pending {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.62rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            box-shadow: 0 2px 8px rgba(11, 94, 215, 0.3);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
         
-        [data-theme="dark"] .badge-warning { color: #1E293B; }
+        .status-badge-paid {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.62rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            box-shadow: 0 2px 8px rgba(5, 150, 105, 0.3);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
         
+        .status-badge-partial {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.62rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            box-shadow: 0 2px 8px rgba(217, 119, 6, 0.3);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+        
+        .status-badge-cancelled {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.62rem;
+            font-weight: 700;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            box-shadow: 0 2px 8px rgba(220, 38, 38, 0.3);
+            letter-spacing: 0.03em;
+            text-transform: uppercase;
+        }
+        
+        /* ✅ BILL ACTION BUTTONS */
+        .bill-actions {
+            display: flex;
+            gap: 5px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .bill-action-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 5px 12px;
+            border-radius: 6px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            border: none;
+            cursor: pointer;
+            text-decoration: none;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            white-space: nowrap;
+        }
+        
+        .bill-action-btn i {
+            font-size: 0.7rem;
+        }
+        
+        .bill-btn-view {
+            background: #E8F0FE;
+            color: #0B5ED7;
+            border: 1px solid rgba(11, 94, 215, 0.2);
+        }
+        
+        .bill-btn-view:hover {
+            background: #0B5ED7;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .bill-btn-edit {
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid rgba(217, 119, 6, 0.2);
+        }
+        
+        .bill-btn-edit:hover {
+            background: #D97706;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(217, 119, 6, 0.3);
+        }
+        
+        .bill-btn-cancel {
+            background: #FEE2E2;
+            color: #DC2626;
+            border: 1px solid rgba(220, 38, 38, 0.2);
+        }
+        
+        .bill-btn-cancel:hover {
+            background: #DC2626;
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        .bill-btn-disabled {
+            background: #F1F5F9;
+            color: #94A3B8;
+            border: 1px solid #E2E8F0;
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+        
+        .bill-btn-disabled:hover {
+            transform: none !important;
+            box-shadow: none !important;
+            background: #F1F5F9 !important;
+            color: #94A3B8 !important;
+        }
+        
+        [data-theme="dark"] .bill-btn-view {
+            background: #1E3A5F;
+            color: #6EA8FE;
+        }
+        
+        [data-theme="dark"] .bill-btn-edit {
+            background: #3A2E1A;
+            color: #FBBF24;
+        }
+        
+        [data-theme="dark"] .bill-btn-cancel {
+            background: #3A1A1A;
+            color: #F87171;
+        }
+        
+        [data-theme="dark"] .bill-btn-disabled {
+            background: #1E293B;
+            color: #64748B;
+        }
+        
+        /* STAT MINI */
         .stat-mini {
             background: var(--bg-card);
             border-radius: var(--radius);
@@ -1076,7 +1205,84 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .stat-mini .stat-number-mini.text-purple-600 { color: #7C3AED; }
         .stat-mini .stat-number-mini.text-teal-600 { color: #0D9488; }
         .stat-mini .stat-number-mini.text-red-600 { color: #DC2626; }
+        .stat-mini .stat-number-mini.text-blue-600 { color: #0B5ED7; }
         
+        /* MODAL */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        
+        .modal-overlay.show {
+            display: flex;
+        }
+        
+        .modal-content {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            max-width: 500px;
+            width: 100%;
+            padding: 24px 28px;
+            border: 2px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding-bottom: 12px;
+            border-bottom: 2px solid var(--border-color);
+            margin-bottom: 16px;
+        }
+        
+        .modal-title {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: #DC2626;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .modal-close {
+            background: none;
+            border: none;
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-secondary);
+        }
+        
+        .modal-close:hover {
+            color: #DC2626;
+        }
+        
+        .cancel-reason-textarea {
+            width: 100%;
+            padding: 10px 14px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            font-size: 0.9rem;
+            resize: vertical;
+            min-height: 80px;
+            background: var(--bg-body);
+            color: var(--text-primary);
+            font-family: inherit;
+        }
+        
+        .cancel-reason-textarea:focus {
+            border-color: #DC2626;
+            box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
+            outline: none;
+        }
+        
+        /* FOOTER */
         .footer {
             padding: 14px 0;
             border-top: 2px solid var(--border-color);
@@ -1091,45 +1297,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 700;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
-        @media (max-width: 1024px) {
-            .top-nav { left: 0; }
-            .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
-            .revenue-grid { grid-template-columns: repeat(2, 1fr); }
-        }
-        
-        @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
-            .top-nav .datetime { display: none; }
-            .page-header { padding: 16px 18px; }
-            .page-header .page-title { font-size: 1.3rem; }
-            .revenue-grid { grid-template-columns: 1fr 1fr; }
-            .detail-card { padding: 16px; }
-            .data-table { font-size: 0.65rem; }
-            .data-table thead th, .data-table td { padding: 6px 8px; }
-        }
-        
-        @media (max-width: 480px) {
-            .main-content { padding: 10px; }
-            .revenue-grid { grid-template-columns: 1fr; }
-            .page-header { flex-direction: column; align-items: flex-start !important; }
-            .data-table { font-size: 0.55rem; }
-            .data-table thead th, .data-table td { padding: 4px 6px; }
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
+        /* TOAST */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1148,38 +1316,87 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: var(--shadow-lg);
         }
         
-        .toast-custom.show {
-            transform: translateY(0);
-            opacity: 1;
-        }
-        
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
         .toast-custom.success { background: #059669; }
         .toast-custom.error { background: #DC2626; }
         .toast-custom.info { background: #0B5ED7; }
         .toast-custom.warning { background: #D97706; }
         
+        /* FLASH MESSAGE */
+        .flash-message {
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 500;
+            font-size: 0.9rem;
+            animation: slideDown 0.5s ease;
+        }
+        
+        .flash-message.success {
+            background: #D1FAE5;
+            color: #065F46;
+            border-left: 5px solid #059669;
+        }
+        
+        .flash-message.error {
+            background: #FEE2E2;
+            color: #991B1B;
+            border-left: 5px solid #DC2626;
+        }
+        
+        @keyframes slideDown {
+            from { opacity: 0; transform: translateY(-15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+        }
+        
+        /* RESPONSIVE */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+            .revenue-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        
+        @media (max-width: 768px) {
+            .datetime { display: none; }
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .revenue-grid { grid-template-columns: 1fr 1fr; }
+            .data-table { font-size: 0.65rem; }
+            .data-table thead th, .data-table td { padding: 6px 8px; }
+            .bill-actions { flex-direction: column; }
+            .bill-action-btn { width: 100%; justify-content: center; }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content { padding: 10px; }
+            .revenue-grid { grid-template-columns: 1fr; }
+            .data-table { font-size: 0.55rem; }
+            .data-table thead th, .data-table td { padding: 4px 6px; }
+        }
+        
         @media print {
             .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .page-header .btn-outline-light,
-            .footer, #sidebarToggle { display: none !important; }
+            .search-wrapper, .bill-actions, #sidebarToggle { display: none !important; }
             .main-content { margin: 0; padding: 20px; }
-            .detail-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .table-container { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .page-header {
-                background: #059669 !important;
-                -webkit-print-color-adjust: exact !important;
-                print-color-adjust: exact !important;
-            }
-            .page-title, .page-subtitle, .header-badge, .role-badge-display {
-                color: white !important;
-            }
         }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- TOP NAVIGATION - SHARED HEADER -->
+<!-- TOP NAVIGATION -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
@@ -1223,7 +1440,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%23059669%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
@@ -1233,9 +1450,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
-    <!-- PAGE HEADER - GREEN THEME -->
-    <!-- ================================================================ -->
+    <!-- FLASH MESSAGE -->
+    <?php if ($flash_message): ?>
+        <div class="flash-message <?= $flash_type ?>">
+            <i class="fas <?= $flash_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <span><?= $flash_message ?></span>
+        </div>
+    <?php endif; ?>
+
+    <!-- PAGE HEADER -->
     <div class="page-header animate-fade-in-up">
         <div>
             <h1 class="page-title">
@@ -1271,9 +1494,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- CASHIER INFO CARD -->
-    <!-- ================================================================ -->
+    <!-- CASHIER INFO -->
     <div class="detail-card animate-fade-in-up">
         <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div>
@@ -1291,10 +1512,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div>
                 <p class="detail-label"><i class="fas fa-user-tie mr-1"></i> Staff</p>
                 <p class="detail-value">
-                    <span class="badge badge-info" style="font-size:0.6rem;padding:2px 10px;">
+                    <span class="badge" style="background:#0B5ED7;color:white;font-size:0.6rem;padding:2px 10px;">
                         <i class="fas fa-cash-register"></i> <?= $cashier['active_cashiers'] ?? 0 ?> Cashiers
                     </span>
-                    <span class="badge badge-teal" style="font-size:0.6rem;padding:2px 10px;background:#0D9488;">
+                    <span class="badge" style="background:#0D9488;color:white;font-size:0.6rem;padding:2px 10px;">
                         <i class="fas fa-headset"></i> <?= $cashier['active_receptions'] ?? 0 ?> Reception
                     </span>
                 </p>
@@ -1302,12 +1523,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- 6 REVENUE CARDS - ONLY CARDS WITH VALUES -->
-    <!-- ================================================================ -->
+    <!-- 6 REVENUE CARDS -->
     <div class="revenue-grid animate-fade-in-up" style="animation-delay:0.05s;">
         
-        <!-- 1. TOTAL REVENUE - BLUE -->
         <a href="revenue.php?branch=<?= $cashier_id ?>" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-money-bill-wave"></i></div>
             <p class="card-amount"><?= formatCurrency($total_revenue) ?></p>
@@ -1316,7 +1534,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 2. EXPENSES - RED -->
         <a href="expenses.php?branch=<?= $cashier_id ?>" class="revenue-card card-red">
             <div class="card-icon"><i class="fas fa-arrow-up"></i></div>
             <p class="card-amount"><?= formatCurrency($total_expenses) ?></p>
@@ -1325,7 +1542,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 3. NET PROFIT - GREEN -->
         <a href="profit.php?branch=<?= $cashier_id ?>" class="revenue-card card-green">
             <div class="card-icon"><i class="fas fa-chart-line"></i></div>
             <p class="card-amount"><?= formatCurrency($net_profit) ?></p>
@@ -1334,7 +1550,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 4. BILLS REVENUE - BLUE -->
         <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="revenue-card card-blue">
             <div class="card-icon"><i class="fas fa-file-invoice"></i></div>
             <p class="card-amount"><?= formatCurrency($patient_bills_revenue) ?></p>
@@ -1343,7 +1558,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 5. OTC REVENUE - TEAL -->
         <a href="otc_sales.php?branch=<?= $cashier_id ?>" class="revenue-card card-teal">
             <div class="card-icon"><i class="fas fa-cash-register"></i></div>
             <p class="card-amount"><?= formatCurrency($otc_revenue) ?></p>
@@ -1352,7 +1566,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <span class="card-nav-arrow"><i class="fas fa-arrow-right"></i></span>
         </a>
         
-        <!-- 6. PRESCRIPTION REVENUE - PURPLE (FOR DISPLAY ONLY) -->
         <a href="prescriptions.php?branch=<?= $cashier_id ?>" class="revenue-card card-purple">
             <div class="card-icon"><i class="fas fa-prescription"></i></div>
             <p class="card-amount"><?= formatCurrency($prescription_revenue) ?></p>
@@ -1363,36 +1576,185 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
     </div>
 
-    <!-- ================================================================ -->
     <!-- BILLS SUMMARY CARDS -->
-    <!-- ================================================================ -->
     <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6 animate-fade-in-up" style="animation-delay:0.1s;">
         <a href="bills.php?branch=<?= $cashier_id ?>" class="stat-mini">
             <p class="stat-label-mini"><i class="fas fa-file-invoice mr-1"></i> Total Bills</p>
-            <p class="stat-number-mini text-green-600"><?= number_format($cashier['total_bills'] ?? 0) ?></p>
+            <p class="stat-number-mini text-blue-600"><?= number_format($cashier['total_bills'] ?? 0) ?></p>
         </a>
         <a href="bills.php?branch=<?= $cashier_id ?>&status=pending" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-clock mr-1"></i> Pending Bills</p>
+            <p class="stat-label-mini"><i class="fas fa-clock mr-1"></i> Pending</p>
             <p class="stat-number-mini text-yellow-600"><?= number_format($cashier['pending_bills'] ?? 0) ?></p>
         </a>
         <a href="bills.php?branch=<?= $cashier_id ?>&status=partial" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-hourglass-half mr-1"></i> Partial Bills</p>
+            <p class="stat-label-mini"><i class="fas fa-hourglass-half mr-1"></i> Partial</p>
             <p class="stat-number-mini text-purple-600"><?= number_format($cashier['partial_bills'] ?? 0) ?></p>
         </a>
         <a href="bills.php?branch=<?= $cashier_id ?>&status=paid" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-check-circle mr-1"></i> Paid Bills</p>
+            <p class="stat-label-mini"><i class="fas fa-check-circle mr-1"></i> Paid</p>
             <p class="stat-number-mini text-green-600"><?= number_format($cashier['paid_bills'] ?? 0) ?></p>
         </a>
-        <a href="receipts.php?branch=<?= $cashier_id ?>" class="stat-mini">
-            <p class="stat-label-mini"><i class="fas fa-receipt mr-1"></i> Receipts</p>
-            <p class="stat-number-mini text-teal-600"><?= number_format($cashier['total_payments'] ?? 0) ?></p>
+        <a href="bills.php?branch=<?= $cashier_id ?>&status=cancelled" class="stat-mini">
+            <p class="stat-label-mini"><i class="fas fa-times-circle mr-1"></i> Cancelled</p>
+            <p class="stat-number-mini text-red-600"><?= number_format($cashier['cancelled_bills'] ?? 0) ?></p>
         </a>
     </div>
 
     <!-- ================================================================ -->
-    <!-- RECENT PAYMENTS -->
+    <!-- ✅ RECENT BILLS - WITH VIEW, EDIT, CANCEL BUTTONS + STATUS BADGES -->
     <!-- ================================================================ -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.15s;">
+        <div class="card-header">
+            <h3 class="card-title">
+                <i class="fas fa-file-invoice"></i>
+                Recent Bills (<?= count($recent_bills) ?>)
+            </h3>
+            <a href="bills.php?branch=<?= $cashier_id ?>" class="card-action">View All →</a>
+        </div>
+        <?php if (count($recent_bills) > 0): ?>
+            <div class="overflow-x-auto">
+                <table class="data-table" id="billsTable">
+                    <thead>
+                        <tr>
+                            <th>Bill #</th>
+                            <th>Patient</th>
+                            <th>Total</th>
+                            <th>Paid</th>
+                            <th>Balance</th>
+                            <th>Status</th>
+                            <th>Date</th>
+                            <th style="text-align:center;min-width:220px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($recent_bills as $bill): 
+                            $balance = (float)$bill['balance'];
+                            $bill_status = strtolower($bill['status'] ?? 'pending');
+                            
+                            // ✅ Status badge styling
+                            $status_class = '';
+                            $status_icon = '';
+                            $status_text = '';
+                            
+                            switch ($bill_status) {
+                                case 'paid':
+                                    $status_class = 'status-badge-paid';
+                                    $status_icon = 'fa-check-circle';
+                                    $status_text = 'PAID';
+                                    break;
+                                case 'partial':
+                                    $status_class = 'status-badge-partial';
+                                    $status_icon = 'fa-hourglass-half';
+                                    $status_text = 'PARTIAL';
+                                    break;
+                                case 'pending':
+                                    $status_class = 'status-badge-pending';
+                                    $status_icon = 'fa-clock';
+                                    $status_text = 'PENDING';
+                                    break;
+                                case 'cancelled':
+                                    $status_class = 'status-badge-cancelled';
+                                    $status_icon = 'fa-times-circle';
+                                    $status_text = 'CANCELLED';
+                                    break;
+                                default:
+                                    $status_class = 'status-badge-pending';
+                                    $status_icon = 'fa-circle';
+                                    $status_text = strtoupper($bill_status);
+                            }
+                        ?>
+                            <tr>
+                                <td class="font-mono text-xs font-semibold" style="color:#059669;">
+                                    <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
+                                </td>
+                                <td>
+                                    <strong><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></strong>
+                                    <?php if (!empty($bill['patient_code'])): ?>
+                                        <div style="font-size:0.6rem;color:var(--text-secondary);">
+                                            <?= htmlspecialchars($bill['patient_code']) ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="font-semibold"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
+                                <td style="color:#059669;font-weight:600;"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
+                                <td>
+                                    <?php if ($balance > 0): ?>
+                                        <span style="color:#DC2626;font-weight:700;"><?= formatCurrency($balance) ?></span>
+                                    <?php else: ?>
+                                        <span style="color:#059669;font-weight:600;"><?= formatCurrency(0) ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <!-- ✅ STATUS BADGE -->
+                                    <span class="<?= $status_class ?>">
+                                        <i class="fas <?= $status_icon ?>"></i>
+                                        <?= $status_text ?>
+                                    </span>
+                                </td>
+                                <td class="text-xs"><?= date('M d, Y', strtotime($bill['created_at'] ?? 'now')) ?></td>
+                                <td>
+                                    <!-- ✅ ACTION BUTTONS -->
+                                    <div class="bill-actions">
+                                        
+                                        <!-- VIEW BUTTON -->
+                                        <a href="view_bill.php?id=<?= $bill['id'] ?>&branch=<?= $cashier_id ?>" 
+                                           class="bill-action-btn bill-btn-view" 
+                                           title="View Bill">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                        
+                                        <!-- EDIT BUTTON - Only if not cancelled -->
+                                        <?php if ($bill_status !== 'cancelled'): ?>
+                                            <a href="edit_bill.php?id=<?= $bill['id'] ?>&branch=<?= $cashier_id ?>" 
+                                               class="bill-action-btn bill-btn-edit" 
+                                               title="Edit Bill">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </a>
+                                        <?php else: ?>
+                                            <button class="bill-action-btn bill-btn-disabled" disabled title="Cannot edit cancelled bill">
+                                                <i class="fas fa-edit"></i> Edit
+                                            </button>
+                                        <?php endif; ?>
+                                        
+                                        <!-- CANCEL BUTTON - Only if not cancelled and no payment -->
+                                        <?php if ($bill_status !== 'cancelled' && $bill_status !== 'paid' && $balance == $bill['total_amount']): ?>
+                                            <button type="button" 
+                                                    class="bill-action-btn bill-btn-cancel" 
+                                                    onclick="openCancelModal(<?= $bill['id'] ?>, '<?= addslashes($bill['bill_number'] ?? 'N/A') ?>', '<?= addslashes($bill['patient_name'] ?? 'N/A') ?>')"
+                                                    title="Cancel Bill">
+                                                <i class="fas fa-ban"></i> Cancel
+                                            </button>
+                                        <?php elseif ($bill_status === 'paid'): ?>
+                                            <button class="bill-action-btn bill-btn-disabled" disabled title="Cannot cancel paid bill">
+                                                <i class="fas fa-ban"></i> Cancel
+                                            </button>
+                                        <?php elseif ($bill_status === 'cancelled'): ?>
+                                            <button class="bill-action-btn bill-btn-disabled" disabled title="Already cancelled">
+                                                <i class="fas fa-times"></i> Cancelled
+                                            </button>
+                                        <?php else: ?>
+                                            <button class="bill-action-btn bill-btn-disabled" disabled title="Cannot cancel - has payment">
+                                                <i class="fas fa-ban"></i> Cancel
+                                            </button>
+                                        <?php endif; ?>
+                                        
+                                    </div>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="text-center py-6 text-gray-400">
+                <i class="fas fa-file-invoice text-2xl block mb-2"></i>
+                <p>No bills found</p>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <!-- RECENT PAYMENTS -->
+    <div class="table-container animate-fade-in-up" style="animation-delay:0.2s;">
         <div class="card-header">
             <h3 class="card-title">
                 <i class="fas fa-credit-card"></i>
@@ -1421,9 +1783,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <td class="font-mono text-xs"><?= htmlspecialchars($payment['receipt_number'] ?? 'N/A') ?></td>
                                 <td class="font-mono text-xs"><?= htmlspecialchars($payment['bill_number'] ?? 'N/A') ?></td>
                                 <td><?= htmlspecialchars($payment['patient_name'] ?? 'N/A') ?></td>
-                                <td class="font-semibold text-green-600"><?= formatCurrency($payment['amount'] ?? 0) ?></td>
+                                <td class="font-semibold" style="color:#059669;"><?= formatCurrency($payment['amount'] ?? 0) ?></td>
                                 <td>
-                                    <span class="badge badge-info" style="font-size:0.55rem;padding:1px 8px;">
+                                    <span class="badge" style="background:#0B5ED7;color:white;font-size:0.55rem;padding:2px 10px;">
                                         <?= ucfirst($payment['payment_method'] ?? 'N/A') ?>
                                     </span>
                                 </td>
@@ -1445,76 +1807,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- RECENT BILLS -->
-    <!-- ================================================================ -->
-    <div class="table-container animate-fade-in-up" style="animation-delay:0.2s;">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-file-invoice"></i>
-                Recent Bills (<?= count($recent_bills) ?>)
-            </h3>
-            <a href="bills.php?branch=<?= $cashier_id ?>" class="card-action">View All →</a>
-        </div>
-        <?php if (count($recent_bills) > 0): ?>
-            <div class="overflow-x-auto">
-                <table class="data-table" id="billsTable">
-                    <thead>
-                        <tr>
-                            <th>Bill #</th>
-                            <th>Patient</th>
-                            <th>Total</th>
-                            <th>Paid</th>
-                            <th>Balance</th>
-                            <th>Status</th>
-                            <th>Date</th>
-                            <th>Action</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php foreach ($recent_bills as $bill): 
-                            $balance = (float)$bill['balance'];
-                        ?>
-                            <tr>
-                                <td class="font-mono text-xs font-semibold text-green-600">
-                                    <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>
-                                </td>
-                                <td><?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?></td>
-                                <td class="font-semibold"><?= formatCurrency($bill['total_amount'] ?? 0) ?></td>
-                                <td class="text-green-600"><?= formatCurrency($bill['paid_amount'] ?? 0) ?></td>
-                                <td>
-                                    <?php if ($balance > 0): ?>
-                                        <span class="text-red-600 font-semibold"><?= formatCurrency($balance) ?></span>
-                                    <?php else: ?>
-                                        <span class="text-green-600"><?= formatCurrency(0) ?></span>
-                                    <?php endif; ?>
-                                </td>
-                                <td>
-                                    <span class="badge badge-<?= getStatusBadge($bill['status'] ?? 'pending') ?>">
-                                        <i class="fas <?= getStatusIcon($bill['status'] ?? 'pending') ?>"></i>
-                                        <?= ucfirst($bill['status'] ?? 'Pending') ?>
-                                    </span>
-                                </td>
-                                <td class="text-xs"><?= date('M d, Y', strtotime($bill['created_at'] ?? 'now')) ?></td>
-                                <td>
-                                    <a href="view_bill.php?id=<?= $bill['id'] ?>&branch=<?= $cashier_id ?>" class="text-green-600 text-xs hover:underline">View</a>
-                                </td>
-                            </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
-            </div>
-        <?php else: ?>
-            <div class="text-center py-6 text-gray-400">
-                <i class="fas fa-file-invoice text-2xl block mb-2"></i>
-                <p>No bills found</p>
-            </div>
-        <?php endif; ?>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- STAFF LIST - CASHIERS + RECEPTIONISTS -->
-    <!-- ================================================================ -->
+    <!-- STAFF LIST -->
     <div class="table-container animate-fade-in-up" style="animation-delay:0.25s;">
         <div class="card-header">
             <h3 class="card-title">
@@ -1522,10 +1815,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 Staff (<?= count($staff_list) ?>)
             </h3>
             <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                <span class="badge badge-info" style="font-size:0.55rem;padding:2px 10px;">
+                <span class="badge" style="background:#0B5ED7;color:white;font-size:0.55rem;padding:2px 10px;">
                     <i class="fas fa-cash-register"></i> Cashiers: <?= $cashier_count ?>
                 </span>
-                <span class="badge badge-teal" style="font-size:0.55rem;padding:2px 10px;background:#0D9488;">
+                <span class="badge" style="background:#0D9488;color:white;font-size:0.55rem;padding:2px 10px;">
                     <i class="fas fa-headset"></i> Reception: <?= $reception_count ?>
                 </span>
                 <a href="add_employee.php?branch=<?= $cashier_id ?>" class="card-action" style="background:rgba(255,255,255,0.15);padding:2px 12px;border-radius:12px;">
@@ -1554,7 +1847,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                                 <td><?= htmlspecialchars($staff['phone'] ?? 'N/A') ?></td>
                                 <td><?= getRoleBadge($staff['role'] ?? 'other') ?></td>
                                 <td>
-                                    <span class="badge badge-<?= $staff['status'] === 'active' ? 'success' : 'danger' ?>" style="font-size:0.6rem;padding:2px 10px;">
+                                    <span class="badge" style="background:<?= $staff['status'] === 'active' ? '#059669' : '#DC2626' ?>;color:white;font-size:0.6rem;padding:2px 10px;">
                                         <?= ucfirst($staff['status'] ?? 'N/A') ?>
                                     </span>
                                 </td>
@@ -1570,14 +1863,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <div class="text-center py-6 text-gray-400">
                 <i class="fas fa-users text-2xl block mb-2"></i>
                 <p>No staff assigned to this branch</p>
-                <a href="add_employee.php?branch=<?= $cashier_id ?>" class="text-green-600 text-sm hover:underline">Add Staff</a>
             </div>
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1591,6 +1881,59 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- CANCEL BILL MODAL -->
+<!-- ================================================================ -->
+<div class="modal-overlay" id="cancelBillModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <div class="modal-title">
+                <i class="fas fa-exclamation-triangle"></i> Cancel Bill
+            </div>
+            <button class="modal-close" onclick="closeCancelModal()">&times;</button>
+        </div>
+        
+        <div style="text-align:center;font-size:3rem;color:#DC2626;margin-bottom:10px;">
+            <i class="fas fa-exclamation-circle"></i>
+        </div>
+        
+        <p style="text-align:center;color:var(--text-primary);font-weight:600;margin-bottom:8px;">
+            Are you sure you want to cancel this bill?
+        </p>
+        <p style="text-align:center;color:var(--text-secondary);font-size:0.85rem;margin-bottom:16px;">
+            Bill: <strong id="cancelBillNumber"></strong><br>
+            Patient: <strong id="cancelPatientName"></strong>
+        </p>
+        
+        <div style="background:#FEE2E2;border:2px solid #DC2626;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:0.8rem;color:#991B1B;">
+            <i class="fas fa-exclamation-triangle"></i>
+            <strong>WARNING:</strong> This will cancel the entire bill and all its items. This action cannot be undone.
+        </div>
+        
+        <form method="POST" action="">
+            <input type="hidden" name="action" value="cancel_bill">
+            <input type="hidden" name="bill_id" id="cancelBillId" value="">
+            
+            <div style="margin-bottom:14px;">
+                <label style="display:block;font-size:0.8rem;font-weight:600;margin-bottom:6px;">
+                    Reason for Cancellation <span style="color:#DC2626;">*</span>
+                </label>
+                <textarea name="cancel_reason" id="cancelReason" class="cancel-reason-textarea" 
+                          placeholder="Enter reason for cancelling this bill..." required></textarea>
+            </div>
+            
+            <div style="display:flex;gap:10px;padding-top:14px;border-top:2px solid var(--border-color);">
+                <button type="submit" style="flex:1;background:#DC2626;color:white;border:none;padding:10px 24px;border-radius:8px;font-weight:700;font-size:0.9rem;cursor:pointer;">
+                    <i class="fas fa-ban"></i> Yes, Cancel Bill
+                </button>
+                <button type="button" onclick="closeCancelModal()" style="background:transparent;color:var(--text-secondary);border:2px solid var(--border-color);padding:10px 24px;border-radius:8px;font-weight:600;font-size:0.9rem;cursor:pointer;">
+                    <i class="fas fa-times"></i> No, Go Back
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- TOAST -->
@@ -1607,9 +1950,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <!-- JAVASCRIPT -->
 <!-- ================================================================ -->
 <script>
-    // ================================================================
-    // DARK MODE TOGGLE - FIXED
-    // ================================================================
+    // DARK MODE
     (function() {
         var darkModeToggle = document.getElementById('darkModeToggle');
         var darkIcon = document.getElementById('darkIcon');
@@ -1617,76 +1958,57 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var htmlElement = document.documentElement;
         
         var savedDarkMode = localStorage.getItem('darkMode');
-        var cookieDarkMode = document.cookie.split('; ').find(function(row) {
-            return row.startsWith('dark_mode=');
-        });
-        
-        var isDark = false;
-        if (savedDarkMode === 'true') {
-            isDark = true;
-        } else if (cookieDarkMode) {
-            isDark = cookieDarkMode.split('=')[1] === 'true';
-        }
+        var isDark = savedDarkMode === 'true';
         
         if (isDark) {
             htmlElement.setAttribute('data-theme', 'dark');
             if (darkIcon) darkIcon.className = 'fas fa-sun';
             if (darkText) darkText.textContent = 'Light';
-        } else {
-            htmlElement.removeAttribute('data-theme');
-            if (darkIcon) darkIcon.className = 'fas fa-moon';
-            if (darkText) darkText.textContent = 'Dark';
         }
         
-        if (darkModeToggle) {
-            darkModeToggle.addEventListener('click', function(e) {
-                e.preventDefault();
-                var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
-                
-                if (isDarkNow) {
-                    htmlElement.removeAttribute('data-theme');
-                    if (darkIcon) darkIcon.className = 'fas fa-moon';
-                    if (darkText) darkText.textContent = 'Dark';
-                    localStorage.setItem('darkMode', 'false');
-                    document.cookie = "dark_mode=false; path=/";
-                } else {
-                    htmlElement.setAttribute('data-theme', 'dark');
-                    if (darkIcon) darkIcon.className = 'fas fa-sun';
-                    if (darkText) darkText.textContent = 'Light';
-                    localStorage.setItem('darkMode', 'true');
-                    document.cookie = "dark_mode=true; path=/";
-                }
-            });
-        }
+        darkModeToggle?.addEventListener('click', function(e) {
+            e.preventDefault();
+            var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
+            
+            if (isDarkNow) {
+                htmlElement.removeAttribute('data-theme');
+                if (darkIcon) darkIcon.className = 'fas fa-moon';
+                if (darkText) darkText.textContent = 'Dark';
+                localStorage.setItem('darkMode', 'false');
+                document.cookie = "dark_mode=false; path=/";
+            } else {
+                htmlElement.setAttribute('data-theme', 'dark');
+                if (darkIcon) darkIcon.className = 'fas fa-sun';
+                if (darkText) darkText.textContent = 'Light';
+                localStorage.setItem('darkMode', 'true');
+                document.cookie = "dark_mode=true; path=/";
+            }
+        });
     })();
 
-    // ================================================================
     // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-
+    
     sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
+        sidebar?.classList.toggle('open');
     });
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
     });
 
-    // ================================================================
-    // SEARCH FUNCTIONALITY
-    // ================================================================
+    // SEARCH
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
-
+    
     function performSearch() {
         var query = searchInput.value.trim().toLowerCase();
-        var tables = ['paymentsTable', 'billsTable', 'staffTable'];
+        var tables = ['billsTable', 'paymentsTable', 'staffTable'];
         
         tables.forEach(function(tableId) {
             var table = document.getElementById(tableId);
@@ -1695,31 +2017,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             var rows = table.getElementsByTagName('tbody')[0]?.getElementsByTagName('tr');
             if (!rows) return;
             
-            var visibleCount = 0;
             for (var i = 0; i < rows.length; i++) {
                 var row = rows[i];
                 var text = row.textContent.toLowerCase();
-                if (query === '' || text.includes(query)) {
-                    row.style.display = '';
-                    visibleCount++;
-                } else {
-                    row.style.display = 'none';
-                }
-            }
-            
-            var noResults = table.parentElement.querySelector('.no-results');
-            if (visibleCount === 0 && query !== '') {
-                if (!noResults) {
-                    noResults = document.createElement('div');
-                    noResults.className = 'no-results text-center py-4 text-gray-400';
-                    noResults.innerHTML = '<i class="fas fa-search text-2xl block mb-2"></i><p>No results found for "<strong>' + query + '</strong>"</p>';
-                    table.parentElement.appendChild(noResults);
-                } else {
-                    noResults.style.display = 'block';
-                    noResults.innerHTML = '<i class="fas fa-search text-2xl block mb-2"></i><p>No results found for "<strong>' + query + '</strong>"</p>';
-                }
-            } else if (noResults) {
-                noResults.style.display = 'none';
+                row.style.display = (query === '' || text.includes(query)) ? '' : 'none';
             }
         });
     }
@@ -1728,21 +2029,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     searchInput?.addEventListener('keypress', function(e) {
         if (e.key === 'Enter') performSearch();
     });
-    
     searchInput?.addEventListener('input', performSearch);
 
-    // ================================================================
     // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // CLOCK - UPDATE EVERY SECOND
-    // ================================================================
+    // CLOCK
     function updateClock() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
@@ -1752,36 +2048,51 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         var el = document.getElementById('clockDisplay');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
-    }
-    setInterval(updateClock, 1000);
-    updateClock();
-
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var dtEl = document.getElementById('currentDateTime');
-        if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
+        if (el) el.textContent = dateStr + ' • ' + timeStr;
         
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
     }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    updateClock();
+    setInterval(updateClock, 1000);
 
-    // ================================================================
-    // TOAST NOTIFICATION
-    // ================================================================
+    // ✅ CANCEL BILL MODAL
+    function openCancelModal(billId, billNumber, patientName) {
+        var modal = document.getElementById('cancelBillModal');
+        if (!modal) return;
+        
+        document.getElementById('cancelBillId').value = billId;
+        document.getElementById('cancelBillNumber').textContent = billNumber;
+        document.getElementById('cancelPatientName').textContent = patientName;
+        document.getElementById('cancelReason').value = '';
+        
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+        
+        setTimeout(function() {
+            document.getElementById('cancelReason').focus();
+        }, 300);
+    }
+    
+    function closeCancelModal() {
+        var modal = document.getElementById('cancelBillModal');
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+    }
+    
+    // Close on outside click
+    document.getElementById('cancelBillModal')?.addEventListener('click', function(e) {
+        if (e.target === this) closeCancelModal();
+    });
+    
+    // Close on Escape
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeCancelModal();
+    });
+
+    // TOAST
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1792,50 +2103,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         toastMessage.textContent = message || '';
         toast.style.display = 'flex';
         
-        setTimeout(function() {
-            toast.classList.add('show');
-        }, 50);
+        setTimeout(function() { toast.classList.add('show'); }, 50);
         
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
-            setTimeout(function() {
-                toast.style.display = 'none';
-            }, 400);
+            setTimeout(function() { toast.style.display = 'none'; }, 400);
         }, 4000);
     }
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-            e.preventDefault();
-            searchInput?.focus();
-        }
-        if (e.key === 'Escape' && document.activeElement === searchInput) {
-            searchInput.value = '';
-            performSearch();
-            searchInput.blur();
-        }
-    });
-
-    // ================================================================
-    // CONSOLE LOG
-    // ================================================================
-    console.log('%c💰 Braick Dispensary - View Cashier (6 Cards)', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c💰 Braick Dispensary - View Cashier', 'font-size:18px; font-weight:bold; color:#059669;');
+    console.log('%c✅ FIXED: Recent Bills have View, Edit, Cancel buttons', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ FIXED: Status badges (Pending, Paid, Partial, Cancelled)', 'font-size:13px; color:#34D399; font-weight:bold;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($cashier['name'] ?? 'N/A') ?> (ID: <?= $cashier_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c📊 6 Revenue Cards:', 'font-size:13px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c   ├─ Total Revenue: <?= formatCurrency($total_revenue) ?> (Patient Bills + OTC)', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c   ├─ Expenses: <?= formatCurrency($total_expenses) ?>', 'font-size:12px; color:#DC2626;');
-    console.log('%c   ├─ Net Profit: <?= formatCurrency($net_profit) ?>', 'font-size:12px; color:#059669;');
-    console.log('%c   ├─ Patient Bills: <?= formatCurrency($patient_bills_revenue) ?> (includes prescriptions)', 'font-size:12px; color:#0B5ED7;');
-    console.log('%c   ├─ OTC Sales: <?= formatCurrency($otc_revenue) ?>', 'font-size:12px; color:#0D9488;');
-    console.log('%c   └─ Prescriptions: <?= formatCurrency($prescription_revenue) ?> (already included in bills)', 'font-size:12px; color:#7C3AED;');
-    console.log('%c📄 Bills: <?= $cashier['paid_bills'] ?? 0 ?> Paid, <?= $cashier['pending_bills'] ?? 0 ?> Pending', 'font-size:13px; color:#D97706;');
-    console.log('%c👥 Staff: <?= count($staff_list) ?> total (Cashiers: <?= $cashier_count ?>, Reception: <?= $reception_count ?>)', 'font-size:13px; color:#4F46E5;');
-    console.log('%c✅ FIXED: Prescription revenue is now correctly included in Patient Bills (no double counting)', 'font-size:13px; color:#34D399;');
-    console.log('%c🌙 Dark Mode: WORKING | 🕐 Clock: WORKING', 'font-size:13px; color:#3B82F6;');
 </script>
 
 </body>

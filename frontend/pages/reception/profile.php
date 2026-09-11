@@ -2,6 +2,9 @@
 // ================================================================
 // FILE: frontend/pages/reception/profile.php
 // RECEPTION - FULL PROFILE WITH PROFILE PICTURE UPLOAD
+// ✅ WITH EDIT PROFILE BUTTON
+// ✅ WITH REMOVE PROFILE PICTURE BUTTON
+// ✅ WITH CONFIRMATION MODAL
 // USING dispensary_db (new database structure)
 // BRAICK DISPENSARY
 // ================================================================
@@ -14,7 +17,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -51,7 +54,7 @@ $phone = $_SESSION['phone'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// PATH SAHIHI
+// DATABASE CONNECTION
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -77,7 +80,6 @@ try {
         $role = $user['role'] ?? $role;
         $branch_id = $user['branch_id'] ?? $branch_id;
         
-        // Update session with latest data
         $_SESSION['full_name'] = $full_name;
         $_SESSION['email'] = $email;
         $_SESSION['phone'] = $phone;
@@ -85,7 +87,6 @@ try {
         $_SESSION['username'] = $username;
         $_SESSION['role'] = $role;
         
-        // Get branch name
         if ($branch_id) {
             $stmt2 = $db->prepare("SELECT name FROM branches WHERE id = ?");
             $stmt2->execute([$branch_id]);
@@ -104,14 +105,12 @@ try {
         $file = $_FILES['profile_pic'];
         $upload_dir = __DIR__ . '/../../assets/uploads/profiles/';
         
-        // Create directory if not exists
         if (!is_dir($upload_dir)) {
             mkdir($upload_dir, 0777, true);
         }
         
-        // Validate file
         $allowed_types = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'image/webp'];
-        $max_size = 5 * 1024 * 1024; // 5MB
+        $max_size = 5 * 1024 * 1024;
         
         $errors = [];
         
@@ -128,19 +127,15 @@ try {
         }
         
         if (empty($errors)) {
-            // Generate unique filename
             $file_extension = pathinfo($file['name'], PATHINFO_EXTENSION);
             $new_filename = 'reception_' . $user_id . '_' . time() . '.' . $file_extension;
             $file_path = $upload_dir . $new_filename;
             
-            // Move uploaded file
             if (move_uploaded_file($file['tmp_name'], $file_path)) {
-                // Delete old profile picture if exists
                 if (!empty($profile_pic) && file_exists($upload_dir . $profile_pic)) {
                     @unlink($upload_dir . $profile_pic);
                 }
                 
-                // Update database
                 $stmt = $db->prepare("UPDATE users SET profile_pic = ? WHERE id = ?");
                 if ($stmt->execute([$new_filename, $user_id])) {
                     $profile_pic = $new_filename;
@@ -148,7 +143,6 @@ try {
                     $message = "Profile picture updated successfully!";
                     $message_type = 'success';
                     
-                    // Refresh user data
                     $stmt = $db->prepare("SELECT * FROM users WHERE id = ?");
                     $stmt->execute([$user_id]);
                     $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -169,7 +163,50 @@ try {
     }
     
     // ================================================================
-    // HANDLE PROFILE UPDATE (name, email, phone)
+    // ✅ HANDLE REMOVE AVATAR (NEW)
+    // ================================================================
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_avatar'])) {
+        try {
+            $stmt = $db->prepare("SELECT profile_pic FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $current = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_pic = $current['profile_pic'] ?? '';
+            
+            // Delete file from disk
+            if (!empty($current_pic)) {
+                $file_to_delete = __DIR__ . '/../../assets/uploads/profiles/' . $current_pic;
+                if (file_exists($file_to_delete)) {
+                    @unlink($file_to_delete);
+                }
+            }
+            
+            // Update DB
+            $stmt = $db->prepare("UPDATE users SET profile_pic = NULL WHERE id = ?");
+            $stmt->execute([$user_id]);
+            
+            $_SESSION['profile_pic'] = '';
+            $profile_pic = '';
+            
+            $message = "Profile picture removed successfully!";
+            $message_type = 'success';
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                    VALUES (?, ?, 'profile_pic_removed', ?, NOW())
+                ");
+                $stmt->execute([$user_id, $branch_id, "Reception removed profile picture"]);
+            } catch (Exception $e) {}
+            
+        } catch (Exception $e) {
+            $message = "Failed to remove profile picture: " . $e->getMessage();
+            $message_type = 'error';
+        }
+    }
+    
+    // ================================================================
+    // HANDLE PROFILE UPDATE
     // ================================================================
     if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
         $full_name = trim($_POST['full_name'] ?? '');
@@ -193,7 +230,6 @@ try {
                 $message = "Profile updated successfully!";
                 $message_type = 'success';
                 
-                // Refresh user data
                 $stmt = $db->prepare("SELECT * FROM users WHERE id = ?");
                 $stmt->execute([$user_id]);
                 $user = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -228,7 +264,9 @@ if (!empty($profile_pic)) {
     }
 }
 
-// Default avatar
+// ✅ NEW: Determine if user has custom picture
+$has_custom_pic = !empty($profile_pic) && $profile_pic_exists;
+
 $default_avatar = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 $default_letter = strtoupper(substr($full_name, 0, 1));
 
@@ -261,6 +299,11 @@ switch ($role) {
 }
 
 // ================================================================
+// LOGO PATH
+// ================================================================
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+
+// ================================================================
 // INCLUDE SHARED HEADER & SIDEBAR
 // ================================================================
 include_once '../../components/reception_header.php';
@@ -274,16 +317,13 @@ include_once '../../components/reception_sidebar.php';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>My Profile - Braick Dispensary</title>
     
-    <link rel="icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
-    <link rel="shortcut icon" href="<?= $logo_path ?? '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png' ?>" type="image/png">
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -603,6 +643,7 @@ include_once '../../components/reception_sidebar.php';
             backdrop-filter: blur(4px);
             position: relative;
             z-index: 1;
+            cursor: pointer;
         }
         
         .page-header .btn-outline-light:hover {
@@ -680,6 +721,32 @@ include_once '../../components/reception_sidebar.php';
             width: 100%;
             height: 100%;
             cursor: pointer;
+        }
+        
+        /* ✅ NEW: Remove Picture Button (Overlay) */
+        .profile-avatar-wrapper .remove-overlay {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: var(--danger);
+            color: white;
+            width: 34px;
+            height: 34px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid var(--bg-card);
+            box-shadow: 0 2px 10px rgba(220, 38, 38, 0.3);
+            font-size: 0.8rem;
+        }
+        
+        .profile-avatar-wrapper .remove-overlay:hover {
+            background: var(--danger-dark);
+            transform: scale(1.1);
+            box-shadow: 0 4px 15px rgba(220, 38, 38, 0.5);
         }
         
         .profile-name {
@@ -761,6 +828,7 @@ include_once '../../components/reception_sidebar.php';
             cursor: pointer;
             border: none;
             text-decoration: none;
+            font-family: inherit;
         }
         
         .btn-primary {
@@ -785,6 +853,30 @@ include_once '../../components/reception_sidebar.php';
             background: var(--bg-body);
             border-color: var(--primary);
             color: var(--primary);
+        }
+        
+        .btn-danger {
+            background: linear-gradient(135deg, #DC2626, #EF4444);
+            color: white;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        
+        .btn-danger:hover {
+            background: linear-gradient(135deg, #B91C1C, #DC2626);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(220, 38, 38, 0.4);
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #059669, #10B981);
+            color: white;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .btn-success:hover {
+            background: linear-gradient(135deg, #047857, #059669);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4);
         }
         
         .btn-sm {
@@ -858,6 +950,99 @@ include_once '../../components/reception_sidebar.php';
         }
         
         /* ================================================================
+           ✅ NEW: MODAL
+           ================================================================ */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .modal-overlay.show {
+            display: flex;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        .modal-box {
+            background: white;
+            border-radius: 16px;
+            padding: 32px 36px;
+            max-width: 420px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: slideUp 0.3s ease;
+            border: 2px solid var(--border-color);
+        }
+        
+        [data-theme="dark"] .modal-box {
+            background: var(--bg-card);
+            border-color: var(--border-color);
+        }
+        
+        .modal-icon {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #FEE2E2, #FECACA);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 2.5rem;
+            color: var(--danger);
+            border: 4px solid #FCA5A5;
+        }
+        
+        [data-theme="dark"] .modal-icon {
+            background: linear-gradient(135deg, #3A1A1A, #4A1A1A);
+            border-color: #7F1D1D;
+        }
+        
+        .modal-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+        }
+        
+        .modal-message {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+        
+        .modal-actions .btn {
+            flex: 1;
+            justify-content: center;
+        }
+        
+        /* ================================================================
            TOAST
            ================================================================ */
         .toast-custom {
@@ -866,7 +1051,7 @@ include_once '../../components/reception_sidebar.php';
             right: 24px;
             padding: 14px 20px;
             border-radius: var(--radius);
-            z-index: 999;
+            z-index: 9999;
             max-width: 380px;
             transform: translateY(100px);
             opacity: 0;
@@ -920,8 +1105,11 @@ include_once '../../components/reception_sidebar.php';
             .profile-avatar { width: 100px; height: 100px; }
             .profile-name { font-size: 1.3rem; }
             .profile-avatar-wrapper .upload-overlay { width: 32px; height: 32px; font-size: 0.8rem; }
+            .profile-avatar-wrapper .remove-overlay { width: 28px; height: 28px; font-size: 0.7rem; }
             .info-row { flex-direction: column; gap: 4px; }
             .btn { padding: 8px 16px; font-size: 0.78rem; }
+            .modal-box { padding: 24px 20px; }
+            .modal-actions { flex-direction: column; }
         }
         
         @media (max-width: 640px) {
@@ -984,8 +1172,8 @@ include_once '../../components/reception_sidebar.php';
         </button>
         
         <a href="profile.php">
-            <?php if ($profile_pic_exists && !empty($profile_pic)): ?>
-                <img src="<?= '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic ?>" alt="Profile" class="avatar" style="object-fit:cover;">
+            <?php if ($has_custom_pic): ?>
+                <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar" style="object-fit:cover;">
             <?php else: ?>
                 <div class="avatar avatar-default" style="background:var(--primary); color:white; display:flex; align-items:center; justify-content:center; font-size:1rem; font-weight:700; width:40px; height:40px; border-radius:50%; border:2px solid var(--primary);">
                     <?= $default_letter ?>
@@ -1010,7 +1198,7 @@ include_once '../../components/reception_sidebar.php';
                 My Profile
                 <span class="role-badge-display">RECEPTION</span>
                 <span class="update-badge-light" style="background:rgba(255,255,255,0.12);color:rgba(255,255,255,0.8);padding:3px 12px;border-radius:20px;font-size:0.6rem;display:inline-flex;align-items:center;gap:4px;backdrop-filter:blur(4px);">
-                    <span class="live-indicator-modern" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;margin-right:4px;"></span> Live
+                    <span style="display:inline-block;width:6px;height:6px;border-radius:50%;background:#34D399;animation:pulse-dot 1.5s infinite;margin-right:4px;"></span> Live
                 </span>
             </h1>
             <p class="page-subtitle">
@@ -1018,7 +1206,11 @@ include_once '../../components/reception_sidebar.php';
                 View and manage your profile information
             </p>
         </div>
-        <div>
+        <div class="flex gap-2 flex-wrap">
+            <!-- ✅ NEW: EDIT PROFILE BUTTON -->
+            <a href="edit_profile.php" class="btn-outline-light" style="background:rgba(255,255,255,0.25);">
+                <i class="fas fa-user-edit"></i> Edit Profile
+            </a>
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Back to Dashboard
             </a>
@@ -1043,19 +1235,27 @@ include_once '../../components/reception_sidebar.php';
         <!-- Profile Picture -->
         <div class="flex flex-col md:flex-row items-center gap-6 mb-6">
             <div class="profile-avatar-wrapper">
-                <?php if ($profile_pic_exists && !empty($profile_pic)): ?>
-                    <img src="<?= '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic ?>" alt="Profile Picture" class="profile-avatar" id="profilePreview">
+                <?php if ($has_custom_pic): ?>
+                    <img src="<?= $profile_pic_url ?>" alt="Profile Picture" class="profile-avatar" id="profilePreview">
                 <?php else: ?>
                     <img src="<?= $default_avatar ?>" alt="Default Avatar" class="profile-avatar" id="profilePreview"
                          onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%22130%22 height=%22130%22%3E%3Crect width=%22130%22 height=%22130%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2265%22 y=%2285%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2250%22 font-weight=%22bold%22%3E<?= $default_letter ?>%3C/text%3E%3C/svg%3E'">
                 <?php endif; ?>
                 
+                <!-- Upload Form -->
                 <form method="POST" enctype="multipart/form-data" id="uploadForm">
                     <div class="upload-overlay" title="Upload Profile Picture">
                         <i class="fas fa-camera"></i>
                         <input type="file" name="profile_pic" accept="image/*" id="profilePicInput">
                     </div>
                 </form>
+                
+                <!-- ✅ NEW: Remove Overlay Button -->
+                <?php if ($has_custom_pic): ?>
+                    <div class="remove-overlay" title="Remove Profile Picture" onclick="openRemoveModal()">
+                        <i class="fas fa-times"></i>
+                    </div>
+                <?php endif; ?>
             </div>
             
             <div class="text-center md:text-left">
@@ -1068,6 +1268,18 @@ include_once '../../components/reception_sidebar.php';
                 <p class="text-sm text-gray-400 mt-1">
                     <i class="fas fa-calendar-alt mr-1"></i> Member since <?= date('F d, Y', strtotime($user['created_at'] ?? 'now')) ?>
                 </p>
+                
+                <!-- ✅ NEW: Action Buttons -->
+                <div class="flex flex-wrap gap-2 mt-3 justify-center md:justify-start">
+                    <a href="edit_profile.php" class="btn btn-primary btn-sm">
+                        <i class="fas fa-user-edit"></i> Edit Profile
+                    </a>
+                    <?php if ($has_custom_pic): ?>
+                        <button type="button" class="btn btn-danger btn-sm" onclick="openRemoveModal()">
+                            <i class="fas fa-trash-alt"></i> Remove Picture
+                        </button>
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
         
@@ -1189,6 +1401,37 @@ include_once '../../components/reception_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
+<!-- ✅ REMOVE PICTURE CONFIRMATION MODAL -->
+<!-- ================================================================ -->
+<div class="modal-overlay" id="removeModal">
+    <div class="modal-box">
+        <div class="modal-icon">
+            <i class="fas fa-trash-alt"></i>
+        </div>
+        <h3 class="modal-title">Remove Profile Picture?</h3>
+        <p class="modal-message">
+            Are you sure you want to remove your profile picture?<br>
+            This action cannot be undone.
+        </p>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-outline" onclick="closeRemoveModal()">
+                <i class="fas fa-times"></i> Cancel
+            </button>
+            <button type="button" class="btn btn-danger" onclick="confirmRemove()">
+                <i class="fas fa-trash-alt"></i> Yes, Remove
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ================================================================ -->
+<!-- HIDDEN FORM FOR DELETE -->
+<!-- ================================================================ -->
+<form method="POST" action="" id="deleteAvatarForm" style="display:none;">
+    <input type="hidden" name="remove_avatar" value="1">
+</form>
+
+<!-- ================================================================ -->
 <!-- TOAST -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
@@ -1237,22 +1480,24 @@ include_once '../../components/reception_sidebar.php';
     var savedDarkMode = localStorage.getItem('darkMode');
     if (savedDarkMode === 'true') {
         htmlElement.setAttribute('data-theme', 'dark');
-        darkIcon.className = 'fas fa-sun';
-        darkText.textContent = 'Light';
+        if (darkIcon) darkIcon.className = 'fas fa-sun';
+        if (darkText) darkText.textContent = 'Light';
     }
     
     darkModeToggle?.addEventListener('click', function() {
         var isDark = htmlElement.getAttribute('data-theme') === 'dark';
         if (isDark) {
             htmlElement.removeAttribute('data-theme');
-            darkIcon.className = 'fas fa-moon';
-            darkText.textContent = 'Dark';
+            if (darkIcon) darkIcon.className = 'fas fa-moon';
+            if (darkText) darkText.textContent = 'Dark';
             localStorage.setItem('darkMode', 'false');
+            document.cookie = "dark_mode=false; path=/";
         } else {
             htmlElement.setAttribute('data-theme', 'dark');
-            darkIcon.className = 'fas fa-sun';
-            darkText.textContent = 'Light';
+            if (darkIcon) darkIcon.className = 'fas fa-sun';
+            if (darkText) darkText.textContent = 'Light';
             localStorage.setItem('darkMode', 'true');
+            document.cookie = "dark_mode=true; path=/";
         }
     });
 
@@ -1263,12 +1508,12 @@ include_once '../../components/reception_sidebar.php';
     var sidebarToggle = document.getElementById('sidebarToggle');
     
     sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
+        if (sidebar) sidebar.classList.toggle('open');
     });
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
@@ -1298,14 +1543,12 @@ include_once '../../components/reception_sidebar.php';
     document.getElementById('profilePicInput')?.addEventListener('change', function() {
         var file = this.files[0];
         if (file) {
-            // Validate file size
             if (file.size > 5 * 1024 * 1024) {
                 showToast('Error', 'File size must be less than 5MB', 'error');
                 this.value = '';
                 return;
             }
             
-            // Validate file type
             var validTypes = ['image/jpeg', 'image/png', 'image/jpg', 'image/gif', 'image/webp'];
             if (!validTypes.includes(file.type)) {
                 showToast('Error', 'Only JPG, PNG, GIF, and WEBP images are allowed', 'error');
@@ -1313,15 +1556,63 @@ include_once '../../components/reception_sidebar.php';
                 return;
             }
             
-            // Preview image
             var reader = new FileReader();
             reader.onload = function(e) {
                 document.getElementById('profilePreview').src = e.target.result;
             };
             reader.readAsDataURL(file);
             
-            // Auto submit form
             document.getElementById('uploadForm').submit();
+        }
+    });
+
+    // ================================================================
+    // ✅ REMOVE PICTURE MODAL FUNCTIONS
+    // ================================================================
+    function openRemoveModal() {
+        var modal = document.getElementById('removeModal');
+        if (modal) {
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+        }
+    }
+    
+    function closeRemoveModal() {
+        var modal = document.getElementById('removeModal');
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+    }
+    
+    function confirmRemove() {
+        var form = document.getElementById('deleteAvatarForm');
+        if (form) {
+            var removeBtn = document.querySelector('#removeModal .btn-danger');
+            if (removeBtn) {
+                removeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Removing...';
+                removeBtn.disabled = true;
+            }
+            setTimeout(function() {
+                form.submit();
+            }, 300);
+        }
+    }
+    
+    // Close modal when clicking outside
+    var removeModal = document.getElementById('removeModal');
+    if (removeModal) {
+        removeModal.addEventListener('click', function(e) {
+            if (e.target === removeModal) {
+                closeRemoveModal();
+            }
+        });
+    }
+    
+    // Close modal with ESC key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeRemoveModal();
         }
     });
 
@@ -1350,8 +1641,9 @@ include_once '../../components/reception_sidebar.php';
 
     console.log('%c👤 Braick - Reception Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 User: <?= htmlspecialchars($full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📸 Profile pic: <?= $profile_pic_exists ? 'Uploaded ✅' : 'Default' ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ Profile picture shows across all pages', 'font-size:13px; color:#059669;');
+    console.log('%c📸 Profile pic: <?= $has_custom_pic ? 'Uploaded ✅' : 'Default' ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c✅ EDIT PROFILE BUTTON ADDED', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ REMOVE PICTURE BUTTON ADDED', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#6EA8FE;');
 </script>

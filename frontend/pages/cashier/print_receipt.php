@@ -1,10 +1,11 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/cashier/print_receipt.php
-// CASHIER - PRINT RECEIPT 
-// SUPPORTS: Regular Bills (with visit_id) AND OTC Sales
-// WITH BEAUTIFUL DESIGN AND PRINT BUTTON
-// FIXED: Medication instructions show dosage, route, frequency, instructions
+// CASHIER - PRINT RECEIPT - BEAUTIFUL DESIGN
+// ✅ PREMIUM AMOUNT HIDDEN (only Paid Amount shown)
+// ✅ BRANCH PHONE & EMAIL FROM branches TABLE
+// ✅ SUPPORTS: Regular Bills AND OTC Sales
+// ✅ Medications show dosage, route, frequency, instructions
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -47,9 +48,6 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// ================================================================
-// GET PARAMETERS
-// ================================================================
 $bill_id = isset($_GET['bill_id']) ? (int)$_GET['bill_id'] : 0;
 $payment_id = isset($_GET['payment_id']) ? (int)$_GET['payment_id'] : 0;
 $sale_id = isset($_GET['sale_id']) ? (int)$_GET['sale_id'] : 0;
@@ -71,11 +69,36 @@ $has_error = false;
 $currency = 'TSh';
 $is_otc = false;
 $site_name = 'Braick Dispensary';
-$site_phone = '+255 700 000 000';
-$site_email = 'info@braick.com';
 
 // ================================================================
-// GET ADMIN CONTACT NUMBERS
+// ✅ BRANCH INFO (PHONE, EMAIL, LOCATION, NAME)
+// ================================================================
+$branch_name = $user_branch_name;
+$branch_phone = '+255 700 000 001';
+$branch_email = 'info@braick.com';
+$branch_location = 'Tanzania';
+
+try {
+    $stmt = $db->prepare("
+        SELECT name, location, phone, email, logo 
+        FROM branches 
+        WHERE id = ? AND status = 'active'
+    ");
+    $stmt->execute([$user_branch_id]);
+    $branch_data = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    if ($branch_data) {
+        $branch_name = $branch_data['name'] ?? $user_branch_name;
+        $branch_phone = $branch_data['phone'] ?? '+255 700 000 001';
+        $branch_email = $branch_data['email'] ?? 'info@braick.com';
+        $branch_location = $branch_data['location'] ?? 'Tanzania';
+    }
+} catch (Exception $e) {
+    error_log("Branch fetch error: " . $e->getMessage());
+}
+
+// ================================================================
+// ✅ ADMIN CONTACTS (FROM users TABLE)
 // ================================================================
 $admin_phones = [];
 try {
@@ -89,21 +112,11 @@ try {
 } catch (Exception $e) {
     $admin_phones = [];
 }
-
-$branch_phone = '';
-try {
-    $stmt = $db->prepare("SELECT phone FROM branches WHERE id = ?");
-    $stmt->execute([$user_branch_id]);
-    $branch_phone = $stmt->fetchColumn();
-} catch (Exception $e) {
-    $branch_phone = '';
-}
-$admin_phones_display = !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001');
+$admin_phones_display = !empty($admin_phones) 
+    ? implode(' | ', array_filter($admin_phones)) 
+    : $branch_phone;
 
 try {
-    // ================================================================
-    // GET SYSTEM SETTINGS
-    // ================================================================
     $stmt = $db->query("SELECT setting_key, setting_value FROM system_settings");
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
         $settings[$row['setting_key']] = $row['setting_value'];
@@ -111,8 +124,6 @@ try {
     
     $site_name = $settings['site_name'] ?? 'Braick Dispensary';
     $currency = $settings['currency'] ?? 'TSh';
-    $site_phone = $settings['phone'] ?? '+255 700 000 000';
-    $site_email = $settings['email'] ?? 'info@braick.com';
     
     // ================================================================
     // CASE 1: OTC SALE
@@ -165,6 +176,12 @@ try {
                     $payment = $stmt->fetch(PDO::FETCH_ASSOC);
                 }
                 
+                // Use branch data if available
+                $branch_name = $otc_sale['branch_name'] ?? $branch_name;
+                $branch_location = $otc_sale['branch_location'] ?? $branch_location;
+                $branch_phone = $otc_sale['branch_phone'] ?? $branch_phone;
+                $branch_email = $otc_sale['branch_email'] ?? $branch_email;
+                
                 $bill = [
                     'id' => $otc_sale['id'],
                     'bill_number' => 'OTC-' . $otc_sale['sale_number'],
@@ -190,10 +207,10 @@ try {
                     'created_at' => $otc_sale['created_at'],
                     'updated_at' => $otc_sale['updated_at'],
                     'cashier_name' => $otc_sale['cashier_name'] ?? $user_full_name,
-                    'branch_name' => $otc_sale['branch_name'] ?? $user_branch_name,
-                    'branch_location' => $otc_sale['branch_location'] ?? 'Dodoma, Tanzania',
-                    'branch_phone' => $otc_sale['branch_phone'] ?? '+255 759 154 160',
-                    'branch_email' => $otc_sale['branch_email'] ?? 'info@braick.com',
+                    'branch_name' => $branch_name,
+                    'branch_location' => $branch_location,
+                    'branch_phone' => $branch_phone,
+                    'branch_email' => $branch_email,
                     'is_otc' => true,
                     'reference_id' => $otc_sale['id']
                 ];
@@ -208,7 +225,7 @@ try {
     }
     
     // ================================================================
-    // CASE 2: REGULAR BILL - FIXED QUERY FOR MEDICATION INSTRUCTIONS
+    // CASE 2: REGULAR BILL
     // ================================================================
     if (!$is_otc && $bill_id > 0) {
         $stmt = $db->prepare("
@@ -217,6 +234,7 @@ try {
                 b.discount_amount as pharmacy_discount,
                 b.cashier_discount,
                 b.total_discount,
+                b.premium_amount,
                 p.full_name as patient_name,
                 p.patient_id as patient_code,
                 p.phone,
@@ -242,12 +260,8 @@ try {
         $bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($bill) {
-            // ================================================================
-            // STEP 1: Get bill items
-            // ================================================================
             $stmt = $db->prepare("
-                SELECT 
-                    bi.*
+                SELECT bi.*
                 FROM bill_items bi
                 WHERE bi.bill_id = ? AND bi.status != 'cancelled'
                 ORDER BY 
@@ -260,17 +274,12 @@ try {
             $stmt->execute([$bill_id]);
             $bill_items_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
             
-            // ================================================================
-            // STEP 2: Get prescriptions and their items for this visit
-            // ================================================================
-            // First get the visit_id from the bill
             $visit_id = $bill['visit_id'] ?? 0;
             
             $prescription_items_map = [];
             $prescription_numbers = [];
             
             if ($visit_id > 0) {
-                // Get all prescriptions for this visit
                 $stmt = $db->prepare("
                     SELECT 
                         p.id as prescription_id,
@@ -296,16 +305,13 @@ try {
                 $stmt->execute([$visit_id]);
                 $prescription_data = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
-                // Build a map of medication_name -> prescription item details
                 foreach ($prescription_data as $rx) {
                     if (!empty($rx['medication_name'])) {
                         $key = trim($rx['medication_name']);
-                        // Store the first occurrence with the most details
                         if (!isset($prescription_items_map[$key]) || 
                             (empty($prescription_items_map[$key]['instructions']) && !empty($rx['instructions']))) {
                             $prescription_items_map[$key] = $rx;
                         }
-                        // Store prescription number
                         if (!empty($rx['prescription_number']) && !in_array($rx['prescription_number'], $prescription_numbers)) {
                             $prescription_numbers[] = $rx['prescription_number'];
                         }
@@ -313,14 +319,9 @@ try {
                 }
             }
             
-            // ================================================================
-            // STEP 3: Merge bill items with prescription details
-            // ================================================================
             $all_items = [];
             foreach ($bill_items_data as $item) {
-                // Try to find matching prescription item by medication name
                 $item_name = trim($item['item_name'] ?? '');
-                // Remove batch info from item name for matching
                 $clean_name = preg_replace('/\s*\(Batch:.*\)/', '', $item_name);
                 $clean_name = trim($clean_name);
                 
@@ -330,7 +331,6 @@ try {
                 } elseif (!empty($item_name) && isset($prescription_items_map[$item_name])) {
                     $rx_details = $prescription_items_map[$item_name];
                 } else {
-                    // Try partial match
                     foreach ($prescription_items_map as $rx_name => $rx_data) {
                         if (stripos($item_name, $rx_name) !== false || stripos($rx_name, $item_name) !== false) {
                             $rx_details = $rx_data;
@@ -339,7 +339,6 @@ try {
                     }
                 }
                 
-                // Merge the data
                 $merged_item = $item;
                 if ($rx_details) {
                     $merged_item['dosage'] = $rx_details['dosage'] ?? '';
@@ -368,7 +367,6 @@ try {
                 $all_items[] = $merged_item;
             }
             
-            // Separate medications from other items
             $medication_items = [];
             $other_items = [];
             foreach ($all_items as $item) {
@@ -379,7 +377,6 @@ try {
                 }
             }
             
-            // Get payment info
             if ($payment_id > 0) {
                 $stmt = $db->prepare("SELECT * FROM payments WHERE id = ? AND bill_id = ?");
                 $stmt->execute([$payment_id, $bill_id]);
@@ -392,8 +389,18 @@ try {
                 $payment = $stmt->fetch(PDO::FETCH_ASSOC);
             }
             
+            // Use branch data
+            $branch_name = $bill['branch_name'] ?? $branch_name;
+            $branch_location = $bill['branch_location'] ?? $branch_location;
+            $branch_phone = $bill['branch_phone'] ?? $branch_phone;
+            $branch_email = $bill['branch_email'] ?? $branch_email;
+            
             $bill['is_otc'] = false;
             $bill['reference_id'] = $bill_id;
+            $bill['branch_name'] = $branch_name;
+            $bill['branch_location'] = $branch_location;
+            $bill['branch_phone'] = $branch_phone;
+            $bill['branch_email'] = $branch_email;
         } else {
             $error_message = 'Bill not found.';
             $has_error = true;
@@ -447,7 +454,6 @@ foreach ($logo_paths as $path) {
     }
 }
 
-// Calculate totals
 $medication_total = 0;
 foreach ($medication_items as $item) {
     $medication_total += (float)($item['total_price'] ?? 0);
@@ -463,7 +469,6 @@ foreach ($otc_items as $item) {
     $otc_total += (float)($item['total_price'] ?? 0);
 }
 
-// Check if we should show the receipt
 $show_receipt = !$has_error && $bill;
 ?>
 <!DOCTYPE html>
@@ -471,98 +476,96 @@ $show_receipt = !$has_error && $bill;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= $is_otc ? 'OTC Receipt' : 'Receipt' ?> - <?= htmlspecialchars($site_name) ?></title>
+    <title><?= $is_otc ? 'OTC Receipt' : 'Receipt' ?> - <?= htmlspecialchars($branch_name) ?></title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
         body {
-            font-family: 'Courier New', Courier, monospace;
-            background: #f0f2f5;
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: linear-gradient(135deg, #f0f2f5 0%, #e8ecf1 100%);
             min-height: 100vh;
             padding: 20px;
         }
         
         .receipt-wrapper {
-            max-width: 450px;
+            max-width: 480px;
             margin: 0 auto;
         }
         
         .page-header {
-            max-width: 450px;
-            margin: 0 auto 16px auto;
+            max-width: 480px;
+            margin: 0 auto 20px auto;
             display: flex;
             justify-content: space-between;
             align-items: center;
             padding: 0 4px;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 10px;
         }
         
         .page-header .btn-group {
             display: flex;
-            gap: 8px;
+            gap: 10px;
             flex-wrap: wrap;
         }
         
         .page-header .btn {
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            padding: 8px 18px;
-            border-radius: 8px;
-            font-size: 0.8rem;
+            gap: 8px;
+            padding: 10px 22px;
+            border-radius: 12px;
+            font-size: 0.82rem;
             font-weight: 600;
             font-family: 'Inter', sans-serif;
             text-decoration: none;
-            transition: all 0.3s ease;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             cursor: pointer;
             border: none;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
         }
         
         .page-header .btn-back {
             background: white;
-            color: #64748B;
+            color: #475569;
             border: 2px solid #E2E8F0;
         }
         
         .page-header .btn-back:hover {
             border-color: #0B5ED7;
             color: #0B5ED7;
-            transform: translateY(-2px);
+            transform: translateY(-3px);
+            box-shadow: 0 6px 20px rgba(11,94,215,0.15);
         }
         
         .page-header .btn-print {
-            background: #0B5ED7;
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
             color: white;
-            border: 2px solid #0B5ED7;
         }
         
         .page-header .btn-print:hover {
-            background: #0A4CA8;
-            border-color: #0A4CA8;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(11,94,215,0.35);
         }
         
         .page-header .btn-print.otc-btn {
-            background: #7C3AED;
-            border-color: #7C3AED;
+            background: linear-gradient(135deg, #7C3AED, #6D28D9);
         }
         
         .page-header .btn-print.otc-btn:hover {
-            background: #6D28D9;
-            border-color: #6D28D9;
-            box-shadow: 0 4px 12px rgba(124, 58, 237, 0.3);
+            box-shadow: 0 8px 25px rgba(124,58,237,0.35);
         }
         
         .receipt {
-            background: white;
-            padding: 24px 28px;
-            border-radius: 16px;
-            box-shadow: 0 4px 24px rgba(0,0,0,0.1);
+            background: #FFFFFF;
+            padding: 0;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.12), 0 4px 20px rgba(0,0,0,0.06);
             position: relative;
             overflow: hidden;
+            font-family: 'Courier Prime', 'Courier New', monospace;
         }
         
         .receipt::before {
@@ -571,39 +574,56 @@ $show_receipt = !$has_error && $bill;
             top: 0;
             left: 0;
             right: 0;
-            height: 6px;
-            background: linear-gradient(90deg, #0B5ED7, #059669, #7C3AED);
+            height: 5px;
+            background: linear-gradient(90deg, #0B5ED7, #059669, #7C3AED, #0B5ED7);
+            background-size: 300% 100%;
+            animation: gradientShift 4s ease infinite;
         }
         
         .receipt.otc-receipt::before {
-            background: linear-gradient(90deg, #7C3AED, #8B5CF6, #A78BFA);
+            background: linear-gradient(90deg, #7C3AED, #8B5CF6, #A78BFA, #7C3AED);
+            background-size: 300% 100%;
+            animation: gradientShift 4s ease infinite;
+        }
+        
+        @keyframes gradientShift {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        .receipt-inner {
+            padding: 28px 30px 24px 30px;
         }
         
         .receipt-header {
             text-align: center;
-            padding-bottom: 14px;
+            padding-bottom: 18px;
             border-bottom: 2px dashed #E2E8F0;
-            margin-bottom: 14px;
+            margin-bottom: 16px;
+            position: relative;
         }
         
         .receipt-header.otc-header {
-            border-bottom-color: #7C3AED;
+            border-bottom-color: #C4B5FD;
         }
         
         .receipt-logo {
             display: block;
             margin: 0 auto 8px auto;
-            max-width: 100px;
-            max-height: 60px;
+            max-width: 110px;
+            max-height: 65px;
             object-fit: contain;
+            filter: drop-shadow(0 2px 8px rgba(0,0,0,0.08));
         }
         
         .receipt-logo-text {
-            font-size: 1.6rem;
-            font-weight: 700;
+            font-size: 1.5rem;
+            font-weight: 800;
             color: #0B5ED7;
-            letter-spacing: 1px;
+            letter-spacing: 1.5px;
             margin-bottom: 2px;
+            font-family: 'Inter', sans-serif;
         }
         
         .receipt-logo-text span {
@@ -619,12 +639,13 @@ $show_receipt = !$has_error && $bill;
         }
         
         .receipt-title {
-            font-size: 1rem;
+            font-size: 0.95rem;
             font-weight: 700;
             color: #1E293B;
-            letter-spacing: 2px;
+            letter-spacing: 3px;
             text-transform: uppercase;
             margin-top: 2px;
+            font-family: 'Inter', sans-serif;
         }
         
         .receipt-title.otc-title {
@@ -634,14 +655,55 @@ $show_receipt = !$has_error && $bill;
         .receipt-subtitle {
             font-size: 0.65rem;
             color: #64748B;
-            margin-top: 2px;
-            line-height: 1.4;
+            margin-top: 3px;
+            line-height: 1.5;
+            font-family: 'Inter', sans-serif;
         }
         
-        .receipt-divider {
-            border: none;
-            border-top: 1px dashed #CBD5E1;
-            margin: 6px 0;
+        .receipt-subtitle i {
+            color: #0B5ED7;
+            font-size: 0.55rem;
+        }
+        
+        .branch-info {
+            text-align: center;
+            font-size: 0.6rem;
+            color: #64748B;
+            margin: 6px 0 0 0;
+            font-family: 'Inter', sans-serif;
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        
+        .branch-info i {
+            color: #0B5ED7;
+            margin-right: 2px;
+        }
+        
+        .admin-contact-line {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            font-size: 0.55rem;
+            color: #94A3B8;
+            margin-top: 6px;
+            padding-top: 6px;
+            border-top: 1px dashed #E2E8F0;
+            font-family: 'Inter', sans-serif;
+        }
+        
+        .admin-contact-line span {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .admin-contact-line i {
+            color: #059669;
+            font-size: 0.5rem;
         }
         
         .receipt-body {
@@ -652,32 +714,41 @@ $show_receipt = !$has_error && $bill;
         .receipt-row {
             display: flex;
             justify-content: space-between;
-            padding: 3px 0;
+            padding: 4px 0;
+            font-family: 'Inter', sans-serif;
         }
         
         .receipt-row .label {
             color: #64748B;
+            font-weight: 500;
         }
         
         .receipt-row .value {
             font-weight: 600;
             color: #0F172A;
+            text-align: right;
+            max-width: 60%;
         }
         
         .receipt-row .value.bold { font-weight: 700; }
         .receipt-row .value.otc-value { color: #7C3AED; }
-        .receipt-row .value.paid-value { color: #059669; }
-        .receipt-row .value.balance-value { color: #DC2626; }
+        
+        .receipt-divider {
+            border: none;
+            border-top: 1px dashed #CBD5E1;
+            margin: 8px 0;
+        }
         
         .section-header {
             font-weight: 700;
             font-size: 0.75rem;
-            padding: 4px 0;
-            margin: 8px 0 4px 0;
+            padding: 5px 0;
+            margin: 10px 0 6px 0;
             border-bottom: 2px solid;
             display: flex;
             justify-content: space-between;
             align-items: center;
+            font-family: 'Inter', sans-serif;
         }
         
         .section-header.other {
@@ -701,11 +772,11 @@ $show_receipt = !$has_error && $bill;
         
         .receipt-items {
             margin: 4px 0;
-            padding: 4px 0;
+            padding: 2px 0;
         }
         
         .receipt-item {
-            padding: 6px 0;
+            padding: 7px 0;
             border-bottom: 1px dotted #E2E8F0;
         }
         
@@ -723,13 +794,15 @@ $show_receipt = !$has_error && $bill;
             flex: 1;
             font-weight: 500;
             font-size: 0.75rem;
+            font-family: 'Inter', sans-serif;
         }
         
         .receipt-item .item-price {
             font-weight: 600;
             white-space: nowrap;
-            margin-left: 8px;
+            margin-left: 10px;
             font-size: 0.75rem;
+            font-family: 'Courier Prime', monospace;
         }
         
         .receipt-item .item-qty {
@@ -743,191 +816,159 @@ $show_receipt = !$has_error && $bill;
             color: #94A3B8;
             display: block;
             margin-top: 1px;
+            font-family: 'Inter', sans-serif;
         }
         
-        /* ================================================================
-           MEDICATION DETAILS - DOSAGE, ROUTE, FREQUENCY, INSTRUCTIONS
-           ================================================================ */
         .receipt-item .med-details {
             display: block;
             font-size: 0.55rem;
             color: #64748B;
-            margin-top: 2px;
-            padding-left: 4px;
+            margin-top: 3px;
+            padding-left: 2px;
+            font-family: 'Inter', sans-serif;
         }
         
         .receipt-item .med-details .med-tag {
             display: inline-block;
-            padding: 0 8px;
-            border-radius: 4px;
+            padding: 1px 10px;
+            border-radius: 6px;
             margin-right: 4px;
+            margin-bottom: 2px;
             font-size: 0.5rem;
             font-weight: 600;
-            color: #475569;
-            background: #F1F5F9;
+            font-family: 'Inter', sans-serif;
         }
         
-        .receipt-item .med-details .med-tag.dosage-tag {
-            background: #DBEAFE;
-            color: #0B5ED7;
-        }
-        
-        .receipt-item .med-details .med-tag.route-tag {
-            background: #D1FAE5;
-            color: #059669;
-        }
-        
-        .receipt-item .med-details .med-tag.freq-tag {
-            background: #FEF3C7;
-            color: #D97706;
-        }
-        
-        .receipt-item .med-details .med-tag.duration-tag {
-            background: #EDE9FE;
-            color: #7C3AED;
-        }
+        .receipt-item .med-details .med-tag.dosage-tag { background: #DBEAFE; color: #0B5ED7; }
+        .receipt-item .med-details .med-tag.route-tag { background: #D1FAE5; color: #059669; }
+        .receipt-item .med-details .med-tag.freq-tag { background: #FEF3C7; color: #D97706; }
+        .receipt-item .med-details .med-tag.duration-tag { background: #EDE9FE; color: #7C3AED; }
         
         .receipt-item .med-instruction-box {
             display: block;
             font-size: 0.6rem;
             color: #64748B;
             font-style: italic;
-            padding: 4px 10px;
+            padding: 5px 12px;
             border-left: 3px solid #D97706;
-            margin-top: 4px;
+            margin-top: 5px;
             background: #FFFBEB;
-            border-radius: 4px;
+            border-radius: 6px;
+            font-family: 'Inter', sans-serif;
         }
         
-        .receipt-item .med-instruction-box i {
-            color: #D97706;
-            margin-right: 4px;
-        }
+        .receipt-item .med-instruction-box i { color: #D97706; margin-right: 5px; }
         
         .receipt-item .med-instruction-box.otc-instruction {
             border-left-color: #7C3AED;
             background: #EDE9FE;
         }
         
-        .receipt-item .med-instruction-box.otc-instruction i {
-            color: #7C3AED;
-        }
+        .receipt-item .med-instruction-box.otc-instruction i { color: #7C3AED; }
         
         .receipt-item .pharmacy-instruction {
             display: block;
             font-size: 0.55rem;
             color: #0B5ED7;
-            padding: 3px 10px;
+            padding: 4px 12px;
             border-left: 3px solid #0B5ED7;
-            margin-top: 3px;
+            margin-top: 4px;
             background: #E8F0FE;
-            border-radius: 4px;
+            border-radius: 6px;
+            font-family: 'Inter', sans-serif;
         }
         
-        .receipt-item .pharmacy-instruction i {
-            color: #0B5ED7;
-        }
+        .receipt-item .pharmacy-instruction i { color: #0B5ED7; margin-right: 5px; }
         
-        /* TOTALS */
         .receipt-totals {
-            margin: 8px 0 4px 0;
-            padding-top: 8px;
+            margin: 10px 0 4px 0;
+            padding-top: 10px;
             border-top: 2px dashed #E2E8F0;
+            font-family: 'Inter', sans-serif;
         }
         
         .receipt-total-row {
             display: flex;
             justify-content: space-between;
-            padding: 3px 0;
+            padding: 4px 0;
             font-size: 0.75rem;
         }
         
-        .receipt-total-row .label {
-            color: #64748B;
-        }
-        
-        .receipt-total-row .value {
-            font-weight: 600;
-        }
+        .receipt-total-row .label { color: #64748B; font-weight: 500; }
+        .receipt-total-row .value { font-weight: 600; font-family: 'Courier Prime', monospace; }
         
         .receipt-grand-total {
             border-top: 2px solid #1E293B;
-            padding-top: 6px;
-            margin-top: 4px;
-            font-size: 0.9rem;
+            padding-top: 8px;
+            margin-top: 6px;
+            font-size: 0.95rem;
             font-weight: 700;
         }
         
-        .receipt-grand-total .value {
-            color: #0B5ED7;
-            font-size: 1rem;
-        }
-        
-        .receipt-grand-total .value.otc-total {
-            color: #7C3AED;
-        }
-        
-        .receipt-grand-total .value.paid-total {
-            color: #059669;
-        }
-        
-        .discount-value {
-            color: #DC2626;
-        }
+        .receipt-grand-total .value { color: #0B5ED7; font-size: 1.05rem; }
+        .receipt-grand-total .value.otc-total { color: #7C3AED; }
+        .receipt-grand-total .value.paid-total { color: #059669; }
+        .discount-value { color: #DC2626; }
         
         .category-totals {
             display: flex;
-            gap: 8px;
-            margin: 8px 0;
-            padding: 4px 0;
+            gap: 10px;
+            margin: 10px 0;
+            padding: 2px 0;
+            font-family: 'Inter', sans-serif;
         }
         
         .category-totals .cat-item {
             display: flex;
             flex-direction: column;
             align-items: center;
-            padding: 6px 12px;
-            border-radius: 8px;
+            padding: 8px 14px;
+            border-radius: 12px;
             flex: 1;
             text-align: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
         }
         
         .category-totals .cat-item.other {
-            background: #E8F0FE;
+            background: linear-gradient(135deg, #E8F0FE, #DBEAFE);
             color: #0B5ED7;
         }
         
         .category-totals .cat-item.medication {
-            background: #FEF3C7;
+            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
             color: #D97706;
         }
         
         .category-totals .cat-item.otc-cat {
-            background: #EDE9FE;
+            background: linear-gradient(135deg, #EDE9FE, #DDD6FE);
             color: #7C3AED;
         }
         
         .category-totals .cat-item .cat-label {
             font-size: 0.5rem;
-            font-weight: 600;
+            font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
         
+        .category-totals .cat-item .cat-label i { margin-right: 3px; }
+        
         .category-totals .cat-item .cat-value {
-            font-weight: 700;
-            font-size: 0.8rem;
-            margin-top: 2px;
+            font-weight: 800;
+            font-size: 0.85rem;
+            margin-top: 3px;
+            font-family: 'Courier Prime', monospace;
         }
         
         .payment-status {
             display: inline-block;
-            padding: 2px 12px;
-            border-radius: 4px;
+            padding: 3px 14px;
+            border-radius: 20px;
             font-size: 0.6rem;
             font-weight: 700;
             text-transform: uppercase;
             letter-spacing: 0.05em;
+            font-family: 'Inter', sans-serif;
         }
         
         .payment-status.paid { background: #D1FAE5; color: #059669; }
@@ -938,118 +979,94 @@ $show_receipt = !$has_error && $bill;
         
         .payment-method-badge {
             display: inline-block;
-            padding: 2px 10px;
-            border-radius: 4px;
+            padding: 3px 12px;
+            border-radius: 8px;
             font-size: 0.6rem;
             font-weight: 600;
             background: #F1F5F9;
             color: #475569;
+            font-family: 'Inter', sans-serif;
         }
         
         .receipt-footer {
             text-align: center;
             font-size: 0.6rem;
             color: #94A3B8;
-            padding-top: 12px;
+            padding-top: 14px;
             border-top: 2px dashed #E2E8F0;
-            margin-top: 12px;
+            margin-top: 14px;
+            font-family: 'Inter', sans-serif;
         }
         
         .receipt-footer .footer-brand {
             color: #0B5ED7;
-            font-weight: 700;
-            font-size: 0.7rem;
+            font-weight: 800;
+            font-size: 0.75rem;
         }
         
-        .receipt-footer .footer-brand.otc-brand {
-            color: #7C3AED;
-        }
+        .receipt-footer .footer-brand.otc-brand { color: #7C3AED; }
         
         .receipt-footer .footer-divider {
-            margin: 4px 0;
+            margin: 6px 0;
             border: none;
             border-top: 1px dashed #E2E8F0;
         }
         
         .receipt-footer .thank-you {
-            font-size: 0.7rem;
-            font-weight: 600;
+            font-size: 0.75rem;
+            font-weight: 700;
             color: #1E293B;
-            margin: 4px 0;
+            margin: 6px 0;
         }
         
         .receipt-footer .thank-you i {
             color: #DC2626;
             opacity: 0.6;
+            margin-right: 4px;
         }
         
-        .admin-contact-line {
-            display: flex;
-            justify-content: center;
-            gap: 8px;
-            flex-wrap: wrap;
+        .receipt-footer .footer-note {
             font-size: 0.5rem;
             color: #94A3B8;
             margin-top: 4px;
-            padding-top: 4px;
-            border-top: 1px dashed #E2E8F0;
-        }
-        
-        .admin-contact-line span {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .admin-contact-line i {
-            color: #059669;
-        }
-        
-        .branch-info {
-            text-align: center;
-            font-size: 0.55rem;
-            color: #64748B;
-            margin: 4px 0;
-        }
-        
-        .branch-info i {
-            color: #0B5ED7;
         }
         
         .error-box {
-            max-width: 450px;
+            max-width: 480px;
             margin: 0 auto;
-            background: #FEF2F2;
+            background: linear-gradient(135deg, #FEF2F2, #FEE2E2);
             border: 2px solid #FCA5A5;
-            border-radius: 16px;
-            padding: 32px 28px;
+            border-radius: 20px;
+            padding: 40px 32px;
             text-align: center;
             color: #991B1B;
+            box-shadow: 0 20px 60px rgba(220,38,38,0.1);
         }
         
-        .error-box i { font-size: 3rem; display: block; margin-bottom: 12px; color: #DC2626; }
-        .error-box h3 { font-size: 1.2rem; margin-bottom: 6px; color: #991B1B; }
-        .error-box p { font-size: 0.85rem; color: #7F1D1D; }
+        .error-box i { font-size: 3rem; display: block; margin-bottom: 16px; color: #DC2626; }
+        .error-box h3 { font-size: 1.3rem; margin-bottom: 8px; color: #991B1B; font-family: 'Inter', sans-serif; }
+        .error-box p { font-size: 0.85rem; color: #7F1D1D; font-family: 'Inter', sans-serif; }
         
         .error-box .back-btn {
             display: inline-block;
-            margin-top: 16px;
-            padding: 10px 28px;
-            background: #DC2626;
+            margin-top: 20px;
+            padding: 12px 32px;
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
             color: white;
             text-decoration: none;
-            border-radius: 8px;
+            border-radius: 12px;
             font-weight: 600;
             font-size: 0.85rem;
             transition: all 0.3s ease;
             font-family: 'Inter', sans-serif;
             border: none;
             cursor: pointer;
+            box-shadow: 0 4px 15px rgba(220,38,38,0.3);
         }
         
         .error-box .back-btn:hover {
-            background: #B91C1C;
-            transform: translateY(-2px);
+            transform: translateY(-3px);
+            box-shadow: 0 8px 25px rgba(220,38,38,0.4);
         }
         
         .error-box .back-btn i {
@@ -1062,8 +1079,9 @@ $show_receipt = !$has_error && $bill;
         @media print {
             body { background: white; padding: 0; margin: 0; }
             .receipt-wrapper { max-width: 100%; margin: 0; }
-            .receipt { border-radius: 0; box-shadow: none; padding: 16px 20px; }
+            .receipt { border-radius: 0; box-shadow: none; padding: 0; max-width: 100%; }
             .receipt::before { display: none; }
+            .receipt-inner { padding: 16px 20px 14px 20px; }
             .page-header { display: none !important; }
             .no-print { display: none !important; }
             .error-box { display: none !important; }
@@ -1073,6 +1091,7 @@ $show_receipt = !$has_error && $bill;
             .category-totals .cat-item.otc-cat {
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
+                box-shadow: none !important;
             }
             
             .receipt-item .med-instruction-box {
@@ -1096,28 +1115,24 @@ $show_receipt = !$has_error && $bill;
                 print-color-adjust: exact !important;
             }
             
-            .receipt-logo {
-                max-width: 80px;
-                max-height: 50px;
-            }
-            
-            .receipt-logo-text {
-                font-size: 1.2rem;
-            }
+            .receipt-logo { max-width: 85px; max-height: 50px; }
+            .receipt-logo-text { font-size: 1.2rem; }
         }
         
         @media (max-width: 480px) {
-            .receipt { padding: 16px 18px; border-radius: 12px; }
+            .receipt-inner { padding: 18px 16px 16px 16px; }
+            .receipt { border-radius: 14px; }
             .receipt-logo-text { font-size: 1.2rem; }
             .page-header { flex-direction: column; align-items: stretch; }
             .page-header .btn-group { justify-content: center; }
             .page-header .btn { flex: 1; justify-content: center; }
             .category-totals { flex-direction: column; }
             .category-totals .cat-item { flex: 1; }
-            .receipt-title { font-size: 0.85rem; }
-            .receipt-item .item-name { font-size: 0.7rem; }
-            .receipt-item .item-price { font-size: 0.7rem; }
-            .receipt-grand-total { font-size: 0.8rem; }
+            .receipt-title { font-size: 0.8rem; }
+            .receipt-item .item-name { font-size: 0.68rem; }
+            .receipt-item .item-price { font-size: 0.68rem; }
+            .receipt-grand-total { font-size: 0.85rem; }
+            .receipt-grand-total .value { font-size: 0.9rem; }
         }
     </style>
 </head>
@@ -1125,9 +1140,7 @@ $show_receipt = !$has_error && $bill;
 
 <div class="receipt-wrapper">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER WITH PRINT BUTTONS -->
-    <!-- ================================================================ -->
     <div class="page-header no-print">
         <a href="paid_bills.php" class="btn btn-back">
             <i class="fas fa-arrow-left"></i> Back
@@ -1139,9 +1152,7 @@ $show_receipt = !$has_error && $bill;
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- ERROR -->
-    <!-- ================================================================ -->
     <?php if ($has_error || !$bill): ?>
     <div class="error-box">
         <i class="fas fa-exclamation-circle"></i>
@@ -1153,10 +1164,9 @@ $show_receipt = !$has_error && $bill;
     </div>
     <?php else: ?>
 
-    <!-- ================================================================ -->
     <!-- RECEIPT -->
-    <!-- ================================================================ -->
     <div class="receipt <?= $is_otc ? 'otc-receipt' : '' ?>" id="receipt">
+        <div class="receipt-inner">
         
         <!-- HEADER -->
         <div class="receipt-header <?= $is_otc ? 'otc-header' : '' ?>">
@@ -1172,19 +1182,25 @@ $show_receipt = !$has_error && $bill;
                 <?= $is_otc ? '🧾 OTC Sale Receipt' : '🧾 Official Receipt' ?>
             </div>
             <div class="receipt-subtitle">
-                <?= htmlspecialchars($bill['branch_name'] ?? $site_name) ?>
-                <?php if (!empty($bill['branch_location'])): ?>
-                    <br><i class="fas fa-map-marker-alt" style="font-size:0.5rem;"></i> 
-                    <?= htmlspecialchars($bill['branch_location']) ?>
+                <strong><?= htmlspecialchars($branch_name) ?></strong>
+                <?php if (!empty($branch_location)): ?>
+                    <br><i class="fas fa-map-marker-alt"></i> 
+                    <?= htmlspecialchars($branch_location) ?>
                 <?php endif; ?>
             </div>
             <div class="branch-info">
-                <i class="fas fa-phone"></i> <?= htmlspecialchars($site_phone) ?> &nbsp;|&nbsp;
-                <i class="fas fa-envelope"></i> <?= htmlspecialchars($site_email) ?>
+                <?php if (!empty($branch_phone)): ?>
+                    <span><i class="fas fa-phone"></i> <?= htmlspecialchars($branch_phone) ?></span>
+                <?php endif; ?>
+                <?php if (!empty($branch_email)): ?>
+                    <span><i class="fas fa-envelope"></i> <?= htmlspecialchars($branch_email) ?></span>
+                <?php endif; ?>
             </div>
+            <?php if (!empty($admin_phones_display) && $admin_phones_display !== $branch_phone): ?>
             <div class="admin-contact-line">
                 <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
             </div>
+            <?php endif; ?>
         </div>
         
         <!-- BODY -->
@@ -1215,7 +1231,7 @@ $show_receipt = !$has_error && $bill;
                 <span class="label">Status</span>
                 <span class="value">
                     <span class="payment-status <?= $is_otc ? 'otc-paid' : ($bill['status'] ?? 'paid') ?>">
-                        <i class="fas fa-circle" style="font-size:0.4rem;"></i>
+                        <i class="fas fa-circle" style="font-size:0.35rem;"></i>
                         <?= $is_otc ? 'OTC Paid' : ucfirst($bill['status'] ?? 'Paid') ?>
                     </span>
                 </span>
@@ -1246,16 +1262,8 @@ $show_receipt = !$has_error && $bill;
                 <span class="value"><?= htmlspecialchars($bill['visit_number']) ?></span>
             </div>
             <?php endif; ?>
-            <?php if ($is_otc && !empty($bill['sale_number'])): ?>
-            <div class="receipt-row">
-                <span class="label"><i class="fas fa-shopping-cart"></i> Sale #</span>
-                <span class="value otc-value"><?= htmlspecialchars($bill['sale_number']) ?></span>
-            </div>
-            <?php endif; ?>
             
-            <!-- ================================================================ -->
             <!-- CATEGORY TOTALS -->
-            <!-- ================================================================ -->
             <?php if ($is_otc): ?>
                 <div class="category-totals" style="grid-template-columns: 1fr;">
                     <div class="cat-item otc-cat" style="flex:1;">
@@ -1276,9 +1284,7 @@ $show_receipt = !$has_error && $bill;
                 </div>
             <?php endif; ?>
             
-            <!-- ================================================================ -->
             <!-- OTC ITEMS SECTION -->
-            <!-- ================================================================ -->
             <?php if ($is_otc && count($otc_items) > 0): ?>
                 <div class="section-header otc-section">
                     <span><i class="fas fa-shopping-cart"></i> OTC Items</span>
@@ -1310,9 +1316,7 @@ $show_receipt = !$has_error && $bill;
                 </div>
             <?php endif; ?>
             
-            <!-- ================================================================ -->
             <!-- OTHER BILLS SECTION -->
-            <!-- ================================================================ -->
             <?php if (!$is_otc && count($other_items) > 0): ?>
                 <div class="section-header other">
                     <span><i class="fas fa-file-invoice"></i> Other Bills</span>
@@ -1333,19 +1337,12 @@ $show_receipt = !$has_error && $bill;
                                     <?= $currency ?> <?= number_format($item['total_price'] ?? $item['unit_price'] ?? 0, 0) ?>
                                 </span>
                             </div>
-                            <?php if (!empty($item['description'])): ?>
-                                <span style="font-size:0.55rem;color:#94A3B8;display:block;padding-left:4px;">
-                                    <?= htmlspecialchars($item['description']) ?>
-                                </span>
-                            <?php endif; ?>
                         </div>
                     <?php endforeach; ?>
                 </div>
             <?php endif; ?>
             
-            <!-- ================================================================ -->
-            <!-- MEDICATIONS SECTION - WITH FULL INSTRUCTIONS -->
-            <!-- ================================================================ -->
+            <!-- MEDICATIONS SECTION -->
             <?php if (!$is_otc && count($medication_items) > 0): ?>
                 <div class="section-header medication">
                     <span><i class="fas fa-prescription"></i> Prescriptions (Medications)</span>
@@ -1353,7 +1350,6 @@ $show_receipt = !$has_error && $bill;
                 </div>
                 <div class="receipt-items">
                     <?php foreach ($medication_items as $item): 
-                        // Get medication details from prescription_items
                         $dosage = $item['dosage'] ?? '';
                         $frequency = $item['frequency'] ?? '';
                         $route = $item['route'] ?? '';
@@ -1363,7 +1359,6 @@ $show_receipt = !$has_error && $bill;
                         $pharmacy_instructions = $item['pharmacy_instructions'] ?? '';
                         $prescription_number = $item['prescription_number'] ?? '';
                         
-                        // Check if we have any medication details to show
                         $has_med_details = !empty($dosage) || !empty($frequency) || !empty($route) || !empty($duration);
                     ?>
                         <div class="receipt-item">
@@ -1382,9 +1377,6 @@ $show_receipt = !$has_error && $bill;
                                 </span>
                             </div>
                             
-                            <!-- ================================================================ -->
-                            <!-- MEDICATION DETAILS: DOSAGE, ROUTE, FREQUENCY, DURATION -->
-                            <!-- ================================================================ -->
                             <?php if ($has_med_details): ?>
                                 <span class="med-details">
                                     <?php if (!empty($dosage)): ?>
@@ -1402,9 +1394,6 @@ $show_receipt = !$has_error && $bill;
                                 </span>
                             <?php endif; ?>
                             
-                            <!-- ================================================================ -->
-                            <!-- INSTRUCTIONS (From prescription_items) -->
-                            <!-- ================================================================ -->
                             <?php if (!empty($instructions)): ?>
                                 <span class="med-instruction-box">
                                     <i class="fas fa-prescription"></i>
@@ -1412,22 +1401,10 @@ $show_receipt = !$has_error && $bill;
                                 </span>
                             <?php endif; ?>
                             
-                            <!-- ================================================================ -->
-                            <!-- PHARMACY INSTRUCTIONS (If any) -->
-                            <!-- ================================================================ -->
                             <?php if (!empty($pharmacy_instructions)): ?>
                                 <span class="pharmacy-instruction">
                                     <i class="fas fa-pharmacy"></i>
                                     <strong>Pharmacy:</strong> <?= htmlspecialchars($pharmacy_instructions) ?>
-                                </span>
-                            <?php endif; ?>
-                            
-                            <!-- ================================================================ -->
-                            <!-- DEBUG: Show raw data if nothing else -->
-                            <!-- ================================================================ -->
-                            <?php if (!$has_med_details && empty($instructions) && empty($pharmacy_instructions)): ?>
-                                <span class="med-details" style="color:#94A3B8;font-size:0.5rem;">
-                                    <i class="fas fa-info-circle"></i> No additional instructions
                                 </span>
                             <?php endif; ?>
                         </div>
@@ -1435,9 +1412,7 @@ $show_receipt = !$has_error && $bill;
                 </div>
             <?php endif; ?>
             
-            <!-- ================================================================ -->
-            <!-- TOTALS -->
-            <!-- ================================================================ -->
+            <!-- TOTALS - PREMIUM HIDDEN, ONLY PAID SHOWN -->
             <div class="receipt-totals">
                 <div class="receipt-total-row">
                     <span class="label">Subtotal</span>
@@ -1459,15 +1434,18 @@ $show_receipt = !$has_error && $bill;
                     </span>
                 </div>
                 
-                <div class="receipt-total-row" style="border-top:1px dashed #E2E8F0;padding-top:4px;margin-top:2px;">
-                    <span class="label" style="font-weight:600;">Amount Paid</span>
-                    <span class="value paid-value" style="font-weight:700;"><?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?></span>
+                <!-- ✅ PAID AMOUNT ONLY - NO PREMIUM SHOWN -->
+                <div class="receipt-total-row" style="border-top:1px dashed #E2E8F0;padding-top:6px;margin-top:4px;">
+                    <span class="label" style="font-weight:700;font-size:0.85rem;">Amount Paid</span>
+                    <span class="value paid-value" style="font-weight:700;font-size:0.9rem;color:#059669;">
+                        <?= $currency ?> <?= number_format($bill['paid_amount'] ?? 0, 0) ?>
+                    </span>
                 </div>
                 
                 <?php if (($bill['balance'] ?? 0) > 0 && !$is_otc): ?>
                 <div class="receipt-total-row">
                     <span class="label" style="font-weight:600;">Remaining Balance</span>
-                    <span class="value balance-value" style="font-weight:700;"><?= $currency ?> <?= number_format($bill['balance'] ?? 0, 0) ?></span>
+                    <span class="value balance-value" style="font-weight:700;color:#DC2626;"><?= $currency ?> <?= number_format($bill['balance'] ?? 0, 0) ?></span>
                 </div>
                 <?php endif; ?>
             </div>
@@ -1504,20 +1482,26 @@ $show_receipt = !$has_error && $bill;
                     <i class="fas fa-heart"></i> 
                     <?= $is_otc ? 'Thank You for Your Purchase!' : 'Thank You for Choosing Us!' ?>
                 </div>
-                <div class="footer-brand <?= $is_otc ? 'otc-brand' : '' ?>"><?= htmlspecialchars($site_name) ?></div>
+                <div class="footer-brand <?= $is_otc ? 'otc-brand' : '' ?>"><?= htmlspecialchars($branch_name) ?></div>
                 <hr class="footer-divider">
                 <div class="branch-info">
-                    <?= htmlspecialchars($bill['branch_name'] ?? '') ?>
-                    <?php if (!empty($bill['branch_location'])): ?>
-                        <br><?= htmlspecialchars($bill['branch_location']) ?>
+                    <?php if (!empty($branch_location)): ?>
+                        <?= htmlspecialchars($branch_location) ?>
                     <?php endif; ?>
                 </div>
-                <div style="font-size:0.5rem;color:#94A3B8;">
-                    Tel: <?= htmlspecialchars($site_phone) ?> | Email: <?= htmlspecialchars($site_email) ?>
+                <div class="footer-note">
+                    <?php if (!empty($branch_phone)): ?>
+                        Tel: <?= htmlspecialchars($branch_phone) ?>
+                    <?php endif; ?>
+                    <?php if (!empty($branch_email)): ?>
+                        | Email: <?= htmlspecialchars($branch_email) ?>
+                    <?php endif; ?>
                 </div>
+                <?php if (!empty($admin_phones_display) && $admin_phones_display !== $branch_phone): ?>
                 <div class="admin-contact-line" style="justify-content:center;">
                     <span><i class="fas fa-phone-alt"></i> Admin: <?= htmlspecialchars($admin_phones_display) ?></span>
                 </div>
+                <?php endif; ?>
                 <hr class="footer-divider">
                 <div style="font-size:0.5rem;color:#94A3B8;margin-top:4px;">
                     <?= date('d/m/Y h:i A') ?>
@@ -1528,7 +1512,7 @@ $show_receipt = !$has_error && $bill;
             </div>
             
         </div>
-        
+        </div>
     </div>
     <?php endif; ?>
     
@@ -1543,46 +1527,13 @@ $show_receipt = !$has_error && $bill;
         }
     })();
 
-    document.addEventListener('keydown', function(e) {
-        if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
-            // Allow default print behavior
-        }
-    });
-
-    console.log('%c🧾 Braick - Print Receipt (Beautiful Design)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c✅ Supports Regular Bills (with visit_id) and OTC Sales', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Beautiful design with gradient header', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Print button available', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Medications show dosage, route, frequency, instructions', 'font-size:13px; color:#D97706;');
-    <?php if ($is_otc): ?>
-        console.log('%c🛒 OTC Sale: <?= htmlspecialchars($bill['sale_number'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-        console.log('%c👤 Customer: <?= htmlspecialchars($bill['patient_name'] ?? 'Walk-in') ?>', 'font-size:13px; color:#7C3AED;');
-        console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
-    <?php else: ?>
-        console.log('%c📋 Regular Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
-        console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#0B5ED7;');
-        console.log('%c💰 Total: <?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#059669;');
-        console.log('%c💊 Medications: <?= count($medication_items) ?> items', 'font-size:13px; color:#D97706;');
-        console.log('%c📄 Other Bills: <?= count($other_items) ?> items', 'font-size:13px; color:#0B5ED7;');
-        console.log('%c📋 Each medication shows: Dosage, Route, Frequency, Duration, Instructions', 'font-size:13px; color:#34D399;');
-    <?php endif; ?>
-    console.log('%c📞 Admin: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#0B5ED7;');
-    
-    // Debug - show medication items data
-    console.log('%c📋 Medication Items Data:', 'font-size:13px; color:#D97706;');
-    <?php 
-    if (!$is_otc && count($medication_items) > 0) {
-        foreach ($medication_items as $idx => $item) {
-            echo "console.log('  Item " . ($idx+1) . ": " . addslashes($item['item_name'] ?? 'N/A') . "');";
-            echo "console.log('    Dosage: " . addslashes($item['dosage'] ?? 'empty') . "');";
-            echo "console.log('    Frequency: " . addslashes($item['frequency'] ?? 'empty') . "');";
-            echo "console.log('    Route: " . addslashes($item['route'] ?? 'empty') . "');";
-            echo "console.log('    Duration: " . addslashes($item['duration'] ?? 'empty') . "');";
-            echo "console.log('    Instructions: " . addslashes($item['instructions'] ?? 'empty') . "');";
-            echo "console.log('    Pharmacy Instructions: " . addslashes($item['pharmacy_instructions'] ?? 'empty') . "');";
-        }
-    }
-    ?>
+    console.log('%c🧾 Braick - Print Receipt', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ Phone & Email from branches table', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Premium amount HIDDEN - only Paid Amount shown', 'font-size:13px; color:#DC2626;');
+    console.log('%c📍 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c📞 Phone: <?= htmlspecialchars($branch_phone) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c📧 Email: <?= htmlspecialchars($branch_email) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👑 Admin: <?= htmlspecialchars($admin_phones_display) ?>', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

@@ -2,27 +2,21 @@
 // ================================================================
 // FILE: frontend/pages/admin/edit_bill.php
 // ADMIN - EDIT BILL
-// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
+// BRAICK DISPENSARY - WITH PREMIUM
+// ✅ ADDED: Premium Card
+// ✅ ADDED: Premium Input & Note
+// ✅ ADDED: Background colors on all 5 cards
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK ADMIN ACCESS
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -36,9 +30,6 @@ if ($_SESSION['role'] !== 'admin') {
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA
-// ================================================================
 $user_id = $_SESSION['user_id'];
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -47,9 +38,6 @@ $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
@@ -59,9 +47,6 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-// ================================================================
-// GET PARAMETERS
-// ================================================================
 $bill_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
 $selected_branch_id = $_GET['branch'] ?? 'all';
 
@@ -71,7 +56,7 @@ if ($bill_id <= 0) {
 }
 
 // ================================================================
-// FETCH BILL DETAILS - USING bills TABLE
+// FETCH BILL
 // ================================================================
 try {
     $stmt = $db->prepare("
@@ -128,7 +113,7 @@ try {
 }
 
 // ================================================================
-// GET ITEM TYPES
+// ITEM TYPES
 // ================================================================
 $item_types = [
     'registration' => 'Registration Fee',
@@ -153,7 +138,7 @@ try {
 }
 
 // ================================================================
-// PROCESS FORM SUBMISSION
+// PROCESS FORM
 // ================================================================
 $message = '';
 $message_type = '';
@@ -162,16 +147,19 @@ $update_success = false;
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
-    // Update bill details
+    // ============================================================
+    // UPDATE BILL - WITH PREMIUM
+    // ============================================================
     if ($action === 'update_bill') {
         $discount_amount = isset($_POST['discount_amount']) ? floatval(str_replace(',', '', $_POST['discount_amount'])) : 0;
+        $premium_amount = isset($_POST['premium_amount']) ? floatval(str_replace(',', '', $_POST['premium_amount'])) : 0;
+        $premium_note = trim($_POST['premium_note'] ?? '');
         $status = $_POST['status'] ?? 'pending';
         $notes = trim($_POST['notes'] ?? '');
         
         try {
             $db->beginTransaction();
             
-            // Calculate new totals
             $subtotal = 0;
             foreach ($bill_items as $item) {
                 if ($item['status'] !== 'cancelled') {
@@ -179,19 +167,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
             }
             
-            $grand_total = $subtotal - $discount_amount;
+            // ✅ FORMULA: Total = Subtotal - Discount + Premium
+            $grand_total = $subtotal - $discount_amount + $premium_amount;
             if ($grand_total < 0) $grand_total = 0;
             
             $paid_amount = (float)$bill['paid_amount'];
             $balance = $grand_total - $paid_amount;
             if ($balance < 0) $balance = 0;
             
-            // Update bill - using bills table
             $stmt = $db->prepare("
                 UPDATE bills 
                 SET 
                     discount_amount = ?,
                     discount_percent = ?,
+                    premium_amount = ?,
+                    premium_note = ?,
                     subtotal = ?,
                     total_amount = ?,
                     balance = ?,
@@ -203,6 +193,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $stmt->execute([
                 $discount_amount,
                 0,
+                $premium_amount,
+                $premium_note,
                 $subtotal,
                 $grand_total,
                 $balance,
@@ -217,15 +209,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message = "✅ Bill updated successfully!";
             $message_type = 'success';
             
-            // Refresh bill data
+            // Refresh bill
             $stmt = $db->prepare("
-                SELECT 
-                    b.*,
-                    p.full_name as patient_name,
-                    p.patient_id as patient_code,
-                    p.phone as patient_phone,
-                    u.full_name as created_by_name,
-                    br.name as branch_name
+                SELECT b.*, p.full_name as patient_name, p.patient_id as patient_code,
+                       p.phone as patient_phone, u.full_name as created_by_name,
+                       br.name as branch_name
                 FROM bills b
                 LEFT JOIN patients p ON b.patient_id = p.id
                 LEFT JOIN users u ON b.created_by = u.id
@@ -239,11 +227,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $db->rollBack();
             $message = "❌ Error: " . $e->getMessage();
             $message_type = 'error';
-            error_log("Update bill error: " . $e->getMessage());
         }
     }
     
-    // Add item to bill
+    // ============================================================
+    // ADD ITEM
+    // ============================================================
     if ($action === 'add_item') {
         $item_type = $_POST['item_type'] ?? 'other';
         $item_name = trim($_POST['item_name'] ?? '');
@@ -275,42 +264,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NOW())
                 ");
                 $stmt->execute([
-                    $bill_id,
-                    $bill['patient_id'],
-                    $branch_id,
-                    $item_type,
-                    $item_name,
-                    $description,
-                    $quantity,
-                    $unit_price,
-                    $total_price
+                    $bill_id, $bill['patient_id'], $branch_id,
+                    $item_type, $item_name, $description,
+                    $quantity, $unit_price, $total_price
                 ]);
                 
-                // Update bill totals
+                // ✅ Recalculate with premium
+                $stmt = $db->prepare("
+                    SELECT COALESCE(SUM(total_price), 0) as subtotal 
+                    FROM bill_items WHERE bill_id = ? AND status != 'cancelled'
+                ");
+                $stmt->execute([$bill_id]);
+                $new_subtotal = (float)$stmt->fetch(PDO::FETCH_ASSOC)['subtotal'];
+                
+                $premium_amount = (float)($bill['premium_amount'] ?? 0);
+                $discount_amount = (float)($bill['discount_amount'] ?? 0);
+                $new_total = $new_subtotal - $discount_amount + $premium_amount;
+                if ($new_total < 0) $new_total = 0;
+                
+                $paid_amount = (float)$bill['paid_amount'];
+                $new_balance = $new_total - $paid_amount;
+                if ($new_balance < 0) $new_balance = 0;
+                
                 $stmt = $db->prepare("
                     UPDATE bills 
-                    SET subtotal = subtotal + ?,
-                        total_amount = total_amount + ?,
-                        balance = balance + ?,
-                        updated_at = NOW()
+                    SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
                     WHERE id = ?
                 ");
-                $stmt->execute([$total_price, $total_price, $total_price, $bill_id]);
+                $stmt->execute([$new_subtotal, $new_total, $new_balance, $bill_id]);
                 
                 $db->commit();
                 
                 $message = "✅ Item added successfully!";
                 $message_type = 'success';
                 
-                // Refresh data
+                // Refresh
                 $stmt = $db->prepare("
-                    SELECT 
-                        b.*,
-                        p.full_name as patient_name,
-                        p.patient_id as patient_code,
-                        p.phone as patient_phone,
-                        u.full_name as created_by_name,
-                        br.name as branch_name
+                    SELECT b.*, p.full_name as patient_name, p.patient_id as patient_code,
+                           p.phone as patient_phone, u.full_name as created_by_name,
+                           br.name as branch_name
                     FROM bills b
                     LEFT JOIN patients p ON b.patient_id = p.id
                     LEFT JOIN users u ON b.created_by = u.id
@@ -320,21 +312,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$bill_id]);
                 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                // Refresh items
                 $stmt = $db->prepare("
-                    SELECT 
-                        id,
-                        item_type,
-                        item_name,
-                        description,
-                        quantity,
-                        unit_price,
-                        total_price,
-                        status,
-                        created_at
-                    FROM bill_items
-                    WHERE bill_id = ?
-                    ORDER BY created_at ASC
+                    SELECT id, item_type, item_name, description, quantity, 
+                           unit_price, total_price, status, created_at
+                    FROM bill_items WHERE bill_id = ? ORDER BY created_at ASC
                 ");
                 $stmt->execute([$bill_id]);
                 $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -343,12 +324,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->rollBack();
                 $message = "❌ Error adding item: " . $e->getMessage();
                 $message_type = 'error';
-                error_log("Add item error: " . $e->getMessage());
             }
         }
     }
     
-    // Delete item from bill
+    // ============================================================
+    // DELETE ITEM
+    // ============================================================
     if ($action === 'delete_item') {
         $item_id = isset($_POST['item_id']) ? (int)$_POST['item_id'] : 0;
         
@@ -359,26 +341,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             try {
                 $db->beginTransaction();
                 
-                // Get item total
                 $stmt = $db->prepare("SELECT total_price FROM bill_items WHERE id = ? AND bill_id = ?");
                 $stmt->execute([$item_id, $bill_id]);
                 $item = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 if ($item) {
-                    // Delete item
                     $stmt = $db->prepare("DELETE FROM bill_items WHERE id = ? AND bill_id = ?");
                     $stmt->execute([$item_id, $bill_id]);
                     
-                    // Update bill totals
+                    // ✅ Recalculate with premium
+                    $stmt = $db->prepare("
+                        SELECT COALESCE(SUM(total_price), 0) as subtotal 
+                        FROM bill_items WHERE bill_id = ? AND status != 'cancelled'
+                    ");
+                    $stmt->execute([$bill_id]);
+                    $new_subtotal = (float)$stmt->fetch(PDO::FETCH_ASSOC)['subtotal'];
+                    
+                    $premium_amount = (float)($bill['premium_amount'] ?? 0);
+                    $discount_amount = (float)($bill['discount_amount'] ?? 0);
+                    $new_total = $new_subtotal - $discount_amount + $premium_amount;
+                    if ($new_total < 0) $new_total = 0;
+                    
+                    $paid_amount = (float)$bill['paid_amount'];
+                    $new_balance = $new_total - $paid_amount;
+                    if ($new_balance < 0) $new_balance = 0;
+                    
                     $stmt = $db->prepare("
                         UPDATE bills 
-                        SET subtotal = subtotal - ?,
-                            total_amount = total_amount - ?,
-                            balance = balance - ?,
-                            updated_at = NOW()
+                        SET subtotal = ?, total_amount = ?, balance = ?, updated_at = NOW()
                         WHERE id = ?
                     ");
-                    $stmt->execute([$item['total_price'], $item['total_price'], $item['total_price'], $bill_id]);
+                    $stmt->execute([$new_subtotal, $new_total, $new_balance, $bill_id]);
                 }
                 
                 $db->commit();
@@ -386,15 +379,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = "✅ Item deleted successfully!";
                 $message_type = 'success';
                 
-                // Refresh data
+                // Refresh
                 $stmt = $db->prepare("
-                    SELECT 
-                        b.*,
-                        p.full_name as patient_name,
-                        p.patient_id as patient_code,
-                        p.phone as patient_phone,
-                        u.full_name as created_by_name,
-                        br.name as branch_name
+                    SELECT b.*, p.full_name as patient_name, p.patient_id as patient_code,
+                           p.phone as patient_phone, u.full_name as created_by_name,
+                           br.name as branch_name
                     FROM bills b
                     LEFT JOIN patients p ON b.patient_id = p.id
                     LEFT JOIN users u ON b.created_by = u.id
@@ -404,21 +393,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$bill_id]);
                 $bill = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                // Refresh items
                 $stmt = $db->prepare("
-                    SELECT 
-                        id,
-                        item_type,
-                        item_name,
-                        description,
-                        quantity,
-                        unit_price,
-                        total_price,
-                        status,
-                        created_at
-                    FROM bill_items
-                    WHERE bill_id = ?
-                    ORDER BY created_at ASC
+                    SELECT id, item_type, item_name, description, quantity, 
+                           unit_price, total_price, status, created_at
+                    FROM bill_items WHERE bill_id = ? ORDER BY created_at ASC
                 ");
                 $stmt->execute([$bill_id]);
                 $bill_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -427,7 +405,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $db->rollBack();
                 $message = "❌ Error deleting item: " . $e->getMessage();
                 $message_type = 'error';
-                error_log("Delete item error: " . $e->getMessage());
             }
         }
     }
@@ -438,12 +415,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // ================================================================
 function getStatusBadge($status) {
     $classes = [
-        'active' => 'success',
-        'inactive' => 'danger',
-        'pending' => 'warning',
-        'paid' => 'success',
-        'partial' => 'warning',
-        'cancelled' => 'danger',
+        'active' => 'success', 'inactive' => 'danger',
+        'pending' => 'warning', 'paid' => 'success',
+        'partial' => 'warning', 'cancelled' => 'danger',
         'completed' => 'success'
     ];
     return $classes[$status] ?? 'secondary';
@@ -451,44 +425,30 @@ function getStatusBadge($status) {
 
 function getItemTypeColor($type) {
     $colors = [
-        'registration' => 'blue',
-        'consultation' => 'purple',
-        'lab_test' => 'orange',
-        'medication' => 'green',
-        'procedure' => 'red',
-        'equipment' => 'teal',
-        'tool' => 'gray',
-        'other' => 'gray'
+        'registration' => 'blue', 'consultation' => 'purple',
+        'lab_test' => 'orange', 'medication' => 'green',
+        'procedure' => 'red', 'equipment' => 'teal',
+        'tool' => 'gray', 'other' => 'gray'
     ];
     return $colors[$type] ?? 'gray';
 }
 
 function getItemTypeLabel($type) {
     $labels = [
-        'registration' => 'Registration',
-        'consultation' => 'Consultation',
-        'lab_test' => 'Lab Test',
-        'medication' => 'Medication',
-        'procedure' => 'Procedure',
-        'equipment' => 'Equipment',
-        'tool' => 'Tool/Supply',
-        'other' => 'Other'
+        'registration' => 'Registration', 'consultation' => 'Consultation',
+        'lab_test' => 'Lab Test', 'medication' => 'Medication',
+        'procedure' => 'Procedure', 'equipment' => 'Equipment',
+        'tool' => 'Tool/Supply', 'other' => 'Other'
     ];
     return $labels[$type] ?? ucfirst($type);
 }
 
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE HEADERS
-// ================================================================
 include_once '../../components/admin_header.php';
 include_once '../../components/admin_sidebar.php';
 ?>
@@ -535,6 +495,7 @@ include_once '../../components/admin_sidebar.php';
             --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+            --shadow-xl: 0 20px 40px rgba(0,0,0,0.12);
             --table-hover: #ECFDF5;
         }
         
@@ -770,6 +731,189 @@ include_once '../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
+        /* ================================================================
+           ✅ 5 CARDS WITH BACKGROUND COLORS
+           ================================================================ */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 14px;
+            margin-bottom: 24px;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .stat-card {
+            border-radius: var(--radius);
+            padding: 18px 20px;
+            border: 2px solid transparent;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+            transition: all 0.3s ease;
+            box-shadow: var(--shadow-md);
+            text-decoration: none;
+            color: inherit;
+            position: relative;
+            overflow: hidden;
+            min-height: 100px;
+        }
+        
+        .stat-card::before {
+            content: '';
+            position: absolute;
+            top: -30%;
+            right: -20%;
+            width: 120px;
+            height: 120px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 50%;
+            pointer-events: none;
+            transition: all 0.5s ease;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-xl);
+        }
+        
+        .stat-card:hover::before {
+            transform: scale(1.3);
+            right: -10%;
+        }
+        
+        /* CARD 1: Total - BLUE */
+        .stat-card.card-total {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            color: white;
+            border-color: #0A4CA8;
+        }
+        .stat-card.card-total:hover { box-shadow: 0 12px 36px rgba(11, 94, 215, 0.4); }
+        .stat-card.card-total .stat-icon {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        /* CARD 2: Discount - ORANGE */
+        .stat-card.card-discount {
+            background: linear-gradient(135deg, #D97706, #B45309);
+            color: white;
+            border-color: #B45309;
+        }
+        .stat-card.card-discount:hover { box-shadow: 0 12px 36px rgba(217, 119, 6, 0.4); }
+        .stat-card.card-discount .stat-icon {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        /* CARD 3: Premium - GOLD */
+        .stat-card.card-premium {
+            background: linear-gradient(135deg, #F59E0B, #D97706);
+            color: white;
+            border-color: #D97706;
+            animation: premiumPulse 2s ease-in-out infinite;
+        }
+        .stat-card.card-premium:hover { box-shadow: 0 12px 36px rgba(245, 158, 11, 0.5); }
+        .stat-card.card-premium .stat-icon {
+            background: rgba(255,255,255,0.25);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.3);
+        }
+        
+        @keyframes premiumPulse {
+            0%, 100% { box-shadow: 0 4px 16px rgba(217, 119, 6, 0.3); }
+            50% { box-shadow: 0 4px 24px rgba(217, 119, 6, 0.6); }
+        }
+        
+        /* CARD 4: Paid - GREEN */
+        .stat-card.card-paid {
+            background: linear-gradient(135deg, #059669, #047857);
+            color: white;
+            border-color: #047857;
+        }
+        .stat-card.card-paid:hover { box-shadow: 0 12px 36px rgba(5, 150, 105, 0.4); }
+        .stat-card.card-paid .stat-icon {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        /* CARD 5: Balance - RED/GREEN */
+        .stat-card.card-balance {
+            background: linear-gradient(135deg, #DC2626, #B91C1C);
+            color: white;
+            border-color: #B91C1C;
+        }
+        .stat-card.card-balance.zero {
+            background: linear-gradient(135deg, #059669, #047857);
+            border-color: #047857;
+        }
+        .stat-card.card-balance:hover { box-shadow: 0 12px 36px rgba(220, 38, 38, 0.4); }
+        .stat-card.card-balance.zero:hover { box-shadow: 0 12px 36px rgba(5, 150, 105, 0.4); }
+        .stat-card.card-balance .stat-icon {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+        }
+        
+        .stat-card .stat-icon {
+            width: 48px;
+            height: 48px;
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            flex-shrink: 0;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(8px);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .stat-card:hover .stat-icon {
+            transform: scale(1.1) rotate(-3deg);
+        }
+        
+        .stat-card .stat-content {
+            flex: 1;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .stat-label {
+            font-size: 0.6rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 0;
+            display: block;
+            color: rgba(255,255,255,0.9);
+        }
+        
+        .stat-value {
+            font-size: 1.15rem;
+            font-weight: 800;
+            margin: 3px 0 0 0;
+            line-height: 1.2;
+            display: block;
+            color: white;
+            letter-spacing: -0.02em;
+        }
+        
+        .stat-sub {
+            font-size: 0.55rem;
+            margin-top: 3px;
+            display: block;
+            color: rgba(255,255,255,0.85);
+        }
+        
+        /* ================================================================
+           FORM CARD
+           ================================================================ */
         .form-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -777,7 +921,7 @@ include_once '../../components/admin_sidebar.php';
             border: 2px solid var(--border-color);
             transition: all 0.3s ease;
             max-width: 1200px;
-            margin: 0 auto;
+            margin: 0 auto 24px;
             box-shadow: var(--shadow-md);
         }
         
@@ -866,6 +1010,22 @@ include_once '../../components/admin_sidebar.php';
         .form-control:disabled {
             opacity: 0.6;
             cursor: not-allowed;
+        }
+        
+        /* ✅ PREMIUM INPUT */
+        .premium-input {
+            border-color: #D97706 !important;
+            background: #FEF3C7 !important;
+            color: #D97706 !important;
+            font-weight: 700 !important;
+        }
+        [data-theme="dark"] .premium-input {
+            background: #3D2E0A !important;
+            color: #FCD34D !important;
+        }
+        .premium-input:focus {
+            border-color: #D97706 !important;
+            box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.15) !important;
         }
         
         select.form-control { appearance: auto; cursor: pointer; }
@@ -988,6 +1148,9 @@ include_once '../../components/admin_sidebar.php';
             overflow: hidden;
             box-shadow: var(--shadow-sm);
             margin-bottom: 24px;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .table-container .card-header {
@@ -1053,6 +1216,23 @@ include_once '../../components/admin_sidebar.php';
         
         [data-theme="dark"] .data-table tbody tr:nth-child(even) { background: #1A3A2A; }
         
+        .data-table .total-label {
+            text-align: right;
+            font-weight: 700;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            padding: 8px 14px;
+        }
+        
+        .data-table .total-amount {
+            text-align: right;
+            font-family: monospace;
+            font-weight: 700;
+            padding: 8px 14px;
+        }
+        
+        .data-table .total-amount.green { color: var(--primary); }
+        
         .alert {
             padding: 12px 16px;
             border-radius: 8px;
@@ -1062,6 +1242,9 @@ include_once '../../components/admin_sidebar.php';
             align-items: center;
             gap: 10px;
             border: 2px solid transparent;
+            max-width: 1200px;
+            margin-left: auto;
+            margin-right: auto;
         }
         
         .alert-success {
@@ -1126,11 +1309,16 @@ include_once '../../components/admin_sidebar.php';
         .text-purple-600 { color: var(--purple); }
         .text-red-600 { color: var(--danger); }
         
+        @media (max-width: 1200px) {
+            .stats-grid { grid-template-columns: repeat(3, 1fr); }
+        }
+        
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
             .grid-2 { grid-template-columns: 1fr; gap: 14px; }
+            .stats-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -1148,6 +1336,7 @@ include_once '../../components/admin_sidebar.php';
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
             .page-header { flex-direction: column; align-items: flex-start !important; }
+            .stats-grid { grid-template-columns: 1fr; }
         }
         
         @keyframes fadeInUp {
@@ -1181,9 +1370,6 @@ include_once '../../components/admin_sidebar.php';
 </head>
 <body>
 
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -1228,9 +1414,6 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </nav>
 
-<!-- ================================================================ -->
-<!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
     <!-- Page Header -->
@@ -1256,10 +1439,15 @@ include_once '../../components/admin_sidebar.php';
                     <i class="fas fa-money-bill-wave"></i>
                     TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>
                 </span>
+                <?php if (($bill['premium_amount'] ?? 0) > 0): ?>
+                    <span class="header-badge" style="background:rgba(245,158,11,0.3);border-color:rgba(245,158,11,0.4);color:#FCD34D;">
+                        <i class="fas fa-crown"></i> Premium: TSh <?= number_format($bill['premium_amount'], 0) ?>
+                    </span>
+                <?php endif; ?>
             </p>
         </div>
         <div class="flex gap-2 flex-wrap" style="position:relative;z-index:1;">
-            <a href="bill_details.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
+            <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn-outline-light">
                 <i class="fas fa-eye"></i> View
             </a>
             <a href="bills.php?branch=<?= $selected_branch_id ?>" class="btn-outline-light">
@@ -1270,27 +1458,103 @@ include_once '../../components/admin_sidebar.php';
 
     <!-- Message -->
     <?php if ($message): ?>
-        <div class="alert alert-<?= $message_type === 'success' ? 'success' : 'danger' ?>" style="max-width:1200px;margin:0 auto 16px;">
+        <div class="alert alert-<?= $message_type === 'success' ? 'success' : 'danger' ?>">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
             <div><?= $message ?></div>
         </div>
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- BILL INFORMATION -->
+    <!-- ✅ 5 CARDS WITH BACKGROUND COLORS -->
+    <!-- ================================================================ -->
+    <div class="stats-grid animate-fade-in-up">
+        
+        <!-- CARD 1: Total - BLUE -->
+        <div class="stat-card card-total">
+            <div class="stat-icon"><i class="fas fa-file-invoice"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Total Bill</p>
+                <p class="stat-value">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></p>
+                <p class="stat-sub"><i class="fas fa-receipt"></i> Bill amount</p>
+            </div>
+        </div>
+        
+        <!-- CARD 2: Discount - ORANGE -->
+        <div class="stat-card card-discount">
+            <div class="stat-icon"><i class="fas fa-tags"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Discount</p>
+                <p class="stat-value">TSh <?= number_format($bill['discount_amount'] ?? 0, 0) ?></p>
+                <p class="stat-sub"><i class="fas fa-percent"></i> Total discount</p>
+            </div>
+        </div>
+        
+        <!-- CARD 3: Premium - GOLD -->
+        <div class="stat-card card-premium">
+            <div class="stat-icon"><i class="fas fa-crown"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Premium</p>
+                <p class="stat-value">TSh <?= number_format($bill['premium_amount'] ?? 0, 0) ?></p>
+                <?php if (!empty($bill['premium_note'])): ?>
+                    <p class="stat-sub"><?= htmlspecialchars($bill['premium_note']) ?></p>
+                <?php else: ?>
+                    <p class="stat-sub">
+                        <i class="fas fa-star"></i> <?= ($bill['premium_amount'] ?? 0) > 0 ? 'Premium charged' : 'No premium' ?>
+                    </p>
+                <?php endif; ?>
+            </div>
+        </div>
+        
+        <!-- CARD 4: Paid - GREEN -->
+        <div class="stat-card card-paid">
+            <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Paid Amount</p>
+                <p class="stat-value">TSh <?= number_format($bill['paid_amount'] ?? 0, 0) ?></p>
+                <p class="stat-sub">
+                    <?php if (($bill['paid_amount'] ?? 0) > 0): ?>
+                        <?php if (($bill['balance'] ?? 0) <= 0): ?>
+                            <i class="fas fa-check-circle"></i> Fully paid
+                        <?php else: ?>
+                            <i class="fas fa-hourglass-half"></i> Partial paid
+                        <?php endif; ?>
+                    <?php else: ?>
+                        <i class="fas fa-times-circle"></i> No payment
+                    <?php endif; ?>
+                </p>
+            </div>
+        </div>
+        
+        <!-- CARD 5: Balance - RED/GREEN -->
+        <div class="stat-card card-balance <?= ($bill['balance'] ?? 0) <= 0 ? 'zero' : '' ?>">
+            <div class="stat-icon"><i class="fas <?= ($bill['balance'] ?? 0) > 0 ? 'fa-exclamation-triangle' : 'fa-check-circle' ?>"></i></div>
+            <div class="stat-content">
+                <p class="stat-label">Balance</p>
+                <p class="stat-value">TSh <?= number_format($bill['balance'] ?? 0, 0) ?></p>
+                <p class="stat-sub">
+                    <?php if (($bill['balance'] ?? 0) > 0): ?>
+                        <i class="fas fa-clock"></i> Pending payment
+                    <?php else: ?>
+                        <i class="fas fa-check-circle"></i> Fully paid!
+                    <?php endif; ?>
+                </p>
+            </div>
+        </div>
+        
+    </div>
+
+    <!-- ================================================================ -->
+    <!-- BILL INFORMATION FORM -->
     <!-- ================================================================ -->
     <div class="form-card animate-fade-in-up">
         <div class="form-header">
-            <div class="form-icon">
-                <i class="fas fa-file-invoice"></i>
-            </div>
+            <div class="form-icon"><i class="fas fa-file-invoice"></i></div>
             <div>
                 <h3 class="form-title">Bill Information</h3>
-                <p class="form-subtitle">Update bill details and manage items</p>
+                <p class="form-subtitle">Update bill details, discount, and premium</p>
             </div>
         </div>
 
-        <!-- Bill Details Form -->
         <form method="POST" action="" id="billForm">
             <input type="hidden" name="action" value="update_bill">
             
@@ -1324,17 +1588,42 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
             
+            <!-- Discount & Premium -->
             <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-money-bill-wave label-icon"></i> Discount Amount
-                        <span class="label-badge">TSh</span>
+                        <span class="label-badge" style="background:#FEF3C7;color:#D97706;">TSh</span>
                     </label>
                     <input type="text" name="discount_amount" class="form-control" 
                            value="<?= number_format($bill['discount_amount'] ?? 0, 0) ?>" 
                            placeholder="0" oninput="formatAmount(this)">
                 </div>
                 
+                <div class="form-row">
+                    <label class="form-label">
+                        <i class="fas fa-crown label-icon" style="color:#D97706;"></i> Premium Amount
+                        <span class="label-badge" style="background:#FEF3C7;color:#D97706;">TSh</span>
+                    </label>
+                    <input type="text" name="premium_amount" class="form-control premium-input" 
+                           value="<?= number_format($bill['premium_amount'] ?? 0, 0) ?>" 
+                           placeholder="0" oninput="formatAmount(this)">
+                </div>
+            </div>
+            
+            <!-- Premium Note -->
+            <div class="form-row">
+                <label class="form-label">
+                    <i class="fas fa-sticky-note label-icon" style="color:#D97706;"></i> Premium Note
+                    <span class="label-badge">Optional</span>
+                </label>
+                <input type="text" name="premium_note" class="form-control" 
+                       value="<?= htmlspecialchars($bill['premium_note'] ?? '') ?>" 
+                       placeholder="e.g. Premium service charge">
+            </div>
+            
+            <!-- Status -->
+            <div class="grid-2">
                 <div class="form-row">
                     <label class="form-label">
                         <i class="fas fa-info-circle label-icon"></i> Status <span class="required">*</span>
@@ -1364,6 +1653,14 @@ include_once '../../components/admin_sidebar.php';
                     <div class="text-xl font-bold text-green-600">TSh <?= number_format($bill['subtotal'] ?? 0, 0) ?></div>
                 </div>
                 <div class="form-row">
+                    <label class="form-label">Discount</label>
+                    <div class="text-xl font-bold" style="color:var(--warning);">- TSh <?= number_format($bill['discount_amount'] ?? 0, 0) ?></div>
+                </div>
+                <div class="form-row">
+                    <label class="form-label">👑 Premium</label>
+                    <div class="text-xl font-bold" style="color:#D97706;">+ TSh <?= number_format($bill['premium_amount'] ?? 0, 0) ?></div>
+                </div>
+                <div class="form-row">
                     <label class="form-label">Grand Total</label>
                     <div class="text-xl font-bold text-blue-600">TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?></div>
                 </div>
@@ -1379,12 +1676,11 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
             
-            <!-- Form Actions -->
             <div class="form-actions">
                 <button type="submit" class="btn btn-primary">
                     <i class="fas fa-save"></i> Update Bill
                 </button>
-                <a href="bill_details.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
+                <a href="view_bill.php?id=<?= $bill_id ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline">
                     <i class="fas fa-times"></i> Cancel
                 </a>
             </div>
@@ -1467,6 +1763,13 @@ include_once '../../components/admin_sidebar.php';
                             <td colspan="2"></td>
                         </tr>
                         <?php endif; ?>
+                        <?php if (($bill['premium_amount'] ?? 0) > 0): ?>
+                        <tr style="background:#FEF3C7;">
+                            <td colspan="5" class="total-label" style="color:#D97706;">👑 Premium:</td>
+                            <td class="total-amount" style="color:#D97706;">+ TSh <?= number_format($bill['premium_amount'] ?? 0, 0) ?></td>
+                            <td colspan="2"></td>
+                        </tr>
+                        <?php endif; ?>
                         <tr style="background:var(--primary-bg);font-size:1rem;">
                             <td colspan="5" class="total-label" style="font-weight:700;">Grand Total:</td>
                             <td class="total-amount" style="color:var(--primary);font-size:1.1rem;font-weight:700;">
@@ -1490,9 +1793,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="form-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="form-header">
-            <div class="form-icon">
-                <i class="fas fa-plus-circle"></i>
-            </div>
+            <div class="form-icon"><i class="fas fa-plus-circle"></i></div>
             <div>
                 <h3 class="form-title">Add Item to Bill</h3>
                 <p class="form-subtitle">Add a new item to this bill</p>
@@ -1558,9 +1859,6 @@ include_once '../../components/admin_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1575,9 +1873,6 @@ include_once '../../components/admin_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
-<!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1586,13 +1881,8 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
     // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -1622,92 +1912,74 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
+    // SIDEBAR
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
     sidebarToggle?.addEventListener('click', function() {
         sidebar.classList.toggle('open');
     });
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
     });
 
+    // SEARCH
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
-            var branch = '<?= $selected_branch_id ?>';
-            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=' + branch;
+            window.location.href = 'search.php?q=' + encodeURIComponent(query) + '&branch=<?= $selected_branch_id ?>';
         }
     }
-    
     searchBtn?.addEventListener('click', performSearch);
-    searchInput?.addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') performSearch();
-    });
+    searchInput?.addEventListener('keypress', function(e) { if (e.key === 'Enter') performSearch(); });
 
+    // BRANCH SWITCH
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
-        url.searchParams.delete('branch_id');
         window.location.href = url.toString();
     }
 
+    // DATE & TIME
     function updateDateTime() {
         var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
+        var dateStr = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
+        var timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
         var dtEl = document.getElementById('currentDateTime');
         if (dtEl) dtEl.textContent = dateStr + ' • ' + timeStr;
-        
         var ftEl = document.getElementById('footerTime');
         if (ftEl) ftEl.textContent = timeStr;
     }
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
     // FORMAT AMOUNT
-    // ================================================================
     function formatAmount(input) {
         var val = input.value.replace(/[^0-9.]/g, '');
         var parts = val.split('.');
         var whole = parts[0];
         var decimal = parts.length > 1 ? '.' + parts[1].slice(0, 2) : '';
-        
         if (whole.length > 0) {
             whole = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
         }
-        
         input.value = whole + decimal;
     }
 
-    // ================================================================
     // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
         var toastMessage = document.getElementById('toastMessage');
-        
         toast.className = 'toast-custom ' + type;
         toastTitle.textContent = title;
         toastMessage.textContent = message;
         toast.style.display = 'flex';
-        
         toast.classList.add('show');
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
@@ -1716,13 +1988,18 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c📄 Braick Dispensary - Edit Bill', 'font-size:18px; font-weight:bold; color:#059669;');
+    <?php if ($message_type === 'success'): ?>
+        showToast('✅ Success', '<?= addslashes(strip_tags($message)) ?>', 'success');
+    <?php elseif ($message_type === 'error'): ?>
+        showToast('❌ Error', '<?= addslashes(strip_tags($message)) ?>', 'error');
+    <?php endif; ?>
+
+    console.log('%c📄 Braick Dispensary - Edit Bill (WITH PREMIUM)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user_full_name) ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?> (ID: <?= $bill_id ?>)', 'font-size:13px; color:#059669;');
-    console.log('%c👤 Patient: <?= htmlspecialchars($bill['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c💰 Total: TSh <?= number_format($bill['total_amount'] ?? 0, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c✅ Using tables: bills, bill_items, patients, users, branches', 'font-size:13px; color:#34D399;');
+    console.log('%c📋 Bill: <?= htmlspecialchars($bill['bill_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
+    console.log('%c✅ 5 CARDS with BACKGROUND COLORS', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Premium Card + Input ADDED', 'font-size:13px; color:#FCD34D;');
+    console.log('%c✅ Formula: Total = Subtotal - Discount + Premium', 'font-size:13px; color:#FBBF24;');
 </script>
 
 </body>

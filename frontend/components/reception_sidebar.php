@@ -9,6 +9,9 @@
 // ✅ MENU MPANGILIO MPYA
 // FULLY RESPONSIVE - ALL DEVICES
 // BRAICK DISPENSARY
+// ✅ FIXED: Assign Doctor | Lab Test shows BOTH counts separately
+//    - Assign Doctor: count visits with doctor_id assigned (assigned status)
+//    - Lab Test: count lab_tests with doctor_id IS NULL (direct lab requests)
 // ================================================================
 
 // ================================================================
@@ -113,39 +116,78 @@ if (!empty($site_logo)) {
 
 // ================================================================
 // GET REAL DATA FOR BADGES
+// ✅ FIXED: Separate counts for Assign Doctor and Lab Test
 // ================================================================
 $patient_count = 0;
 $appointment_count = 0;
 $pending_appointments = 0;
 $today_visits = 0;
-$pending_patients = 0;
 $services_count = 0;
+
+// ✅ NEW: Separate counts
+$assigned_doctor_count = 0;   // Visits with doctor_id assigned
+$lab_test_count = 0;          // Lab tests with doctor_id IS NULL (direct lab requests)
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
+        // 1. Total patients
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
         $stmt->execute([$user_branch_id]);
         $patient_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // 2. Today's appointments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND DATE(appointment_date) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $appointment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // 3. Pending appointments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM appointments WHERE branch_id = ? AND status IN ('scheduled', 'pending')");
         $stmt->execute([$user_branch_id]);
         $pending_appointments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // 4. Today's visits
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $today_visits = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM visits WHERE branch_id = ? AND status IN ('pending', 'assigned')");
+        // ============================================================
+        // ✅ 5. ASSIGN DOCTOR COUNT
+        // Count visits with doctor_id assigned (waiting to be seen by doctor)
+        // ============================================================
+        $stmt = $db->prepare("
+            SELECT COUNT(DISTINCT v.id) as count 
+            FROM visits v 
+            WHERE v.branch_id = ? 
+            AND v.doctor_id IS NOT NULL
+            AND v.status IN ('assigned', 'pending')
+        ");
         $stmt->execute([$user_branch_id]);
-        $pending_patients = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $assigned_doctor_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // ============================================================
+        // ✅ 6. LAB TEST COUNT
+        // Count visits with direct lab requests (no doctor assigned)
+        // ============================================================
+        $stmt = $db->prepare("
+            SELECT COUNT(DISTINCT lt.visit_id) as count 
+            FROM lab_tests lt 
+            INNER JOIN visits v ON lt.visit_id = v.id
+            WHERE lt.branch_id = ? 
+            AND lt.doctor_id IS NULL
+            AND lt.status IN ('pending', 'in_progress')
+            AND v.branch_id = ?
+        ");
+        $stmt->execute([$user_branch_id, $user_branch_id]);
+        $lab_test_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // ============================================================
+        // 7. Services count
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM services WHERE branch_id = ? OR branch_id IS NULL");
         $stmt->execute([$user_branch_id]);
         $services_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Log for debugging
+        error_log("Reception Sidebar - Patients: $patient_count, Assigned Doctor: $assigned_doctor_count, Lab Test: $lab_test_count");
         
     } catch (Exception $e) {
         error_log("Reception sidebar stats error: " . $e->getMessage());
@@ -188,7 +230,8 @@ $initial_hash = md5(json_encode([
     'appointments' => $appointment_count,
     'pending_appointments' => $pending_appointments,
     'today_visits' => $today_visits,
-    'pending_patients' => $pending_patients,
+    'assigned_doctor_count' => $assigned_doctor_count,
+    'lab_test_count' => $lab_test_count,
     'services_count' => $services_count
 ]));
 
@@ -200,7 +243,8 @@ $initial_data = [
     'appointments' => $appointment_count,
     'pending_appointments' => $pending_appointments,
     'today_visits' => $today_visits,
-    'pending_patients' => $pending_patients,
+    'assigned_doctor_count' => $assigned_doctor_count,
+    'lab_test_count' => $lab_test_count,
     'services_count' => $services_count,
     'branch_id' => $user_branch_id,
     'branch_name' => $user_branch_name,
@@ -452,6 +496,65 @@ $initial_data = [
     }
     
     /* ================================================================
+       DUAL BADGE - Assign Doctor | Lab Test
+       ================================================================ */
+    .dual-badge-container {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex-shrink: 0;
+    }
+    
+    .dual-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        padding: 2px 7px;
+        border-radius: 12px;
+        font-size: 0.55rem;
+        font-weight: 700;
+        color: white;
+        min-width: 26px;
+        text-align: center;
+        border: 1px solid rgba(255,255,255,0.15);
+        transition: all 0.3s ease;
+    }
+    
+    .dual-badge.doctor-badge {
+        background: #D97706;
+        border-color: #D97706;
+    }
+    
+    .dual-badge.doctor-badge.zero {
+        background: rgba(255,255,255,0.08);
+        border-color: rgba(255,255,255,0.1);
+        color: #9EC5FE;
+    }
+    
+    .dual-badge.lab-badge {
+        background: #7C3AED;
+        border-color: #7C3AED;
+    }
+    
+    .dual-badge.lab-badge.zero {
+        background: rgba(255,255,255,0.08);
+        border-color: rgba(255,255,255,0.1);
+        color: #9EC5FE;
+    }
+    
+    .dual-badge-separator {
+        color: rgba(255,255,255,0.3);
+        font-size: 0.55rem;
+        font-weight: 600;
+    }
+    
+    .sidebar-link:hover .dual-badge {
+        transform: scale(1.05);
+    }
+    
+    /* ================================================================
        BADGE UPDATE ANIMATION
        ================================================================ */
     .badge-update {
@@ -601,6 +704,11 @@ $initial_data = [
             font-size: 0.55rem;
             padding: 1px 7px;
         }
+        .dual-badge {
+            font-size: 0.5rem;
+            padding: 1px 6px;
+            min-width: 22px;
+        }
         .sidebar-status {
             padding: 8px 14px;
         }
@@ -637,6 +745,11 @@ $initial_data = [
         .sidebar-link .badge {
             font-size: 0.5rem;
             padding: 1px 6px;
+        }
+        .dual-badge {
+            font-size: 0.45rem;
+            padding: 1px 5px;
+            min-width: 20px;
         }
         .sidebar-nav .nav-label {
             font-size: 0.45rem;
@@ -685,6 +798,14 @@ $initial_data = [
             font-size: 0.45rem;
             padding: 1px 5px;
             min-width: 16px;
+        }
+        .dual-badge {
+            font-size: 0.4rem;
+            padding: 1px 4px;
+            min-width: 18px;
+        }
+        .dual-badge-separator {
+            font-size: 0.5rem;
         }
         .sidebar-nav .nav-label {
             font-size: 0.4rem;
@@ -785,14 +906,30 @@ $initial_data = [
             <span class="badge" id="receptionPatientCount"><?= $patient_count ?></span>
         </a>
         
-        <!-- 4. Assign Doctor -->
+        <!-- ============================================================ -->
+        <!-- 4. Assign Doctor | Lab Test - DUAL BADGE -->
+        <!-- ============================================================ -->
         <a href="/dispensary_system/frontend/pages/reception/assign_doctor.php" class="sidebar-link <?= isActive('assign_doctor.php') ?>">
-            <i class="fas fa-user-md"></i> Assign Doctor
-            <?php if ($pending_patients > 0): ?>
-                <span class="badge danger" id="receptionPendingPatients"><?= $pending_patients ?></span>
-            <?php else: ?>
-                <span class="badge" id="receptionPendingPatients">0</span>
-            <?php endif; ?>
+            <i class="fas fa-user-md"></i>
+            <span class="link-text">Assign Doctor</span>
+            <div class="dual-badge-container">
+                <!-- Doctor Badge (Assigned) -->
+                <span class="dual-badge doctor-badge <?= $assigned_doctor_count == 0 ? 'zero' : '' ?>" 
+                      id="sidebarAssignedDoctorBadge"
+                      title="Visits waiting for doctor">
+                    <?= $assigned_doctor_count ?>
+                </span>
+                
+                <!-- Separator -->
+                <span class="dual-badge-separator">|</span>
+                
+                <!-- Lab Test Badge -->
+                <span class="dual-badge lab-badge <?= $lab_test_count == 0 ? 'zero' : '' ?>" 
+                      id="sidebarLabTestBadge"
+                      title="Direct lab requests (no doctor)">
+                    <?= $lab_test_count ?>
+                </span>
+            </div>
         </a>
         
         <!-- ============================================================ -->
@@ -1017,7 +1154,7 @@ $initial_data = [
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
                 patientEl.textContent = newVal;
-                patientEl.className = parseInt(newVal) > 0 ? 'badge badge-update' : 'badge badge-update';
+                patientEl.className = 'badge badge-update';
                 patientEl.classList.remove('badge-update');
                 void patientEl.offsetWidth;
                 patientEl.classList.add('badge-update');
@@ -1058,23 +1195,47 @@ $initial_data = [
             }
         }
         
-        // 4. Pending Patients
-        var pendingEl = document.getElementById('receptionPendingPatients');
-        if (pendingEl && data.pending_patients !== undefined) {
-            var oldVal = pendingEl.textContent;
-            var newVal = data.pending_patients;
+        // ============================================================
+        // 4. ASSIGNED DOCTOR BADGE (DUAL)
+        // ============================================================
+        var doctorBadge = document.getElementById('sidebarAssignedDoctorBadge');
+        if (doctorBadge && data.assigned_doctor_count !== undefined) {
+            var oldVal = doctorBadge.textContent;
+            var newVal = data.assigned_doctor_count;
             if (oldVal !== String(newVal)) {
                 hasChanges = true;
-                pendingEl.textContent = newVal;
-                pendingEl.className = parseInt(newVal) > 0 ? 'badge danger badge-update' : 'badge badge-update';
-                pendingEl.classList.remove('badge-update');
-                void pendingEl.offsetWidth;
-                pendingEl.classList.add('badge-update');
-                console.log('🔄 Pending Patients: ' + oldVal + ' → ' + newVal);
+                doctorBadge.textContent = newVal;
+                doctorBadge.className = parseInt(newVal) > 0 
+                    ? 'dual-badge doctor-badge badge-update' 
+                    : 'dual-badge doctor-badge zero badge-update';
+                doctorBadge.classList.remove('badge-update');
+                void doctorBadge.offsetWidth;
+                doctorBadge.classList.add('badge-update');
+                console.log('🔄 Assigned Doctor: ' + oldVal + ' → ' + newVal);
             }
         }
         
-        // 5. Services
+        // ============================================================
+        // 5. LAB TEST BADGE (DUAL)
+        // ============================================================
+        var labBadge = document.getElementById('sidebarLabTestBadge');
+        if (labBadge && data.lab_test_count !== undefined) {
+            var oldVal = labBadge.textContent;
+            var newVal = data.lab_test_count;
+            if (oldVal !== String(newVal)) {
+                hasChanges = true;
+                labBadge.textContent = newVal;
+                labBadge.className = parseInt(newVal) > 0 
+                    ? 'dual-badge lab-badge badge-update' 
+                    : 'dual-badge lab-badge zero badge-update';
+                labBadge.classList.remove('badge-update');
+                void labBadge.offsetWidth;
+                labBadge.classList.add('badge-update');
+                console.log('🔄 Lab Test: ' + oldVal + ' → ' + newVal);
+            }
+        }
+        
+        // 6. Services
         var servicesEl = document.getElementById('receptionServicesCount');
         if (servicesEl && data.services_count !== undefined) {
             var oldVal = servicesEl.textContent;
@@ -1090,7 +1251,7 @@ $initial_data = [
             }
         }
         
-        // 6. Update timestamp
+        // 7. Update timestamp
         var timeEl = document.getElementById('sidebarLiveTime');
         if (timeEl) {
             var now = new Date();
@@ -1307,7 +1468,7 @@ $initial_data = [
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c✅ Jina na logo kutoka system_settings table', 
         'font-size:12px; color:#34D399;');
-    console.log('%c📋 MENU: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 
+    console.log('%c📋 MENU: 1.Dashboard 2.Register Patient 3.Patients 4.Assign Doctor|Lab Test 5.Visit 6.Appointments 7.Services 8.Cashier 9.Profile 10.Logout', 
         'font-size:12px; color:#34D399;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?>', 
         'font-size:12px; color:#059669;');
@@ -1315,8 +1476,12 @@ $initial_data = [
         'font-size:12px; color:#6EA8FE;');
     console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
     console.log('   Patients: <?= $patient_count ?>, Appointments: <?= $appointment_count ?>');
-    console.log('   Today Visits: <?= $today_visits ?>, Pending Patients: <?= $pending_patients ?>');
+    console.log('   Today Visits: <?= $today_visits ?>');
+    console.log('   ✅ Assigned Doctor: <?= $assigned_doctor_count ?>');
+    console.log('   ✅ Lab Test (Direct): <?= $lab_test_count ?>');
     console.log('   Services: <?= $services_count ?>');
+    console.log('%c✅ FIXED: Assign Doctor | Lab Test shows BOTH counts separately', 
+        'font-size:13px; font-weight:bold; color:#34D399;');
     console.log('%c⚡ Auto-Update: Every 2s (only if data changed)', 
         'font-size:13px; color:#34D399;');
     console.log('%c🔄 Force refresh: Every 5s (safety net)', 

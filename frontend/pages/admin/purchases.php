@@ -1,30 +1,20 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/admin/purchases.php
-// ADMIN - PURCHASE MANAGEMENT WITH PDF INVOICE
-// SHOWS ALL IN_PROGRESS PURCHASES WITH JOIN BUTTONS
-// ADMIN CAN COMPLETE OR CANCEL ANY PURCHASE
-// FIXED: Category saving, Quantity update, Status set to active
+// ADMIN - PURCHASE MANAGEMENT
+// ✅ EMBEDDED HEADER (same as shared admin_header.php)
+// ✅ Uses SHARED admin_sidebar.php
 // ================================================================
 
-// ================================================================
-// SESSION START
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK USER ACCESS (Admin only)
-// ================================================================
 if ($_SESSION['role'] !== 'admin') {
     $role = $_SESSION['role'];
     switch ($role) {
@@ -38,9 +28,6 @@ if ($_SESSION['role'] !== 'admin') {
     exit;
 }
 
-// ================================================================
-// GET USER DATA
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
 $user_full_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
@@ -50,19 +37,8 @@ $user_username = $_SESSION['username'] ?? 'admin';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 $user_is_online = $_SESSION['is_online'] ?? 1;
 
-// ================================================================
-// GET SELECTED BRANCH FROM URL
-// ================================================================
 $selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
-if ($selected_branch_id === 'all') {
-    $branch_id_for_query = $user_branch_id;
-} else {
-    $branch_id_for_query = (int)$selected_branch_id;
-}
 
-// ================================================================
-// DATABASE CONNECTION
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
 try {
@@ -71,122 +47,14 @@ try {
     die("Database connection failed: " . $e->getMessage());
 }
 
-// ================================================================
-// GET BRANCHES FOR FILTER
-// ================================================================
+// GET BRANCHES
 $branches = [];
 try {
     $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
     $branches = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {
-    $branches = [];
-}
+} catch (Exception $e) { $branches = []; }
 
-// ================================================================
-// SIDEBAR STATISTICS - GET ALL REQUIRED VARIABLES
-// ================================================================
-$total_employees_sidebar = 0;
-$total_doctors_sidebar = 0;
-$total_branches_sidebar = 0;
-$module_counts = ['pharmacy' => 0, 'reception' => 0, 'laboratory' => 0, 'cashier' => 0];
-$total_patients_sidebar = 0;
-$today_patients_sidebar = 0;
-$total_services_sidebar = 0;
-$today_services_sidebar = 0;
-$pending_prescriptions_sidebar = 0;
-$pending_lab_tests_sidebar = 0;
-
-try {
-    $stats_branch = $selected_branch_id;
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active'");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role != 'admin' AND status = 'active' AND branch_id = ?");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $total_employees_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active'");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = 'doctor' AND status = 'active' AND branch_id = ?");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $total_doctors_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    $modules = ['pharmacy', 'reception', 'laboratory', 'cashier'];
-    foreach ($modules as $module) {
-        if ($stats_branch === 'all') {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = ? AND status = 'active'");
-            $stmt->execute([$module]);
-        } else {
-            $stmt = $db->prepare("SELECT COUNT(*) as count FROM users WHERE role = ? AND status = 'active' AND branch_id = ?");
-            $stmt->execute([$module, (int)$stats_branch]);
-        }
-        $module_counts[$module] = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    }
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM patients");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $total_patients_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM patients WHERE DATE(created_at) = CURDATE()");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $today_patients_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled'");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled'");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $total_services_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM bill_items WHERE status != 'cancelled' AND DATE(created_at) = CURDATE()");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM bill_items WHERE branch_id = ? AND status != 'cancelled' AND DATE(created_at) = CURDATE()");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $today_services_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM prescriptions WHERE status IN ('pending', 'confirmed')");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status IN ('pending', 'confirmed')");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $pending_prescriptions_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    if ($stats_branch === 'all') {
-        $stmt = $db->query("SELECT COUNT(*) as count FROM lab_tests WHERE status IN ('pending', 'in_progress')");
-    } else {
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM lab_tests WHERE branch_id = ? AND status IN ('pending', 'in_progress')");
-        $stmt->execute([(int)$stats_branch]);
-    }
-    $pending_lab_tests_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-    $stmt = $db->query("SELECT COUNT(*) as count FROM branches WHERE status = 'active'");
-    $total_branches_sidebar = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
-    
-} catch (Exception $e) {
-    // ignore
-}
-
-// ================================================================
-// CHECK AND ADD COLUMNS IF NOT EXISTS
-// ================================================================
-
-// Check if added_by exists in medications_inventory
+// AUTO-MIGRATION
 try {
     $stmt = $db->query("SHOW COLUMNS FROM medications_inventory LIKE 'added_by'");
     if ($stmt->rowCount() == 0) {
@@ -195,7 +63,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// Check if added_by exists in medical_equipment
 try {
     $stmt = $db->query("SHOW COLUMNS FROM medical_equipment LIKE 'added_by'");
     if ($stmt->rowCount() == 0) {
@@ -204,7 +71,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// Check if cancelled_reason exists in purchases
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'cancelled_reason'");
     if ($stmt->rowCount() == 0) {
@@ -212,7 +78,6 @@ try {
     }
 } catch (Exception $e) {}
 
-// Check if cancelled_by exists in purchases
 try {
     $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'cancelled_by'");
     if ($stmt->rowCount() == 0) {
@@ -220,9 +85,29 @@ try {
     }
 } catch (Exception $e) {}
 
-// ================================================================
-// PRE-DEFINED CATEGORIES
-// ================================================================
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'cancelled_by_name'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` ADD COLUMN `cancelled_by_name` VARCHAR(100) NULL AFTER `cancelled_by`");
+    }
+} catch (Exception $e) {}
+
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'cancelled_at'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` ADD COLUMN `cancelled_at` DATETIME NULL AFTER `cancelled_by_name`");
+    }
+} catch (Exception $e) {}
+
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'branch_id'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` ADD COLUMN `branch_id` INT NULL AFTER `created_by_name`");
+        $db->exec("UPDATE `purchases` SET `branch_id` = 1 WHERE `branch_id` IS NULL");
+    }
+} catch (Exception $e) {}
+
+// PREDEFINED DATA
 $predefined_med_categories = [
     'Antibiotics', 'Painkillers', 'Antipyretics', 'Antihistamines',
     'Antacids', 'Antivirals', 'Antifungals', 'Antimalarials',
@@ -238,112 +123,132 @@ $predefined_equip_categories = [
     'Respiratory', 'Other'
 ];
 
-// ================================================================
-// GET PURCHASE ID AND TYPE FROM URL
-// ================================================================
-$purchase_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
-$purchase_type = isset($_GET['type']) ? $_GET['type'] : 'medicine';
-$action = isset($_GET['action']) ? $_GET['action'] : '';
+$predefined_units = [
+    'pcs' => 'Pieces (pcs)', 'tablets' => 'Tablets', 'capsules' => 'Capsules',
+    'ml' => 'Milliliters (ml)', 'mg' => 'Milligrams (mg)', 'g' => 'Grams (g)',
+    'bottle' => 'Bottle', 'box' => 'Box', 'strip' => 'Strip', 'vial' => 'Vial',
+    'ampoule' => 'Ampoule', 'sachet' => 'Sachet', 'tube' => 'Tube', 'pack' => 'Pack',
+    'set' => 'Set', 'roll' => 'Roll', 'pair' => 'Pair', 'kit' => 'Kit',
+    'unit' => 'Unit', 'dozen' => 'Dozen', 'litre' => 'Litre (L)',
+    'bag' => 'Bag', 'carton' => 'Carton'
+];
 
-// ================================================================
-// MONEY FORMAT FUNCTIONS
-// ================================================================
+// GET PARAMETERS
+$purchase_id = isset($_GET['id']) ? (int)$_GET['id'] : 0;
+$action = isset($_GET['action']) ? $_GET['action'] : '';
+$url_type = isset($_GET['type']) ? trim($_GET['type']) : '';
+
+$active_view = 'none';
+if ($action === 'list_medicine') $active_view = 'medicine';
+elseif ($action === 'list_equipment') $active_view = 'equipment';
+elseif ($action === 'create' && $url_type === 'medicine') $active_view = 'medicine';
+elseif ($action === 'create' && $url_type === 'equipment') $active_view = 'equipment';
+elseif ($purchase_id > 0 && $url_type === 'medicine') $active_view = 'medicine';
+elseif ($purchase_id > 0 && $url_type === 'equipment') $active_view = 'equipment';
+elseif ($url_type === 'medicine') $active_view = 'medicine';
+elseif ($url_type === 'equipment') $active_view = 'equipment';
+
+$purchase_type = ($active_view === 'equipment') ? 'equipment' : 'medicine';
+
 function formatMoney($amount) {
-    if ($amount === null || $amount === '') {
-        return '0.00';
-    }
+    if ($amount === null || $amount === '') return '0.00';
     return number_format((float)$amount, 2, '.', ',');
 }
+function cleanMoney($value) { return str_replace(',', '', $value); }
+function getMoney($value) { return floatval(cleanMoney($value)); }
 
-function formatMoneyNoDecimal($amount) {
-    if ($amount === null || $amount === '') {
-        return '0';
-    }
-    return number_format((float)$amount, 0, '.', ',');
-}
-
-function cleanMoney($value) {
-    return str_replace(',', '', $value);
-}
-
-function getMoney($value) {
-    $clean = cleanMoney($value);
-    return floatval($clean);
-}
-
-// ================================================================
 // PROCESS POST REQUESTS
-// ================================================================
 $message = '';
 $message_type = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action_post = $_POST['action'] ?? '';
+    $post_branch = $_POST['branch'] ?? $selected_branch_id;
+    $post_type = $_POST['purchase_type'] ?? $purchase_type;
     
-    // ================================================================
     // JOIN PURCHASE
-    // ================================================================
     if ($action_post === 'join_purchase') {
         $purchase_id_join = (int)($_POST['purchase_id'] ?? 0);
-        $join_type = $_POST['purchase_type'] ?? 'medicine';
-        
         if ($purchase_id_join > 0) {
             $stmt = $db->prepare("SELECT id, status, invoice_number, purchase_type FROM purchases WHERE id = ? AND status = 'IN_PROGRESS'");
             $stmt->execute([$purchase_id_join]);
             $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
-            
             if ($purchase) {
-                header('Location: purchases.php?id=' . $purchase_id_join . '&type=' . $purchase['purchase_type'] . '&branch=' . $selected_branch_id);
+                header('Location: purchases.php?id=' . $purchase_id_join . '&type=' . $purchase['purchase_type'] . '&branch=' . $post_branch);
                 exit;
             } else {
-                $message = "❌ This purchase is not available or already completed.";
+                $message = "❌ Purchase not available.";
                 $message_type = 'error';
             }
-        } else {
-            $message = "❌ Invalid purchase ID.";
-            $message_type = 'error';
         }
     }
     
-    // ================================================================
     // CREATE NEW PURCHASE
-    // ================================================================
     if ($action_post === 'create_purchase') {
         $purchase_type_new = $_POST['purchase_type'] ?? 'medicine';
+        $create_branch_id = $user_branch_id;
+        if ($post_branch !== 'all' && is_numeric($post_branch)) {
+            $create_branch_id = (int)$post_branch;
+        }
         
         $date = date('Ymd');
         $prefix = $purchase_type_new === 'medicine' ? 'INV-MED' : 'INV-EQP';
-        $stmt = $db->prepare("SELECT COUNT(*) as count FROM purchases WHERE DATE(created_at) = CURDATE() AND purchase_type = ?");
-        $stmt->execute([$purchase_type_new]);
-        $count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-        $invoice_number = $prefix . '-' . $date . '-' . str_pad($count + 1, 4, '0', STR_PAD_LEFT);
+        $pattern = $prefix . '-' . $date . '-%';
         
-        try {
-            $stmt = $db->prepare("
-                INSERT INTO purchases (invoice_number, purchase_type, created_by, created_by_name, status, created_at)
-                VALUES (?, ?, ?, ?, 'IN_PROGRESS', NOW())
-            ");
-            $stmt->execute([$invoice_number, $purchase_type_new, $user_id, $user_full_name]);
-            
-            $new_purchase_id = $db->lastInsertId();
-            
+        $stmt = $db->prepare("SELECT invoice_number FROM purchases WHERE invoice_number LIKE ?");
+        $stmt->execute([$pattern]);
+        $existing = $stmt->fetchAll(PDO::FETCH_COLUMN);
+        
+        $used = [];
+        foreach ($existing as $inv) {
+            if (preg_match('/-(\d+)$/', $inv, $m)) $used[(int)$m[1]] = true;
+        }
+        
+        $new_num = 1;
+        for ($i = 1; $i <= 9999; $i++) {
+            if (!isset($used[$i])) { $new_num = $i; break; }
+        }
+        
+        $invoice_number = $prefix . '-' . $date . '-' . str_pad($new_num, 4, '0', STR_PAD_LEFT);
+        
+        $max_attempts = 10;
+        $inserted = false;
+        $new_purchase_id = null;
+        
+        for ($attempt = 0; $attempt < $max_attempts && !$inserted; $attempt++) {
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO purchases (invoice_number, purchase_type, created_by, created_by_name, branch_id, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, 'IN_PROGRESS', NOW())
+                ");
+                $stmt->execute([$invoice_number, $purchase_type_new, $user_id, $user_full_name, $create_branch_id]);
+                $new_purchase_id = $db->lastInsertId();
+                $inserted = true;
+            } catch (PDOException $e) {
+                if ($e->getCode() == 23000) {
+                    $new_num++;
+                    if ($new_num > 9999) $new_num = 1;
+                    $invoice_number = $prefix . '-' . $date . '-' . str_pad($new_num, 4, '0', STR_PAD_LEFT);
+                    usleep(100000);
+                } else {
+                    $message = "❌ Error: " . $e->getMessage();
+                    $message_type = 'error';
+                    break;
+                }
+            }
+        }
+        
+        if ($inserted && $new_purchase_id) {
             $_SESSION['purchase_message'] = "✅ New " . ucfirst($purchase_type_new) . " purchase created! Invoice: <strong>$invoice_number</strong>";
             $_SESSION['purchase_message_type'] = 'success';
-            header('Location: purchases.php?id=' . $new_purchase_id . '&type=' . $purchase_type_new . '&branch=' . $selected_branch_id);
+            header('Location: purchases.php?id=' . $new_purchase_id . '&type=' . $purchase_type_new . '&branch=' . $post_branch);
             exit;
-            
-        } catch (Exception $e) {
-            $message = "❌ Error: " . $e->getMessage();
-            $message_type = 'error';
         }
     }
     
-    // ================================================================
-    // ADD MEDICINE TO PURCHASE - FIXED: Category saving
-    // ================================================================
+    // ADD MEDICINE
     if ($action_post === 'add_medicine') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
-        $medicine_id = (int)($_POST['medicine_id'] ?? 0);
         $medication_name = trim($_POST['medication_name'] ?? '');
         $quantity = (int)($_POST['quantity'] ?? 0);
         $buying_price = (float)str_replace(',', '', $_POST['buying_price'] ?? 0);
@@ -352,59 +257,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $batch_number = trim($_POST['batch_number'] ?? '');
         $category = trim($_POST['category'] ?? '');
         
-        // ================================================================
-        // FIX: If category is '__other__', use manual category instead
-        // ================================================================
         if ($category === '__other__' && !empty($_POST['category_manual'])) {
             $category = trim($_POST['category_manual']);
         }
-        // If category is still empty, use 'Other' as fallback
-        if (empty($category)) {
-            $category = 'Other';
-        }
+        if (empty($category)) $category = 'Other';
         
         $unit = trim($_POST['unit'] ?? 'pcs');
+        if (empty($unit) && !empty($_POST['unit_manual'])) {
+            $unit = trim($_POST['unit_manual']);
+        }
+        if (empty($unit) || $unit === '__other__') {
+            $unit = 'pcs';
+        }
+        
         $reorder_level = (int)($_POST['reorder_level'] ?? 10);
         $supplier = trim($_POST['supplier'] ?? '');
         $status = $_POST['status'] ?? 'active';
         
-        // Generate batch number if empty
         if (empty($batch_number)) {
             $batch_number = 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
         }
         
-        $errors = [];
-        if ($purchase_id_post <= 0) { $errors[] = 'Invalid purchase'; }
-        if (empty($medication_name)) { $errors[] = 'Medicine name is required'; }
-        if ($quantity <= 0) { $errors[] = 'Quantity must be greater than 0'; }
-        if ($buying_price < 0) { $errors[] = 'Buying price cannot be negative'; }
-        if ($selling_price < 0) { $errors[] = 'Selling price cannot be negative'; }
-        if (!empty($expiry_date) && strtotime($expiry_date) < strtotime(date('Y-m-d'))) {
-            $errors[] = 'Expiry date cannot be in the past';
-        }
-        
-        $stmt = $db->prepare("SELECT status, created_by, purchase_type FROM purchases WHERE id = ?");
+        $stmt = $db->prepare("SELECT status, created_by, purchase_type, branch_id FROM purchases WHERE id = ?");
         $stmt->execute([$purchase_id_post]);
         $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
+        $purchase_branch_id = $purchase ? $purchase['branch_id'] : $user_branch_id;
         
-        if (!$purchase) {
-            $errors[] = 'Purchase not found';
-        } elseif ($purchase['status'] !== 'IN_PROGRESS') {
-            $errors[] = 'This purchase is already completed. Cannot add more items.';
-        }
+        $errors = [];
+        if (!$purchase) $errors[] = 'Purchase not found';
+        elseif ($purchase['status'] !== 'IN_PROGRESS') $errors[] = 'Purchase is completed';
+        if ($quantity <= 0) $errors[] = 'Quantity must be > 0';
+        if (empty($medication_name)) $errors[] = 'Medicine name is required';
         
         if (empty($errors)) {
             try {
-                // Check if medicine exists in inventory
-                $stmt = $db->prepare("
-                    SELECT id, medication_name FROM medications_inventory 
-                    WHERE medication_name = ? AND branch_id = ?
-                    LIMIT 1
-                ");
-                $stmt->execute([$medication_name, $user_branch_id]);
-                $existing_medicine = $stmt->fetch(PDO::FETCH_ASSOC);
+                $stmt = $db->prepare("SELECT id FROM medications_inventory WHERE medication_name = ? AND branch_id = ? LIMIT 1");
+                $stmt->execute([$medication_name, $purchase_branch_id]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                if (!$existing_medicine) {
+                if (!$existing) {
                     $stmt = $db->prepare("
                         INSERT INTO medications_inventory (
                             medication_name, category, unit, quantity, reorder_level,
@@ -415,81 +306,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt->execute([
                         $medication_name, $category, $unit, $reorder_level,
                         $buying_price, $selling_price, $supplier, $expiry_date, $batch_number,
-                        $user_branch_id, $status, $user_id, $user_full_name
+                        $purchase_branch_id, $status, $user_id, $user_full_name
                     ]);
-                    
                     $medicine_id = $db->lastInsertId();
                     $is_new = true;
                 } else {
-                    $medicine_id = $existing_medicine['id'];
+                    $medicine_id = $existing['id'];
                     $is_new = false;
+                    $stmt = $db->prepare("UPDATE medications_inventory SET unit = ?, updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$unit, $medicine_id]);
                 }
-                
-                $total_selling_value = $quantity * $selling_price;
-                $total_buying_cost = $quantity * $buying_price;
                 
                 $stmt = $db->prepare("
                     INSERT INTO purchase_items 
-                    (purchase_id, item_type, item_id, quantity, 
-                     buying_price, selling_price, 
-                     total_buying_cost, total_selling_value,
-                     added_by, added_by_name, added_at)
+                    (purchase_id, item_type, item_id, quantity, buying_price, selling_price, 
+                     total_buying_cost, total_selling_value, added_by, added_by_name, added_at)
                     VALUES (?, 'medicine', ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([
-                    $purchase_id_post, 
-                    $medicine_id, 
-                    $quantity, 
-                    $buying_price, 
-                    $selling_price,
-                    $total_buying_cost,
-                    $total_selling_value,
-                    $user_id, 
-                    $user_full_name
+                    $purchase_id_post, $medicine_id, $quantity, $buying_price, $selling_price,
+                    $quantity * $buying_price, $quantity * $selling_price,
+                    $user_id, $user_full_name
                 ]);
                 
-                // Update purchase totals
                 $stmt = $db->prepare("
-                    SELECT 
-                        COUNT(*) as total_items,
-                        SUM(quantity) as total_quantity,
-                        SUM(total_buying_cost) as total_buying_cost,
-                        SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items 
-                    WHERE purchase_id = ?
+                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
+                           SUM(total_buying_cost) as total_buying_cost,
+                           SUM(total_selling_value) as total_selling_value
+                    FROM purchase_items WHERE purchase_id = ?
                 ");
                 $stmt->execute([$purchase_id_post]);
                 $totals = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 $stmt = $db->prepare("
-                    UPDATE purchases 
-                    SET total_items = ?, 
-                        total_quantity = ?, 
-                        total_buying_cost = ?, 
-                        total_selling_value = ?,
-                        updated_at = NOW()
+                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
+                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
                     WHERE id = ?
                 ");
                 $stmt->execute([
-                    $totals['total_items'] ?? 0,
-                    $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0,
-                    $totals['total_selling_value'] ?? 0,
+                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
+                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
                     $purchase_id_post
                 ]);
                 
-                if ($is_new) {
-                    $message = "✅ New medicine <strong>" . htmlspecialchars($medication_name) . "</strong> added to purchase (will be saved to inventory on completion)";
-                } else {
-                    $message = "✅ Added <strong>" . htmlspecialchars($medication_name) . "</strong> x $quantity (New Batch - will be saved to inventory on completion)";
-                }
-                $message_type = 'success';
-                
-                $_SESSION['purchase_message'] = $message;
-                $_SESSION['purchase_message_type'] = $message_type;
-                header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase_type . '&branch=' . $selected_branch_id);
+                $_SESSION['purchase_message'] = "✅ " . ($is_new ? "New" : "Added") . " medicine <strong>" . htmlspecialchars($medication_name) . "</strong> x $quantity";
+                $_SESSION['purchase_message_type'] = 'success';
+                header('Location: purchases.php?id=' . $purchase_id_post . '&type=medicine&branch=' . $post_branch);
                 exit;
-                
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
@@ -502,12 +365,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
-    // ADD EQUIPMENT TO PURCHASE - FIXED: Category saving
-    // ================================================================
+    // ADD EQUIPMENT
     if ($action_post === 'add_equipment') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
-        $equipment_id = (int)($_POST['equipment_id'] ?? 0);
         $equipment_name = trim($_POST['equipment_name'] ?? '');
         $quantity = (int)($_POST['quantity'] ?? 0);
         $buying_price = (float)str_replace(',', '', $_POST['buying_price'] ?? 0);
@@ -516,59 +376,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $batch_number = trim($_POST['batch_number'] ?? '');
         $category = trim($_POST['category'] ?? '');
         
-        // ================================================================
-        // FIX: If category is '__other__', use manual category instead
-        // ================================================================
         if ($category === '__other__' && !empty($_POST['category_manual'])) {
             $category = trim($_POST['category_manual']);
         }
-        // If category is still empty, use 'Other' as fallback
-        if (empty($category)) {
-            $category = 'Other';
-        }
+        if (empty($category)) $category = 'Other';
         
         $unit = trim($_POST['unit'] ?? 'pcs');
+        if (empty($unit) && !empty($_POST['unit_manual'])) {
+            $unit = trim($_POST['unit_manual']);
+        }
+        if (empty($unit) || $unit === '__other__') {
+            $unit = 'pcs';
+        }
+        
         $reorder_level = (int)($_POST['reorder_level'] ?? 5);
         $supplier = trim($_POST['supplier'] ?? '');
         $status = $_POST['status'] ?? 'active';
         
-        // Generate batch number if empty
         if (empty($batch_number)) {
             $batch_number = 'EQP-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6));
         }
         
-        $errors = [];
-        if ($purchase_id_post <= 0) { $errors[] = 'Invalid purchase'; }
-        if (empty($equipment_name)) { $errors[] = 'Equipment name is required'; }
-        if ($quantity <= 0) { $errors[] = 'Quantity must be greater than 0'; }
-        if ($buying_price < 0) { $errors[] = 'Buying price cannot be negative'; }
-        if ($selling_price < 0) { $errors[] = 'Selling price cannot be negative'; }
-        if (!empty($expiry_date) && strtotime($expiry_date) < strtotime(date('Y-m-d'))) {
-            $errors[] = 'Expiry date cannot be in the past';
-        }
-        
-        $stmt = $db->prepare("SELECT status, created_by, purchase_type FROM purchases WHERE id = ?");
+        $stmt = $db->prepare("SELECT status, created_by, purchase_type, branch_id FROM purchases WHERE id = ?");
         $stmt->execute([$purchase_id_post]);
         $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
+        $purchase_branch_id = $purchase ? $purchase['branch_id'] : $user_branch_id;
         
-        if (!$purchase) {
-            $errors[] = 'Purchase not found';
-        } elseif ($purchase['status'] !== 'IN_PROGRESS') {
-            $errors[] = 'This purchase is already completed. Cannot add more items.';
-        }
+        $errors = [];
+        if (!$purchase) $errors[] = 'Purchase not found';
+        elseif ($purchase['status'] !== 'IN_PROGRESS') $errors[] = 'Purchase is completed';
+        if ($quantity <= 0) $errors[] = 'Quantity must be > 0';
+        if (empty($equipment_name)) $errors[] = 'Equipment name is required';
         
         if (empty($errors)) {
             try {
-                // Check if equipment exists in inventory
-                $stmt = $db->prepare("
-                    SELECT id, equipment_name FROM medical_equipment 
-                    WHERE equipment_name = ? AND branch_id = ?
-                    LIMIT 1
-                ");
-                $stmt->execute([$equipment_name, $user_branch_id]);
-                $existing_equipment = $stmt->fetch(PDO::FETCH_ASSOC);
+                $stmt = $db->prepare("SELECT id FROM medical_equipment WHERE equipment_name = ? AND branch_id = ? LIMIT 1");
+                $stmt->execute([$equipment_name, $purchase_branch_id]);
+                $existing = $stmt->fetch(PDO::FETCH_ASSOC);
                 
-                if (!$existing_equipment) {
+                if (!$existing) {
                     $stmt = $db->prepare("
                         INSERT INTO medical_equipment (
                             equipment_name, category, unit, quantity, reorder_level,
@@ -579,81 +425,53 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $stmt->execute([
                         $equipment_name, $category, $unit, $reorder_level,
                         $buying_price, $selling_price, $supplier, $expiry_date, $batch_number,
-                        $user_branch_id, $status, $user_id, $user_full_name
+                        $purchase_branch_id, $status, $user_id, $user_full_name
                     ]);
-                    
                     $equipment_id = $db->lastInsertId();
                     $is_new = true;
                 } else {
-                    $equipment_id = $existing_equipment['id'];
+                    $equipment_id = $existing['id'];
                     $is_new = false;
+                    $stmt = $db->prepare("UPDATE medical_equipment SET unit = ?, updated_at = NOW() WHERE id = ?");
+                    $stmt->execute([$unit, $equipment_id]);
                 }
-                
-                $total_selling_value = $quantity * $selling_price;
-                $total_buying_cost = $quantity * $buying_price;
                 
                 $stmt = $db->prepare("
                     INSERT INTO purchase_items 
-                    (purchase_id, item_type, item_id, quantity, 
-                     buying_price, selling_price, 
-                     total_buying_cost, total_selling_value,
-                     added_by, added_by_name, added_at)
+                    (purchase_id, item_type, item_id, quantity, buying_price, selling_price, 
+                     total_buying_cost, total_selling_value, added_by, added_by_name, added_at)
                     VALUES (?, 'equipment', ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                 ");
                 $stmt->execute([
-                    $purchase_id_post, 
-                    $equipment_id, 
-                    $quantity, 
-                    $buying_price, 
-                    $selling_price,
-                    $total_buying_cost,
-                    $total_selling_value,
-                    $user_id, 
-                    $user_full_name
+                    $purchase_id_post, $equipment_id, $quantity, $buying_price, $selling_price,
+                    $quantity * $buying_price, $quantity * $selling_price,
+                    $user_id, $user_full_name
                 ]);
                 
-                // Update purchase totals
                 $stmt = $db->prepare("
-                    SELECT 
-                        COUNT(*) as total_items,
-                        SUM(quantity) as total_quantity,
-                        SUM(total_buying_cost) as total_buying_cost,
-                        SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items 
-                    WHERE purchase_id = ?
+                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
+                           SUM(total_buying_cost) as total_buying_cost,
+                           SUM(total_selling_value) as total_selling_value
+                    FROM purchase_items WHERE purchase_id = ?
                 ");
                 $stmt->execute([$purchase_id_post]);
                 $totals = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 $stmt = $db->prepare("
-                    UPDATE purchases 
-                    SET total_items = ?, 
-                        total_quantity = ?, 
-                        total_buying_cost = ?, 
-                        total_selling_value = ?,
-                        updated_at = NOW()
+                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
+                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
                     WHERE id = ?
                 ");
                 $stmt->execute([
-                    $totals['total_items'] ?? 0,
-                    $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0,
-                    $totals['total_selling_value'] ?? 0,
+                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
+                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
                     $purchase_id_post
                 ]);
                 
-                if ($is_new) {
-                    $message = "✅ New equipment <strong>" . htmlspecialchars($equipment_name) . "</strong> added to purchase (will be saved to inventory on completion)";
-                } else {
-                    $message = "✅ Added <strong>" . htmlspecialchars($equipment_name) . "</strong> x $quantity (New Batch - will be saved to inventory on completion)";
-                }
-                $message_type = 'success';
-                
-                $_SESSION['purchase_message'] = $message;
-                $_SESSION['purchase_message_type'] = $message_type;
-                header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase_type . '&branch=' . $selected_branch_id);
+                $_SESSION['purchase_message'] = "✅ " . ($is_new ? "New" : "Added") . " equipment <strong>" . htmlspecialchars($equipment_name) . "</strong> x $quantity";
+                $_SESSION['purchase_message_type'] = 'success';
+                header('Location: purchases.php?id=' . $purchase_id_post . '&type=equipment&branch=' . $post_branch);
                 exit;
-                
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
@@ -666,61 +484,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
     
-    // ================================================================
-    // COMPLETE PURCHASE - FIXED: Quantity ADD, Status ACTIVE
-    // ================================================================
+    // COMPLETE PURCHASE
     if ($action_post === 'complete_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         
         $stmt = $db->prepare("
-            SELECT id, status, created_by, invoice_number, purchase_type, total_items, total_quantity, total_buying_cost, total_selling_value
+            SELECT id, status, created_by, invoice_number, purchase_type, branch_id, total_items
             FROM purchases WHERE id = ?
         ");
         $stmt->execute([$purchase_id_post]);
         $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
         
         $errors = [];
-        if (!$purchase) {
-            $errors[] = 'Purchase not found';
-        } elseif ($purchase['status'] !== 'IN_PROGRESS') {
-            $errors[] = 'This purchase is already completed';
-        } elseif ($purchase['total_items'] <= 0) {
-            $errors[] = 'Cannot complete empty purchase. Add at least one item.';
-        }
+        if (!$purchase) $errors[] = 'Purchase not found';
+        elseif ($purchase['status'] !== 'IN_PROGRESS') $errors[] = 'Already completed';
+        elseif ($purchase['total_items'] <= 0) $errors[] = 'Cannot complete empty purchase';
         
         if (empty($errors)) {
             try {
                 $db->beginTransaction();
                 
-                // Get all items with details
-                $stmt = $db->prepare("
-                    SELECT 
-                        pi.*,
-                        CASE 
-                            WHEN pi.item_type = 'medicine' THEN mi.medication_name 
-                            WHEN pi.item_type = 'equipment' THEN eq.equipment_name 
-                        END as item_name,
-                        CASE 
-                            WHEN pi.item_type = 'medicine' THEN mi.branch_id 
-                            WHEN pi.item_type = 'equipment' THEN eq.branch_id 
-                        END as branch_id,
-                        CASE 
-                            WHEN pi.item_type = 'medicine' THEN mi.category 
-                            WHEN pi.item_type = 'equipment' THEN eq.category 
-                        END as category,
-                        CASE 
-                            WHEN pi.item_type = 'medicine' THEN mi.unit 
-                            WHEN pi.item_type = 'equipment' THEN eq.unit 
-                        END as unit,
-                        pi.buying_price,
-                        pi.selling_price,
-                        pi.total_buying_cost,
-                        pi.total_selling_value
-                    FROM purchase_items pi
-                    LEFT JOIN medications_inventory mi ON pi.item_id = mi.id AND pi.item_type = 'medicine'
-                    LEFT JOIN medical_equipment eq ON pi.item_id = eq.id AND pi.item_type = 'equipment'
-                    WHERE pi.purchase_id = ?
-                ");
+                $stmt = $db->prepare("SELECT pi.* FROM purchase_items pi WHERE pi.purchase_id = ?");
                 $stmt->execute([$purchase_id_post]);
                 $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
@@ -728,178 +512,121 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 foreach ($items as $item) {
                     if ($item['item_type'] === 'medicine') {
-                        // Check if medicine exists in inventory
-                        $stmt = $db->prepare("
-                            SELECT id, quantity, status FROM medications_inventory 
-                            WHERE id = ?
-                            LIMIT 1
-                        ");
+                        $stmt = $db->prepare("SELECT id, quantity FROM medications_inventory WHERE id = ? LIMIT 1");
                         $stmt->execute([$item['item_id']]);
                         $inventory = $stmt->fetch(PDO::FETCH_ASSOC);
                         
                         if ($inventory) {
-                            // ================================================================
-                            // FIX: Calculate new quantity by ADDING to existing
-                            // ================================================================
                             $new_qty = $inventory['quantity'] + $item['quantity'];
-                            
-                            // ================================================================
-                            // FIX: Set status to 'active' when completing purchase
-                            // ================================================================
                             $stmt = $db->prepare("
                                 UPDATE medications_inventory 
-                                SET quantity = ?, 
-                                    unit_cost = ?,
-                                    selling_price = ?,
-                                    status = 'active',
-                                    updated_at = NOW()
+                                SET quantity = ?, unit_cost = ?, selling_price = ?, status = 'active', updated_at = NOW()
                                 WHERE id = ?
                             ");
-                            $stmt->execute([
-                                $new_qty, 
-                                $item['buying_price'],
-                                $item['selling_price'],
-                                $item['item_id']
-                            ]);
+                            $stmt->execute([$new_qty, $item['buying_price'], $item['selling_price'], $item['item_id']]);
                             $updated_count++;
                         }
                     } else {
-                        // Equipment
-                        $stmt = $db->prepare("
-                            SELECT id, quantity, status FROM medical_equipment 
-                            WHERE id = ?
-                            LIMIT 1
-                        ");
+                        $stmt = $db->prepare("SELECT id, quantity FROM medical_equipment WHERE id = ? LIMIT 1");
                         $stmt->execute([$item['item_id']]);
                         $inventory = $stmt->fetch(PDO::FETCH_ASSOC);
                         
                         if ($inventory) {
-                            // ================================================================
-                            // FIX: Calculate new quantity by ADDING to existing
-                            // ================================================================
                             $new_qty = $inventory['quantity'] + $item['quantity'];
-                            
-                            // ================================================================
-                            // FIX: Set status to 'active' when completing purchase
-                            // ================================================================
                             $stmt = $db->prepare("
                                 UPDATE medical_equipment 
-                                SET quantity = ?, 
-                                    unit_cost = ?,
-                                    selling_price = ?,
-                                    status = 'active',
-                                    updated_at = NOW()
+                                SET quantity = ?, unit_cost = ?, selling_price = ?, status = 'active', updated_at = NOW()
                                 WHERE id = ?
                             ");
-                            $stmt->execute([
-                                $new_qty, 
-                                $item['buying_price'],
-                                $item['selling_price'],
-                                $item['item_id']
-                            ]);
+                            $stmt->execute([$new_qty, $item['buying_price'], $item['selling_price'], $item['item_id']]);
                             $updated_count++;
                         }
                     }
                 }
                 
-                // Update purchase status
                 $stmt = $db->prepare("
-                    UPDATE purchases 
-                    SET status = 'COMPLETED', completed_at = NOW(), updated_at = NOW()
+                    UPDATE purchases SET status = 'COMPLETED', completed_at = NOW(), updated_at = NOW()
                     WHERE id = ?
                 ");
                 $stmt->execute([$purchase_id_post]);
                 
                 $db->commit();
                 
-                $message = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> completed successfully! ($updated_count items updated in inventory)";
-                $message_type = 'success';
-                $_SESSION['purchase_message'] = $message;
-                $_SESSION['purchase_message_type'] = $message_type;
-                header('Location: purchases.php?action=view&id=' . $purchase_id_post . '&branch=' . $selected_branch_id);
+                $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> completed! ($updated_count items updated)";
+                $_SESSION['purchase_message_type'] = 'success';
+                header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase['purchase_type'] . '&branch=' . $post_branch);
                 exit;
-                
             } catch (Exception $e) {
                 $db->rollBack();
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
             }
-        } else {
+        }
+        
+        if (!empty($errors)) {
             $message = implode('<br>', $errors);
             $message_type = 'error';
         }
     }
     
-    // ================================================================
-    // CANCEL PURCHASE - ADMIN CAN CANCEL ANY PURCHASE
-    // ================================================================
+    // CANCEL PURCHASE
     if ($action_post === 'cancel_purchase') {
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
-        $cancel_reason = trim($_POST['cancel_reason'] ?? '');
+        $cancel_reason = trim($_POST['cancel_reason'] ?? 'Cancelled by Admin');
         
-        $stmt = $db->prepare("
-            SELECT id, status, invoice_number
-            FROM purchases WHERE id = ?
-        ");
+        $stmt = $db->prepare("SELECT id, status, invoice_number, purchase_type FROM purchases WHERE id = ?");
         $stmt->execute([$purchase_id_post]);
         $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
         
         $errors = [];
-        if (!$purchase) {
-            $errors[] = 'Purchase not found';
-        } elseif ($purchase['status'] === 'COMPLETED') {
-            $errors[] = 'This purchase is already completed. Cannot cancel.';
-        } elseif ($purchase['status'] === 'CANCELLED') {
-            $errors[] = 'This purchase is already cancelled.';
-        }
+        if (!$purchase) $errors[] = 'Purchase not found';
+        elseif ($purchase['status'] === 'COMPLETED') $errors[] = 'Cannot cancel completed';
+        elseif ($purchase['status'] === 'CANCELLED') $errors[] = 'Already cancelled';
         
         if (empty($errors)) {
             try {
                 $db->beginTransaction();
                 
-                // Update purchase status to CANCELLED
+                $stmt = $db->prepare("DELETE FROM purchase_items WHERE purchase_id = ?");
+                $stmt->execute([$purchase_id_post]);
+                
                 $stmt = $db->prepare("
                     UPDATE purchases 
                     SET status = 'CANCELLED', 
-                        cancelled_reason = ?,
-                        cancelled_by = ?,
+                        cancelled_reason = ?, 
+                        cancelled_by = ?, 
+                        cancelled_by_name = ?,
+                        cancelled_at = NOW(), 
                         updated_at = NOW()
                     WHERE id = ?
                 ");
-                $stmt->execute([
-                    $cancel_reason ?: 'Cancelled by Admin',
-                    $user_id,
-                    $purchase_id_post
-                ]);
+                $stmt->execute([$cancel_reason, $user_id, $user_full_name, $purchase_id_post]);
                 
                 $db->commit();
                 
-                $message = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> cancelled successfully!";
-                $message_type = 'success';
-                $_SESSION['purchase_message'] = $message;
-                $_SESSION['purchase_message_type'] = $message_type;
-                header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase_type . '&branch=' . $selected_branch_id);
+                $_SESSION['purchase_message'] = "✅ Purchase <strong>{$purchase['invoice_number']}</strong> cancelled!";
+                $_SESSION['purchase_message_type'] = 'success';
+                header('Location: purchases.php?type=' . $purchase['purchase_type'] . '&branch=' . $post_branch);
                 exit;
-                
             } catch (Exception $e) {
                 $db->rollBack();
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
             }
-        } else {
+        }
+        
+        if (!empty($errors)) {
             $message = implode('<br>', $errors);
             $message_type = 'error';
         }
     }
     
-    // ================================================================
-    // DELETE PURCHASE ITEM
-    // ================================================================
+    // DELETE ITEM
     if ($action_post === 'delete_item') {
         $item_id = (int)($_POST['item_id'] ?? 0);
         $purchase_id_post = (int)($_POST['purchase_id'] ?? 0);
         
-        $stmt = $db->prepare("SELECT status FROM purchases WHERE id = ?");
+        $stmt = $db->prepare("SELECT status, purchase_type FROM purchases WHERE id = ?");
         $stmt->execute([$purchase_id_post]);
         $purchase = $stmt->fetch(PDO::FETCH_ASSOC);
         
@@ -909,55 +636,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$item_id, $purchase_id_post]);
                 
                 $stmt = $db->prepare("
-                    SELECT 
-                        COUNT(*) as total_items,
-                        SUM(quantity) as total_quantity,
-                        SUM(total_buying_cost) as total_buying_cost,
-                        SUM(total_selling_value) as total_selling_value
-                    FROM purchase_items 
-                    WHERE purchase_id = ?
+                    SELECT COUNT(*) as total_items, SUM(quantity) as total_quantity,
+                           SUM(total_buying_cost) as total_buying_cost,
+                           SUM(total_selling_value) as total_selling_value
+                    FROM purchase_items WHERE purchase_id = ?
                 ");
                 $stmt->execute([$purchase_id_post]);
                 $totals = $stmt->fetch(PDO::FETCH_ASSOC);
                 
                 $stmt = $db->prepare("
-                    UPDATE purchases 
-                    SET total_items = ?, 
-                        total_quantity = ?, 
-                        total_buying_cost = ?, 
-                        total_selling_value = ?,
-                        updated_at = NOW()
+                    UPDATE purchases SET total_items = ?, total_quantity = ?, 
+                        total_buying_cost = ?, total_selling_value = ?, updated_at = NOW()
                     WHERE id = ?
                 ");
                 $stmt->execute([
-                    $totals['total_items'] ?? 0,
-                    $totals['total_quantity'] ?? 0,
-                    $totals['total_buying_cost'] ?? 0,
-                    $totals['total_selling_value'] ?? 0,
+                    $totals['total_items'] ?? 0, $totals['total_quantity'] ?? 0,
+                    $totals['total_buying_cost'] ?? 0, $totals['total_selling_value'] ?? 0,
                     $purchase_id_post
                 ]);
                 
-                $message = "✅ Item removed successfully!";
-                $message_type = 'success';
-                $_SESSION['purchase_message'] = $message;
-                $_SESSION['purchase_message_type'] = $message_type;
-                header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase_type . '&branch=' . $selected_branch_id);
+                $_SESSION['purchase_message'] = "✅ Item removed!";
+                $_SESSION['purchase_message_type'] = 'success';
+                header('Location: purchases.php?id=' . $purchase_id_post . '&type=' . $purchase['purchase_type'] . '&branch=' . $post_branch);
                 exit;
-                
             } catch (Exception $e) {
                 $message = "❌ Error: " . $e->getMessage();
                 $message_type = 'error';
             }
-        } else {
-            $message = "❌ Cannot delete item from completed or cancelled purchase";
-            $message_type = 'error';
         }
     }
 }
 
-// ================================================================
-// CHECK SESSION MESSAGES
-// ================================================================
+// SESSION MESSAGES
 if (isset($_SESSION['purchase_message'])) {
     $message = $_SESSION['purchase_message'];
     $message_type = $_SESSION['purchase_message_type'] ?? 'success';
@@ -965,9 +675,7 @@ if (isset($_SESSION['purchase_message'])) {
     unset($_SESSION['purchase_message_type']);
 }
 
-// ================================================================
-// GET PURCHASE DATA FOR VIEWING
-// ================================================================
+// GET CURRENT PURCHASE
 $current_purchase = null;
 $purchase_items = [];
 $is_creator = false;
@@ -976,41 +684,40 @@ $all_medicines = [];
 $all_equipment = [];
 
 if ($purchase_id > 0) {
+    $branch_where = "";
+    $branch_params = [$purchase_id];
+    
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $branch_where = " AND p.branch_id = ?";
+        $branch_params[] = (int)$selected_branch_id;
+    }
+    
     $stmt = $db->prepare("
-        SELECT p.*, u.full_name as creator_name,
-               a.full_name as cancelled_by_name
+        SELECT p.*, u.full_name as creator_name, a.full_name as cancelled_by_name
         FROM purchases p
         LEFT JOIN users u ON p.created_by = u.id
         LEFT JOIN users a ON p.cancelled_by = a.id
-        WHERE p.id = ?
-    ");
-    $stmt->execute([$purchase_id]);
+        WHERE p.id = ?" . $branch_where
+    );
+    $stmt->execute($branch_params);
     $current_purchase = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($current_purchase) {
         $is_creator = ($current_purchase['created_by'] == $user_id);
-        // Admin can edit any IN_PROGRESS purchase
         $can_edit = ($current_purchase['status'] === 'IN_PROGRESS');
         
+        $purchase_branch = $current_purchase['branch_id'] ?? $user_branch_id;
+        
         $stmt = $db->prepare("
-            SELECT 
-                pi.*,
-                CASE 
-                    WHEN pi.item_type = 'medicine' THEN mi.medication_name 
-                    WHEN pi.item_type = 'equipment' THEN eq.equipment_name 
-                END as item_name,
-                CASE 
-                    WHEN pi.item_type = 'medicine' THEN mi.category 
-                    WHEN pi.item_type = 'equipment' THEN eq.category 
-                END as category,
-                CASE 
-                    WHEN pi.item_type = 'medicine' THEN mi.unit 
-                    WHEN pi.item_type = 'equipment' THEN eq.unit 
-                END as unit,
-                CASE 
-                    WHEN pi.item_type = 'medicine' THEN mi.batch_number 
-                    WHEN pi.item_type = 'equipment' THEN eq.batch_number 
-                END as batch_number,
+            SELECT pi.*,
+                CASE WHEN pi.item_type = 'medicine' THEN mi.medication_name 
+                     WHEN pi.item_type = 'equipment' THEN eq.equipment_name END as item_name,
+                CASE WHEN pi.item_type = 'medicine' THEN mi.category 
+                     WHEN pi.item_type = 'equipment' THEN eq.category END as category,
+                CASE WHEN pi.item_type = 'medicine' THEN mi.unit 
+                     WHEN pi.item_type = 'equipment' THEN eq.unit END as unit,
+                CASE WHEN pi.item_type = 'medicine' THEN mi.batch_number 
+                     WHEN pi.item_type = 'equipment' THEN eq.batch_number END as batch_number,
                 u.full_name as added_by_full_name
             FROM purchase_items pi
             LEFT JOIN medications_inventory mi ON pi.item_id = mi.id AND pi.item_type = 'medicine'
@@ -1022,112 +729,141 @@ if ($purchase_id > 0) {
         $stmt->execute([$purchase_id]);
         $purchase_items = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // Get all medicines for auto-search
         $stmt = $db->prepare("
             SELECT id, medication_name, category, unit, selling_price, reorder_level, unit_cost, supplier
             FROM medications_inventory 
             WHERE branch_id = ? AND status = 'active'
             ORDER BY medication_name
         ");
-        $stmt->execute([$user_branch_id]);
+        $stmt->execute([$purchase_branch]);
         $all_medicines = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // Get all equipment for auto-search
         $stmt = $db->prepare("
             SELECT id, equipment_name, category, unit, selling_price, reorder_level, unit_cost, supplier
             FROM medical_equipment 
             WHERE branch_id = ? AND status = 'active'
             ORDER BY equipment_name
         ");
-        $stmt->execute([$user_branch_id]);
+        $stmt->execute([$purchase_branch]);
         $all_equipment = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
 }
 
-// ================================================================
-// HANDLE ACTION: LIST ALL IN_PROGRESS PURCHASES FOR JOINING
-// ================================================================
-
-// Get all IN_PROGRESS medicine purchases
+// GET IN_PROGRESS PURCHASES
 $all_med_in_progress = [];
-$stmt = $db->prepare("
-    SELECT p.*, u.full_name as creator_name 
-    FROM purchases p
-    LEFT JOIN users u ON p.created_by = u.id
-    WHERE p.status = 'IN_PROGRESS' AND p.purchase_type = 'medicine'
-    ORDER BY p.created_at DESC
-");
-$stmt->execute();
-$all_med_in_progress = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Get all IN_PROGRESS equipment purchases
 $all_equip_in_progress = [];
-$stmt = $db->prepare("
-    SELECT p.*, u.full_name as creator_name 
-    FROM purchases p
-    LEFT JOIN users u ON p.created_by = u.id
-    WHERE p.status = 'IN_PROGRESS' AND p.purchase_type = 'equipment'
-    ORDER BY p.created_at DESC
-");
-$stmt->execute();
-$all_equip_in_progress = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-$has_med_in_progress = count($all_med_in_progress) > 0;
-$has_equip_in_progress = count($all_equip_in_progress) > 0;
-
-// ================================================================
-// HANDLE ACTION: SHOW LIST OR CREATE
-// ================================================================
-$show_med_list = ($action === 'list_medicine' || ($action === 'create' && $purchase_type === 'medicine') || ($action === '' && !$purchase_id));
-$show_equip_list = ($action === 'list_equipment' || ($action === 'create' && $purchase_type === 'equipment'));
-
-// If action is 'create', check if there are IN_PROGRESS purchases first
-if ($action === 'create') {
-    if ($purchase_type === 'medicine' && $has_med_in_progress) {
-        $show_med_list = true;
-        $action = 'list_medicine';
-    } elseif ($purchase_type === 'equipment' && $has_equip_in_progress) {
-        $show_equip_list = true;
-        $action = 'list_equipment';
+if ($active_view === 'medicine') {
+    $med_where = "p.status = 'IN_PROGRESS' AND p.purchase_type = 'medicine'";
+    $med_params = [];
+    
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $med_where .= " AND p.branch_id = ?";
+        $med_params[] = (int)$selected_branch_id;
     }
+    
+    $stmt = $db->prepare("
+        SELECT p.*, u.full_name as creator_name, b.name as branch_name
+        FROM purchases p
+        LEFT JOIN users u ON p.created_by = u.id
+        LEFT JOIN branches b ON p.branch_id = b.id
+        WHERE " . $med_where . "
+        ORDER BY p.created_at DESC
+    ");
+    $stmt->execute($med_params);
+    $all_med_in_progress = $stmt->fetchAll(PDO::FETCH_ASSOC);
 }
 
-// ================================================================
-// GET COMPLETED PURCHASES
-// ================================================================
+if ($active_view === 'equipment') {
+    $equip_where = "p.status = 'IN_PROGRESS' AND p.purchase_type = 'equipment'";
+    $equip_params = [];
+    
+    if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+        $equip_where .= " AND p.branch_id = ?";
+        $equip_params[] = (int)$selected_branch_id;
+    }
+    
+    $stmt = $db->prepare("
+        SELECT p.*, u.full_name as creator_name, b.name as branch_name
+        FROM purchases p
+        LEFT JOIN users u ON p.created_by = u.id
+        LEFT JOIN branches b ON p.branch_id = b.id
+        WHERE " . $equip_where . "
+        ORDER BY p.created_at DESC
+    ");
+    $stmt->execute($equip_params);
+    $all_equip_in_progress = $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+// COMPLETED
 $completed_purchases = [];
+$comp_where = "p.status = 'COMPLETED'";
+$comp_params = [];
+
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $comp_where .= " AND p.branch_id = ?";
+    $comp_params[] = (int)$selected_branch_id;
+}
+
+if ($active_view === 'medicine') {
+    $comp_where .= " AND p.purchase_type = 'medicine'";
+} elseif ($active_view === 'equipment') {
+    $comp_where .= " AND p.purchase_type = 'equipment'";
+}
+
 $stmt = $db->prepare("
-    SELECT p.*, u.full_name as creator_name 
+    SELECT p.*, u.full_name as creator_name, b.name as branch_name
     FROM purchases p
     LEFT JOIN users u ON p.created_by = u.id
-    WHERE p.status = 'COMPLETED'
+    LEFT JOIN branches b ON p.branch_id = b.id
+    WHERE " . $comp_where . "
     ORDER BY p.completed_at DESC
     LIMIT 50
 ");
-$stmt->execute();
+$stmt->execute($comp_params);
 $completed_purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
+// CANCELLED
+$cancelled_purchases = [];
+$canc_where = "p.status = 'CANCELLED'";
+$canc_params = [];
+
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $canc_where .= " AND p.branch_id = ?";
+    $canc_params[] = (int)$selected_branch_id;
+}
+
+if ($active_view === 'medicine') {
+    $canc_where .= " AND p.purchase_type = 'medicine'";
+} elseif ($active_view === 'equipment') {
+    $canc_where .= " AND p.purchase_type = 'equipment'";
+}
+
+$stmt = $db->prepare("
+    SELECT p.*, u.full_name as creator_name, a.full_name as cancelled_by_name, b.name as branch_name
+    FROM purchases p
+    LEFT JOIN users u ON p.created_by = u.id
+    LEFT JOIN users a ON p.cancelled_by = a.id
+    LEFT JOIN branches b ON p.branch_id = b.id
+    WHERE " . $canc_where . "
+    ORDER BY p.updated_at DESC
+    LIMIT 20
+");
+$stmt->execute($canc_params);
+$cancelled_purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
 $unread_notifications = 0;
 try {
     $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
     $stmt->execute([$user_id]);
     $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-} catch (Exception $e) {
-    $unread_notifications = 0;
-}
+} catch (Exception $e) {}
 
-// ================================================================
-// PROFILE & LOGO
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 $logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.PNG';
 
-// Display branch name
 $display_branch_name = 'All Branches';
 if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     foreach ($branches as $b) {
@@ -1138,16 +874,21 @@ if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
     }
 }
 
-// Determine page title based on action
 $page_title = 'Admin Purchases';
-if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === 'medicine')) {
-    $page_title = 'Medicine Purchases - Join or Create';
-} elseif ($action === 'list_equipment' || ($action === 'create' && $purchase_type === 'equipment')) {
-    $page_title = 'Equipment Purchases - Join or Create';
+if ($active_view === 'medicine') {
+    $page_title = 'Medicine Purchases';
+} elseif ($active_view === 'equipment') {
+    $page_title = 'Equipment Purchases';
 } elseif ($purchase_id > 0 && $current_purchase) {
     $page_title = 'Purchase: ' . $current_purchase['invoice_number'];
 }
+
+// ================================================================
+// ✅ INCLUDE SHARED SIDEBAR ONLY (NO HEADER - WE HAVE EMBEDDED HEADER)
+// ================================================================
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
+
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -1157,1596 +898,728 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
     
     <link rel="icon" href="<?= $logo_path ?>" type="image/png">
     <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
-    <link rel="apple-touch-icon" href="<?= $logo_path ?>">
     
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================ */
-        /* ROOT VARIABLES */
-        /* ================================================================ */
         :root {
-            --primary: #0B5ED7;
-            --primary-dark: #0A4CA8;
-            --primary-light: #E8F0FE;
-            --success: #059669;
-            --success-dark: #047857;
-            --success-light: #D1FAE5;
-            --warning: #D97706;
-            --warning-light: #FEF3C7;
-            --danger: #DC2626;
-            --danger-light: #FEE2E2;
-            --purple: #7C3AED;
-            --teal: #0D9488;
-            --bg-body: #F1F5F9;
-            --bg-card: #FFFFFF;
-            --bg-nav: #FFFFFF;
+            --primary: #0B5ED7; --primary-dark: #0A4CA8; --primary-light: #E8F0FE;
+            --success: #059669; --success-dark: #047857; --success-light: #D1FAE5;
+            --warning: #D97706; --warning-light: #FEF3C7;
+            --danger: #DC2626; --danger-light: #FEE2E2;
+            --purple: #7C3AED; --purple-light: #EDE9FE;
+            --teal: #0D9488; --teal-light: #CCFBF1;
+            --bg-body: #F1F5F9; --bg-card: #FFFFFF; --bg-nav: #FFFFFF;
             --border-color: #E2E8F0;
-            --text-primary: #1E293B;
-            --text-secondary: #64748B;
-            --text-muted: #94A3B8;
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.12);
-            --radius: 12px;
-            --radius-lg: 16px;
+            --text-primary: #1E293B; --text-secondary: #64748B; --text-muted: #94A3B8;
         }
         
         [data-theme="dark"] {
-            --bg-body: #0F172A;
-            --bg-card: #1E293B;
-            --bg-nav: #1E293B;
+            --bg-body: #0F172A; --bg-card: #1E293B; --bg-nav: #1E293B;
             --border-color: #334155;
-            --text-primary: #F1F5F9;
-            --text-secondary: #94A3B8;
-            --text-muted: #64748B;
-            --shadow-sm: 0 1px 3px rgba(0,0,0,0.3);
-            --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
-            --shadow-lg: 0 8px 30px rgba(0,0,0,0.4);
+            --text-primary: #F1F5F9; --text-secondary: #94A3B8; --text-muted: #64748B;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
-        body {
-            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: background 0.3s ease, color 0.3s ease;
-        }
+        body { font-family: 'Inter', 'Segoe UI', sans-serif; background: var(--bg-body); color: var(--text-primary); }
         
         ::-webkit-scrollbar { width: 5px; height: 5px; }
-        ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================ */
-        /* SIDEBAR */
-        /* ================================================================ */
-        .sidebar {
-            position: fixed; top: 0; left: 0; bottom: 0;
-            width: 270px; 
-            background: linear-gradient(180deg, #0B4EA8 0%, #0A3D7A 100%);
-            color: white; z-index: 50; overflow-y: auto; overflow-x: hidden;
-            transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
-            transform: translateX(0);
-            box-shadow: 4px 0 20px rgba(0,0,0,0.15);
-            scroll-behavior: smooth;
-        }
-        
-        [data-theme="dark"] .sidebar {
-            background: linear-gradient(180deg, #0A3D7A 0%, #082F5E 100%);
-        }
-        
-        .sidebar::-webkit-scrollbar { width: 5px; }
-        .sidebar::-webkit-scrollbar-track { background: rgba(255,255,255,0.05); }
-        .sidebar::-webkit-scrollbar-thumb { background: #0AA84F; border-radius: 10px; }
-        
-        .sidebar-brand {
-            padding: 18px 16px 14px;
-            border-bottom: 2px solid rgba(255,255,255,0.08);
-            background: rgba(0,0,0,0.1);
-            position: sticky; top: 0; z-index: 5;
-            backdrop-filter: blur(10px);
-        }
-        
-        .sidebar-brand .logo {
-            width: 42px; height: 42px; border-radius: 10px;
-            object-fit: cover; background: white; padding: 4px;
-            border: 2px solid rgba(255,255,255,0.15);
-            transition: transform 0.3s ease;
-        }
-        
-        .sidebar-brand .logo:hover { transform: rotate(-5deg) scale(1.05); }
-        
-        .sidebar-brand .brand-text { color: white; font-weight: 700; font-size: 0.95rem; line-height: 1.2; letter-spacing: 0.5px; }
-        .sidebar-brand .brand-sub { color: #9EC5FE; font-size: 0.65rem; font-weight: 500; letter-spacing: 0.3px; }
-        
-        .sidebar-branch-selector {
-            padding: 10px 14px;
-            border-bottom: 2px solid rgba(255,255,255,0.06);
-            background: rgba(0,0,0,0.05);
-        }
-        
-        .sidebar-branch-selector select {
-            width: 100%;
-            padding: 7px 10px;
-            border-radius: 8px;
-            border: none;
-            background: rgba(255,255,255,0.12);
-            color: white;
-            font-size: 0.75rem;
-            cursor: pointer;
-            outline: none;
+        /* ================================================================
+           ✅ EMBEDDED HEADER - SAME AS SHARED admin_header.php
+           ================================================================ */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
             transition: all 0.3s ease;
-            appearance: none;
-            -webkit-appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='white' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 10px center;
-        }
-        
-        .sidebar-branch-selector select:hover {
-            background-color: rgba(255,255,255,0.2);
-        }
-        
-        .sidebar-branch-selector select:focus {
-            box-shadow: 0 0 0 2px rgba(10, 168, 79, 0.5);
-        }
-        
-        .sidebar-branch-selector select option {
-            background: #0B4EA8;
-            color: white;
-            padding: 8px;
-        }
-        
-        .sidebar-nav { padding: 10px 8px 20px; }
-        
-        .sidebar-nav .nav-label {
-            font-size: 0.5rem; text-transform: uppercase;
-            letter-spacing: 0.08em; color: #6EA8FE;
-            padding: 8px 10px 4px; margin: 8px 0 2px;
-            font-weight: 700; opacity: 0.8;
-        }
-        
-        .sidebar-nav .nav-label .label-icon { margin-right: 4px; }
-        
-        .sidebar-link {
-            display: flex; align-items: center; gap: 10px;
-            padding: 8px 12px; border-radius: 8px;
-            color: #D2E3FC; text-decoration: none;
-            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
-            font-size: 0.8rem; font-weight: 500;
-            margin: 1px 0; background: transparent;
-            cursor: pointer; border: none; width: 100%;
-            text-align: left; position: relative;
-        }
-        
-        .sidebar-link:hover {
-            background: rgba(10, 168, 79, 0.4);
-            color: white; box-shadow: 0 4px 12px rgba(10, 168, 79, 0.2);
-            transform: translateX(4px);
-        }
-        
-        .sidebar-link.active {
-            background: rgba(10, 168, 79, 0.5);
-            color: white; box-shadow: 0 4px 12px rgba(10, 168, 79, 0.3);
-        }
-        
-        .sidebar-link.active::before {
-            content: ''; position: absolute; left: 0; top: 15%; bottom: 15%;
-            width: 4px; background: #0AA84F;
-            border-radius: 0 4px 4px 0;
-            box-shadow: 0 0 12px rgba(10, 168, 79, 0.5);
-        }
-        
-        .sidebar-link i { width: 20px; text-align: center; font-size: 0.9rem; flex-shrink: 0; opacity: 0.8; }
-        .sidebar-link:hover i, .sidebar-link.active i { opacity: 1; }
-        .sidebar-link .link-text { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-        
-        .sidebar-link .badge {
-            margin-left: auto; background: rgba(255,255,255,0.12);
-            padding: 1px 8px; border-radius: 20px;
-            font-size: 0.6rem; font-weight: 600; color: white;
-            transition: all 0.3s ease; flex-shrink: 0; min-width: 20px;
-            text-align: center; border: 1px solid rgba(255,255,255,0.05);
-        }
-        
-        .sidebar-link .badge.danger { background: #EF4444; animation: pulse-badge 2s infinite; border-color: #EF4444; }
-        .sidebar-link .badge.success { background: #059669; border-color: #059669; }
-        
-        .sidebar-link.logout-link {
-            border-top: 2px solid rgba(255,255,255,0.06);
-            padding-top: 10px; margin-top: 4px; color: #FCA5A5;
-        }
-        
-        .sidebar-link.logout-link:hover { background: #DC2626; color: white; box-shadow: 0 4px 12px rgba(220, 38, 38, 0.4); transform: translateX(4px); }
-        
-        .sidebar-status {
-            padding: 10px 16px; border-top: 2px solid rgba(255,255,255,0.06);
-            display: flex; align-items: center; gap: 10px;
-            background: rgba(0,0,0,0.1); position: sticky; bottom: 0;
             backdrop-filter: blur(10px);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
         }
         
-        .sidebar-status .status-dot {
-            width: 8px; height: 8px; border-radius: 50%; display: inline-block;
-            transition: all 0.3s ease;
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: 12px;
+            border: 2px solid var(--border-color);
+            flex: 1;
+            max-width: 500px;
+            height: 42px;
+            transition: all 0.3s;
         }
         
-        .sidebar-status .status-dot.online {
-            background: #34D399; box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
-            animation: pulse-dot 1.5s infinite;
-        }
-        
-        .sidebar-status .status-dot.offline {
-            background: #94A3B8;
-        }
-        
-        .sidebar-status .status-text { font-size: 0.65rem; color: #D2E3FC; font-weight: 500; }
-        
-        @keyframes pulse-dot {
-            0%, 100% { opacity: 1; transform: scale(1); }
-            50% { opacity: 0.3; transform: scale(0.8); }
-        }
-        
-        @keyframes pulse-badge {
-            0%, 100% { transform: scale(1); }
-            50% { transform: scale(1.08); }
-        }
-        
-        #sidebarOverlay {
-            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.5); z-index: 45;
-            display: none; backdrop-filter: blur(4px);
-        }
-        
-        #sidebarOverlay.active { display: block !important; }
-        
-        @media (min-width: 1025px) {
-            .sidebar { transform: translateX(0) !important; z-index: 50; }
-            #sidebarOverlay { display: none !important; }
-        }
-        
-        @media (max-width: 1024px) {
-            .sidebar { width: 280px; transform: translateX(-100%); z-index: 9999; border-radius: 0 12px 12px 0; }
-            .sidebar.open { transform: translateX(0) !important; }
-            #sidebarOverlay { display: none; z-index: 9998; }
-            #sidebarOverlay.active { display: block !important; }
-        }
-        
-        /* ================================================================ */
-        /* HEADER & MAIN CONTENT */
-        /* ================================================================ */
-        .embedded-header {
-            position: fixed; top: 0; left: 270px; right: 0;
-            height: 68px; background: var(--bg-nav); z-index: 40;
-            display: flex; align-items: center; justify-content: space-between;
-            padding: 0 24px; border-bottom: 2px solid var(--border-color);
-            transition: all 0.3s ease; backdrop-filter: blur(10px);
-            box-shadow: var(--shadow-sm);
-        }
-        
-        .embedded-header .search-wrapper {
-            display: flex; align-items: center; background: var(--bg-body);
-            border-radius: var(--radius); border: 2px solid var(--border-color);
-            transition: all 0.3s; flex: 1; max-width: 500px;
-        }
-        
-        .embedded-header .search-wrapper:focus-within {
+        .top-nav .search-wrapper:focus-within {
             border-color: var(--primary);
             box-shadow: 0 0 0 4px rgba(11, 94, 215, 0.12);
         }
         
-        .embedded-header .search-wrapper input {
-            border: none; background: transparent; padding: 8px 14px;
-            width: 100%; font-size: 0.85rem; outline: none;
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 8px 14px;
+            width: 100%;
+            font-size: 0.85rem;
+            outline: none;
             color: var(--text-primary);
+            height: 100%;
         }
         
-        .embedded-header .search-wrapper input::placeholder { color: var(--text-secondary); }
+        .top-nav .search-wrapper input::placeholder {
+            color: var(--text-secondary);
+        }
         
-        .embedded-header .search-wrapper .search-btn {
-            background: var(--primary); color: white; border: none;
-            padding: 8px 16px; border-radius: 0 var(--radius) var(--radius) 0;
-            cursor: pointer; font-size: 0.85rem; transition: all 0.3s;
+        .top-nav .search-wrapper .search-btn {
+            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
+            color: white;
+            border: none;
+            padding: 0 20px;
+            border-radius: 0 10px 10px 0;
+            cursor: pointer;
+            font-size: 0.85rem;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.3s;
             white-space: nowrap;
         }
         
-        .embedded-header .search-wrapper .search-btn:hover {
-            background: var(--primary-dark); transform: scale(1.02);
+        .top-nav .search-wrapper .search-btn:hover {
+            transform: scale(1.02);
         }
         
-        .embedded-header .datetime { font-size: 0.78rem; color: var(--text-secondary); font-weight: 500; display: flex; align-items: center; gap: 6px; }
-        .embedded-header .datetime i { color: var(--success); }
-        
-        .embedded-header .avatar {
-            width: 40px; height: 40px; border-radius: 50%;
-            object-fit: cover; border: 2px solid var(--border-color);
-            cursor: pointer; transition: all 0.3s;
-        }
-        
-        .embedded-header .avatar:hover { border-color: var(--primary); transform: scale(1.05); }
-        
-        .embedded-header .icon-btn {
-            width: 38px; height: 38px; border-radius: 50%;
-            display: flex; align-items: center; justify-content: center;
-            color: var(--text-secondary); transition: all 0.3s;
-            background: transparent; border: none; cursor: pointer;
-            position: relative;
-        }
-        
-        .embedded-header .icon-btn:hover { background: var(--bg-body); color: var(--primary); }
-        
-        .embedded-header .notif-dot {
-            position: absolute; top: 6px; right: 6px;
-            width: 8px; height: 8px; border-radius: 50%;
-            border: 2px solid var(--bg-nav); animation: pulse-dot 2s infinite;
-        }
-        
-        .embedded-header .notif-dot.has-notif { background: var(--danger); }
-        .embedded-header .notif-dot.no-notif { background: var(--text-muted); animation: none; }
-        
-        .embedded-header .dark-toggle-btn {
-            background: var(--bg-body); border: 2px solid var(--border-color);
-            border-radius: var(--radius); padding: 6px 12px;
-            cursor: pointer; font-size: 0.82rem; color: var(--text-primary);
-            transition: all 0.3s; display: flex; align-items: center; gap: 6px;
-        }
-        
-        .embedded-header .dark-toggle-btn:hover { border-color: var(--primary); background: var(--bg-card); }
-        .embedded-header .dark-toggle-btn i { font-size: 0.9rem; }
-        
-        .embedded-header .branch-selector {
-            background: var(--bg-body); border: 2px solid var(--border-color);
-            border-radius: var(--radius); padding: 6px 12px;
-            font-size: 0.78rem; color: var(--text-primary);
-            outline: none; cursor: pointer; transition: all 0.3s;
-        }
-        
-        .embedded-header .branch-selector:focus { border-color: var(--primary); }
-        
-        .main-content {
-            margin-left: 270px; margin-top: 68px;
-            padding: 28px 32px; min-height: calc(100vh - 68px);
-        }
-        
-        /* ================================================================ */
-        /* PAGE HEADER BOX */
-        /* ================================================================ */
-        .page-header-box {
-            background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-            border-radius: 16px;
-            padding: 18px 24px;
-            margin-bottom: 20px;
-            box-shadow: 0 6px 24px rgba(11, 94, 215, 0.2);
-            position: relative;
-            overflow: hidden;
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
+            gap: 6px;
         }
         
-        .page-header-box::before {
-            content: '';
-            position: absolute;
-            top: -60%;
-            right: -10%;
-            width: 350px;
-            height: 350px;
-            background: rgba(255,255,255,0.05);
+        .top-nav .datetime i {
+            color: var(--primary-light);
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
             border-radius: 50%;
-            pointer-events: none;
-        }
-        
-        .page-header-box .page-title {
-            color: white;
-            font-size: 1.4rem;
-            font-weight: 700;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .page-header-box .page-title .role-badge-display {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            padding: 2px 10px;
-            border-radius: 20px;
-            font-size: 0.55rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            backdrop-filter: blur(4px);
-        }
-        
-        .page-header-box .page-title .branch-name-display {
-            background: rgba(255,255,255,0.15);
-            padding: 2px 12px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 500;
-            color: white;
-        }
-        
-        .page-header-box .page-title .btn-back-green {
-            background: var(--success); color: white; border: none;
-            padding: 5px 16px; border-radius: 20px; font-size: 0.7rem;
-            font-weight: 600; text-decoration: none;
-            display: inline-flex; align-items: center; gap: 6px;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
-            margin-left: 4px;
-        }
-        
-        .page-header-box .page-title .btn-back-green:hover {
-            background: var(--success-dark); transform: translateY(-2px) scale(1.03);
-            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.5);
-        }
-        
-        .page-header-box .page-subtitle {
-            color: rgba(255,255,255,0.85);
-            font-size: 0.8rem;
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: wrap;
-            position: relative;
-            z-index: 1;
-            margin-top: 2px;
-        }
-        
-        .page-header-box .page-subtitle strong { color: white; font-weight: 600; }
-        
-        .page-header-box .header-badge {
-            background: rgba(255,255,255,0.12);
-            color: white;
-            padding: 2px 10px;
-            border-radius: 20px;
-            font-size: 0.6rem;
-            font-weight: 500;
-            backdrop-filter: blur(4px);
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            border: 1px solid rgba(255,255,255,0.1);
-        }
-        
-        .page-header-box .header-badge i { opacity: 0.8; }
-        .page-header-box .header-badge.medicines {
-            background: rgba(52, 211, 153, 0.2);
-            border-color: rgba(52, 211, 153, 0.3);
-            color: #6EE7B7;
-        }
-        .page-header-box .header-badge.equipment {
-            background: rgba(124, 58, 237, 0.2);
-            border-color: rgba(124, 58, 237, 0.3);
-            color: #C4B5FD;
-        }
-        
-        .header-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-            align-items: center;
-            position: relative;
-            z-index: 1;
-        }
-        
-        .btn-back {
-            background: rgba(255,255,255,0.15);
-            color: white;
-            padding: 6px 16px;
-            border-radius: 8px;
-            font-weight: 500;
-            font-size: 0.75rem;
-            border: 1px solid rgba(255,255,255,0.15);
+            object-fit: cover;
+            border: 2px solid var(--border-color);
             cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            text-decoration: none;
+            transition: all 0.3s;
         }
         
-        .btn-back:hover {
-            background: rgba(255,255,255,0.25);
-            transform: translateY(-2px);
-        }
-        
-        .btn-add-purchase {
-            background: var(--success);
-            color: white;
-            padding: 8px 20px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.8rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.25);
-        }
-        
-        .btn-add-purchase:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.35);
-        }
-        
-        .btn-join {
-            background: var(--primary);
-            color: white;
-            padding: 4px 14px;
-            border-radius: 6px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-        }
-        
-        .btn-join:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-        }
-        
-        .btn-complete {
-            background: var(--success);
-            color: white;
-            padding: 8px 24px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .btn-complete:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-complete:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .btn-cancel-purchase {
-            background: var(--danger);
-            color: white;
-            padding: 8px 24px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .btn-cancel-purchase:hover {
-            background: #991B1B;
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-        }
-        
-        .btn-cancel-purchase:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            transform: none;
-        }
-        
-        .btn-delete-item {
-            background: var(--danger);
-            color: white;
-            border: none;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 0.6rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-        }
-        
-        .btn-delete-item:hover {
-            background: #991B1B;
+        .top-nav .avatar:hover {
+            border-color: var(--primary);
             transform: scale(1.05);
         }
         
-        .btn-print {
-            background: var(--danger);
-            color: white;
-            padding: 8px 20px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .btn-print:hover {
-            background: #991B1B;
-            transform: translateY(-2px);
-        }
-        
-        .btn-save {
-            background: var(--success);
-            color: white;
-            padding: 10px 28px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .btn-save:hover {
-            background: var(--success-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-        }
-        
-        .btn-cancel {
-            background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
-            padding: 10px 24px;
-            border-radius: 10px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            text-decoration: none;
-        }
-        
-        .btn-cancel:hover {
-            border-color: var(--danger);
-            color: var(--danger);
-        }
-        
-        .btn-generate {
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            padding: 8px 14px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            white-space: nowrap;
-            height: 42px;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .btn-generate:hover {
-            background: var(--primary-dark);
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-        }
-        
-        .btn-toggle {
-            background: var(--primary);
-            color: white;
-            border: none;
-            border-radius: 10px;
-            padding: 8px 12px;
-            font-size: 0.7rem;
-            font-weight: 600;
-            cursor: pointer;
-            white-space: nowrap;
-            height: 42px;
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-        }
-        
-        .btn-toggle:hover {
-            background: var(--primary-dark);
-        }
-        
-        .message-box {
-            padding: 12px 18px;
-            border-radius: 10px;
-            margin-bottom: 16px;
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
             display: flex;
             align-items: center;
-            gap: 10px;
-            font-weight: 500;
-            font-size: 0.9rem;
-            animation: slideDown 0.5s ease;
-            border-left: 5px solid transparent;
-        }
-        
-        .message-box.success {
-            background: #D1FAE5;
-            color: #065F46;
-            border-color: #059669;
-            border-left: 5px solid #059669;
-        }
-        
-        .message-box.success i { color: #059669; font-size: 1.2rem; }
-        
-        .message-box.error {
-            background: #FEE2E2;
-            color: #991B1B;
-            border-color: #DC2626;
-            border-left: 5px solid #DC2626;
-        }
-        
-        .message-box.error i { color: #DC2626; font-size: 1.2rem; }
-        
-        .message-box.info {
-            background: var(--primary-light);
-            color: #0A4CA8;
-            border-color: #0B5ED7;
-            border-left: 5px solid #0B5ED7;
-        }
-        
-        .message-box.info i { color: #0B5ED7; font-size: 1.2rem; }
-        
-        .message-box .message-close {
-            margin-left: auto;
-            background: none;
+            justify-content: center;
+            color: var(--text-secondary);
+            background: transparent;
             border: none;
             cursor: pointer;
-            font-size: 1.1rem;
-            color: inherit;
-            opacity: 0.6;
-            transition: opacity 0.3s ease;
+            position: relative;
+            transition: all 0.3s;
         }
         
-        .message-box .message-close:hover { opacity: 1; }
-        
-        @keyframes slideDown {
-            from { opacity: 0; transform: translateY(-15px); }
-            to { opacity: 1; transform: translateY(0); }
+        .top-nav .icon-btn:hover {
+            background: var(--bg-body);
+            color: var(--primary);
         }
         
-        .card {
-            background: var(--bg-card);
-            border-radius: 12px;
-            padding: 14px 18px;
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+            animation: pulse-dot 2s infinite;
+        }
+        
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif { background: var(--text-muted); animation: none; }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
             border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
+            border-radius: 8px;
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.3s;
+        }
+        
+        .dark-toggle-btn:hover {
+            border-color: var(--primary);
+            background: var(--bg-card);
+        }
+        
+        .branch-selector {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            padding: 6px 12px;
+            font-size: 0.78rem;
+            color: var(--text-primary);
+            outline: none;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .branch-selector:focus {
+            border-color: var(--primary);
+        }
+        
+        /* ================================================================
+           MAIN CONTENT
+           ================================================================ */
+        .main-content { margin-left: 270px; margin-top: 68px; padding: 28px 32px; min-height: calc(100vh - 68px); }
+        
+        /* PAGE HEADER */
+        .page-header-box {
+            background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
+            border-radius: 16px; padding: 18px 24px; margin-bottom: 20px;
+            display: flex; justify-content: space-between; align-items: center;
+            flex-wrap: wrap; gap: 10px;
+        }
+        
+        .page-header-box.equipment-mode {
+            background: linear-gradient(135deg, #7C3AED, #5B21B6);
+        }
+        
+        .page-header-box .page-title {
+            color: white; font-size: 1.4rem; font-weight: 700;
+            display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+        }
+        .page-header-box .role-badge-display {
+            background: rgba(255,255,255,0.2); color: white;
+            padding: 2px 10px; border-radius: 20px; font-size: 0.55rem;
+            font-weight: 600; text-transform: uppercase;
+        }
+        .page-header-box .branch-name-display {
+            background: rgba(255,255,255,0.15); padding: 2px 12px;
+            border-radius: 20px; font-size: 0.7rem; font-weight: 500; color: white;
+        }
+        .page-header-box .page-subtitle {
+            color: rgba(255,255,255,0.85); font-size: 0.8rem;
+            display: flex; align-items: center; gap: 6px;
+            flex-wrap: wrap; margin-top: 2px;
+        }
+        
+        .header-badge {
+            background: rgba(255,255,255,0.15); color: white;
+            padding: 2px 10px; border-radius: 20px; font-size: 0.6rem;
+            font-weight: 500; display: inline-flex; align-items: center; gap: 4px;
+        }
+        
+        .header-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        
+        .btn-back-header {
+            background: rgba(255,255,255,0.2); color: white;
+            padding: 10px 22px; border-radius: 10px;
+            font-weight: 600; font-size: 0.85rem;
+            border: 2px solid rgba(255,255,255,0.3);
+            cursor: pointer; text-decoration: none;
+            display: inline-flex; align-items: center; gap: 8px;
+            transition: all 0.3s ease; white-space: nowrap;
+            height: 48px; backdrop-filter: blur(4px);
+        }
+        .btn-back-header:hover {
+            background: rgba(255,255,255,0.3);
+            border-color: rgba(255,255,255,0.5);
+            transform: translateX(-3px);
+        }
+        
+        .btn-add-purchase {
+            background: #059669; color: white;
+            padding: 10px 24px; border-radius: 8px;
+            font-weight: 700; font-size: 0.9rem; border: none;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.35);
+        }
+        .btn-add-purchase:hover { background: #047857; transform: translateY(-2px); }
+        .btn-add-purchase.purple { background: #7C3AED; box-shadow: 0 4px 12px rgba(124, 58, 237, 0.35); }
+        .btn-add-purchase.purple:hover { background: #6D28D9; }
+        
+        .btn-join {
+            background: #0B5ED7; color: white;
+            padding: 6px 18px; border-radius: 6px;
+            font-size: 0.75rem; font-weight: 600; border: none;
+            cursor: pointer; text-decoration: none;
+            display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-join:hover { background: #0A4CA8; transform: translateY(-2px); }
+        .btn-join.purple { background: #7C3AED; }
+        .btn-join.purple:hover { background: #6D28D9; }
+        
+        .btn-complete {
+            background: #059669; color: white;
+            padding: 10px 24px; border-radius: 8px;
+            font-weight: 700; font-size: 0.85rem; border: none;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        .btn-complete:hover { background: #047857; transform: translateY(-2px); }
+        .btn-complete:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+        
+        .btn-cancel-purchase {
+            background: #DC2626; color: white;
+            padding: 10px 24px; border-radius: 8px;
+            font-weight: 700; font-size: 0.85rem; border: none;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        .btn-cancel-purchase:hover { background: #991B1B; transform: translateY(-2px); }
+        
+        .btn-delete-item {
+            background: #DC2626; color: white; border: none;
+            padding: 3px 10px; border-radius: 4px;
+            font-size: 0.65rem; cursor: pointer;
+        }
+        .btn-delete-item:hover { background: #991B1B; }
+        
+        .btn-print {
+            background: #DC2626; color: white;
+            padding: 8px 20px; border-radius: 8px;
+            font-weight: 600; font-size: 0.85rem; border: none;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+        }
+        .btn-print:hover { background: #991B1B; }
+        
+        .btn-save {
+            background: #059669; color: white;
+            padding: 10px 28px; border-radius: 10px;
+            font-weight: 600; font-size: 0.9rem; border: none;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 8px;
+        }
+        .btn-save:hover { background: #047857; }
+        .btn-save.purple { background: #7C3AED; }
+        .btn-save.purple:hover { background: #6D28D9; }
+        
+        .btn-cancel {
+            background: transparent; color: var(--text-secondary);
+            border: 2px solid var(--border-color);
+            padding: 10px 24px; border-radius: 10px;
+            font-weight: 600; font-size: 0.9rem; cursor: pointer;
+            text-decoration: none;
+        }
+        .btn-cancel:hover { border-color: #DC2626; color: #DC2626; }
+        
+        .btn-generate {
+            background: #0B5ED7; color: white; border: none;
+            border-radius: 10px; padding: 8px 14px;
+            font-size: 0.75rem; font-weight: 600;
+            cursor: pointer; white-space: nowrap; height: 42px;
+            display: inline-flex; align-items: center; gap: 4px;
+        }
+        .btn-generate:hover { background: #0A4CA8; }
+        
+        .btn-toggle {
+            background: #0B5ED7; color: white; border: none;
+            border-radius: 10px; padding: 8px 12px;
+            font-size: 0.7rem; font-weight: 600;
+            cursor: pointer; white-space: nowrap; height: 42px;
+            display: inline-flex; align-items: center; gap: 4px;
+        }
+        .btn-toggle:hover { background: #0A4CA8; }
+        
+        /* MESSAGE */
+        .message-box {
+            padding: 12px 18px; border-radius: 10px; margin-bottom: 16px;
+            display: flex; align-items: center; gap: 10px;
+            font-weight: 500; font-size: 0.9rem;
+            border-left: 5px solid transparent;
+        }
+        .message-box.success { background: #D1FAE5; color: #065F46; border-left-color: #059669; }
+        .message-box.error { background: #FEE2E2; color: #991B1B; border-left-color: #DC2626; }
+        .message-box.info { background: #E8F0FE; color: #0A4CA8; border-left-color: #0B5ED7; }
+        .message-box .message-close { margin-left: auto; background: none; border: none; cursor: pointer; font-size: 1.1rem; color: inherit; }
+        
+        /* CARD */
+        .card {
+            background: var(--bg-card); border-radius: 12px;
+            padding: 14px 18px; border: 2px solid var(--border-color);
             margin-bottom: 20px;
         }
         
-        .card:hover {
-            border-color: var(--primary);
-            box-shadow: 0 4px 20px rgba(11, 94, 215, 0.06);
-        }
-        
         .card-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            flex-wrap: wrap;
-            gap: 6px;
+            display: flex; justify-content: space-between;
+            align-items: center; margin-bottom: 10px;
+            flex-wrap: wrap; gap: 6px;
         }
         
-        .card-title {
-            font-size: 0.9rem;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
+        .card-title { font-size: 0.9rem; font-weight: 600; }
+        .card-title i.blue { color: #0B5ED7; }
+        .card-title i.purple { color: #7C3AED; }
+        .card-title i.green { color: #059669; }
         
-        .card-title .title-blue { color: var(--primary); }
-        .card-title .title-green { color: var(--success); }
-        .card-title .title-purple { color: var(--purple); }
+        .result-count { font-size: 0.75rem; color: var(--text-secondary); }
+        .result-count strong { color: #0B5ED7; }
         
-        .grid-3 {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
-        }
+        /* GRID */
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
         
         .purchase-card {
-            background: var(--bg-card);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 14px 16px;
+            background: var(--bg-card); border: 2px solid var(--border-color);
+            border-radius: 10px; padding: 14px 16px;
             transition: all 0.3s ease;
         }
+        .purchase-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.1); transform: translateY(-2px); }
         
-        .purchase-card:hover {
-            border-color: var(--primary);
-            box-shadow: var(--shadow-md);
-        }
-        
-        .purchase-card .invoice-number {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--primary);
-        }
+        .purchase-card .invoice-number { font-size: 1rem; font-weight: 700; }
         
         .purchase-card .status-badge {
-            padding: 2px 10px;
-            border-radius: 12px;
-            font-size: 0.6rem;
-            font-weight: 600;
+            padding: 2px 10px; border-radius: 12px;
+            font-size: 0.6rem; font-weight: 600;
+        }
+        .status-badge.in-progress { background: #FEF3C7; color: #D97706; }
+        .status-badge.completed { background: #D1FAE5; color: #059669; }
+        .status-badge.cancelled { background: #FEE2E2; color: #DC2626; }
+        
+        .purchase-card .meta-text { font-size: 0.7rem; color: var(--text-secondary); }
+        
+        .branch-tag-small {
+            display: inline-flex; align-items: center; gap: 3px;
+            padding: 1px 8px; border-radius: 10px;
+            font-size: 0.6rem; font-weight: 600;
+            background: #E8F0FE; color: #0B5ED7;
         }
         
-        .purchase-card .status-badge.in-progress {
-            background: var(--warning-light);
-            color: var(--warning);
-        }
-        
-        .purchase-card .status-badge.completed {
-            background: var(--success-light);
-            color: var(--success);
-        }
-        
-        .purchase-card .status-badge.cancelled {
-            background: var(--danger-light);
-            color: var(--danger);
-        }
-        
-        .purchase-card .meta-text {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-        }
-        
+        /* PURCHASE DETAILS */
         .purchase-details-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 10px;
+            display: flex; justify-content: space-between;
+            align-items: center; flex-wrap: wrap; gap: 10px;
             margin-bottom: 16px;
         }
-        
         .purchase-details-header .invoice-number {
-            font-size: 1.4rem;
-            font-weight: 700;
-            color: var(--primary);
+            font-size: 1.4rem; font-weight: 700; color: #0B5ED7;
         }
         
-        .purchase-details-header .purchase-status {
-            padding: 4px 16px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
+        .purchase-status {
+            padding: 4px 16px; border-radius: 20px;
+            font-size: 0.7rem; font-weight: 600;
         }
-        
-        .purchase-details-header .purchase-status.in-progress {
-            background: var(--warning-light);
-            color: var(--warning);
-        }
-        
-        .purchase-details-header .purchase-status.completed {
-            background: var(--success-light);
-            color: var(--success);
-        }
-        
-        .purchase-details-header .purchase-status.cancelled {
-            background: var(--danger-light);
-            color: var(--danger);
-        }
+        .purchase-status.in_progress { background: #FEF3C7; color: #D97706; }
+        .purchase-status.completed { background: #D1FAE5; color: #059669; }
+        .purchase-status.cancelled { background: #FEE2E2; color: #DC2626; }
         
         .purchase-info-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 10px;
-            margin-bottom: 16px;
+            gap: 10px; margin-bottom: 16px;
         }
-        
         .purchase-info-item {
-            padding: 8px 12px;
-            background: var(--bg-body);
+            padding: 8px 12px; background: var(--bg-body);
             border-radius: 6px;
         }
-        
         .purchase-info-item .label {
-            font-size: 0.55rem;
-            text-transform: uppercase;
-            color: var(--text-secondary);
-            font-weight: 600;
-            letter-spacing: 0.05em;
+            font-size: 0.55rem; text-transform: uppercase;
+            color: var(--text-secondary); font-weight: 600;
         }
-        
         .purchase-info-item .value {
-            font-size: 0.85rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-top: 2px;
+            font-size: 0.85rem; font-weight: 600; margin-top: 2px;
         }
         
-        .purchase-info-item .profit-positive {
-            color: var(--success);
-        }
-        
-        .purchase-info-item .profit-negative {
-            color: var(--danger);
-        }
-        
-        .form-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 14px;
-        }
-        
+        /* FORMS */
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
         .form-grid .full-width { grid-column: 1 / -1; }
         
-        .form-label {
-            font-size: 0.75rem;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin-bottom: 3px;
-            display: block;
-        }
-        
-        .form-label .required {
-            color: var(--danger);
-            margin-left: 2px;
-        }
+        .form-label { font-size: 0.75rem; font-weight: 600; margin-bottom: 3px; display: block; }
+        .form-label .required { color: #DC2626; }
         
         .form-control {
-            width: 100%;
-            padding: 7px 12px;
+            width: 100%; padding: 7px 12px;
             border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 0.8rem;
-            transition: all 0.3s ease;
-            outline: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
+            border-radius: 8px; font-size: 0.8rem;
+            outline: none; background: var(--bg-card); color: var(--text-primary);
             height: 42px;
         }
-        
-        .form-control:focus {
-            border-color: var(--primary);
-            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
-        }
-        
-        .help-text {
-            font-size: 0.6rem;
-            color: var(--text-muted);
-            margin-top: 2px;
-        }
+        .form-control:focus { border-color: #0B5ED7; box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1); }
         
         .form-actions {
-            display: flex;
-            gap: 10px;
-            margin-top: 18px;
-            padding-top: 14px;
-            border-top: 2px solid var(--border-color);
+            display: flex; gap: 10px; margin-top: 18px;
+            padding-top: 14px; border-top: 2px solid var(--border-color);
             flex-wrap: wrap;
         }
         
-        .category-input-group {
-            display: flex;
-            gap: 6px;
-            align-items: center;
-        }
-        
-        .category-input-group .form-control { flex: 1; }
-        
+        .category-input-group,
+        .unit-input-group,
         .batch-input-group {
-            display: flex;
-            gap: 6px;
-            align-items: center;
+            display: flex; gap: 6px; align-items: center;
         }
-        
+        .category-input-group .form-control,
+        .unit-input-group .form-control,
         .batch-input-group .form-control { flex: 1; }
         
-        .autocomplete-container {
-            position: relative;
-            width: 100%;
-        }
+        .autocomplete-container { position: relative; width: 100%; }
         
         .autocomplete-list {
-            position: absolute;
-            top: 100%;
-            left: 0;
-            right: 0;
+            position: absolute; top: 100%; left: 0; right: 0;
             background: var(--bg-card);
-            border: 2px solid var(--border-color);
-            border-top: none;
-            border-radius: 0 0 8px 8px;
-            z-index: 100;
-            max-height: 200px;
-            overflow-y: auto;
-            display: none;
-            box-shadow: var(--shadow-lg);
+            border: 2px solid var(--border-color); border-top: none;
+            border-radius: 0 0 8px 8px; z-index: 100;
+            max-height: 200px; overflow-y: auto;
+            display: none; box-shadow: 0 8px 30px rgba(0,0,0,0.12);
         }
-        
         .autocomplete-list.show { display: block; }
         
         .autocomplete-item {
-            padding: 8px 14px;
-            cursor: pointer;
+            padding: 8px 14px; cursor: pointer;
             border-bottom: 1px solid var(--border-color);
             font-size: 0.82rem;
-            transition: all 0.2s ease;
-            color: var(--text-primary);
         }
+        .autocomplete-item:hover { background: #E8F0FE; color: #0B5ED7; }
+        .autocomplete-item .item-detail { font-size: 0.65rem; color: var(--text-muted); display: block; }
         
-        .autocomplete-item:hover {
-            background: var(--primary-light);
-            color: var(--primary);
-        }
-        
-        .autocomplete-item.active {
-            background: var(--primary);
-            color: white;
-        }
-        
-        .autocomplete-item .item-detail {
-            font-size: 0.65rem;
-            color: var(--text-muted);
-            display: block;
-        }
-        
+        /* TABLE */
         .table-wrapper { overflow-x: auto; }
         
         .data-table {
-            width: 100%;
-            border-collapse: separate;
-            border-spacing: 0;
-            font-size: 0.78rem;
+            width: 100%; border-collapse: separate;
+            border-spacing: 0; font-size: 0.78rem;
         }
-        
         .data-table thead th {
-            background: var(--primary);
-            color: white;
-            padding: 6px 10px;
-            font-size: 0.6rem;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 700;
-            white-space: nowrap;
-            text-align: left;
+            background: #0B5ED7; color: white;
+            padding: 8px 10px; font-size: 0.6rem;
+            text-transform: uppercase; font-weight: 700;
+            white-space: nowrap; text-align: left;
         }
-        
-        .data-table thead th:first-child { border-radius: 6px 0 0 0; }
-        .data-table thead th:last-child { border-radius: 0 6px 0 0; }
-        
-        .data-table tbody tr:nth-child(even) {
-            background: var(--primary-light);
-        }
-        
-        .data-table tbody tr:hover td {
-            background: var(--success-light);
-        }
-        
-        [data-theme="dark"] .data-table tbody tr:nth-child(even) {
-            background: #1E293B;
-        }
-        
-        [data-theme="dark"] .data-table tbody tr:hover td {
-            background: #1A3A2A;
-        }
-        
+        .data-table tbody tr:nth-child(even) { background: #E8F0FE; }
+        .data-table tbody tr:hover td { background: #D1FAE5; }
         .data-table td {
-            padding: 6px 10px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
+            padding: 8px 10px; border-bottom: 1px solid var(--border-color);
             vertical-align: middle;
         }
         
-        .col-sno { width: 30px; text-align: center; }
-        .col-item { min-width: 160px; }
-        .col-category { min-width: 90px; }
-        .col-quantity { min-width: 60px; text-align: center; }
-        .col-buying-price { min-width: 90px; }
-        .col-buying-total { min-width: 100px; }
-        .col-selling-price { min-width: 90px; }
-        .col-selling-total { min-width: 100px; }
-        .col-added-by { min-width: 100px; }
-        .col-actions { min-width: 70px; text-align: center; }
-        
         .added-by-tag {
-            display: inline-flex;
-            align-items: center;
-            gap: 3px;
-            padding: 1px 8px;
-            border-radius: 10px;
-            font-size: 0.6rem;
-            font-weight: 600;
-            background: var(--purple-light);
-            color: var(--purple);
+            display: inline-flex; align-items: center; gap: 3px;
+            padding: 1px 8px; border-radius: 10px;
+            font-size: 0.6rem; font-weight: 600;
+            background: #EDE9FE; color: #7C3AED;
         }
         
-        [data-theme="dark"] .added-by-tag {
-            background: #2D1B4E;
-            color: #C4B5FD;
-        }
-        
-        .grand-total {
-            font-size: 1.2rem;
-            font-weight: 700;
-            text-align: right;
-            padding: 10px 0;
-            border-top: 2px solid var(--border-color);
-        }
-        
-        .grand-total .label {
-            font-size: 0.8rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-        }
-        
-        .grand-total .amount {
-            font-size: 1.4rem;
-            color: var(--success);
+        .unit-badge {
+            display: inline-flex; align-items: center; gap: 3px;
+            padding: 1px 6px; border-radius: 6px;
+            font-size: 0.6rem; font-weight: 600;
+            background: #CCFBF1; color: #0D9488;
         }
         
         .empty-state {
-            text-align: center;
-            padding: 30px 20px;
+            text-align: center; padding: 40px 20px;
             color: var(--text-secondary);
         }
-        
         .empty-state i {
-            font-size: 2rem;
-            color: var(--border-color);
-            display: block;
-            margin-bottom: 8px;
+            font-size: 3rem; color: var(--border-color);
+            display: block; margin-bottom: 12px;
         }
+        .empty-state p { font-size: 0.95rem; margin-bottom: 6px; }
+        .empty-state .sub { font-size: 0.8rem; }
         
-        .footer {
-            padding: 10px 0;
-            border-top: 1px solid var(--border-color);
-            margin-top: 16px;
-            text-align: center;
-            font-size: 0.6rem;
-            color: var(--text-secondary);
-        }
-        
-        .footer .footer-brand { color: var(--primary); font-weight: 600; }
-        
-        .animate-fade-in-up {
-            animation: fadeInUp 0.5s ease forwards;
-            opacity: 0;
-        }
-        
-        @keyframes fadeInUp {
-            from { opacity: 0; transform: translateY(20px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        
-        /* ================================================================ */
-        /* CANCEL MODAL STYLES */
-        /* ================================================================ */
+        /* MODAL */
         .modal-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
+            display: none; position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7); z-index: 2000;
+            justify-content: center; align-items: center;
             padding: 20px;
         }
-        
-        .modal-overlay.show {
-            display: flex;
-        }
+        .modal-overlay.show { display: flex; }
         
         .modal-content {
-            background: var(--bg-card);
-            border-radius: 12px;
-            max-width: 550px;
-            width: 100%;
-            max-height: 90vh;
-            overflow-y: auto;
+            background: var(--bg-card); border-radius: 12px;
+            max-width: 550px; width: 100%;
+            max-height: 90vh; overflow-y: auto;
             padding: 24px 28px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
             border: 2px solid var(--border-color);
         }
+        .modal-content.modal-pdf { max-width: 900px; background: white; padding: 20px; }
         
         .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-bottom: 12px;
-            border-bottom: 2px solid var(--border-color);
+            display: flex; justify-content: space-between; align-items: center;
+            padding-bottom: 12px; border-bottom: 2px solid var(--border-color);
             margin-bottom: 16px;
         }
-        
-        .modal-header .modal-title {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: var(--danger);
-        }
-        
-        .modal-close {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            cursor: pointer;
-            color: var(--text-secondary);
-            transition: all 0.3s ease;
-        }
-        
-        .modal-close:hover {
-            color: var(--danger);
-            transform: rotate(90deg);
-        }
+        .modal-title { font-size: 1.1rem; font-weight: 700; color: #DC2626; }
+        .modal-close { background: none; border: none; font-size: 1.5rem; cursor: pointer; color: var(--text-secondary); }
+        .modal-close:hover { color: #DC2626; }
         
         .modal-actions {
-            display: flex;
-            gap: 10px;
-            padding-top: 14px;
+            display: flex; gap: 10px; padding-top: 14px;
             border-top: 2px solid var(--border-color);
-            margin-top: 16px;
-            flex-wrap: wrap;
+            margin-top: 16px; flex-wrap: wrap;
         }
         
-        .modal-actions .btn-confirm-cancel {
-            background: var(--danger);
-            color: white;
-            padding: 10px 28px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            flex: 1;
+        .btn-confirm-cancel {
+            background: #DC2626; color: white;
+            padding: 10px 28px; border-radius: 8px;
+            font-weight: 600; font-size: 0.9rem; border: none;
+            cursor: pointer; flex: 1;
         }
+        .btn-confirm-cancel:hover { background: #991B1B; }
         
-        .modal-actions .btn-confirm-cancel:hover {
-            background: #991B1B;
-            transform: translateY(-2px);
-        }
-        
-        .modal-actions .btn-close-modal {
-            background: transparent;
-            color: var(--text-secondary);
+        .btn-close-modal {
+            background: transparent; color: var(--text-secondary);
             border: 2px solid var(--border-color);
-            padding: 10px 24px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.9rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
+            padding: 10px 24px; border-radius: 8px;
+            font-weight: 600; font-size: 0.9rem; cursor: pointer;
         }
-        
-        .modal-actions .btn-close-modal:hover {
-            border-color: var(--danger);
-            color: var(--danger);
-        }
+        .btn-close-modal:hover { border-color: #DC2626; color: #DC2626; }
         
         .cancel-reason-textarea {
-            width: 100%;
-            padding: 10px 14px;
+            width: 100%; padding: 10px 14px;
             border: 2px solid var(--border-color);
-            border-radius: 8px;
-            font-size: 0.9rem;
-            resize: vertical;
-            min-height: 80px;
-            background: var(--bg-body);
-            color: var(--text-primary);
-            transition: all 0.3s ease;
+            border-radius: 8px; font-size: 0.9rem;
+            resize: vertical; min-height: 80px;
+            background: var(--bg-body); color: var(--text-primary);
+            font-family: inherit;
         }
-        
         .cancel-reason-textarea:focus {
-            border-color: var(--danger);
+            border-color: #DC2626;
             box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.1);
             outline: none;
         }
         
         .cancel-warning-icon {
-            text-align: center;
-            font-size: 3rem;
-            color: var(--danger);
-            margin-bottom: 10px;
-        }
-        
-        /* ================================================================ */
-        /* PDF MODAL STYLES */
-        /* ================================================================ */
-        .modal-overlay-pdf {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 1000;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        }
-        
-        .modal-overlay-pdf.show {
-            display: flex;
-        }
-        
-        .modal-content-pdf {
-            background: white;
-            border-radius: 12px;
-            max-width: 900px;
-            width: 100%;
-            max-height: 90vh;
-            overflow-y: auto;
-            padding: 20px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        
-        .modal-header-pdf {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-bottom: 12px;
-            border-bottom: 2px solid #E2E8F0;
-            margin-bottom: 16px;
-        }
-        
-        .modal-header-pdf .modal-title-pdf {
-            font-size: 1.1rem;
-            font-weight: 700;
-            color: #0B5ED7;
-        }
-        
-        .modal-close-pdf {
-            background: none;
-            border: none;
-            font-size: 1.5rem;
-            cursor: pointer;
-            color: #64748B;
-            transition: all 0.3s ease;
-        }
-        
-        .modal-close-pdf:hover {
-            color: #DC2626;
-            transform: rotate(90deg);
-        }
-        
-        .modal-actions-pdf {
-            display: flex;
-            gap: 10px;
-            padding-top: 12px;
-            border-top: 2px solid #E2E8F0;
-            margin-top: 16px;
-            flex-wrap: wrap;
+            text-align: center; font-size: 3rem;
+            color: #DC2626; margin-bottom: 10px;
         }
         
         .btn-print-invoice {
-            background: #0B5ED7;
-            color: white;
-            padding: 8px 20px;
-            border-radius: 8px;
-            font-weight: 600;
-            font-size: 0.85rem;
-            border: none;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
+            background: #0B5ED7; color: white;
+            padding: 8px 20px; border-radius: 8px;
+            font-weight: 600; font-size: 0.85rem; border: none;
+            cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
         }
-        
-        .btn-print-invoice:hover {
-            background: #0A4CA8;
-            transform: translateY(-2px);
-        }
+        .btn-print-invoice:hover { background: #0A4CA8; }
         
         .btn-close-modal-pdf {
-            background: transparent;
-            color: #64748B;
-            border: 2px solid #E2E8F0;
-            padding: 8px 20px;
-            border-radius: 8px;
-            font-weight: 600;
+            background: transparent; color: #64748B;
+            border: 2px solid #E2E8F0; padding: 8px 20px;
+            border-radius: 8px; font-weight: 600;
+            font-size: 0.85rem; cursor: pointer;
+        }
+        .btn-close-modal-pdf:hover { border-color: #DC2626; color: #DC2626; }
+        
+        .admin-badge {
+            background: linear-gradient(135deg, #DC2626, #991B1B);
+            color: white; padding: 2px 10px; border-radius: 20px;
+            font-size: 0.6rem; font-weight: 700;
+            display: inline-flex; align-items: center; gap: 4px;
+        }
+        
+        /* ACTION BAR */
+        .action-bar {
+            background: linear-gradient(135deg, #FEF3C7, #FDE68A);
+            border: 2px solid #D97706;
+            border-radius: 12px;
+            padding: 14px 20px;
+            margin-top: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .action-bar .action-info {
             font-size: 0.85rem;
-            cursor: pointer;
-            transition: all 0.3s ease;
+            color: #92400E;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .action-bar .action-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
         }
         
-        .btn-close-modal-pdf:hover {
-            border-color: #DC2626;
-            color: #DC2626;
+        /* FOOTER */
+        .footer {
+            padding: 10px 0; border-top: 1px solid var(--border-color);
+            margin-top: 16px; text-align: center;
+            font-size: 0.6rem; color: var(--text-secondary);
         }
+        .footer .footer-brand { color: #0B5ED7; font-weight: 600; }
         
-        /* ================================================================ */
         /* RESPONSIVE */
-        /* ================================================================ */
         @media (max-width: 1024px) {
-            .main-content { margin-left: 0; padding: 14px; }
-            .embedded-header { left: 0; }
-            .embedded-header .search-wrapper { max-width: 300px; }
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
             .grid-3 { grid-template-columns: 1fr 1fr; }
         }
-        
         @media (max-width: 768px) {
             .grid-3 { grid-template-columns: 1fr; }
             .form-grid { grid-template-columns: 1fr; }
             .form-grid .full-width { grid-column: 1; }
             .page-header-box .page-title { font-size: 1.1rem; }
-            .page-header-box { flex-direction: column; align-items: stretch !important; }
-            .purchase-details-header { flex-direction: column; align-items: flex-start; }
             .header-actions { width: 100%; }
-            .header-actions .btn-add-purchase { width: 100%; justify-content: center; }
-            .embedded-header .datetime { display: none; }
-            .category-input-group { flex-direction: column; }
-            .batch-input-group { flex-direction: column; }
-            .batch-input-group .btn-generate { width: 100%; justify-content: center; }
-            .form-actions { flex-direction: column; }
-            .form-actions .btn-save,
-            .form-actions .btn-cancel { width: 100%; justify-content: center; }
-            .purchase-info-grid { grid-template-columns: 1fr 1fr; }
-            .modal-content { padding: 16px; }
-        }
-        
-        @media (max-width: 480px) {
-            .data-table { font-size: 0.65rem; }
-            .data-table th, .data-table td { padding: 3px 5px; }
-            .col-item { min-width: 100px; }
-            .col-buying-price, .col-selling-price { min-width: 70px; }
-            .col-buying-total, .col-selling-total { min-width: 80px; }
-            .purchase-info-grid { grid-template-columns: 1fr; }
+            .data-table { min-width: 800px; }
+            .btn-back-header { width: 100%; justify-content: center; }
+            .action-bar { flex-direction: column; align-items: stretch; }
+            .action-bar .action-buttons { width: 100%; }
+            .action-bar .action-buttons button,
+            .action-bar .action-buttons form { flex: 1; }
+            .action-bar .action-buttons button { width: 100%; justify-content: center; }
+            .datetime { display: none; }
         }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR OVERLAY -->
+<!-- ✅ EMBEDDED HEADER - SAME AS SHARED admin_header.php -->
 <!-- ================================================================ -->
-<div id="sidebarOverlay"></div>
-
-<!-- ================================================================ -->
-<!-- SIDEBAR -->
-<!-- ================================================================ -->
-<aside class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
-        <div class="flex items-center gap-3">
-            <img src="<?= $logo_path ?>" alt="Braick Logo" class="logo"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
-            <div>
-                <p class="brand-text">Braick Dispensary</p>
-                <p class="brand-sub">👑 Super Admin</p>
-            </div>
-        </div>
-    </div>
-    
-    <div class="sidebar-branch-selector">
-        <select id="sidebarBranchSelector" onchange="switchBranch(this.value)">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php foreach ($branches as $b): ?>
-                <option value="<?= $b['id'] ?>" <?= $selected_branch_id == $b['id'] ? 'selected' : '' ?>>
-                    🏥 <?= htmlspecialchars($b['name']) ?>
-                </option>
-            <?php endforeach; ?>
-        </select>
-    </div>
-    
-    <nav class="sidebar-nav">
-        <div class="nav-label"><span class="label-icon">📋</span> Main Menu</div>
-        <a href="dashboard.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-home"></i> <span class="link-text">Dashboard</span>
-        </a>
-        <a href="employees.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-users"></i> <span class="link-text">Employees</span>
-            <span class="badge"><?= $total_employees_sidebar ?></span>
-        </a>
-        <a href="patients.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-user-injured"></i> <span class="link-text">Patients</span>
-            <span class="badge"><?= $total_patients_sidebar ?></span>
-            <?php if ($today_patients_sidebar > 0): ?>
-                <span class="badge success">+<?= $today_patients_sidebar ?></span>
-            <?php endif; ?>
-        </a>
-        
-        <div class="nav-label"><span class="label-icon">⚙️</span> Modules</div>
-        <a href="doctors_list.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-user-md"></i> <span class="link-text">Doctors</span>
-            <span class="badge"><?= $total_doctors_sidebar ?></span>
-        </a>
-        <a href="view_pharmacy.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-prescription"></i> <span class="link-text">Pharmacy</span>
-            <span class="badge"><?= $module_counts['pharmacy'] ?? 0 ?></span>
-            <?php if ($pending_prescriptions_sidebar > 0): ?>
-                <span class="badge danger"><?= $pending_prescriptions_sidebar ?></span>
-            <?php endif; ?>
-        </a>
-        <a href="view_reception.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-headset"></i> <span class="link-text">Reception</span>
-            <span class="badge"><?= $module_counts['reception'] ?? 0 ?></span>
-        </a>
-        <a href="view_laboratory.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-flask"></i> <span class="link-text">Laboratory</span>
-            <span class="badge"><?= $module_counts['laboratory'] ?? 0 ?></span>
-            <?php if ($pending_lab_tests_sidebar > 0): ?>
-                <span class="badge danger"><?= $pending_lab_tests_sidebar ?></span>
-            <?php endif; ?>
-        </a>
-        <a href="view_cashier.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-cash-register"></i> <span class="link-text">Cashier</span>
-            <span class="badge"><?= $module_counts['cashier'] ?? 0 ?></span>
-        </a>
-        
-        <div class="nav-label"><span class="label-icon">💼</span> Services</div>
-        <a href="services.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-concierge-bell"></i> <span class="link-text">Services</span>
-            <span class="badge"><?= $total_services_sidebar ?></span>
-            <?php if ($today_services_sidebar > 0): ?>
-                <span class="badge success">+<?= $today_services_sidebar ?></span>
-            <?php endif; ?>
-        </a>
-        
-        <div class="nav-label"><span class="label-icon">🏢</span> Management</div>
-        <a href="branches.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-store-alt"></i> <span class="link-text">Branches</span>
-            <span class="badge"><?= $total_branches_sidebar ?></span>
-        </a>
-        <a href="departments.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-building"></i> <span class="link-text">Departments</span>
-        </a>
-        <a href="reports.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-chart-bar"></i> <span class="link-text">Reports</span>
-        </a>
-        
-        <div class="nav-label"><span class="label-icon">🔧</span> System</div>
-        <a href="settings.php?branch=<?= $selected_branch_id ?>" class="sidebar-link">
-            <i class="fas fa-cog"></i> <span class="link-text">Settings</span>
-        </a>
-        
-        <div class="nav-label"><span class="label-icon">👤</span> Account</div>
-        <a href="profile.php" class="sidebar-link">
-            <i class="fas fa-user-circle"></i> <span class="link-text">Profile</span>
-        </a>
-        <a href="/dispensary_system/frontend/pages/logout.php" class="sidebar-link logout-link">
-            <i class="fas fa-sign-out-alt"></i> <span class="link-text">Logout</span>
-        </a>
-    </nav>
-    
-    <div class="sidebar-status">
-        <span class="status-dot <?= $user_is_online ? 'online' : 'offline' ?>"></span>
-        <span class="status-text"><?= $user_is_online ? 'Online' : 'Offline' ?></span>
-    </div>
-</aside>
-
-<!-- ================================================================ -->
-<!-- HEADER -->
-<!-- ================================================================ -->
-<header class="embedded-header">
-    <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="icon-btn lg:hidden">
-            <i class="fas fa-bars text-lg"></i>
+<nav class="top-nav">
+    <div style="display:flex;align-items:center;gap:16px;flex:1;">
+        <button id="sidebarToggle" class="lg:hidden icon-btn" style="display:none;">
+            <i class="fas fa-bars" style="font-size:1.1rem;"></i>
         </button>
+        
         <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <input type="text" id="searchInput" placeholder="Search purchases...">
-            <button id="searchBtn" class="search-btn">
-                <i class="fas fa-search mr-1"></i> Search
+            <i class="fas fa-search" style="color:#94A3B8;margin-left:12px;"></i>
+            <input type="text" id="globalSearchInput" placeholder="Search purchases...">
+            <button id="globalSearchBtn" class="search-btn">
+                <i class="fas fa-search"></i> Search
             </button>
         </div>
     </div>
-    <div class="flex items-center gap-3">
+    
+    <div style="display:flex;align-items:center;gap:12px;">
         <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php foreach ($branches as $b): ?>
@@ -2755,42 +1628,44 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                 </option>
             <?php endforeach; ?>
         </select>
-        <span class="datetime" id="currentDateTime">
-            <i class="fas fa-clock" style="color:#059669;"></i>
-            <span id="clockDisplay"><?= date('d M Y • h:i:s A') ?></span>
+        
+        <span class="datetime">
+            <i class="fas fa-clock"></i>
+            <span id="currentDateTime"><?= date('d M Y • h:i:s A') ?></span>
         </span>
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+        
+        <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
+        
         <button class="icon-btn" onclick="window.location.href='notifications.php'">
-            <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+            <i class="fas fa-bell" style="font-size:1.1rem;"></i>
+            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
+        
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
                  onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
-</header>
+</nav>
 
 <!-- ================================================================ -->
 <!-- MAIN CONTENT -->
 <!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
-    <div class="page-header-box">
+    <div class="page-header-box <?= $active_view === 'equipment' ? 'equipment-mode' : '' ?>">
         <div>
             <h1 class="page-title">
-                <?php if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === 'medicine')): ?>
+                <?php if ($active_view === 'medicine'): ?>
                     <i class="fas fa-pills"></i> Medicine Purchases
-                <?php elseif ($action === 'list_equipment' || ($action === 'create' && $purchase_type === 'equipment')): ?>
+                <?php elseif ($active_view === 'equipment'): ?>
                     <i class="fas fa-tools"></i> Equipment Purchases
                 <?php elseif ($purchase_id > 0 && $current_purchase): ?>
-                    <i class="fas fa-shopping-cart"></i> Purchase: <?= htmlspecialchars($current_purchase['invoice_number']) ?>
+                    <i class="fas fa-shopping-cart"></i> <?= htmlspecialchars($current_purchase['invoice_number']) ?>
                 <?php else: ?>
                     <i class="fas fa-shopping-cart"></i> Admin Purchases
                 <?php endif; ?>
@@ -2798,57 +1673,57 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                 <span class="branch-name-display">
                     <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
                 </span>
-                <a href="inventory.php?branch=<?= $selected_branch_id ?>" class="btn-back-green">
-                    <i class="fas fa-arrow-left"></i> Back to Inventory
-                </a>
             </h1>
             <p class="page-subtitle">
                 <?php if ($purchase_id > 0 && $current_purchase): ?>
                     <strong><?= $current_purchase['total_items'] ?></strong> items · 
                     <strong><?= number_format($current_purchase['total_quantity']) ?></strong> units
-                <?php else: ?>
-                    <strong><?= count($all_med_in_progress) + count($all_equip_in_progress) ?></strong> IN_PROGRESS purchases
-                <?php endif; ?>
-                <?php if ($action === 'list_medicine' || $purchase_type === 'medicine'): ?>
-                    <span class="header-badge medicines">
-                        <i class="fas fa-pills"></i> <?= count($all_med_in_progress) ?> Medicine
-                    </span>
-                <?php endif; ?>
-                <?php if ($action === 'list_equipment' || $purchase_type === 'equipment'): ?>
-                    <span class="header-badge equipment">
-                        <i class="fas fa-tools"></i> <?= count($all_equip_in_progress) ?> Equipment
-                    </span>
+                    <?php if (!$is_creator): ?>
+                        <span class="admin-badge">
+                            <i class="fas fa-shield-alt"></i> ADMIN MODE
+                        </span>
+                    <?php endif; ?>
+                <?php elseif ($active_view === 'medicine'): ?>
+                    <span class="header-badge"><i class="fas fa-pills"></i> <?= count($all_med_in_progress) ?> MEDICINE in progress</span>
+                <?php elseif ($active_view === 'equipment'): ?>
+                    <span class="header-badge"><i class="fas fa-tools"></i> <?= count($all_equip_in_progress) ?> EQUIPMENT in progress</span>
                 <?php endif; ?>
             </p>
         </div>
         <div class="header-actions">
-            <?php if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === 'medicine')): ?>
-                <?php if (count($all_med_in_progress) == 0): ?>
-                    <form method="POST" style="display:inline;">
-                        <input type="hidden" name="action" value="create_purchase">
-                        <input type="hidden" name="purchase_type" value="medicine">
-                        <button type="submit" class="btn-add-purchase" style="padding:8px 20px;font-size:0.8rem;">
-                            <i class="fas fa-plus-circle"></i> Create New Purchase
-                        </button>
-                    </form>
-                <?php endif; ?>
-            <?php elseif ($action === 'list_equipment' || ($action === 'create' && $purchase_type === 'equipment')): ?>
-                <?php if (count($all_equip_in_progress) == 0): ?>
-                    <form method="POST" style="display:inline;">
-                        <input type="hidden" name="action" value="create_purchase">
-                        <input type="hidden" name="purchase_type" value="equipment">
-                        <button type="submit" class="btn-add-purchase" style="padding:8px 20px;font-size:0.8rem;background:var(--purple);">
-                            <i class="fas fa-plus-circle"></i> Create New Purchase
-                        </button>
-                    </form>
-                <?php endif; ?>
+            <?php if ($purchase_id > 0 && $current_purchase): ?>
+                <a href="purchases.php?action=list_<?= $current_purchase['purchase_type'] ?>&branch=<?= $selected_branch_id ?>" class="btn-back-header">
+                    <i class="fas fa-arrow-left"></i> Back to List
+                </a>
+            <?php elseif ($active_view !== 'none'): ?>
+                <a href="inventory.php?tab=<?= $active_view === 'medicine' ? 'medicines' : 'equipment' ?>&branch=<?= $selected_branch_id ?>" class="btn-back-header">
+                    <i class="fas fa-arrow-left"></i> Back to Inventory
+                </a>
+            <?php endif; ?>
+            
+            <?php if ($active_view === 'medicine' && !$purchase_id): ?>
+                <form method="POST" style="display:inline;">
+                    <input type="hidden" name="action" value="create_purchase">
+                    <input type="hidden" name="purchase_type" value="medicine">
+                    <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
+                    <button type="submit" class="btn-add-purchase">
+                        <i class="fas fa-plus-circle"></i> New Medicine Purchase
+                    </button>
+                </form>
+            <?php elseif ($active_view === 'equipment' && !$purchase_id): ?>
+                <form method="POST" style="display:inline;">
+                    <input type="hidden" name="action" value="create_purchase">
+                    <input type="hidden" name="purchase_type" value="equipment">
+                    <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
+                    <button type="submit" class="btn-add-purchase purple">
+                        <i class="fas fa-plus-circle"></i> New Equipment Purchase
+                    </button>
+                </form>
             <?php endif; ?>
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- MESSAGE -->
-    <!-- ================================================================ -->
     <?php if ($message): ?>
         <div class="message-box <?= $message_type ?>" id="messageBox">
             <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : ($message_type === 'info' ? 'fa-info-circle' : 'fa-exclamation-circle') ?>"></i>
@@ -2857,15 +1732,12 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- SHOW LIST OF IN_PROGRESS PURCHASES FOR JOINING -->
-    <!-- ================================================================ -->
-    <?php if (($action === 'list_medicine' || ($action === 'create' && $purchase_type === 'medicine')) && !$purchase_id): ?>
-        
+    <!-- MEDICINE IN PROGRESS -->
+    <?php if ($active_view === 'medicine' && !$purchase_id): ?>
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-spinner title-blue fa-spin"></i> 
+                    <i class="fas fa-pills blue"></i> 
                     Medicine Purchases In Progress
                     <span class="result-count">(<strong><?= count($all_med_in_progress) ?></strong> available)</span>
                 </h3>
@@ -2874,20 +1746,25 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
             <?php if (count($all_med_in_progress) > 0): ?>
                 <div class="grid-3">
                     <?php foreach ($all_med_in_progress as $purchase): ?>
-                        <div class="purchase-card" style="border-color:var(--warning);">
+                        <div class="purchase-card" style="border-color:#D97706;">
                             <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:4px;">
                                 <div>
-                                    <div class="invoice-number" style="color:var(--warning);">
+                                    <div class="invoice-number" style="color:#D97706;">
                                         <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($purchase['invoice_number']) ?>
-                                        <span style="font-size:0.55rem;font-weight:400;color:var(--text-secondary);">
-                                            (Medicine)
-                                        </span>
+                                    </div>
+                                    <div class="meta-text" style="margin-top:4px;">
+                                        <i class="fas fa-user"></i> <?= htmlspecialchars($purchase['creator_name'] ?? 'Unknown') ?>
+                                        <?php if ($purchase['created_by'] == $user_id): ?>
+                                            <span style="color:#059669;font-weight:600;"> (You)</span>
+                                        <?php else: ?>
+                                            <span class="admin-badge" style="font-size:0.5rem;padding:0 6px;">
+                                                <i class="fas fa-shield-alt"></i> OTHER
+                                            </span>
+                                        <?php endif; ?>
                                     </div>
                                     <div class="meta-text">
-                                        <i class="fas fa-user"></i> Created by: <?= htmlspecialchars($purchase['creator_name'] ?? 'Unknown') ?>
-                                        <?php if ($purchase['created_by'] == $user_id): ?>
-                                            <span style="color:var(--success);font-weight:600;"> (You)</span>
-                                        <?php endif; ?>
+                                        <i class="fas fa-store-alt"></i> 
+                                        <span class="branch-tag-small"><?= htmlspecialchars($purchase['branch_name'] ?? 'N/A') ?></span>
                                     </div>
                                     <div class="meta-text">
                                         <i class="fas fa-clock"></i> <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
@@ -2897,57 +1774,33 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                                     <i class="fas fa-spinner fa-spin"></i> IN PROGRESS
                                 </span>
                             </div>
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:4px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:4px;">
                                 <div class="meta-text">
                                     <i class="fas fa-boxes"></i> <?= number_format($purchase['total_items']) ?> items
-                                    <span style="margin-left:6px;">
-                                        <i class="fas fa-cubes"></i> <?= number_format($purchase['total_quantity']) ?> units
-                                    </span>
-                                    <span style="margin-left:6px;font-weight:600;color:var(--success);">
-                                        TSh <?= number_format($purchase['total_selling_value'] ?? 0) ?>
-                                    </span>
                                 </div>
-                                <div style="display:flex;gap:4px;">
-                                    <form method="POST" style="display:inline;">
-                                        <input type="hidden" name="action" value="join_purchase">
-                                        <input type="hidden" name="purchase_id" value="<?= $purchase['id'] ?>">
-                                        <input type="hidden" name="purchase_type" value="<?= $purchase['purchase_type'] ?>">
-                                        <button type="submit" class="btn-join">
-                                            <i class="fas fa-sign-in-alt"></i> Join
-                                        </button>
-                                    </form>
-                                    <?php if ($purchase['created_by'] == $user_id): ?>
-                                        <a href="purchases.php?id=<?= $purchase['id'] ?>&type=<?= $purchase['purchase_type'] ?>&branch=<?= $selected_branch_id ?>" class="btn-join" style="background:var(--success);">
-                                            <i class="fas fa-arrow-right"></i> Continue
-                                        </a>
-                                    <?php endif; ?>
-                                </div>
+                                <a href="purchases.php?id=<?= $purchase['id'] ?>&type=medicine&branch=<?= $selected_branch_id ?>" class="btn-join">
+                                    <i class="fas fa-sign-in-alt"></i> Open
+                                </a>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
             <?php else: ?>
                 <div class="empty-state">
-                    <i class="fas fa-inbox"></i>
+                    <i class="fas fa-pills"></i>
                     <p>No medicine purchases in progress</p>
-                    <p style="font-size:0.8rem;margin-top:4px;">
-                        Click "Create New Purchase" to start one.
-                    </p>
+                    <p class="sub">Click "New Medicine Purchase" above to start one.</p>
                 </div>
             <?php endif; ?>
         </div>
-        
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- SHOW LIST OF EQUIPMENT IN_PROGRESS PURCHASES -->
-    <!-- ================================================================ -->
-    <?php if (($action === 'list_equipment' || ($action === 'create' && $purchase_type === 'equipment')) && !$purchase_id): ?>
-        
+    <!-- EQUIPMENT IN PROGRESS -->
+    <?php if ($active_view === 'equipment' && !$purchase_id): ?>
         <div class="card">
             <div class="card-header">
                 <h3 class="card-title">
-                    <i class="fas fa-spinner title-purple fa-spin"></i> 
+                    <i class="fas fa-tools purple"></i> 
                     Equipment Purchases In Progress
                     <span class="result-count">(<strong><?= count($all_equip_in_progress) ?></strong> available)</span>
                 </h3>
@@ -2956,20 +1809,25 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
             <?php if (count($all_equip_in_progress) > 0): ?>
                 <div class="grid-3">
                     <?php foreach ($all_equip_in_progress as $purchase): ?>
-                        <div class="purchase-card" style="border-color:var(--warning);">
+                        <div class="purchase-card" style="border-color:#7C3AED;">
                             <div style="display:flex;justify-content:space-between;align-items:start;flex-wrap:wrap;gap:4px;">
                                 <div>
-                                    <div class="invoice-number" style="color:var(--warning);">
+                                    <div class="invoice-number" style="color:#7C3AED;">
                                         <i class="fas fa-file-invoice"></i> <?= htmlspecialchars($purchase['invoice_number']) ?>
-                                        <span style="font-size:0.55rem;font-weight:400;color:var(--text-secondary);">
-                                            (Equipment)
-                                        </span>
+                                    </div>
+                                    <div class="meta-text" style="margin-top:4px;">
+                                        <i class="fas fa-user"></i> <?= htmlspecialchars($purchase['creator_name'] ?? 'Unknown') ?>
+                                        <?php if ($purchase['created_by'] == $user_id): ?>
+                                            <span style="color:#059669;font-weight:600;"> (You)</span>
+                                        <?php else: ?>
+                                            <span class="admin-badge" style="font-size:0.5rem;padding:0 6px;">
+                                                <i class="fas fa-shield-alt"></i> OTHER
+                                            </span>
+                                        <?php endif; ?>
                                     </div>
                                     <div class="meta-text">
-                                        <i class="fas fa-user"></i> Created by: <?= htmlspecialchars($purchase['creator_name'] ?? 'Unknown') ?>
-                                        <?php if ($purchase['created_by'] == $user_id): ?>
-                                            <span style="color:var(--success);font-weight:600;"> (You)</span>
-                                        <?php endif; ?>
+                                        <i class="fas fa-store-alt"></i> 
+                                        <span class="branch-tag-small"><?= htmlspecialchars($purchase['branch_name'] ?? 'N/A') ?></span>
                                     </div>
                                     <div class="meta-text">
                                         <i class="fas fa-clock"></i> <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
@@ -2979,54 +1837,29 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                                     <i class="fas fa-spinner fa-spin"></i> IN PROGRESS
                                 </span>
                             </div>
-                            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;flex-wrap:wrap;gap:4px;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;flex-wrap:wrap;gap:4px;">
                                 <div class="meta-text">
                                     <i class="fas fa-boxes"></i> <?= number_format($purchase['total_items']) ?> items
-                                    <span style="margin-left:6px;">
-                                        <i class="fas fa-cubes"></i> <?= number_format($purchase['total_quantity']) ?> units
-                                    </span>
-                                    <span style="margin-left:6px;font-weight:600;color:var(--success);">
-                                        TSh <?= number_format($purchase['total_selling_value'] ?? 0) ?>
-                                    </span>
                                 </div>
-                                <div style="display:flex;gap:4px;">
-                                    <form method="POST" style="display:inline;">
-                                        <input type="hidden" name="action" value="join_purchase">
-                                        <input type="hidden" name="purchase_id" value="<?= $purchase['id'] ?>">
-                                        <input type="hidden" name="purchase_type" value="<?= $purchase['purchase_type'] ?>">
-                                        <button type="submit" class="btn-join">
-                                            <i class="fas fa-sign-in-alt"></i> Join
-                                        </button>
-                                    </form>
-                                    <?php if ($purchase['created_by'] == $user_id): ?>
-                                        <a href="purchases.php?id=<?= $purchase['id'] ?>&type=<?= $purchase['purchase_type'] ?>&branch=<?= $selected_branch_id ?>" class="btn-join" style="background:var(--success);">
-                                            <i class="fas fa-arrow-right"></i> Continue
-                                        </a>
-                                    <?php endif; ?>
-                                </div>
+                                <a href="purchases.php?id=<?= $purchase['id'] ?>&type=equipment&branch=<?= $selected_branch_id ?>" class="btn-join purple">
+                                    <i class="fas fa-sign-in-alt"></i> Open
+                                </a>
                             </div>
                         </div>
                     <?php endforeach; ?>
                 </div>
             <?php else: ?>
                 <div class="empty-state">
-                    <i class="fas fa-inbox"></i>
+                    <i class="fas fa-tools"></i>
                     <p>No equipment purchases in progress</p>
-                    <p style="font-size:0.8rem;margin-top:4px;">
-                        Click "Create New Purchase" to start one.
-                    </p>
+                    <p class="sub">Click "New Equipment Purchase" above to start one.</p>
                 </div>
             <?php endif; ?>
         </div>
-        
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- IF VIEWING A SPECIFIC PURCHASE -->
-    <!-- ================================================================ -->
+    <!-- VIEW SPECIFIC PURCHASE -->
     <?php if ($purchase_id && $current_purchase): ?>
-        
-        <!-- PURCHASE DETAILS -->
         <div class="card">
             <div class="purchase-details-header">
                 <div>
@@ -3041,9 +1874,21 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                         <?php if ($current_purchase['completed_at']): ?>
                             | Completed: <?= date('d/m/Y H:i', strtotime($current_purchase['completed_at'])) ?>
                         <?php endif; ?>
-                        <?php if ($current_purchase['status'] === 'CANCELLED' && $current_purchase['cancelled_reason']): ?>
-                            | <span style="color:var(--danger);">Cancelled: <?= htmlspecialchars($current_purchase['cancelled_reason']) ?></span>
-                        <?php endif; ?>
+                    </div>
+                    <div style="margin-top:6px;">
+                        <span class="branch-tag-small" style="padding:3px 12px;font-size:0.7rem;">
+                            <i class="fas fa-store-alt"></i> 
+                            <?php 
+                                $purchase_branch_name = 'N/A';
+                                foreach ($branches as $b) {
+                                    if ($b['id'] == ($current_purchase['branch_id'] ?? 0)) {
+                                        $purchase_branch_name = $b['name'];
+                                        break;
+                                    }
+                                }
+                                echo htmlspecialchars($purchase_branch_name);
+                            ?>
+                        </span>
                     </div>
                 </div>
                 <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -3051,14 +1896,13 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                         <i class="fas <?= $current_purchase['status'] === 'IN_PROGRESS' ? 'fa-spinner fa-spin' : ($current_purchase['status'] === 'COMPLETED' ? 'fa-check-circle' : 'fa-times-circle') ?>"></i>
                         <?= $current_purchase['status'] ?>
                     </span>
-                    <?php if ($is_creator && $current_purchase['status'] === 'IN_PROGRESS'): ?>
-                        <span style="font-size:0.6rem;color:var(--success);background:var(--success-light);padding:2px 10px;border-radius:12px;">
+                    <?php if ($is_creator): ?>
+                        <span style="font-size:0.6rem;color:#059669;background:#D1FAE5;padding:2px 10px;border-radius:12px;">
                             <i class="fas fa-crown"></i> Creator
                         </span>
-                    <?php endif; ?>
-                    <?php if ($current_purchase['status'] === 'CANCELLED'): ?>
-                        <span style="font-size:0.6rem;color:var(--danger);background:var(--danger-light);padding:2px 10px;border-radius:12px;">
-                            <i class="fas fa-user"></i> Cancelled by: <?= htmlspecialchars($current_purchase['cancelled_by_name'] ?? 'Admin') ?>
+                    <?php else: ?>
+                        <span class="admin-badge">
+                            <i class="fas fa-shield-alt"></i> ADMIN MODE
                         </span>
                     <?php endif; ?>
                     <?php if ($current_purchase['status'] === 'COMPLETED'): ?>
@@ -3069,93 +1913,110 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                 </div>
             </div>
             
-            <!-- Purchase Info Grid -->
+            <!-- INFO GRID -->
             <?php 
                 $profit = ($current_purchase['total_selling_value'] ?? 0) - ($current_purchase['total_buying_cost'] ?? 0);
-                $profit_class = $profit >= 0 ? 'profit-positive' : 'profit-negative';
             ?>
             <div class="purchase-info-grid">
                 <div class="purchase-info-item">
                     <div class="label">Created By</div>
                     <div class="value">
-                        <i class="fas fa-user" style="color:var(--primary);"></i>
+                        <i class="fas fa-user" style="color:#0B5ED7;"></i>
                         <?= htmlspecialchars($current_purchase['creator_name'] ?? 'Unknown') ?>
                     </div>
                 </div>
                 <div class="purchase-info-item">
                     <div class="label">Total Items</div>
                     <div class="value">
-                        <i class="fas fa-boxes" style="color:var(--warning);"></i>
+                        <i class="fas fa-boxes" style="color:#D97706;"></i>
                         <?= number_format($current_purchase['total_items']) ?> items
                     </div>
                 </div>
                 <div class="purchase-info-item">
                     <div class="label">Total Quantity</div>
                     <div class="value">
-                        <i class="fas fa-cubes" style="color:var(--teal);"></i>
+                        <i class="fas fa-cubes" style="color:#0D9488;"></i>
                         <?= number_format($current_purchase['total_quantity']) ?> units
                     </div>
                 </div>
-                <div class="purchase-info-item" style="background:var(--danger-light);border:2px solid var(--danger);">
-                    <div class="label" style="color:var(--danger);">💰 Total Buying Cost</div>
-                    <div class="value" style="color:var(--danger);font-size:1rem;">
-                        <i class="fas fa-shopping-cart"></i>
+                <div class="purchase-info-item" style="background:#FEE2E2;border:2px solid #DC2626;">
+                    <div class="label" style="color:#DC2626;">💰 Buying Cost</div>
+                    <div class="value" style="color:#DC2626;">
                         TSh <?= number_format($current_purchase['total_buying_cost'] ?? 0) ?>
                     </div>
                 </div>
-                <div class="purchase-info-item" style="background:var(--success-light);border:2px solid var(--success);">
-                    <div class="label" style="color:var(--success);">💰 Total Selling Value</div>
-                    <div class="value" style="color:var(--success);font-size:1rem;">
-                        <i class="fas fa-coins"></i>
+                <div class="purchase-info-item" style="background:#D1FAE5;border:2px solid #059669;">
+                    <div class="label" style="color:#059669;">💰 Selling Value</div>
+                    <div class="value" style="color:#059669;">
                         TSh <?= number_format($current_purchase['total_selling_value'] ?? 0) ?>
                     </div>
                 </div>
-                <div class="purchase-info-item" style="background:var(<?= $profit >= 0 ? '--success-light' : '--danger-light' ?>);border:2px solid var(<?= $profit >= 0 ? '--success' : '--danger' ?>);">
-                    <div class="label" style="color:var(<?= $profit >= 0 ? '--success' : '--danger' ?>);">📈 Expected Profit</div>
-                    <div class="value <?= $profit_class ?>" style="font-size:1rem;">
-                        <i class="fas fa-chart-line"></i>
+                <div class="purchase-info-item" style="background:<?= $profit >= 0 ? '#D1FAE5' : '#FEE2E2' ?>;border:2px solid <?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
+                    <div class="label" style="color:<?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">📈 Expected Profit</div>
+                    <div class="value" style="color:<?= $profit >= 0 ? '#059669' : '#DC2626' ?>;">
                         TSh <?= number_format($profit) ?>
-                        <?php if ($current_purchase['total_buying_cost'] > 0): ?>
-                            <span style="font-size:0.6rem;">
-                                (<?= round(($profit / $current_purchase['total_buying_cost']) * 100, 1) ?>% margin)
-                            </span>
-                        <?php endif; ?>
                     </div>
                 </div>
             </div>
             
+            <!-- ACTION BAR -->
+            <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
+                <div class="action-bar">
+                    <div class="action-info">
+                        <i class="fas fa-info-circle"></i>
+                        <?php if ($is_creator): ?>
+                            This purchase has <strong><?= count($purchase_items) ?></strong> item(s). Click to complete or cancel.
+                        <?php else: ?>
+                            <span class="admin-badge" style="font-size:0.6rem;">
+                                <i class="fas fa-shield-alt"></i> ADMIN MODE
+                            </span>
+                            You are viewing a purchase created by <strong><?= htmlspecialchars($current_purchase['creator_name'] ?? 'another user') ?></strong>. You can complete or cancel it.
+                        <?php endif; ?>
+                    </div>
+                    <div class="action-buttons">
+                        <form method="POST" style="display:inline;" 
+                              onsubmit="return confirm('Complete this purchase? Inventory will be updated.');">
+                            <input type="hidden" name="action" value="complete_purchase">
+                            <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
+                            <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
+                            <button type="submit" class="btn-complete" <?= count($purchase_items) == 0 ? 'disabled' : '' ?>>
+                                <i class="fas fa-check-circle"></i> Complete Purchase
+                            </button>
+                        </form>
+                        
+                        <button type="button" class="btn-cancel-purchase" onclick="openCancelModal(<?= $purchase_id ?>, '<?= htmlspecialchars($current_purchase['invoice_number']) ?>')">
+                            <i class="fas fa-times-circle"></i> Cancel Purchase
+                        </button>
+                    </div>
+                </div>
+            <?php endif; ?>
+            
             <!-- ADD MEDICINE FORM -->
             <?php if ($current_purchase['purchase_type'] === 'medicine' && $current_purchase['status'] === 'IN_PROGRESS'): ?>
-                <div class="card" style="margin-top:12px;border-color:var(--success);">
+                <div class="card" style="margin-top:12px;border-color:#059669;">
                     <div class="card-header">
                         <h4 class="card-title" style="font-size:0.85rem;">
-                            <i class="fas fa-plus-circle title-green"></i> 
-                            Add Medicine Batch to Purchase
-                            <span style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);">
-                                (Auto-search or type new medicine)
-                            </span>
+                            <i class="fas fa-plus-circle green"></i> Add Medicine Batch
                         </h4>
                     </div>
                     
                     <form method="POST" id="addMedicineForm">
                         <input type="hidden" name="action" value="add_medicine">
                         <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
+                        <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
                         
                         <div class="form-grid">
-                            <!-- Medicine Name -->
-                            <div class="full-width form-row">
+                            <div class="full-width">
                                 <label class="form-label">Medicine Name <span class="required">*</span></label>
                                 <div class="autocomplete-container">
                                     <input type="text" name="medication_name" id="purchaseMedicineName" class="form-control" 
-                                           placeholder="Type medicine name to search or type new medicine..." required autocomplete="off">
+                                           placeholder="Type medicine name..." required autocomplete="off">
                                     <input type="hidden" name="medicine_id" id="purchaseMedicineId" value="">
                                     <div class="autocomplete-list" id="purchaseMedicineAutocomplete"></div>
                                 </div>
-                                <div class="help-text">Type to search existing medicine. You can also type a new medicine name.</div>
                             </div>
                             
-                            <!-- Category -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Category <span class="required">*</span></label>
                                 <div class="category-input-group">
                                     <select name="category" id="purchaseCategorySelect" class="form-control" required>
@@ -3165,88 +2026,72 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                                         <?php endforeach; ?>
                                         <option value="__other__">+ Other</option>
                                     </select>
-                                    <input type="text" name="category_manual" id="purchaseCategoryManual" class="form-control" placeholder="Custom category..." style="display:none;">
+                                    <input type="text" name="category_manual" id="purchaseCategoryManual" class="form-control" placeholder="Custom..." style="display:none;">
                                     <button type="button" class="btn-toggle" onclick="toggleCategory('med')">
-                                        <i class="fas fa-edit"></i> Manual
+                                        <i class="fas fa-edit"></i>
                                     </button>
                                 </div>
                             </div>
                             
-                            <!-- Unit -->
-                            <div class="form-row">
-                                <label class="form-label">Unit</label>
-                                <select name="unit" id="purchaseUnit" class="form-control">
-                                    <option value="pcs">Pieces (pcs)</option>
-                                    <option value="tablets">Tablets</option>
-                                    <option value="capsules">Capsules</option>
-                                    <option value="ml">Milliliters (ml)</option>
-                                    <option value="mg">Milligrams (mg)</option>
-                                    <option value="g">Grams (g)</option>
-                                    <option value="bottle">Bottle</option>
-                                    <option value="box">Box</option>
-                                    <option value="strip">Strip</option>
-                                    <option value="vial">Vial</option>
-                                    <option value="sachet">Sachet</option>
-                                </select>
+                            <div>
+                                <label class="form-label">Unit <span class="required">*</span></label>
+                                <div class="unit-input-group">
+                                    <select name="unit" id="purchaseUnit" class="form-control" required>
+                                        <option value="">Select Unit</option>
+                                        <?php foreach ($predefined_units as $unit_key => $unit_label): ?>
+                                            <option value="<?= htmlspecialchars($unit_key) ?>"><?= htmlspecialchars($unit_label) ?></option>
+                                        <?php endforeach; ?>
+                                        <option value="__other__">+ Other (Manual)</option>
+                                    </select>
+                                    <input type="text" name="unit_manual" id="purchaseUnitManual" class="form-control" placeholder="Custom unit..." style="display:none;">
+                                    <button type="button" class="btn-toggle" onclick="toggleUnit('med')">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                </div>
                             </div>
                             
-                            <!-- Quantity -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Quantity <span class="required">*</span></label>
                                 <input type="number" name="quantity" id="purchaseQuantity" class="form-control" placeholder="0" min="1" required>
-                                <div class="help-text">Number of units being purchased</div>
                             </div>
                             
-                            <!-- Reorder Level -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Reorder Level</label>
-                                <input type="number" name="reorder_level" id="purchaseReorderLevel" class="form-control" placeholder="10" min="0" value="10">
-                                <div class="help-text">Alert when stock reaches this level</div>
+                                <input type="number" name="reorder_level" id="purchaseReorderLevel" class="form-control" value="10" min="0">
                             </div>
                             
-                            <!-- Buying Price -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Buying Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="buying_price" id="purchaseBuyingPrice" class="form-control money-input" placeholder="0" value="0" required>
-                                <div class="help-text" style="color:var(--danger);">Price you paid per unit</div>
+                                <input type="text" name="buying_price" id="purchaseBuyingPrice" class="form-control money-input" value="0" required>
                             </div>
                             
-                            <!-- Selling Price -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="selling_price" id="purchaseUnitPrice" class="form-control money-input" placeholder="0" value="0" required>
-                                <div class="help-text" style="color:var(--success);">Price you will sell per unit | 0 = Free</div>
+                                <input type="text" name="selling_price" id="purchaseUnitPrice" class="form-control money-input" value="0" required>
                             </div>
                             
-                            <!-- Supplier -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Supplier</label>
-                                <input type="text" name="supplier" id="purchaseSupplier" class="form-control" placeholder="Supplier name">
+                                <input type="text" name="supplier" id="purchaseSupplier" class="form-control" placeholder="Supplier">
                             </div>
                             
-                            <!-- Expiry Date -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Expiry Date <span class="required">*</span></label>
                                 <input type="date" name="expiry_date" id="purchaseExpiryDate" class="form-control" required>
-                                <div class="help-text">Expiry date is required for medicines</div>
                             </div>
                             
-                            <!-- Batch Number -->
-                            <div class="full-width form-row">
+                            <div class="full-width">
                                 <label class="form-label">Batch Number</label>
                                 <div class="batch-input-group">
                                     <input type="text" name="batch_number" id="purchaseBatchInput" class="form-control" 
-                                           placeholder="BATCH-YYYYMMDD-XXXX" 
                                            value="<?= 'BATCH-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)) ?>">
                                     <button type="button" class="btn-generate" onclick="generateBatch('med')">
                                         <i class="fas fa-sync-alt"></i> Generate
                                     </button>
                                 </div>
-                                <div class="help-text">Auto-generated. Click "Generate" for a new batch number.</div>
                             </div>
                             
-                            <!-- Status -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Status</label>
                                 <select name="status" id="purchaseStatus" class="form-control">
                                     <option value="active">Active</option>
@@ -3257,53 +2102,42 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                         
                         <div class="form-actions">
                             <button type="submit" class="btn-save">
-                                <i class="fas fa-plus-circle"></i> Add Batch to Purchase
+                                <i class="fas fa-plus-circle"></i> Add Medicine
                             </button>
                             <button type="reset" class="btn-cancel">
                                 <i class="fas fa-times"></i> Clear
                             </button>
                         </div>
                     </form>
-                    
-                    <div style="font-size:0.6rem;color:var(--text-muted);margin-top:6px;">
-                        <i class="fas fa-info-circle"></i> 
-                        Items are saved to purchase only. Inventory will be updated when you <strong>Complete Purchase</strong>.
-                    </div>
                 </div>
             <?php endif; ?>
             
             <!-- ADD EQUIPMENT FORM -->
             <?php if ($current_purchase['purchase_type'] === 'equipment' && $current_purchase['status'] === 'IN_PROGRESS'): ?>
-                <div class="card" style="margin-top:12px;border-color:var(--purple);">
+                <div class="card" style="margin-top:12px;border-color:#7C3AED;">
                     <div class="card-header">
                         <h4 class="card-title" style="font-size:0.85rem;">
-                            <i class="fas fa-plus-circle" style="color:var(--purple);"></i> 
-                            Add Equipment Batch to Purchase
-                            <span style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);">
-                                (Auto-search or type new equipment)
-                            </span>
+                            <i class="fas fa-plus-circle purple"></i> Add Equipment Batch
                         </h4>
                     </div>
                     
                     <form method="POST" id="addEquipmentForm">
                         <input type="hidden" name="action" value="add_equipment">
                         <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
+                        <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
                         
                         <div class="form-grid">
-                            <!-- Equipment Name -->
-                            <div class="full-width form-row">
+                            <div class="full-width">
                                 <label class="form-label">Equipment Name <span class="required">*</span></label>
                                 <div class="autocomplete-container">
                                     <input type="text" name="equipment_name" id="purchaseEquipmentName" class="form-control" 
-                                           placeholder="Type equipment name to search or type new equipment..." required autocomplete="off">
+                                           placeholder="Type equipment name..." required autocomplete="off">
                                     <input type="hidden" name="equipment_id" id="purchaseEquipmentId" value="">
                                     <div class="autocomplete-list" id="purchaseEquipmentAutocomplete"></div>
                                 </div>
-                                <div class="help-text">Type to search existing equipment. You can also type a new equipment name.</div>
                             </div>
                             
-                            <!-- Category -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Category <span class="required">*</span></label>
                                 <div class="category-input-group">
                                     <select name="category" id="purchaseEquipCategorySelect" class="form-control" required>
@@ -3313,82 +2147,80 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                                         <?php endforeach; ?>
                                         <option value="__other__">+ Other</option>
                                     </select>
-                                    <input type="text" name="category_manual" id="purchaseEquipCategoryManual" class="form-control" placeholder="Custom category..." style="display:none;">
+                                    <input type="text" name="category_manual" id="purchaseEquipCategoryManual" class="form-control" placeholder="Custom..." style="display:none;">
                                     <button type="button" class="btn-toggle" onclick="toggleCategory('equip')">
-                                        <i class="fas fa-edit"></i> Manual
+                                        <i class="fas fa-edit"></i>
                                     </button>
                                 </div>
                             </div>
                             
-                            <!-- Unit -->
-                            <div class="form-row">
-                                <label class="form-label">Unit</label>
-                                <select name="unit" id="purchaseEquipUnit" class="form-control">
-                                    <option value="pcs">Pieces (pcs)</option>
-                                    <option value="set">Set</option>
-                                    <option value="box">Box</option>
-                                    <option value="pack">Pack</option>
-                                    <option value="each">Each</option>
-                                </select>
+                            <div>
+                                <label class="form-label">Unit <span class="required">*</span></label>
+                                <div class="unit-input-group">
+                                    <select name="unit" id="purchaseEquipUnit" class="form-control" required>
+                                        <option value="">Select Unit</option>
+                                        <option value="pcs">Pieces (pcs)</option>
+                                        <option value="set">Set</option>
+                                        <option value="box">Box</option>
+                                        <option value="pack">Pack</option>
+                                        <option value="pair">Pair</option>
+                                        <option value="roll">Roll</option>
+                                        <option value="kit">Kit</option>
+                                        <option value="unit">Unit</option>
+                                        <option value="dozen">Dozen</option>
+                                        <option value="bag">Bag</option>
+                                        <option value="carton">Carton</option>
+                                        <option value="__other__">+ Other (Manual)</option>
+                                    </select>
+                                    <input type="text" name="unit_manual" id="purchaseEquipUnitManual" class="form-control" placeholder="Custom unit..." style="display:none;">
+                                    <button type="button" class="btn-toggle" onclick="toggleUnit('equip')">
+                                        <i class="fas fa-edit"></i>
+                                    </button>
+                                </div>
                             </div>
                             
-                            <!-- Quantity -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Quantity <span class="required">*</span></label>
                                 <input type="number" name="quantity" id="purchaseEquipQuantity" class="form-control" placeholder="0" min="1" required>
-                                <div class="help-text">Number of units being purchased</div>
                             </div>
                             
-                            <!-- Reorder Level -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Reorder Level</label>
-                                <input type="number" name="reorder_level" id="purchaseEquipReorderLevel" class="form-control" placeholder="5" min="0" value="5">
-                                <div class="help-text">Alert when stock reaches this level</div>
+                                <input type="number" name="reorder_level" id="purchaseEquipReorderLevel" class="form-control" value="5" min="0">
                             </div>
                             
-                            <!-- Buying Price -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Buying Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="buying_price" id="purchaseEquipBuyingPrice" class="form-control money-input" placeholder="0" value="0" required>
-                                <div class="help-text" style="color:var(--danger);">Price you paid per unit</div>
+                                <input type="text" name="buying_price" id="purchaseEquipBuyingPrice" class="form-control money-input" value="0" required>
                             </div>
                             
-                            <!-- Selling Price -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Selling Price (TSh) <span class="required">*</span></label>
-                                <input type="text" name="selling_price" id="purchaseEquipSellingPrice" class="form-control money-input" placeholder="0" value="0" required>
-                                <div class="help-text" style="color:var(--success);">Price you will sell per unit | 0 = Free</div>
+                                <input type="text" name="selling_price" id="purchaseEquipSellingPrice" class="form-control money-input" value="0" required>
                             </div>
                             
-                            <!-- Supplier -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Supplier</label>
-                                <input type="text" name="supplier" id="purchaseEquipSupplier" class="form-control" placeholder="Supplier name">
+                                <input type="text" name="supplier" id="purchaseEquipSupplier" class="form-control" placeholder="Supplier">
                             </div>
                             
-                            <!-- Expiry Date - OPTIONAL -->
-                            <div class="form-row">
-                                <label class="form-label">Expiry Date <span style="font-size:0.55rem;color:var(--text-muted);">(Optional)</span></label>
+                            <div>
+                                <label class="form-label">Expiry Date (Optional)</label>
                                 <input type="date" name="expiry_date" id="purchaseEquipExpiryDate" class="form-control">
-                                <div class="help-text">Leave empty = No expiry (Active Forever)</div>
                             </div>
                             
-                            <!-- Batch Number -->
-                            <div class="full-width form-row">
+                            <div class="full-width">
                                 <label class="form-label">Batch Number</label>
                                 <div class="batch-input-group">
                                     <input type="text" name="batch_number" id="purchaseEquipBatchInput" class="form-control" 
-                                           placeholder="EQP-YYYYMMDD-XXXX" 
                                            value="<?= 'EQP-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -6)) ?>">
                                     <button type="button" class="btn-generate" onclick="generateBatch('equip')">
                                         <i class="fas fa-sync-alt"></i> Generate
                                     </button>
                                 </div>
-                                <div class="help-text">Auto-generated. Click "Generate" for a new batch number.</div>
                             </div>
                             
-                            <!-- Status -->
-                            <div class="form-row">
+                            <div>
                                 <label class="form-label">Status</label>
                                 <select name="status" id="purchaseEquipStatus" class="form-control">
                                     <option value="active">Active</option>
@@ -3398,19 +2230,14 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                         </div>
                         
                         <div class="form-actions">
-                            <button type="submit" class="btn-save" style="background:var(--purple);">
-                                <i class="fas fa-plus-circle"></i> Add Batch to Purchase
+                            <button type="submit" class="btn-save purple">
+                                <i class="fas fa-plus-circle"></i> Add Equipment
                             </button>
                             <button type="reset" class="btn-cancel">
                                 <i class="fas fa-times"></i> Clear
                             </button>
                         </div>
                     </form>
-                    
-                    <div style="font-size:0.6rem;color:var(--text-muted);margin-top:6px;">
-                        <i class="fas fa-info-circle"></i> 
-                        Items are saved to purchase only. Inventory will be updated when you <strong>Complete Purchase</strong>.
-                    </div>
                 </div>
             <?php endif; ?>
             
@@ -3418,27 +2245,9 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
             <div style="margin-top:16px;">
                 <div class="card-header">
                     <h4 class="card-title">
-                        <i class="fas fa-list title-blue"></i> Items 
+                        <i class="fas fa-list blue"></i> Items 
                         <span class="result-count">(<strong><?= count($purchase_items) ?></strong> items)</span>
                     </h4>
-                    <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                        <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
-                            <!-- Complete Purchase - Admin can complete any purchase -->
-                            <form method="POST" style="display:inline;" 
-                                  onsubmit="return confirm('Are you sure you want to complete this purchase as Admin?\nThis will update inventory and cannot be undone.');">
-                                <input type="hidden" name="action" value="complete_purchase">
-                                <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
-                                <button type="submit" class="btn-complete" <?= count($purchase_items) == 0 ? 'disabled' : '' ?>>
-                                    <i class="fas fa-check-circle"></i> Complete Purchase
-                                </button>
-                            </form>
-                            
-                            <!-- Cancel Purchase - Admin can cancel any purchase -->
-                            <button type="button" class="btn-cancel-purchase" onclick="openCancelModal(<?= $purchase_id ?>, '<?= htmlspecialchars($current_purchase['invoice_number']) ?>')">
-                                <i class="fas fa-times-circle"></i> Cancel Purchase
-                            </button>
-                        <?php endif; ?>
-                    </div>
                 </div>
                 
                 <?php if (count($purchase_items) > 0): ?>
@@ -3446,17 +2255,18 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                         <table class="data-table">
                             <thead>
                                 <tr>
-                                    <th class="col-sno">#</th>
-                                    <th class="col-item"><?= ucfirst($current_purchase['purchase_type']) ?></th>
-                                    <th class="col-category">Category</th>
-                                    <th class="col-quantity">Qty</th>
-                                    <th class="col-buying-price">Buy Price</th>
-                                    <th class="col-buying-total">Buy Total</th>
-                                    <th class="col-selling-price">Sell Price</th>
-                                    <th class="col-selling-total">Sell Total</th>
-                                    <th class="col-added-by">Added By</th>
+                                    <th style="width:30px;text-align:center;">#</th>
+                                    <th style="min-width:160px;">Item</th>
+                                    <th style="min-width:90px;">Category</th>
+                                    <th style="text-align:center;">Qty</th>
+                                    <th style="text-align:center;">Unit</th>
+                                    <th>Buy Price</th>
+                                    <th>Buy Total</th>
+                                    <th>Sell Price</th>
+                                    <th>Sell Total</th>
+                                    <th>Added By</th>
                                     <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
-                                        <th class="col-actions">Action</th>
+                                        <th style="text-align:center;">Action</th>
                                     <?php endif; ?>
                                 </tr>
                             </thead>
@@ -3464,42 +2274,40 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                                 <?php $counter = 1; ?>
                                 <?php foreach ($purchase_items as $item): ?>
                                     <tr>
-                                        <td class="col-sno"><?= $counter++ ?></td>
-                                        <td class="col-item">
+                                        <td style="text-align:center;"><?= $counter++ ?></td>
+                                        <td>
                                             <strong><?= htmlspecialchars($item['item_name'] ?? 'Unknown') ?></strong>
                                             <div style="font-size:0.6rem;color:var(--text-secondary);">
-                                                <?= htmlspecialchars($item['unit'] ?? 'pcs') ?> | 
                                                 Batch: <?= htmlspecialchars($item['batch_number'] ?? 'N/A') ?>
                                             </div>
                                         </td>
-                                        <td class="col-category"><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
-                                        <td class="col-quantity"><?= number_format($item['quantity']) ?></td>
-                                        <td class="col-buying-price" style="color:var(--danger);font-weight:600;">
-                                            TSh <?= number_format($item['buying_price'] ?? 0) ?>
+                                        <td><?= htmlspecialchars($item['category'] ?? 'N/A') ?></td>
+                                        <td style="text-align:center;"><?= number_format($item['quantity']) ?></td>
+                                        <td style="text-align:center;">
+                                            <span class="unit-badge">
+                                                <i class="fas fa-balance-scale"></i>
+                                                <?= htmlspecialchars($item['unit'] ?? 'pcs') ?>
+                                            </span>
                                         </td>
-                                        <td class="col-buying-total" style="color:var(--danger);font-weight:600;">
-                                            TSh <?= number_format($item['total_buying_cost'] ?? 0) ?>
-                                        </td>
-                                        <td class="col-selling-price" style="color:var(--success);font-weight:600;">
-                                            TSh <?= number_format($item['selling_price'] ?? 0) ?>
-                                        </td>
-                                        <td class="col-selling-total" style="color:var(--success);font-weight:600;">
-                                            TSh <?= number_format($item['total_selling_value'] ?? 0) ?>
-                                        </td>
-                                        <td class="col-added-by">
+                                        <td style="color:#DC2626;font-weight:600;">TSh <?= number_format($item['buying_price'] ?? 0) ?></td>
+                                        <td style="color:#DC2626;font-weight:600;">TSh <?= number_format($item['total_buying_cost'] ?? 0) ?></td>
+                                        <td style="color:#059669;font-weight:600;">TSh <?= number_format($item['selling_price'] ?? 0) ?></td>
+                                        <td style="color:#059669;font-weight:600;">TSh <?= number_format($item['total_selling_value'] ?? 0) ?></td>
+                                        <td>
                                             <span class="added-by-tag">
                                                 <i class="fas fa-user-circle"></i>
                                                 <?= htmlspecialchars($item['added_by_full_name'] ?? 'Unknown') ?>
                                             </span>
                                         </td>
                                         <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
-                                            <td class="col-actions">
+                                            <td style="text-align:center;">
                                                 <form method="POST" style="display:inline;" 
-                                                      onsubmit="return confirm('Remove this item from purchase?');">
+                                                      onsubmit="return confirm('Remove this item?');">
                                                     <input type="hidden" name="action" value="delete_item">
                                                     <input type="hidden" name="item_id" value="<?= $item['id'] ?>">
                                                     <input type="hidden" name="purchase_id" value="<?= $purchase_id ?>">
-                                                    <button type="submit" class="btn-delete-item" title="Remove item">
+                                                    <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
+                                                    <button type="submit" class="btn-delete-item" title="Remove">
                                                         <i class="fas fa-trash"></i>
                                                     </button>
                                                 </form>
@@ -3508,320 +2316,176 @@ if ($action === 'list_medicine' || ($action === 'create' && $purchase_type === '
                                     </tr>
                                 <?php endforeach; ?>
                             </tbody>
-                            <tfoot>
-                                <tr>
-                                    <td colspan="9">
-                                        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;padding:10px 0;border-top:2px solid var(--border-color);">
-                                            <div style="background:var(--danger-light);padding:8px 12px;border-radius:8px;border:2px solid var(--danger);">
-                                                <div style="font-size:0.6rem;color:var(--danger);font-weight:600;">💰 Total Buying Cost</div>
-                                                <div style="font-size:1.1rem;font-weight:700;color:var(--danger);">
-                                                    TSh <?= number_format($current_purchase['total_buying_cost'] ?? 0) ?>
-                                                </div>
-                                            </div>
-                                            <div style="background:var(--success-light);padding:8px 12px;border-radius:8px;border:2px solid var(--success);">
-                                                <div style="font-size:0.6rem;color:var(--success);font-weight:600;">💰 Total Selling Value</div>
-                                                <div style="font-size:1.1rem;font-weight:700;color:var(--success);">
-                                                    TSh <?= number_format($current_purchase['total_selling_value'] ?? 0) ?>
-                                                </div>
-                                            </div>
-                                            <?php 
-                                                $total_profit = ($current_purchase['total_selling_value'] ?? 0) - ($current_purchase['total_buying_cost'] ?? 0);
-                                            ?>
-                                            <div style="background:var(<?= $total_profit >= 0 ? '--success-light' : '--danger-light' ?>);padding:8px 12px;border-radius:8px;border:2px solid var(<?= $total_profit >= 0 ? '--success' : '--danger' ?>);">
-                                                <div style="font-size:0.6rem;color:var(<?= $total_profit >= 0 ? '--success' : '--danger' ?>);font-weight:600;">📈 Expected Profit</div>
-                                                <div style="font-size:1.1rem;font-weight:700;color:var(<?= $total_profit >= 0 ? '--success' : '--danger' ?>);">
-                                                    TSh <?= number_format($total_profit) ?>
-                                                    <?php if ($current_purchase['total_buying_cost'] > 0): ?>
-                                                        <span style="font-size:0.6rem;">
-                                                            (<?= round(($total_profit / $current_purchase['total_buying_cost']) * 100, 1) ?>% margin)
-                                                        </span>
-                                                    <?php endif; ?>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </td>
-                                    <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
-                                        <td colspan="1"></td>
-                                    <?php endif; ?>
-                                </tr>
-                            </tfoot>
                         </table>
                     </div>
                 <?php else: ?>
                     <div class="empty-state">
                         <i class="fas fa-box-open"></i>
                         <p>No items added yet</p>
-                        <p style="font-size:0.8rem;margin-top:4px;">
-                            <?php if ($current_purchase['status'] === 'IN_PROGRESS'): ?>
-                                Use the form above to add <?= $current_purchase['purchase_type'] === 'medicine' ? 'medicines' : 'equipment' ?> to this purchase.
-                            <?php else: ?>
-                                This purchase has been <?= strtolower($current_purchase['status']) ?>.
-                            <?php endif; ?>
-                        </p>
+                        <p class="sub">Use the form above to add items.</p>
                     </div>
                 <?php endif; ?>
             </div>
         </div>
-        
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- CANCEL PURCHASE MODAL -->
-    <!-- ================================================================ -->
-    <div class="modal-overlay" id="cancelModal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <div class="modal-title">
-                    <i class="fas fa-exclamation-triangle"></i> Cancel Purchase
-                </div>
-                <button class="modal-close" onclick="closeCancelModal()">&times;</button>
-            </div>
-            
-            <div class="cancel-warning-icon">
-                <i class="fas fa-exclamation-circle"></i>
-            </div>
-            
-            <p style="text-align:center;color:var(--text-primary);font-weight:500;margin-bottom:8px;">
-                Are you sure you want to cancel this purchase?
-            </p>
-            <p style="text-align:center;color:var(--text-secondary);font-size:0.85rem;margin-bottom:16px;">
-                <strong id="cancelInvoiceNumber"></strong>
-            </p>
-            
-            <form method="POST" id="cancelForm">
-                <input type="hidden" name="action" value="cancel_purchase">
-                <input type="hidden" name="purchase_id" id="cancelPurchaseId" value="">
-                
-                <div style="margin-bottom:8px;">
-                    <label class="form-label">Reason for Cancellation <span class="required">*</span></label>
-                    <textarea name="cancel_reason" id="cancelReason" class="cancel-reason-textarea" 
-                              placeholder="Explain why this purchase is being cancelled..." required></textarea>
-                </div>
-                
-                <div class="modal-actions">
-                    <button type="submit" class="btn-confirm-cancel">
-                        <i class="fas fa-times-circle"></i> Yes, Cancel Purchase
-                    </button>
-                    <button type="button" class="btn-close-modal" onclick="closeCancelModal()">
-                        <i class="fas fa-times"></i> No, Go Back
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PDF VIEW MODAL -->
-    <!-- ================================================================ -->
-    <div class="modal-overlay-pdf" id="pdfModal">
-        <div class="modal-content-pdf">
-            <div class="modal-header-pdf">
-                <div class="modal-title-pdf">
-                    <i class="fas fa-file-pdf" style="color:#DC2626;"></i> Purchase Invoice
-                </div>
-                <button class="modal-close-pdf" onclick="closePDF()">&times;</button>
-            </div>
-            
-            <div id="pdfInvoiceContent" style="background:white;padding:10px;max-height:70vh;overflow-y:auto;">
-                <div style="text-align:center;padding:30px;color:#64748B;">
-                    <i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i>
-                    <p>Loading invoice...</p>
-                </div>
-            </div>
-            
-            <div class="modal-actions-pdf">
-                <button class="btn-print-invoice" onclick="printPDFInvoice()">
-                    <i class="fas fa-print"></i> Print Invoice
-                </button>
-                <button class="btn-close-modal-pdf" onclick="closePDF()">
-                    <i class="fas fa-times"></i> Close
-                </button>
-            </div>
-        </div>
-    </div>
-
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-400 mx-2">|</span>
+            <span>|</span>
             Admin Purchases
-            <span class="text-gray-400 mx-2">|</span>
-            &copy; <?= date('Y') ?> All rights reserved
+            <span>|</span>
+            <span class="branch-tag-small" style="padding:2px 10px;">
+                <i class="fas fa-store-alt"></i> <?= htmlspecialchars($display_branch_name) ?>
+            </span>
+            &copy; <?= date('Y') ?>
         </p>
     </footer>
 
 </main>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
+<!-- CANCEL MODAL -->
+<div class="modal-overlay" id="cancelModal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <div class="modal-title">
+                <i class="fas fa-exclamation-triangle"></i> Cancel Purchase
+            </div>
+            <button class="modal-close" onclick="closeCancelModal()">&times;</button>
+        </div>
+        
+        <div class="cancel-warning-icon">
+            <i class="fas fa-exclamation-circle"></i>
+        </div>
+        
+        <p style="text-align:center;color:var(--text-primary);font-weight:500;margin-bottom:8px;">
+            Are you sure you want to cancel this purchase?
+        </p>
+        <p style="text-align:center;color:var(--text-secondary);font-size:0.85rem;margin-bottom:16px;">
+            <strong id="cancelInvoiceNumber"></strong>
+        </p>
+        
+        <div style="background:#FEE2E2;border:2px solid #DC2626;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:0.8rem;color:#991B1B;">
+            <i class="fas fa-exclamation-triangle"></i> 
+            <strong>WARNING:</strong> All items will be permanently deleted. Inventory will NOT be affected.
+        </div>
+        
+        <form method="POST" id="cancelForm">
+            <input type="hidden" name="action" value="cancel_purchase">
+            <input type="hidden" name="purchase_id" id="cancelPurchaseId" value="">
+            <input type="hidden" name="branch" value="<?= $selected_branch_id ?>">
+            
+            <div style="margin-bottom:8px;">
+                <label class="form-label">Reason for Cancellation <span class="required">*</span></label>
+                <textarea name="cancel_reason" id="cancelReason" class="cancel-reason-textarea" 
+                          placeholder="Explain why..." required></textarea>
+            </div>
+            
+            <div class="modal-actions">
+                <button type="submit" class="btn-confirm-cancel">
+                    <i class="fas fa-times-circle"></i> Yes, Cancel Purchase
+                </button>
+                <button type="button" class="btn-close-modal" onclick="closeCancelModal()">
+                    <i class="fas fa-times"></i> No, Go Back
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- PDF MODAL -->
+<div class="modal-overlay" id="pdfModal">
+    <div class="modal-content modal-pdf">
+        <div class="modal-header">
+            <div class="modal-title" style="color:#0B5ED7;">
+                <i class="fas fa-file-pdf" style="color:#DC2626;"></i> Purchase Invoice
+            </div>
+            <button class="modal-close" onclick="closePDF()">&times;</button>
+        </div>
+        
+        <div id="pdfInvoiceContent" style="background:white;padding:10px;max-height:70vh;overflow-y:auto;">
+            <div style="text-align:center;padding:30px;color:#64748B;">
+                <i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i>
+                <p>Loading invoice...</p>
+            </div>
+        </div>
+        
+        <div class="modal-actions">
+            <button class="btn-print-invoice" onclick="printPDFInvoice()">
+                <i class="fas fa-print"></i> Print Invoice
+            </button>
+            <button class="btn-close-modal-pdf" onclick="closePDF()">
+                <i class="fas fa-times"></i> Close
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
 // ================================================================
-// CLOSE MESSAGE
+// HEADER JAVASCRIPT
 // ================================================================
-function closeMessage() {
-    var messageBox = document.getElementById('messageBox');
-    if (messageBox) {
-        messageBox.style.display = 'none';
+(function() {
+    var toggle = document.getElementById('darkModeToggle');
+    var icon = document.getElementById('darkIcon');
+    var text = document.getElementById('darkText');
+    var html = document.documentElement;
+    
+    if (localStorage.getItem('darkMode') === 'true') {
+        html.setAttribute('data-theme', 'dark');
+        if (icon) icon.className = 'fas fa-sun';
+        if (text) text.textContent = 'Light';
     }
-}
+    
+    toggle?.addEventListener('click', function() {
+        if (html.getAttribute('data-theme') === 'dark') {
+            html.removeAttribute('data-theme');
+            if (icon) icon.className = 'fas fa-moon';
+            if (text) text.textContent = 'Dark';
+            localStorage.setItem('darkMode', 'false');
+        } else {
+            html.setAttribute('data-theme', 'dark');
+            if (icon) icon.className = 'fas fa-sun';
+            if (text) text.textContent = 'Light';
+            localStorage.setItem('darkMode', 'true');
+        }
+    });
+})();
 
-setTimeout(function() {
-    var messageBox = document.getElementById('messageBox');
-    if (messageBox) {
-        messageBox.style.display = 'none';
-    }
-}, 5000);
-
-// ================================================================
-// CLOCK
-// ================================================================
 function updateClock() {
-    var now = new Date();
-    var dateStr = now.toLocaleDateString('en-US', {
-        weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-    });
-    var timeStr = now.toLocaleTimeString('en-US', {
-        hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-    });
-    var el = document.getElementById('clockDisplay');
-    if (el) {
-        el.textContent = dateStr + ' • ' + timeStr;
-    }
+    var n = new Date();
+    var d = n.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric', year:'numeric' });
+    var tm = n.toLocaleTimeString('en-US', { hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:true });
+    var el = document.getElementById('currentDateTime');
+    if (el) el.textContent = d + ' • ' + tm;
 }
-setInterval(updateClock, 1000);
 updateClock();
+setInterval(updateClock, 1000);
 
-// ================================================================
-// BRANCH SWITCHER
-// ================================================================
-function switchBranch(branchId) {
+function switchBranch(id) {
     var url = new URL(window.location.href);
-    url.searchParams.set('branch', branchId);
+    url.searchParams.set('branch', id);
     window.location.href = url.toString();
 }
 
 // ================================================================
-// SEARCH
+// PURCHASE-SPECIFIC JAVASCRIPT
 // ================================================================
-var searchBtn = document.getElementById('searchBtn');
-var searchInput = document.getElementById('searchInput');
 
-function performSearch() {
-    var query = searchInput.value.trim();
-    if (query.length > 0) {
-        var branch = document.getElementById('branchSelector')?.value || 'all';
-        window.location.href = 'purchases.php?search=' + encodeURIComponent(query) + '&branch=' + branch;
-    }
+function closeMessage() {
+    var messageBox = document.getElementById('messageBox');
+    if (messageBox) messageBox.style.display = 'none';
 }
 
-searchBtn?.addEventListener('click', performSearch);
-searchInput?.addEventListener('keypress', function(e) {
-    if (e.key === 'Enter') performSearch();
-});
+setTimeout(function() {
+    var messageBox = document.getElementById('messageBox');
+    if (messageBox) messageBox.style.display = 'none';
+}, 5000);
 
-document.addEventListener('keydown', function(e) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault();
-        if (searchInput) {
-            searchInput.focus();
-            searchInput.select();
-        }
-    }
-});
-
-// ================================================================
-// SIDEBAR TOGGLE
-// ================================================================
-(function() {
-    var sidebar = document.getElementById('sidebar');
-    var toggleBtn = document.getElementById('sidebarToggle');
-    var overlay = document.getElementById('sidebarOverlay');
-    
-    function toggleSidebar() {
-        if (!sidebar) return;
-        sidebar.classList.toggle('open');
-        if (overlay) {
-            if (sidebar.classList.contains('open')) {
-                overlay.style.display = 'block';
-                overlay.classList.add('active');
-                document.body.style.overflow = 'hidden';
-            } else {
-                overlay.style.display = 'none';
-                overlay.classList.remove('active');
-                document.body.style.overflow = '';
-            }
-        }
-    }
-    
-    if (toggleBtn) {
-        toggleBtn.addEventListener('click', function(e) {
-            e.preventDefault();
-            e.stopPropagation();
-            toggleSidebar();
-        });
-    }
-    
-    if (overlay) {
-        overlay.addEventListener('click', function() {
-            if (sidebar) {
-                sidebar.classList.remove('open');
-                overlay.style.display = 'none';
-                overlay.classList.remove('active');
-                document.body.style.overflow = '';
-            }
-        });
-    }
-})();
-
-// ================================================================
-// DARK MODE TOGGLE
-// ================================================================
-(function() {
-    var darkModeToggle = document.getElementById('darkModeToggle');
-    var darkIcon = document.getElementById('darkIcon');
-    var darkText = document.getElementById('darkText');
-    var htmlElement = document.documentElement;
-    
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
-        htmlElement.setAttribute('data-theme', 'dark');
-        if (darkIcon) darkIcon.className = 'fas fa-sun';
-        if (darkText) darkText.textContent = 'Light';
-    }
-    
-    if (darkModeToggle) {
-        darkModeToggle.addEventListener('click', function(e) {
-            e.preventDefault();
-            var isDarkNow = htmlElement.getAttribute('data-theme') === 'dark';
-            if (isDarkNow) {
-                htmlElement.removeAttribute('data-theme');
-                if (darkIcon) darkIcon.className = 'fas fa-moon';
-                if (darkText) darkText.textContent = 'Dark';
-                localStorage.setItem('darkMode', 'false');
-                document.cookie = "dark_mode=false; path=/";
-            } else {
-                htmlElement.setAttribute('data-theme', 'dark');
-                if (darkIcon) darkIcon.className = 'fas fa-sun';
-                if (darkText) darkText.textContent = 'Light';
-                localStorage.setItem('darkMode', 'true');
-                document.cookie = "dark_mode=true; path=/";
-            }
-        });
-    }
-})();
-
-// ================================================================
-// GENERATE BATCH NUMBER
-// ================================================================
 function generateBatch(type) {
     var now = new Date();
-    var dateStr = now.getFullYear() + 
-                  String(now.getMonth() + 1).padStart(2, '0') + 
-                  String(now.getDate()).padStart(2, '0');
+    var dateStr = now.getFullYear() + String(now.getMonth() + 1).padStart(2, '0') + String(now.getDate()).padStart(2, '0');
     var random = Math.random().toString(36).substring(2, 8).toUpperCase();
     var prefix = type === 'med' ? 'BATCH' : 'EQP';
     var batch = prefix + '-' + dateStr + '-' + random;
@@ -3830,9 +2494,6 @@ function generateBatch(type) {
     if (input) input.value = batch;
 }
 
-// ================================================================
-// CATEGORY TOGGLE
-// ================================================================
 function toggleCategory(type) {
     var select, manual;
     if (type === 'med') {
@@ -3841,16 +2502,17 @@ function toggleCategory(type) {
     } else if (type === 'equip') {
         select = document.getElementById('purchaseEquipCategorySelect');
         manual = document.getElementById('purchaseEquipCategoryManual');
-    } else {
-        return;
-    }
+    } else return;
+    
     if (!select || !manual) return;
+    
     if (manual.style.display === 'none') {
         manual.style.display = 'block';
         select.style.display = 'none';
         manual.focus();
         manual.required = true;
         select.required = false;
+        select.value = '';
     } else {
         manual.style.display = 'none';
         select.style.display = 'block';
@@ -3860,9 +2522,66 @@ function toggleCategory(type) {
     }
 }
 
-// ================================================================
-// CANCEL MODAL FUNCTIONS
-// ================================================================
+function toggleUnit(type) {
+    var select, manual;
+    if (type === 'med') {
+        select = document.getElementById('purchaseUnit');
+        manual = document.getElementById('purchaseUnitManual');
+    } else if (type === 'equip') {
+        select = document.getElementById('purchaseEquipUnit');
+        manual = document.getElementById('purchaseEquipUnitManual');
+    } else return;
+    
+    if (!select || !manual) return;
+    
+    if (manual.style.display === 'none') {
+        manual.style.display = 'block';
+        select.style.display = 'none';
+        manual.focus();
+        manual.required = true;
+        select.required = false;
+        select.value = '';
+    } else {
+        manual.style.display = 'none';
+        select.style.display = 'block';
+        select.value = '';
+        manual.required = false;
+        select.required = true;
+        manual.value = '';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    var medUnitSelect = document.getElementById('purchaseUnit');
+    var medUnitManual = document.getElementById('purchaseUnitManual');
+    var equipUnitSelect = document.getElementById('purchaseEquipUnit');
+    var equipUnitManual = document.getElementById('purchaseEquipUnitManual');
+    
+    if (medUnitSelect && medUnitManual) {
+        medUnitSelect.addEventListener('change', function() {
+            if (this.value === '__other__') {
+                medUnitManual.style.display = 'block';
+                this.style.display = 'none';
+                medUnitManual.focus();
+                medUnitManual.required = true;
+                this.required = false;
+            }
+        });
+    }
+    
+    if (equipUnitSelect && equipUnitManual) {
+        equipUnitSelect.addEventListener('change', function() {
+            if (this.value === '__other__') {
+                equipUnitManual.style.display = 'block';
+                this.style.display = 'none';
+                equipUnitManual.focus();
+                equipUnitManual.required = true;
+                this.required = false;
+            }
+        });
+    }
+});
+
 function openCancelModal(purchaseId, invoiceNumber) {
     var modal = document.getElementById('cancelModal');
     if (!modal) return;
@@ -3883,24 +2602,10 @@ function closeCancelModal() {
     }
 }
 
-// Close cancel modal on outside click
 document.getElementById('cancelModal')?.addEventListener('click', function(e) {
-    if (e.target === this) {
-        closeCancelModal();
-    }
+    if (e.target === this) closeCancelModal();
 });
 
-// Close cancel modal on escape
-document.addEventListener('keydown', function(e) {
-    if (e.key === 'Escape') {
-        closeCancelModal();
-        closePDF();
-    }
-});
-
-// ================================================================
-// OPEN PDF VIEW
-// ================================================================
 function openPDFView(purchaseId) {
     var modal = document.getElementById('pdfModal');
     var content = document.getElementById('pdfInvoiceContent');
@@ -3908,125 +2613,60 @@ function openPDFView(purchaseId) {
     modal.classList.add('show');
     document.body.style.overflow = 'hidden';
     
-    content.innerHTML = `
-        <div style="text-align:center;padding:30px;color:#64748B;">
-            <i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i>
-            <p>Loading invoice...</p>
-        </div>
-    `;
+    content.innerHTML = '<div style="text-align:center;padding:30px;color:#64748B;"><i class="fas fa-spinner fa-spin" style="font-size:2rem;"></i><p>Loading...</p></div>';
     
     fetch('get_invoice.php?id=' + purchaseId)
-        .then(function(response) {
-            if (!response.ok) {
-                throw new Error('Network response was not ok');
-            }
-            return response.text();
-        })
-        .then(function(html) {
-            content.innerHTML = html;
-        })
+        .then(function(r) { return r.text(); })
+        .then(function(html) { content.innerHTML = html; })
         .catch(function(error) {
-            content.innerHTML = `
-                <div style="text-align:center;padding:30px;color:#DC2626;">
-                    <i class="fas fa-exclamation-circle" style="font-size:2rem;"></i>
-                    <p>Error loading invoice: ${error.message}</p>
-                    <button class="btn-close-modal-pdf" onclick="closePDF()" style="margin-top:10px;">
-                        <i class="fas fa-times"></i> Close
-                    </button>
-                </div>
-            `;
+            content.innerHTML = '<div style="text-align:center;padding:30px;color:#DC2626;"><i class="fas fa-exclamation-circle" style="font-size:2rem;"></i><p>Error: ' + error.message + '</p></div>';
         });
 }
 
-// ================================================================
-// CLOSE PDF MODAL
-// ================================================================
 function closePDF() {
     var modal = document.getElementById('pdfModal');
     modal.classList.remove('show');
     document.body.style.overflow = 'auto';
 }
 
-// ================================================================
-// PRINT PDF INVOICE
-// ================================================================
+document.getElementById('pdfModal')?.addEventListener('click', function(e) {
+    if (e.target === this) closePDF();
+});
+
 function printPDFInvoice() {
     var content = document.getElementById('pdfInvoiceContent');
     if (!content) return;
     
     var printContents = content.innerHTML;
-    var originalTitle = document.title;
-    document.title = 'Invoice - Braick Dispensary';
-    
     var win = window.open('', '_blank', 'width=900,height=700');
     if (!win) {
         var originalContents = document.body.innerHTML;
-        document.body.innerHTML = '<style>body{background:white;padding:20px;}</style>' + printContents;
+        document.body.innerHTML = printContents;
         window.print();
         document.body.innerHTML = originalContents;
-        document.title = originalTitle;
         return;
     }
     
-    win.document.write('<!DOCTYPE html><html><head><title>Invoice - Braick Dispensary</title>');
+    win.document.write('<!DOCTYPE html><html><head><title>Invoice</title>');
     win.document.write('<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">');
-    win.document.write('<style>');
-    win.document.write(`
-        body { font-family: Arial, sans-serif; background: white; padding: 20px; margin: 0; }
-        .invoice-container { max-width: 800px; margin: 0 auto; }
-        .invoice-header { text-align: center; border-bottom: 3px solid #0B5ED7; padding-bottom: 15px; margin-bottom: 20px; }
-        .invoice-header .logo { max-height: 70px; width: auto; display: block; margin: 0 auto 10px; }
-        .invoice-header h1 { font-size: 24px; color: #0B5ED7; margin: 0; }
-        .invoice-header p { font-size: 12px; color: #64748B; margin: 2px 0; }
-        .invoice-title { text-align: center; margin-bottom: 20px; }
-        .invoice-title h2 { font-size: 20px; color: #0B5ED7; margin: 0; }
-        .invoice-title p { font-size: 12px; color: #64748B; margin: 2px 0; }
-        .invoice-info { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px; background: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0; margin-bottom: 20px; }
-        .invoice-info .label { font-size: 11px; color: #64748B; margin: 0; font-weight: 600; }
-        .invoice-info .value { font-size: 14px; font-weight: 600; margin: 2px 0; }
-        .invoice-info .text-right { text-align: right; }
-        .invoice-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 20px; }
-        .invoice-table thead th { background: #0B5ED7; color: white; padding: 8px 10px; text-align: left; border: 1px solid #0B5ED7; }
-        .invoice-table thead th.text-center { text-align: center; }
-        .invoice-table thead th.text-right { text-align: right; }
-        .invoice-table tbody td { padding: 6px 10px; border: 1px solid #E2E8F0; }
-        .invoice-table tbody td.text-center { text-align: center; }
-        .invoice-table tbody td.text-right { text-align: right; }
-        .invoice-table tbody td .batch-info { font-size: 11px; color: #64748B; }
-        .invoice-table tbody tr:nth-child(even) { background: #F8FAFC; }
-        .invoice-table tfoot td { padding: 8px 10px; border-top: 2px solid #0B5ED7; font-weight: 700; }
-        .invoice-summary { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; padding: 12px; background: #F8FAFC; border-radius: 8px; border: 1px solid #E2E8F0; margin-bottom: 20px; }
-        .invoice-summary .label { font-size: 11px; color: #64748B; margin: 0; font-weight: 600; }
-        .invoice-summary .value { font-size: 18px; font-weight: 700; margin: 2px 0; }
-        .invoice-summary .text-right { text-align: right; }
-        .invoice-added-by { font-size: 11px; color: #64748B; border-top: 1px solid #E2E8F0; padding-top: 10px; margin-top: 10px; }
-        .invoice-footer { text-align: center; border-top: 2px solid #0B5ED7; padding-top: 12px; margin-top: 15px; }
-        .invoice-footer p { font-size: 11px; color: #64748B; margin: 0; }
-        .invoice-footer .thank-you { font-size: 10px; color: #94A3B8; margin: 2px 0; }
-        @media print { body { padding: 10px; } }
-        @media (max-width: 600px) { .invoice-info { grid-template-columns: 1fr; } .invoice-summary { grid-template-columns: 1fr; } }
-    `);
-    win.document.write('</style>');
+    win.document.write('<style>body{font-family:Arial;padding:20px;}</style>');
     win.document.write('</head><body>');
-    win.document.write('<div class="invoice-container">');
-    win.document.write(printContents);
-    win.document.write('</div>');
+    win.document.write('<div class="invoice-container">' + printContents + '</div>');
     win.document.write('</body></html>');
     win.document.close();
     
-    setTimeout(function() {
-        win.focus();
-        win.print();
-        win.close();
-    }, 500);
+    setTimeout(function() { win.focus(); win.print(); win.close(); }, 500);
 }
 
-// ================================================================
-// AUTO MONEY FORMAT
-// ================================================================
+document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') {
+        closeCancelModal();
+        closePDF();
+    }
+});
+
+// MONEY FORMATTING
 (function() {
-    'use strict';
-    
     function formatWithCommas(value) {
         if (!value) return '';
         var clean = value.toString().replace(/[^0-9.]/g, '');
@@ -4040,176 +2680,72 @@ function printPDFInvoice() {
             for (var i = integerPart.length - 1; i >= 0; i--) {
                 counter++;
                 formatted = integerPart[i] + formatted;
-                if (counter % 3 === 0 && i !== 0) {
-                    formatted = ',' + formatted;
-                }
+                if (counter % 3 === 0 && i !== 0) formatted = ',' + formatted;
             }
             integerPart = formatted;
         }
         return integerPart + decimalPart;
     }
     
-    function autoFormat(input) {
-        if (!input) return;
-        var cursorPos = input.selectionStart;
-        var lengthBefore = input.value.length;
-        var formatted = formatWithCommas(input.value);
-        if (formatted !== input.value) {
-            input.value = formatted;
-            var lengthAfter = formatted.length;
-            var diff = lengthAfter - lengthBefore;
-            input.setSelectionRange(cursorPos + diff, cursorPos + diff);
-        }
-    }
-    
     function initMoneyInputs() {
-        var moneyInputs = document.querySelectorAll('.money-input');
-        moneyInputs.forEach(function(input) {
-            if (input.dataset.moneyInitialized) return;
-            input.dataset.moneyInitialized = 'true';
+        document.querySelectorAll('.money-input').forEach(function(input) {
+            if (input.dataset.moneyInit) return;
+            input.dataset.moneyInit = 'true';
             
-            input.addEventListener('input', function() { autoFormat(this); });
+            input.addEventListener('input', function() {
+                var cursorPos = this.selectionStart;
+                var before = this.value.length;
+                var formatted = formatWithCommas(this.value);
+                if (formatted !== this.value) {
+                    this.value = formatted;
+                    var diff = formatted.length - before;
+                    this.setSelectionRange(cursorPos + diff, cursorPos + diff);
+                }
+            });
+            
             input.addEventListener('focus', function() {
-                var raw = this.value.replace(/,/g, '');
-                this.value = raw;
+                this.value = this.value.replace(/,/g, '');
                 this.select();
             });
+            
             input.addEventListener('blur', function() {
-                if (this.value) {
-                    this.value = formatWithCommas(this.value);
-                } else {
-                    this.value = '0';
-                }
+                if (this.value) this.value = formatWithCommas(this.value);
+                else this.value = '0';
             });
         });
     }
     
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', initMoneyInputs);
-    } else {
-        initMoneyInputs();
-    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initMoneyInputs);
+    else initMoneyInputs();
     
-    document.addEventListener('modalOpened', function() {
-        setTimeout(initMoneyInputs, 150);
-    });
-    
-    var observer = new MutationObserver(function() {
-        setTimeout(initMoneyInputs, 100);
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
+    new MutationObserver(function() { setTimeout(initMoneyInputs, 100); }).observe(document.body, { childList: true, subtree: true });
 })();
 
-// ================================================================
-// AUTO-SEARCH - Medicine
-// ================================================================
+// AUTOCOMPLETE - MEDICINE
 (function() {
     var medicineData = <?= json_encode($all_medicines) ?>;
     var input = document.getElementById('purchaseMedicineName');
     var autocomplete = document.getElementById('purchaseMedicineAutocomplete');
     var medicineIdInput = document.getElementById('purchaseMedicineId');
     
-    var categorySelect = document.getElementById('purchaseCategorySelect');
-    var categoryManual = document.getElementById('purchaseCategoryManual');
-    var unitSelect = document.getElementById('purchaseUnit');
-    var buyingPriceInput = document.getElementById('purchaseBuyingPrice');
-    var sellingPriceInput = document.getElementById('purchaseUnitPrice');
-    var reorderInput = document.getElementById('purchaseReorderLevel');
-    var supplierInput = document.getElementById('purchaseSupplier');
-    var quantityInput = document.getElementById('purchaseQuantity');
-    var expiryInput = document.getElementById('purchaseExpiryDate');
-    
     if (!input || !autocomplete) return;
-    
-    function autoFillMedicine(medicineId) {
-        var selected = medicineData.find(function(m) { return m.id == medicineId; });
-        if (selected) {
-            if (medicineIdInput) medicineIdInput.value = selected.id;
-            
-            if (categorySelect && selected.category) {
-                var catFound = false;
-                for (var i = 0; i < categorySelect.options.length; i++) {
-                    if (categorySelect.options[i].value === selected.category) {
-                        categorySelect.value = selected.category;
-                        catFound = true;
-                        break;
-                    }
-                }
-                if (!catFound && selected.category) {
-                    categoryManual.style.display = 'block';
-                    categorySelect.style.display = 'none';
-                    categoryManual.value = selected.category;
-                    categoryManual.required = true;
-                    categorySelect.required = false;
-                } else {
-                    categoryManual.style.display = 'none';
-                    categorySelect.style.display = 'block';
-                    categorySelect.value = selected.category || '';
-                    categoryManual.required = false;
-                    categorySelect.required = true;
-                }
-            }
-            
-            if (unitSelect && selected.unit) {
-                for (var j = 0; j < unitSelect.options.length; j++) {
-                    if (unitSelect.options[j].value === selected.unit) {
-                        unitSelect.value = selected.unit;
-                        break;
-                    }
-                }
-            }
-            
-            if (buyingPriceInput) {
-                buyingPriceInput.value = Number(selected.unit_cost || 0).toLocaleString();
-            }
-            
-            if (sellingPriceInput) {
-                sellingPriceInput.value = Number(selected.selling_price || 0).toLocaleString();
-            }
-            
-            if (reorderInput && selected.reorder_level > 0) {
-                reorderInput.value = selected.reorder_level;
-            }
-            
-            if (supplierInput && selected.supplier) {
-                supplierInput.value = selected.supplier;
-            }
-            
-            if (quantityInput && selected.reorder_level > 0) {
-                quantityInput.value = selected.reorder_level;
-            }
-        }
-    }
     
     input.addEventListener('input', function() {
         var query = this.value.toLowerCase().trim();
-        
-        if (query.length < 1) {
-            autocomplete.classList.remove('show');
-            return;
-        }
+        if (query.length < 1) { autocomplete.classList.remove('show'); return; }
         
         var matches = medicineData.filter(function(item) {
             return item.medication_name.toLowerCase().includes(query);
         });
         
-        if (matches.length === 0) {
-            autocomplete.classList.remove('show');
-            return;
-        }
+        if (matches.length === 0) { autocomplete.classList.remove('show'); return; }
         
         var html = '';
         matches.forEach(function(item) {
-            html += `
-                <div class="autocomplete-item" data-id="${item.id}" data-name="${escapeHtml(item.medication_name)}">
-                    <strong>${escapeHtml(item.medication_name)}</strong>
-                    <span class="item-detail">
-                        Category: ${escapeHtml(item.category || 'N/A')} | 
-                        Buy: TSh ${Number(item.unit_cost || 0).toLocaleString()} | 
-                        Sell: TSh ${Number(item.selling_price || 0).toLocaleString()}
-                    </span>
-                </div>
-            `;
+            html += '<div class="autocomplete-item" data-id="' + item.id + '" data-name="' + escapeHtml(item.medication_name) + '" data-unit="' + escapeHtml(item.unit || 'pcs') + '" data-cost="' + (item.unit_cost || 0) + '" data-price="' + (item.selling_price || 0) + '" data-reorder="' + (item.reorder_level || 10) + '" data-supplier="' + escapeHtml(item.supplier || '') + '">' +
+                '<strong>' + escapeHtml(item.medication_name) + '</strong>' +
+                '<span class="item-detail">Unit: ' + escapeHtml(item.unit || 'pcs') + ' | Buy: TSh ' + Number(item.unit_cost || 0).toLocaleString() + ' | Sell: TSh ' + Number(item.selling_price || 0).toLocaleString() + '</span>' +
+                '</div>';
         });
         
         autocomplete.innerHTML = html;
@@ -4217,175 +2753,77 @@ function printPDFInvoice() {
         
         autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
             item.addEventListener('click', function() {
-                var id = parseInt(this.dataset.id);
-                var name = this.dataset.name;
-                input.value = name;
-                if (medicineIdInput) medicineIdInput.value = id;
+                input.value = this.dataset.name;
+                if (medicineIdInput) medicineIdInput.value = this.dataset.id;
                 autocomplete.classList.remove('show');
-                autoFillMedicine(id);
+                
+                if (document.getElementById('purchaseBuyingPrice')) {
+                    document.getElementById('purchaseBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
+                }
+                if (document.getElementById('purchaseUnitPrice')) {
+                    document.getElementById('purchaseUnitPrice').value = Number(this.dataset.price || 0).toLocaleString();
+                }
+                if (document.getElementById('purchaseReorderLevel')) {
+                    document.getElementById('purchaseReorderLevel').value = this.dataset.reorder || 10;
+                }
+                if (document.getElementById('purchaseSupplier')) {
+                    document.getElementById('purchaseSupplier').value = this.dataset.supplier || '';
+                }
+                
+                var unitVal = this.dataset.unit;
+                var unitSelect = document.getElementById('purchaseUnit');
+                var unitManual = document.getElementById('purchaseUnitManual');
+                if (unitSelect && unitManual && unitVal) {
+                    var found = false;
+                    for (var i = 0; i < unitSelect.options.length; i++) {
+                        if (unitSelect.options[i].value === unitVal) {
+                            unitSelect.value = unitVal;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        unitManual.style.display = 'block';
+                        unitSelect.style.display = 'none';
+                        unitManual.value = unitVal;
+                        unitManual.required = true;
+                        unitSelect.required = false;
+                    }
+                }
             });
         });
     });
     
     document.addEventListener('click', function(e) {
-        if (!e.target.closest('.autocomplete-container')) {
-            autocomplete.classList.remove('show');
-        }
+        if (!e.target.closest('.autocomplete-container')) autocomplete.classList.remove('show');
     });
-    
-    var selectedIndex = -1;
-    input.addEventListener('keydown', function(e) {
-        var items = autocomplete.querySelectorAll('.autocomplete-item');
-        
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
-            updateSelection(items);
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            selectedIndex = Math.max(selectedIndex - 1, -1);
-            updateSelection(items);
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            if (selectedIndex >= 0 && items.length > 0) {
-                var selectedItem = items[selectedIndex];
-                var id = parseInt(selectedItem.dataset.id);
-                var name = selectedItem.dataset.name;
-                input.value = name;
-                if (medicineIdInput) medicineIdInput.value = id;
-                autocomplete.classList.remove('show');
-                selectedIndex = -1;
-                autoFillMedicine(id);
-            }
-        } else if (e.key === 'Escape') {
-            autocomplete.classList.remove('show');
-            selectedIndex = -1;
-        }
-    });
-    
-    function updateSelection(items) {
-        items.forEach(function(item, index) {
-            if (index === selectedIndex) {
-                item.classList.add('active');
-            } else {
-                item.classList.remove('active');
-            }
-        });
-        if (selectedIndex >= 0 && items.length > 0) {
-            items[selectedIndex].scrollIntoView({ block: 'nearest' });
-        }
-    }
 })();
 
-// ================================================================
-// AUTO-SEARCH - Equipment
-// ================================================================
+// AUTOCOMPLETE - EQUIPMENT
 (function() {
     var equipmentData = <?= json_encode($all_equipment) ?>;
     var input = document.getElementById('purchaseEquipmentName');
     var autocomplete = document.getElementById('purchaseEquipmentAutocomplete');
     var equipmentIdInput = document.getElementById('purchaseEquipmentId');
     
-    var categorySelect = document.getElementById('purchaseEquipCategorySelect');
-    var categoryManual = document.getElementById('purchaseEquipCategoryManual');
-    var unitSelect = document.getElementById('purchaseEquipUnit');
-    var buyingPriceInput = document.getElementById('purchaseEquipBuyingPrice');
-    var sellingPriceInput = document.getElementById('purchaseEquipSellingPrice');
-    var reorderInput = document.getElementById('purchaseEquipReorderLevel');
-    var supplierInput = document.getElementById('purchaseEquipSupplier');
-    var quantityInput = document.getElementById('purchaseEquipQuantity');
-    
     if (!input || !autocomplete) return;
-    
-    function autoFillEquipment(equipmentId) {
-        var selected = equipmentData.find(function(m) { return m.id == equipmentId; });
-        if (selected) {
-            if (equipmentIdInput) equipmentIdInput.value = selected.id;
-            
-            if (categorySelect && selected.category) {
-                var catFound = false;
-                for (var i = 0; i < categorySelect.options.length; i++) {
-                    if (categorySelect.options[i].value === selected.category) {
-                        categorySelect.value = selected.category;
-                        catFound = true;
-                        break;
-                    }
-                }
-                if (!catFound && selected.category) {
-                    categoryManual.style.display = 'block';
-                    categorySelect.style.display = 'none';
-                    categoryManual.value = selected.category;
-                    categoryManual.required = true;
-                    categorySelect.required = false;
-                } else {
-                    categoryManual.style.display = 'none';
-                    categorySelect.style.display = 'block';
-                    categorySelect.value = selected.category || '';
-                    categoryManual.required = false;
-                    categorySelect.required = true;
-                }
-            }
-            
-            if (unitSelect && selected.unit) {
-                for (var j = 0; j < unitSelect.options.length; j++) {
-                    if (unitSelect.options[j].value === selected.unit) {
-                        unitSelect.value = selected.unit;
-                        break;
-                    }
-                }
-            }
-            
-            if (buyingPriceInput) {
-                buyingPriceInput.value = Number(selected.unit_cost || 0).toLocaleString();
-            }
-            
-            if (sellingPriceInput) {
-                sellingPriceInput.value = Number(selected.selling_price || 0).toLocaleString();
-            }
-            
-            if (reorderInput && selected.reorder_level > 0) {
-                reorderInput.value = selected.reorder_level;
-            }
-            
-            if (supplierInput && selected.supplier) {
-                supplierInput.value = selected.supplier;
-            }
-            
-            if (quantityInput && selected.reorder_level > 0) {
-                quantityInput.value = selected.reorder_level;
-            }
-        }
-    }
     
     input.addEventListener('input', function() {
         var query = this.value.toLowerCase().trim();
-        
-        if (query.length < 1) {
-            autocomplete.classList.remove('show');
-            return;
-        }
+        if (query.length < 1) { autocomplete.classList.remove('show'); return; }
         
         var matches = equipmentData.filter(function(item) {
             return item.equipment_name.toLowerCase().includes(query);
         });
         
-        if (matches.length === 0) {
-            autocomplete.classList.remove('show');
-            return;
-        }
+        if (matches.length === 0) { autocomplete.classList.remove('show'); return; }
         
         var html = '';
         matches.forEach(function(item) {
-            html += `
-                <div class="autocomplete-item" data-id="${item.id}" data-name="${escapeHtml(item.equipment_name)}">
-                    <strong>${escapeHtml(item.equipment_name)}</strong>
-                    <span class="item-detail">
-                        Category: ${escapeHtml(item.category || 'N/A')} | 
-                        Buy: TSh ${Number(item.unit_cost || 0).toLocaleString()} | 
-                        Sell: TSh ${Number(item.selling_price || 0).toLocaleString()}
-                    </span>
-                </div>
-            `;
+            html += '<div class="autocomplete-item" data-id="' + item.id + '" data-name="' + escapeHtml(item.equipment_name) + '" data-unit="' + escapeHtml(item.unit || 'pcs') + '" data-cost="' + (item.unit_cost || 0) + '" data-price="' + (item.selling_price || 0) + '" data-reorder="' + (item.reorder_level || 5) + '" data-supplier="' + escapeHtml(item.supplier || '') + '">' +
+                '<strong>' + escapeHtml(item.equipment_name) + '</strong>' +
+                '<span class="item-detail">Unit: ' + escapeHtml(item.unit || 'pcs') + ' | Buy: TSh ' + Number(item.unit_cost || 0).toLocaleString() + ' | Sell: TSh ' + Number(item.selling_price || 0).toLocaleString() + '</span>' +
+                '</div>';
         });
         
         autocomplete.innerHTML = html;
@@ -4393,64 +2831,50 @@ function printPDFInvoice() {
         
         autocomplete.querySelectorAll('.autocomplete-item').forEach(function(item) {
             item.addEventListener('click', function() {
-                var id = parseInt(this.dataset.id);
-                var name = this.dataset.name;
-                input.value = name;
-                if (equipmentIdInput) equipmentIdInput.value = id;
+                input.value = this.dataset.name;
+                if (equipmentIdInput) equipmentIdInput.value = this.dataset.id;
                 autocomplete.classList.remove('show');
-                autoFillEquipment(id);
+                
+                if (document.getElementById('purchaseEquipBuyingPrice')) {
+                    document.getElementById('purchaseEquipBuyingPrice').value = Number(this.dataset.cost || 0).toLocaleString();
+                }
+                if (document.getElementById('purchaseEquipSellingPrice')) {
+                    document.getElementById('purchaseEquipSellingPrice').value = Number(this.dataset.price || 0).toLocaleString();
+                }
+                if (document.getElementById('purchaseEquipReorderLevel')) {
+                    document.getElementById('purchaseEquipReorderLevel').value = this.dataset.reorder || 5;
+                }
+                if (document.getElementById('purchaseEquipSupplier')) {
+                    document.getElementById('purchaseEquipSupplier').value = this.dataset.supplier || '';
+                }
+                
+                var unitVal = this.dataset.unit;
+                var unitSelect = document.getElementById('purchaseEquipUnit');
+                var unitManual = document.getElementById('purchaseEquipUnitManual');
+                if (unitSelect && unitManual && unitVal) {
+                    var found = false;
+                    for (var i = 0; i < unitSelect.options.length; i++) {
+                        if (unitSelect.options[i].value === unitVal) {
+                            unitSelect.value = unitVal;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        unitManual.style.display = 'block';
+                        unitSelect.style.display = 'none';
+                        unitManual.value = unitVal;
+                        unitManual.required = true;
+                        unitSelect.required = false;
+                    }
+                }
             });
         });
     });
     
     document.addEventListener('click', function(e) {
-        if (!e.target.closest('.autocomplete-container')) {
-            autocomplete.classList.remove('show');
-        }
+        if (!e.target.closest('.autocomplete-container')) autocomplete.classList.remove('show');
     });
-    
-    var selectedIndex = -1;
-    input.addEventListener('keydown', function(e) {
-        var items = autocomplete.querySelectorAll('.autocomplete-item');
-        
-        if (e.key === 'ArrowDown') {
-            e.preventDefault();
-            selectedIndex = Math.min(selectedIndex + 1, items.length - 1);
-            updateSelection(items);
-        } else if (e.key === 'ArrowUp') {
-            e.preventDefault();
-            selectedIndex = Math.max(selectedIndex - 1, -1);
-            updateSelection(items);
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            if (selectedIndex >= 0 && items.length > 0) {
-                var selectedItem = items[selectedIndex];
-                var id = parseInt(selectedItem.dataset.id);
-                var name = selectedItem.dataset.name;
-                input.value = name;
-                if (equipmentIdInput) equipmentIdInput.value = id;
-                autocomplete.classList.remove('show');
-                selectedIndex = -1;
-                autoFillEquipment(id);
-            }
-        } else if (e.key === 'Escape') {
-            autocomplete.classList.remove('show');
-            selectedIndex = -1;
-        }
-    });
-    
-    function updateSelection(items) {
-        items.forEach(function(item, index) {
-            if (index === selectedIndex) {
-                item.classList.add('active');
-            } else {
-                item.classList.remove('active');
-            }
-        });
-        if (selectedIndex >= 0 && items.length > 0) {
-            items[selectedIndex].scrollIntoView({ block: 'nearest' });
-        }
-    }
 })();
 
 function escapeHtml(text) {
@@ -4460,22 +2884,9 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// ================================================================
-// CONSOLE LOG
-// ================================================================
 console.log('%c💊 Braick - Admin Purchases', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-console.log('%c✅ Medicine Form: Auto-search, expiry required', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Equipment Form: Auto-search, expiry optional', 'font-size:13px; color:#7C3AED;');
-console.log('%c✅ Items saved to purchase_items only', 'font-size:13px; color:#34D399;');
-console.log('%c✅ Inventory updated ONLY on Complete Purchase', 'font-size:13px; color:#34D399;');
-console.log('%c✅ PDF Invoice: Click PDF Invoice button to view', 'font-size:13px; color:#DC2626;');
-console.log('%c✅ ADMIN CAN COMPLETE ANY PURCHASE (not just creator)', 'font-size:13px; color:#EF4444; font-weight:bold;');
-console.log('%c✅ ADMIN CAN CANCEL ANY PURCHASE with reason', 'font-size:13px; color:#EF4444; font-weight:bold;');
-console.log('%c✅ FIXED: Category saves correctly (not __other__)', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ FIXED: Quantity ADDS to existing inventory', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ FIXED: Status set to ACTIVE on complete', 'font-size:13px; color:#34D399; font-weight:bold;');
-console.log('%c✅ Medicine IN_PROGRESS count: <?= count($all_med_in_progress) ?>', 'font-size:13px; color:#D97706;');
-console.log('%c✅ Equipment IN_PROGRESS count: <?= count($all_equip_in_progress) ?>', 'font-size:13px; color:#D97706;');
+console.log('%c✅ EMBEDDED HEADER (same as shared)', 'font-size:13px; color:#34D399; font-weight:bold;');
+console.log('%c✅ Uses SHARED admin_sidebar.php', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

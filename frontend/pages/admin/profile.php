@@ -4,8 +4,8 @@
 // SUPER ADMIN - PROFILE PAGE
 // VIEW AND EDIT ADMIN PROFILE
 // WITH PROFILE PICTURE UPLOAD & USERNAME CHANGE
+// ✅ MOBILE SIDEBAR FIXED - Full width page on mobile
 // BRAICK DISPENSARY - USING EXISTING DB TABLES
-// WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // ================================================================
 
 // ================================================================
@@ -74,7 +74,6 @@ $stmt->execute([$user_id]);
 $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
 if (!$user) {
-    // If user not found, use session data
     $user = [
         'id' => $_SESSION['user_id'] ?? 1,
         'username' => $_SESSION['username'] ?? 'admin',
@@ -109,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     
     // ================================================================
-    // UPDATE PROFILE (with username)
+    // UPDATE PROFILE
     // ================================================================
     if ($action === 'update_profile') {
         $full_name = trim($_POST['full_name'] ?? '');
@@ -117,36 +116,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email = trim($_POST['email'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
         
-        // Validate
-        if (empty($full_name)) {
-            $errors[] = 'Full name is required';
-        }
-        if (empty($username)) {
-            $errors[] = 'Username is required';
-        }
-        if (empty($email)) {
-            $errors[] = 'Email is required';
-        }
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $errors[] = 'Invalid email address';
-        }
+        if (empty($full_name)) $errors[] = 'Full name is required';
+        if (empty($username)) $errors[] = 'Username is required';
+        if (empty($email)) $errors[] = 'Email is required';
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Invalid email address';
         
-        // Check if username already exists (except current user)
         if (empty($errors) && $username !== $user['username']) {
             $stmt = $db->prepare("SELECT id FROM users WHERE username = ? AND id != ?");
             $stmt->execute([$username, $user_id]);
-            if ($stmt->fetch()) {
-                $errors[] = 'Username already exists';
-            }
+            if ($stmt->fetch()) $errors[] = 'Username already exists';
         }
         
-        // Check if email already exists (except current user)
         if (empty($errors) && $email !== $user['email']) {
             $stmt = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
             $stmt->execute([$email, $user_id]);
-            if ($stmt->fetch()) {
-                $errors[] = 'Email already exists';
-            }
+            if ($stmt->fetch()) $errors[] = 'Email already exists';
         }
         
         if (empty($errors)) {
@@ -158,29 +142,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $stmt->execute([$full_name, $username, $email, $phone, $user_id]);
                 
-                // Update session
                 $_SESSION['full_name'] = $full_name;
                 $_SESSION['username'] = $username;
                 $_SESSION['email'] = $email;
                 $_SESSION['phone'] = $phone;
                 
-                // Refresh user data
                 $user['full_name'] = $full_name;
                 $user['username'] = $username;
                 $user['email'] = $email;
                 $user['phone'] = $phone;
                 
-                // Log activity
                 try {
                     $stmt = $db->prepare("
                         INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
                         VALUES (?, ?, 'profile_updated', ?, NOW())
                     ");
-                    $stmt->execute([
-                        $user_id,
-                        $user_branch_id,
-                        "Profile updated by: $full_name"
-                    ]);
+                    $stmt->execute([$user_id, $user_branch_id, "Profile updated by: $full_name"]);
                 } catch (Exception $e) {}
                 
                 $message = 'Profile updated successfully!';
@@ -204,21 +181,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $new_password = $_POST['new_password'] ?? '';
         $confirm_password = $_POST['confirm_password'] ?? '';
         
-        if (empty($current_password)) {
-            $errors[] = 'Current password is required';
-        }
-        if (empty($new_password)) {
-            $errors[] = 'New password is required';
-        }
-        if (strlen($new_password) < 6) {
-            $errors[] = 'Password must be at least 6 characters';
-        }
-        if ($new_password !== $confirm_password) {
-            $errors[] = 'Passwords do not match';
-        }
+        if (empty($current_password)) $errors[] = 'Current password is required';
+        if (empty($new_password)) $errors[] = 'New password is required';
+        if (strlen($new_password) < 6) $errors[] = 'Password must be at least 6 characters';
+        if ($new_password !== $confirm_password) $errors[] = 'Passwords do not match';
         
         if (empty($errors)) {
-            // Verify current password
             $stmt = $db->prepare("SELECT password FROM users WHERE id = ?");
             $stmt->execute([$user_id]);
             $user_data = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -228,17 +196,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $db->prepare("UPDATE users SET password = ? WHERE id = ?");
                 $stmt->execute([$hashed_password, $user_id]);
                 
-                // Log activity
                 try {
                     $stmt = $db->prepare("
                         INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
                         VALUES (?, ?, 'password_changed', ?, NOW())
                     ");
-                    $stmt->execute([
-                        $user_id,
-                        $user_branch_id,
-                        "Password changed for user: {$user['username']}"
-                    ]);
+                    $stmt->execute([$user_id, $user_branch_id, "Password changed for user: {$user['username']}"]);
                 } catch (Exception $e) {}
                 
                 $message = 'Password changed successfully!';
@@ -264,7 +227,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $file_tmp = $file['tmp_name'];
             $file_size = $file['size'];
             
-            // Validate file type
             $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
             $file_type = mime_content_type($file_tmp);
             
@@ -272,35 +234,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $errors[] = 'Only JPG, PNG, GIF, and WEBP images are allowed';
             }
             
-            // Validate file size (max 2MB)
             if ($file_size > 2 * 1024 * 1024) {
                 $errors[] = 'File size must be less than 2MB';
             }
             
             if (empty($errors)) {
-                // Generate unique filename
                 $extension = pathinfo($file_name, PATHINFO_EXTENSION);
                 $new_filename = 'user_' . $user_id . '_' . time() . '.' . $extension;
                 $upload_path = $upload_dir . $new_filename;
                 
-                // Delete old profile picture if exists
                 if (!empty($user['profile_pic'])) {
                     $old_file = $upload_dir . $user['profile_pic'];
-                    if (file_exists($old_file)) {
-                        unlink($old_file);
-                    }
+                    if (file_exists($old_file)) unlink($old_file);
                 }
                 
-                // Move uploaded file
                 if (move_uploaded_file($file_tmp, $upload_path)) {
-                    // Update database
                     $stmt = $db->prepare("UPDATE users SET profile_pic = ? WHERE id = ?");
                     $stmt->execute([$new_filename, $user_id]);
                     
-                    // Update session
                     $_SESSION['profile_pic'] = $new_filename;
-                    
-                    // Refresh user data
                     $user['profile_pic'] = $new_filename;
                     
                     $message = 'Profile picture updated successfully!';
@@ -325,9 +277,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'remove_profile_pic') {
         if (!empty($user['profile_pic'])) {
             $old_file = $upload_dir . $user['profile_pic'];
-            if (file_exists($old_file)) {
-                unlink($old_file);
-            }
+            if (file_exists($old_file)) unlink($old_file);
             
             $stmt = $db->prepare("UPDATE users SET profile_pic = NULL WHERE id = ?");
             $stmt->execute([$user_id]);
@@ -361,9 +311,6 @@ if (!empty($profile_pic)) {
     }
 }
 
-// ================================================================
-// PROFILE PICTURE URL FOR AVATAR
-// ================================================================
 $profile_pic_avatar = !empty($profile_pic_url) 
     ? $profile_pic_url 
     : 'data:image/svg+xml,' . urlencode('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" rx="50%" fill="#0B5ED7"/><text x="20" y="26" text-anchor="middle" fill="white" font-size="18" font-weight="bold" font-family="Arial">' . $initial . '</text></svg>');
@@ -464,9 +411,7 @@ include_once '../../components/admin_sidebar.php';
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
         
-        <!-- ============================================================ -->
         <!-- PROFILE CARD WITH PICTURE UPLOAD -->
-        <!-- ============================================================ -->
         <div class="profile-card">
             <div class="profile-avatar">
                 <?php if ($show_initial): ?>
@@ -522,9 +467,7 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <!-- ============================================================ -->
         <!-- PROFILE INFO -->
-        <!-- ============================================================ -->
         <div class="card lg:col-span-2">
             <div class="card-header">
                 <h3 class="card-title">
@@ -667,9 +610,108 @@ include_once '../../components/admin_sidebar.php';
 
 <style>
     /* ================================================================
+       ✅ MOBILE FIX - SIDEBAR & LAYOUT
+       ================================================================ */
+    @media (max-width: 1024px) {
+        /* Top nav inaanza kutoka 0 (full width) */
+        .top-nav {
+            left: 0 !important;
+            right: 0 !important;
+            padding: 0 16px !important;
+        }
+        
+        /* Main content inaanza kutoka 0 (full width) */
+        .main-content {
+            margin-left: 0 !important;
+            margin-right: 0 !important;
+            padding: 16px !important;
+            width: 100% !important;
+            max-width: 100% !important;
+            overflow-x: hidden;
+        }
+        
+        /* Sidebar imefichwa kwa default */
+        #sidebar,
+        .sidebar {
+            transform: translateX(-100%) !important;
+            transition: transform 0.3s ease !important;
+            z-index: 1000 !important;
+            position: fixed !important;
+            top: 0 !important;
+            left: 0 !important;
+            height: 100vh !important;
+        }
+        
+        /* Sidebar inaonekana ikiwa na class 'open' */
+        #sidebar.open,
+        .sidebar.open {
+            transform: translateX(0) !important;
+        }
+        
+        /* Overlay nyuma ya sidebar */
+        .sidebar-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 999;
+            backdrop-filter: blur(2px);
+        }
+        
+        .sidebar-overlay.show {
+            display: block;
+        }
+        
+        /* Profile card full width */
+        .profile-card {
+            width: 100% !important;
+        }
+        
+        /* Grid single column */
+        .grid.grid-cols-1.lg\:grid-cols-3 {
+            grid-template-columns: 1fr !important;
+        }
+        
+        .lg\:col-span-2 {
+            grid-column: span 1 !important;
+        }
+        
+        /* Form rows single column */
+        .form-row {
+            grid-template-columns: 1fr !important;
+        }
+    }
+
+    @media (max-width: 640px) {
+        .main-content {
+            padding: 10px !important;
+        }
+        
+        .top-nav {
+            padding: 0 10px !important;
+        }
+        
+        .page-header {
+            flex-direction: column !important;
+            align-items: stretch !important;
+        }
+        
+        .page-header .flex.gap-2 {
+            width: 100% !important;
+        }
+        
+        .page-header .btn {
+            width: 100% !important;
+            justify-content: center !important;
+        }
+    }
+
+    /* ================================================================
        PROFILE PAGE STYLES
        ================================================================ */
-    
     :root {
         --bg-body: #F1F5F9;
         --bg-card: #FFFFFF;
@@ -708,9 +750,6 @@ include_once '../../components/admin_sidebar.php';
         transition: all 0.3s ease;
     }
     
-    /* ================================================================
-       PROFILE CARD
-       ================================================================ */
     .profile-card {
         background: var(--bg-card);
         border-radius: var(--radius);
@@ -855,9 +894,6 @@ include_once '../../components/admin_sidebar.php';
         letter-spacing: 0.03em;
     }
     
-    /* ================================================================
-       FORM
-       ================================================================ */
     .card {
         background: var(--bg-card);
         border-radius: var(--radius);
@@ -982,9 +1018,6 @@ include_once '../../components/admin_sidebar.php';
         border-top: 1px solid var(--border-color);
     }
     
-    /* ================================================================
-       BUTTONS
-       ================================================================ */
     .btn {
         display: inline-flex;
         align-items: center;
@@ -1051,9 +1084,6 @@ include_once '../../components/admin_sidebar.php';
         color: var(--blue);
     }
     
-    /* ================================================================
-       ALERTS
-       ================================================================ */
     .alert {
         display: flex;
         align-items: center;
@@ -1110,9 +1140,6 @@ include_once '../../components/admin_sidebar.php';
         opacity: 1;
     }
     
-    /* ================================================================
-       BADGES
-       ================================================================ */
     .badge {
         display: inline-flex;
         align-items: center;
@@ -1129,9 +1156,6 @@ include_once '../../components/admin_sidebar.php';
     .badge-green { background: var(--green); }
     .badge-orange { background: var(--orange); }
     
-    /* ================================================================
-       PAGE HEADER
-       ================================================================ */
     .page-title {
         font-size: 1.5rem;
         font-weight: 700;
@@ -1182,9 +1206,6 @@ include_once '../../components/admin_sidebar.php';
     
     .mt-5 { margin-top: 20px; }
     
-    /* ================================================================
-       FOOTER
-       ================================================================ */
     .footer {
         margin-top: 30px;
         padding: 16px 20px;
@@ -1205,9 +1226,6 @@ include_once '../../components/admin_sidebar.php';
         color: var(--blue);
     }
     
-    /* ================================================================
-       RESPONSIVE
-       ================================================================ */
     @media (max-width: 1024px) {
         .main-content { padding: 16px; }
         .grid-cols-1 { grid-template-columns: 1fr; }
@@ -1236,9 +1254,6 @@ include_once '../../components/admin_sidebar.php';
         .btn { font-size: 0.8rem; padding: 8px 14px; }
     }
     
-    /* ================================================================
-       PRINT
-       ================================================================ */
     @media print {
         .top-nav, .sidebar, #sidebarToggle, .btn, .dark-toggle-btn,
         .icon-btn, .search-wrapper, .page-header .flex.gap-2, .footer,
@@ -1252,9 +1267,6 @@ include_once '../../components/admin_sidebar.php';
     }
 </style>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
     // ================================================================
     // DARK MODE
@@ -1289,31 +1301,89 @@ include_once '../../components/admin_sidebar.php';
     });
 
     // ================================================================
-    // DOM ELEMENTS
+    // ✅ SIDEBAR TOGGLE - MOBILE FRIENDLY
     // ================================================================
-    var sidebar = document.getElementById('sidebar');
+    var sidebar = document.getElementById('sidebar') || document.querySelector('.sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
-    var searchBtn = document.getElementById('searchBtn');
-    var searchInput = document.getElementById('searchInput');
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
+    
+    // Create overlay if not exists
+    if (sidebar && !document.querySelector('.sidebar-overlay')) {
+        var overlay = document.createElement('div');
+        overlay.className = 'sidebar-overlay';
+        document.body.appendChild(overlay);
+    }
+    
+    var sidebarOverlay = document.querySelector('.sidebar-overlay');
+    
+    // Toggle sidebar
+    sidebarToggle?.addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (sidebar) {
+            sidebar.classList.toggle('open');
+            if (sidebarOverlay) {
+                sidebarOverlay.classList.toggle('show');
+            }
+            
+            // Prevent body scroll when sidebar is open
+            if (sidebar.classList.contains('open')) {
+                document.body.style.overflow = 'hidden';
+            } else {
+                document.body.style.overflow = '';
+            }
+        }
     });
     
+    // Close sidebar when clicking overlay
+    sidebarOverlay?.addEventListener('click', function() {
+        if (sidebar) {
+            sidebar.classList.remove('open');
+            this.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+    });
+    
+    // Close sidebar when clicking outside (mobile only)
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && sidebarToggle && 
+                !sidebar.contains(e.target) && 
+                !sidebarToggle.contains(e.target) &&
+                sidebar.classList.contains('open')) {
+                sidebar.classList.remove('open');
+                if (sidebarOverlay) sidebarOverlay.classList.remove('show');
+                document.body.style.overflow = '';
+            }
+        }
+    });
+    
+    // Close sidebar on window resize (if going to desktop)
+    window.addEventListener('resize', function() {
+        if (window.innerWidth > 1024) {
+            if (sidebar) {
                 sidebar.classList.remove('open');
             }
+            if (sidebarOverlay) {
+                sidebarOverlay.classList.remove('show');
+            }
+            document.body.style.overflow = '';
+        }
+    });
+    
+    // Close sidebar on Escape key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && sidebar && sidebar.classList.contains('open')) {
+            sidebar.classList.remove('open');
+            if (sidebarOverlay) sidebarOverlay.classList.remove('show');
+            document.body.style.overflow = '';
         }
     });
 
     // ================================================================
     // SEARCH
     // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
     function performSearch() {
         var query = searchInput.value.trim();
         if (query.length > 0) {
@@ -1352,14 +1422,12 @@ include_once '../../components/admin_sidebar.php';
     document.getElementById('profile_pic_input')?.addEventListener('change', function(e) {
         var file = this.files[0];
         if (file) {
-            // Validate file size (2MB max)
             if (file.size > 2 * 1024 * 1024) {
                 alert('⚠️ File size must be less than 2MB!');
                 this.value = '';
                 return;
             }
             
-            // Validate file type
             var validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
             if (!validTypes.includes(file.type)) {
                 alert('⚠️ Only JPG, PNG, GIF, and WEBP images are allowed!');
@@ -1420,13 +1488,10 @@ include_once '../../components/admin_sidebar.php';
     });
 
     console.log('%c👤 Braick Dispensary - Profile Page', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ MOBILE FIX: Sidebar toggle inafanya page full width', 'font-size:13px; color:#34D399;');
     console.log('%c👤 Admin: <?= htmlspecialchars($user['full_name'] ?? 'Admin') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📧 Email: <?= htmlspecialchars($user['email'] ?? '') ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user['branch_name'] ?? 'N/A') ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📸 Profile Pic: <?= !empty($profile_pic) ? '✅ Uploaded' : '❌ Not set' ?>', 'font-size:13px; color:#059669;');
-    console.log('%c🔄 Username can be changed', 'font-size:13px; color:#34D399;');
-    console.log('%c📊 Tables: users, branches', 'font-size:13px; color:#64748B;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#0B5ED7;');
 </script>
 
 </body>

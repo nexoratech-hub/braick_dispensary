@@ -2,8 +2,9 @@
 // ================================================================
 // FILE: frontend/components/pharmacy_sidebar.php
 // PHARMACY - SHARED SIDEBAR (DIRECT AJAX - NO EXTERNAL API)
-// ✅ BLUE THEME - SAME AS TABLE HEADER (#0B5ED7)
+// ✅ BLUE THEME - MODERN GRADIENT
 // ✅ FONTS ZOTE NYEUPE
+// ✅ COMPACT SPACING - Punguza nafasi
 // ✅ OTC HISTORY - INOYESHA ZOTE
 // ✅ PRESCRIPTION HISTORY - INOYESHA ZOTE
 // ✅ DIRECT AJAX - HAKUNA API YA NJE
@@ -114,7 +115,7 @@ $total_otc = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
-        // 1. Pending Prescriptions (pending + confirmed)
+        // 1. Pending Prescriptions
         $stmt = $db->prepare("
             SELECT COUNT(*) as count 
             FROM prescriptions 
@@ -125,21 +126,12 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $pending_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // 2. Total Prescriptions
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM prescriptions 
-            WHERE branch_id = ?
-        ");
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ?");
         $stmt->execute([$user_branch_id]);
         $total_prescriptions = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // 3. Total Dispensed
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM prescriptions 
-            WHERE branch_id = ? 
-            AND status = 'dispensed'
-        ");
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM prescriptions WHERE branch_id = ? AND status = 'dispensed'");
         $stmt->execute([$user_branch_id]);
         $total_dispensed = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
@@ -179,21 +171,12 @@ if ($db !== null && isset($_SESSION['user_id'])) {
         $today_sales = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // 7. Today OTC Sales
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM otc_sales 
-            WHERE branch_id = ? 
-            AND DATE(created_at) = CURDATE()
-        ");
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND DATE(created_at) = CURDATE()");
         $stmt->execute([$user_branch_id]);
         $today_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
         // 8. TOTAL OTC Sales
-        $stmt = $db->prepare("
-            SELECT COUNT(*) as count 
-            FROM otc_sales 
-            WHERE branch_id = ?
-        ");
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ?");
         $stmt->execute([$user_branch_id]);
         $total_otc = (int)($stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0);
         
@@ -249,7 +232,7 @@ $initial_data = [
 
 <style>
     /* ================================================================
-       SIDEBAR - BLUE THEME SAME AS TABLE HEADER (#0B5ED7)
+       SIDEBAR - MODERN BLUE THEME WITH COMPACT SPACING
        ================================================================ */
     
     .sidebar-modern {
@@ -258,7 +241,7 @@ $initial_data = [
         left: 0;
         bottom: 0;
         width: 270px;
-        background: linear-gradient(180deg, #0B5ED7 0%, #0A4CA8 100%);
+        background: linear-gradient(180deg, #0B5ED7 0%, #0A4CA8 50%, #083A7A 100%);
         color: #ffffff !important;
         z-index: 9999;
         overflow-y: auto;
@@ -266,12 +249,12 @@ $initial_data = [
         transition: transform 0.35s cubic-bezier(0.4, 0, 0.2, 1);
         transform: translateX(-100%);
         box-shadow: 4px 0 30px rgba(11, 94, 215, 0.4);
-        padding-bottom: 16px;
+        padding-bottom: 8px;
         font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
     }
     
     [data-theme="dark"] .sidebar-modern {
-        background: linear-gradient(180deg, #0A4CA8 0%, #083A7A 100%);
+        background: linear-gradient(180deg, #0A4CA8 0%, #083A7A 50%, #062A5A 100%);
         box-shadow: 4px 0 30px rgba(0,0,0,0.6);
     }
     
@@ -310,27 +293,29 @@ $initial_data = [
     }
     
     /* ================================================================
-       SIDEBAR BRAND - BLUE THEME
+       SIDEBAR BRAND - COMPACT
        ================================================================ */
     .sidebar-brand-modern {
-        padding: 18px 18px 14px;
-        border-bottom: 2px solid rgba(255,255,255,0.08);
-        background: rgba(0,0,0,0.05);
+        padding: 12px 14px 10px;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+        background: rgba(0,0,0,0.1);
         position: sticky;
         top: 0;
         z-index: 5;
         backdrop-filter: blur(10px);
+        margin-bottom: 4px;
     }
     
     .sidebar-brand-modern .logo-modern {
-        width: 40px;
-        height: 40px;
+        width: 36px;
+        height: 36px;
         border-radius: 10px;
         object-fit: cover;
         background: white;
         padding: 4px;
-        border: 1px solid rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
         transition: transform 0.3s ease;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
     }
     
     .sidebar-brand-modern .logo-modern:hover {
@@ -340,34 +325,35 @@ $initial_data = [
     .sidebar-brand-modern .brand-text-modern {
         color: #ffffff !important;
         font-weight: 700;
-        font-size: 1rem;
+        font-size: 0.9rem;
         line-height: 1.2;
         letter-spacing: -0.01em;
     }
     
     .sidebar-brand-modern .brand-sub-modern {
-        color: rgba(255,255,255,0.6) !important;
-        font-size: 0.6rem;
-        font-weight: 500;
+        color: rgba(255,255,255,0.7) !important;
+        font-size: 0.55rem;
+        font-weight: 600;
         letter-spacing: 0.04em;
         text-transform: uppercase;
+        margin-top: 1px;
     }
     
     .sidebar-close-btn-modern {
         display: none;
-        background: rgba(255,255,255,0.06);
+        background: rgba(255,255,255,0.1);
         border: none;
-        color: rgba(255,255,255,0.6) !important;
-        font-size: 1.1rem;
+        color: rgba(255,255,255,0.8) !important;
+        font-size: 0.9rem;
         cursor: pointer;
-        padding: 4px 10px;
+        padding: 5px 9px;
         border-radius: 6px;
         transition: all 0.3s ease;
         margin-left: auto;
     }
     
     .sidebar-close-btn-modern:hover {
-        background: rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.2);
         color: #ffffff !important;
         transform: rotate(90deg);
     }
@@ -377,44 +363,54 @@ $initial_data = [
     }
     
     /* ================================================================
-       PROFILE SECTION IMETOLEWA
-       ================================================================ */
-    
-    /* ================================================================
-       NAVIGATION - FONTS NYEUPE KABISA
+       NAVIGATION - COMPACT SPACING
        ================================================================ */
     .sidebar-nav-modern {
-        padding: 8px 10px 16px;
+        padding: 4px 8px 8px;
     }
     
+    /* Section Labels - Compact */
     .sidebar-nav-modern .nav-label-modern {
-        font-size: 0.55rem;
+        font-size: 0.52rem;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: rgba(255,255,255,0.5) !important;
-        padding: 8px 12px 4px;
+        color: rgba(255,255,255,0.45) !important;
+        padding: 8px 10px 3px;
         font-weight: 700;
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        position: relative;
     }
     
     .sidebar-nav-modern .nav-label-modern:first-of-type {
-        padding-top: 6px;
+        padding-top: 4px;
+    }
+    
+    /* Divider line under section label */
+    .sidebar-nav-modern .nav-label-modern::after {
+        content: '';
+        flex: 1;
+        height: 1px;
+        background: linear-gradient(90deg, rgba(255,255,255,0.15), transparent);
+        margin-left: 5px;
     }
     
     /* ================================================================
-       SIDEBAR LINKS - PURE BLUE, FONTS NYEUPE
+       SIDEBAR LINKS - COMPACT
        ================================================================ */
     .sidebar-link-modern {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 8px 12px;
-        border-radius: 8px;
-        color: rgba(255,255,255,0.75) !important;
+        gap: 9px;
+        padding: 7px 10px;
+        border-radius: 7px;
+        color: rgba(255,255,255,0.85) !important;
         text-decoration: none;
         transition: all 0.2s ease;
-        font-size: 0.78rem;
+        font-size: 0.74rem;
         font-weight: 500;
-        margin: 2px 0;
+        margin: 1px 0;
         background: transparent;
         cursor: pointer;
         border: none;
@@ -425,23 +421,25 @@ $initial_data = [
     }
     
     .sidebar-link-modern:hover {
-        background: rgba(255,255,255,0.1);
+        background: rgba(255,255,255,0.12);
         color: #ffffff !important;
         transform: translateX(3px);
     }
     
     .sidebar-link-modern.active {
-        background: rgba(255,255,255,0.15);
+        background: rgba(255,255,255,0.18);
         color: #ffffff !important;
         box-shadow: inset 3px 0 0 #6EA8FE;
+        font-weight: 600;
     }
     
     .sidebar-link-modern i {
-        width: 18px;
+        width: 16px;
         text-align: center;
-        font-size: 0.85rem;
+        font-size: 0.78rem;
         flex-shrink: 0;
-        color: rgba(255,255,255,0.5) !important;
+        color: rgba(255,255,255,0.7) !important;
+        transition: color 0.2s ease;
     }
     
     .sidebar-link-modern.active i {
@@ -449,66 +447,56 @@ $initial_data = [
     }
     
     .sidebar-link-modern:hover i {
-        color: rgba(255,255,255,0.8) !important;
+        color: #ffffff !important;
     }
     
     /* ================================================================
-       BADGES - FONTS NYEUPE
+       BADGES - COMPACT
        ================================================================ */
     .sidebar-link-modern .badge-modern {
         margin-left: auto;
-        background: rgba(255,255,255,0.08);
-        padding: 2px 8px;
-        border-radius: 12px;
-        font-size: 0.6rem;
-        font-weight: 600;
-        color: rgba(255,255,255,0.6) !important;
+        background: rgba(255,255,255,0.12);
+        padding: 2px 7px;
+        border-radius: 10px;
+        font-size: 0.55rem;
+        font-weight: 700;
+        color: rgba(255,255,255,0.8) !important;
         transition: all 0.3s ease;
         flex-shrink: 0;
-        min-width: 20px;
+        min-width: 18px;
         text-align: center;
+        border: 1px solid rgba(255,255,255,0.1);
     }
     
     .sidebar-link-modern .badge-modern.danger {
-        background: rgba(239, 68, 68, 0.25);
-        color: #F87171 !important;
+        background: rgba(239, 68, 68, 0.35);
+        color: #FCA5A5 !important;
+        border-color: rgba(239, 68, 68, 0.4);
         animation: pulse-badge-modern 2s infinite;
     }
     
     .sidebar-link-modern .badge-modern.green {
-        background: rgba(52, 211, 153, 0.15);
-        color: #34D399 !important;
-    }
-    
-    .sidebar-link-modern .badge-modern.orange {
-        background: rgba(251, 191, 36, 0.15);
-        color: #FBBF24 !important;
+        background: rgba(52, 211, 153, 0.2);
+        color: #6EE7B7 !important;
+        border-color: rgba(52, 211, 153, 0.3);
     }
     
     .sidebar-link-modern .badge-modern.red {
-        background: rgba(239, 68, 68, 0.25);
-        color: #F87171 !important;
+        background: rgba(239, 68, 68, 0.35);
+        color: #FCA5A5 !important;
+        border-color: rgba(239, 68, 68, 0.4);
         animation: pulse-badge-modern 2s infinite;
     }
     
-    .sidebar-link-modern .badge-modern.blue {
-        background: rgba(96, 165, 250, 0.15);
-        color: #60A5FA !important;
-    }
-    
     .sidebar-link-modern:hover .badge-modern {
-        background: rgba(255,255,255,0.12);
-        color: rgba(255,255,255,0.8) !important;
-    }
-    
-    .sidebar-link-modern.active .badge-modern {
-        background: rgba(255,255,255,0.12);
+        background: rgba(255,255,255,0.2);
         color: #ffffff !important;
     }
     
-    .sidebar-link-modern.active .badge-modern.danger {
-        background: rgba(239, 68, 68, 0.3);
-        color: #FCA5A5 !important;
+    .sidebar-link-modern.active .badge-modern {
+        background: rgba(255,255,255,0.2);
+        color: #ffffff !important;
+        border-color: rgba(255,255,255,0.25);
     }
     
     /* ================================================================
@@ -537,39 +525,44 @@ $initial_data = [
     }
     
     /* ================================================================
-       LOGOUT LINK
+       LOGOUT LINK - COMPACT
        ================================================================ */
     .sidebar-link-modern.logout-link-modern {
-        border-top: 1px solid rgba(255,255,255,0.06);
-        padding-top: 10px;
-        margin-top: 6px;
-        color: rgba(252, 165, 165, 0.5) !important;
-        font-size: 0.78rem;
+        border-top: 1px solid rgba(255,255,255,0.1);
+        padding-top: 9px;
+        margin-top: 8px;
+        color: rgba(252, 165, 165, 0.7) !important;
+        font-size: 0.74rem;
+        border-radius: 0;
+        background: transparent;
     }
     
     .sidebar-link-modern.logout-link-modern:hover {
-        background: rgba(220, 38, 38, 0.15);
-        color: #F87171 !important;
+        background: rgba(220, 38, 38, 0.2);
+        color: #FCA5A5 !important;
         box-shadow: none;
+        transform: translateX(3px);
+        border-radius: 7px;
     }
     
     .sidebar-link-modern.logout-link-modern:hover i {
-        color: #F87171 !important;
+        color: #FCA5A5 !important;
     }
     
     /* ================================================================
-       SIDEBAR STATUS FOOTER
+       SIDEBAR STATUS FOOTER - COMPACT
        ================================================================ */
     .sidebar-status-modern {
-        padding: 8px 18px;
-        border-top: 1px solid rgba(255,255,255,0.06);
+        padding: 7px 14px;
+        border-top: 1px solid rgba(255,255,255,0.1);
         display: flex;
         align-items: center;
-        gap: 10px;
-        background: rgba(0,0,0,0.05);
+        gap: 8px;
+        background: rgba(0,0,0,0.1);
         position: sticky;
         bottom: 0;
         backdrop-filter: blur(10px);
+        margin-top: 4px;
     }
     
     .sidebar-status-modern .status-dot-modern {
@@ -582,7 +575,7 @@ $initial_data = [
     .sidebar-status-modern .status-dot-modern.online {
         background: #34D399;
         animation: pulse-dot-modern 1.5s infinite;
-        box-shadow: 0 0 8px rgba(52, 211, 153, 0.3);
+        box-shadow: 0 0 8px rgba(52, 211, 153, 0.5);
     }
     
     .sidebar-status-modern .status-dot-modern.offline {
@@ -590,18 +583,19 @@ $initial_data = [
     }
     
     .sidebar-status-modern .status-text-modern {
-        font-size: 0.6rem;
-        color: rgba(255,255,255,0.5) !important;
-        font-weight: 500;
+        font-size: 0.58rem;
+        color: rgba(255,255,255,0.7) !important;
+        font-weight: 600;
     }
     
     .sidebar-status-modern .status-time-modern {
         font-size: 0.55rem;
-        color: rgba(255,255,255,0.35) !important;
+        color: rgba(255,255,255,0.5) !important;
         margin-left: auto;
         display: flex;
         align-items: center;
         gap: 4px;
+        font-weight: 500;
     }
     
     .sidebar-status-modern .status-time-modern .live-dot-modern {
@@ -611,6 +605,7 @@ $initial_data = [
         background: #34D399;
         display: inline-block;
         animation: pulse-dot-modern 1.5s infinite;
+        box-shadow: 0 0 6px rgba(52, 211, 153, 0.5);
     }
     
     @keyframes pulse-dot-modern {
@@ -626,7 +621,7 @@ $initial_data = [
         .sidebar-modern {
             transform: translateX(0) !important;
             z-index: 50;
-            box-shadow: 2px 0 16px rgba(11, 94, 215, 0.15);
+            box-shadow: 2px 0 16px rgba(11, 94, 215, 0.2);
         }
         #sidebarOverlayModern { display: none !important; }
         .sidebar-close-btn-modern { display: none !important; }
@@ -634,58 +629,59 @@ $initial_data = [
     
     @media (max-width: 1024px) {
         .sidebar-modern {
-            width: 290px;
+            width: 280px;
             transform: translateX(-100%);
             z-index: 9999;
             border-radius: 0 12px 12px 0;
-            box-shadow: 4px 0 30px rgba(11, 94, 215, 0.3);
+            box-shadow: 4px 0 30px rgba(11, 94, 215, 0.4);
         }
         .sidebar-modern.open { transform: translateX(0) !important; }
         #sidebarOverlayModern { display: none; z-index: 9998; }
         #sidebarOverlayModern.active { display: block !important; }
-        .sidebar-brand-modern { padding: 14px 16px 12px; }
-        .sidebar-brand-modern .logo-modern { width: 36px; height: 36px; }
-        .sidebar-brand-modern .brand-text-modern { font-size: 0.9rem; }
-        .sidebar-link-modern { padding: 6px 12px; font-size: 0.7rem; gap: 8px; }
-        .sidebar-link-modern i { width: 16px; font-size: 0.75rem; }
-        .sidebar-link-modern .badge-modern { font-size: 0.55rem; padding: 2px 7px; min-width: 18px; }
-        .sidebar-nav-modern .nav-label-modern { font-size: 0.5rem; padding: 6px 12px 3px; }
-        .sidebar-status-modern { padding: 6px 16px; }
+        .sidebar-brand-modern { padding: 10px 12px 8px; }
+        .sidebar-brand-modern .logo-modern { width: 32px; height: 32px; }
+        .sidebar-brand-modern .brand-text-modern { font-size: 0.85rem; }
+        .sidebar-link-modern { padding: 6px 10px; font-size: 0.7rem; gap: 8px; }
+        .sidebar-link-modern i { width: 15px; font-size: 0.72rem; }
+        .sidebar-link-modern .badge-modern { font-size: 0.52rem; padding: 2px 6px; min-width: 16px; }
+        .sidebar-nav-modern .nav-label-modern { font-size: 0.5rem; padding: 6px 8px 2px; }
+        .sidebar-status-modern { padding: 6px 12px; }
         .sidebar-status-modern .status-text-modern { font-size: 0.55rem; }
         .sidebar-status-modern .status-time-modern { font-size: 0.5rem; }
     }
     
     @media (max-width: 768px) {
-        .sidebar-modern { width: 310px; border-radius: 0 16px 16px 0; }
-        .sidebar-brand-modern { padding: 12px 14px 10px; }
-        .sidebar-brand-modern .logo-modern { width: 32px; height: 32px; }
-        .sidebar-brand-modern .brand-text-modern { font-size: 0.85rem; }
-        .sidebar-link-modern { padding: 5px 12px; font-size: 0.65rem; gap: 7px; }
-        .sidebar-link-modern i { width: 15px; font-size: 0.7rem; }
-        .sidebar-link-modern .badge-modern { font-size: 0.5rem; padding: 1px 6px; min-width: 16px; }
-        .sidebar-nav-modern .nav-label-modern { font-size: 0.45rem; padding: 5px 12px 2px; }
-        .sidebar-status-modern { padding: 5px 14px; }
-        .sidebar-status-modern .status-text-modern { font-size: 0.5rem; }
-        .sidebar-status-modern .status-time-modern { font-size: 0.45rem; }
+        .sidebar-modern { width: 290px; border-radius: 0 14px 14px 0; }
+        .sidebar-brand-modern { padding: 9px 11px 7px; }
+        .sidebar-brand-modern .logo-modern { width: 30px; height: 30px; }
+        .sidebar-brand-modern .brand-text-modern { font-size: 0.82rem; }
+        .sidebar-brand-modern .brand-sub-modern { font-size: 0.5rem; }
+        .sidebar-link-modern { padding: 6px 9px; font-size: 0.68rem; gap: 7px; }
+        .sidebar-link-modern i { width: 14px; font-size: 0.7rem; }
+        .sidebar-link-modern .badge-modern { font-size: 0.5rem; padding: 1px 6px; min-width: 15px; }
+        .sidebar-nav-modern .nav-label-modern { font-size: 0.48rem; padding: 5px 8px 2px; }
+        .sidebar-status-modern { padding: 5px 11px; }
+        .sidebar-status-modern .status-text-modern { font-size: 0.52rem; }
+        .sidebar-status-modern .status-time-modern { font-size: 0.48rem; }
     }
     
     @media (max-width: 480px) {
         .sidebar-modern {
             width: 100%;
-            max-width: 320px;
-            border-radius: 0 20px 20px 0;
+            max-width: 300px;
+            border-radius: 0 16px 16px 0;
         }
-        .sidebar-brand-modern { padding: 10px 12px 8px; }
+        .sidebar-brand-modern { padding: 8px 10px 6px; }
         .sidebar-brand-modern .logo-modern { width: 28px; height: 28px; }
-        .sidebar-brand-modern .brand-text-modern { font-size: 0.75rem; }
-        .sidebar-brand-modern .brand-sub-modern { font-size: 0.5rem; }
-        .sidebar-link-modern { padding: 4px 10px; font-size: 0.6rem; gap: 6px; }
-        .sidebar-link-modern i { width: 14px; font-size: 0.65rem; }
-        .sidebar-link-modern .badge-modern { font-size: 0.45rem; padding: 1px 5px; min-width: 14px; }
-        .sidebar-nav-modern .nav-label-modern { font-size: 0.4rem; padding: 4px 10px 2px; }
-        .sidebar-status-modern { padding: 4px 12px; }
-        .sidebar-status-modern .status-text-modern { font-size: 0.45rem; }
-        .sidebar-status-modern .status-time-modern { font-size: 0.4rem; }
+        .sidebar-brand-modern .brand-text-modern { font-size: 0.78rem; }
+        .sidebar-brand-modern .brand-sub-modern { font-size: 0.48rem; }
+        .sidebar-link-modern { padding: 5px 8px; font-size: 0.65rem; gap: 6px; }
+        .sidebar-link-modern i { width: 13px; font-size: 0.65rem; }
+        .sidebar-link-modern .badge-modern { font-size: 0.48rem; padding: 1px 5px; min-width: 14px; }
+        .sidebar-nav-modern .nav-label-modern { font-size: 0.45rem; padding: 4px 7px 1px; }
+        .sidebar-status-modern { padding: 4px 10px; }
+        .sidebar-status-modern .status-text-modern { font-size: 0.48rem; }
+        .sidebar-status-modern .status-time-modern { font-size: 0.44rem; }
         .sidebar-status-modern .status-dot-modern { width: 5px; height: 5px; }
     }
     
@@ -694,10 +690,10 @@ $initial_data = [
        ================================================================ */
     .flex { display: flex; }
     .items-center { align-items: center; }
-    .gap-2 { gap: 8px; }
-    .gap-3 { gap: 12px; }
-    .mt-2 { margin-top: 8px; }
-    .mt-1 { margin-top: 4px; }
+    .gap-2 { gap: 6px; }
+    .gap-3 { gap: 10px; }
+    .mt-2 { margin-top: 6px; }
+    .mt-1 { margin-top: 3px; }
     .ml-auto { margin-left: auto; }
     .truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>
@@ -720,7 +716,7 @@ $initial_data = [
             <img src="<?= $site_logo_path ?>" 
                  alt="<?= htmlspecialchars($site_name) ?>" 
                  class="logo-modern"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2234%22 height=%2234%22%3E%3Crect width=%2234%22 height=%2234%22 fill=%22%230B5ED7%22 rx=%228%22/%3E%3Ctext x=%2217%22 y=%2224%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2236%22 height=%2236%22%3E%3Crect width=%2236%22 height=%2236%22 fill=%22%230B5ED7%22 rx=%2210%22/%3E%3Ctext x=%2218%22 y=%2224%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2216%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
             <div class="truncate">
                 <p class="brand-text-modern" id="sidebarSiteName"><?= htmlspecialchars($site_name) ?></p>
                 <p class="brand-sub-modern">💊 Pharmacy Panel</p>
@@ -732,23 +728,19 @@ $initial_data = [
     </div>
     
     <!-- ================================================================ -->
-    <!-- PROFILE SECTION IMETOLEWA KABISA -->
-    <!-- ================================================================ -->
-    
-    <!-- ================================================================ -->
     <!-- NAVIGATION -->
     <!-- ================================================================ -->
     <nav class="sidebar-nav-modern">
         
         <!-- Pharmacy -->
-        <div class="nav-label-modern">📋 Pharmacy</div>
+        <div class="nav-label-modern">📋 PHARMACY</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/dashboard.php" class="sidebar-link-modern <?= isActive('dashboard.php') ?>">
             <i class="fas fa-home"></i> Dashboard
         </a>
         
         <!-- Prescription Sales -->
-        <div class="nav-label-modern">💊 Prescription Sales</div>
+        <div class="nav-label-modern">💊 PRESCRIPTIONS</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/pending_prescriptions.php" class="sidebar-link-modern <?= isActive('pending_prescriptions.php') ?>">
             <i class="fas fa-prescription"></i> Prescriptions
@@ -765,7 +757,7 @@ $initial_data = [
         </a>
         
         <!-- OTC Sales -->
-        <div class="nav-label-modern">🛒 OTC Sales</div>
+        <div class="nav-label-modern">🛒 OTC SALES</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/new_otc_sale.php" class="sidebar-link-modern <?= isActive('new_otc_sale.php') ?>">
             <i class="fas fa-plus-circle"></i> New OTC Sale
@@ -777,7 +769,7 @@ $initial_data = [
         </a>
         
         <!-- Medicines -->
-        <div class="nav-label-modern">📦 Medicines</div>
+        <div class="nav-label-modern">📦 MEDICINES</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/inventory.php" class="sidebar-link-modern <?= isActive('inventory.php') ?>">
             <i class="fas fa-warehouse"></i> Inventory
@@ -802,7 +794,7 @@ $initial_data = [
         </a>
         
         <!-- Account -->
-        <div class="nav-label-modern">👤 Account</div>
+        <div class="nav-label-modern">👤 ACCOUNT</div>
         
         <a href="/dispensary_system/frontend/pages/pharmacy/profile.php" class="sidebar-link-modern <?= isActive('profile.php') ?>">
             <i class="fas fa-user-circle"></i> Profile
@@ -952,8 +944,6 @@ $initial_data = [
         
         var hasChanges = false;
         
-        console.log('📊 Updating badges with data:', data);
-        
         // 1. Pending Prescriptions
         var pendingBadge = document.getElementById('sidebarPendingBadgeModern');
         if (pendingBadge && data.pending_prescriptions !== undefined) {
@@ -966,7 +956,6 @@ $initial_data = [
                 pendingBadge.classList.remove('badge-update-modern');
                 void pendingBadge.offsetWidth;
                 pendingBadge.classList.add('badge-update-modern');
-                console.log('🔄 Pending Prescriptions: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -982,7 +971,6 @@ $initial_data = [
                 lowStockBadge.classList.remove('badge-update-modern');
                 void lowStockBadge.offsetWidth;
                 lowStockBadge.classList.add('badge-update-modern');
-                console.log('🔄 Low Stock: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -998,7 +986,6 @@ $initial_data = [
                 expiredBadge.classList.remove('badge-update-modern');
                 void expiredBadge.offsetWidth;
                 expiredBadge.classList.add('badge-update-modern');
-                console.log('🔄 Expired: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -1014,7 +1001,6 @@ $initial_data = [
                 totalPrescBadge.classList.remove('badge-update-modern');
                 void totalPrescBadge.offsetWidth;
                 totalPrescBadge.classList.add('badge-update-modern');
-                console.log('🔄 Total Prescriptions: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -1030,7 +1016,6 @@ $initial_data = [
                 totalOtcBadge.classList.remove('badge-update-modern');
                 void totalOtcBadge.offsetWidth;
                 totalOtcBadge.classList.add('badge-update-modern');
-                console.log('🔄 Total OTC: ' + oldVal + ' → ' + newVal);
             }
         }
         
@@ -1055,7 +1040,6 @@ $initial_data = [
                 sidebarEl.classList.add('sidebar-data-flash-modern');
             }
             sidebarState.changeCount++;
-            console.log('📊 Pharmacy sidebar updated: ' + sidebarState.changeCount + ' changes');
         }
         
         return hasChanges;
@@ -1077,8 +1061,6 @@ $initial_data = [
             formData.append('force_update', '1');
         }
         
-        console.log('📡 Fetching sidebar data via AJAX... (force: ' + (forceUpdate ? 'YES' : 'NO') + ')');
-        
         fetch(SIDEBAR_CONFIG.AJAX_URL, {
             method: 'POST',
             body: formData,
@@ -1094,13 +1076,10 @@ $initial_data = [
             sidebarState.isUpdating = false;
             
             if (data.success) {
-                console.log('📥 AJAX Response:', data);
-                
                 if (data.has_changed && data.data) {
                     var hasUpdates = updateSidebarBadges(data.data);
                     if (hasUpdates) {
                         sidebarState.dataHash = data.hash;
-                        console.log('✅ Sidebar updated with new data');
                     }
                     sidebarState.hasInitialData = true;
                     
@@ -1140,12 +1119,10 @@ $initial_data = [
                 if (data.message && data.message.includes('Unauthorized')) {
                     window.location.href = '/dispensary_system/frontend/pages/login.php';
                 }
-                console.warn('⚠️ AJAX Error:', data.message);
             }
         })
         .catch(function(error) {
             sidebarState.isUpdating = false;
-            console.warn('❌ Sidebar AJAX error:', error.message);
             
             var statusDot = document.getElementById('sidebarStatusDotModern');
             if (statusDot) {
@@ -1184,10 +1161,6 @@ $initial_data = [
                 fetchSidebarData(true);
             }
         }, SIDEBAR_CONFIG.FORCE_INTERVAL);
-        
-        console.log('🔄 Pharmacy sidebar auto-update started (check: ' + 
-            SIDEBAR_CONFIG.CHECK_INTERVAL/1000 + 's, force: ' + 
-            SIDEBAR_CONFIG.FORCE_INTERVAL/1000 + 's)');
     }
 
     function stopSidebarAutoUpdate() {
@@ -1199,7 +1172,6 @@ $initial_data = [
             clearInterval(sidebarState.forceInterval);
             sidebarState.forceInterval = null;
         }
-        console.log('🔄 Pharmacy sidebar auto-update stopped');
     }
 
     // ================================================================
@@ -1246,24 +1218,10 @@ $initial_data = [
     // ================================================================
     // CONSOLE LOG
     // ================================================================
-    console.log('%c💊 Braick Pharmacy Sidebar (BLUE THEME - #0B5ED7)', 
+    console.log('%c💊 Braick Pharmacy Sidebar (COMPACT BLUE THEME)', 
         'font-size:16px; font-weight:bold; color:#0B5ED7;');
     console.log('%c🏥 Site: <?= htmlspecialchars($site_name) ?>', 
         'font-size:12px; color:#34D399;');
-    console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
-    console.log('   Pending: <?= $pending_prescriptions ?>, Low Stock: <?= $low_stock_count ?>');
-    console.log('   Expired: <?= $expired_count ?>, Total Prescriptions: <?= $total_prescriptions ?>');
-    console.log('   Total OTC: <?= $total_otc ?>, Dispensed: <?= $total_dispensed ?>');
-    console.log('%c⚡ Smart Updates: Every 2s (only if data changed)', 
-        'font-size:13px; color:#34D399;');
-    console.log('%c🔄 Force refresh: Every 5s (safety net)', 
-        'font-size:13px; color:#F59E0B;');
-    console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 
-        'font-size:12px; color:#94A3B8;');
-    console.log('%c💡 Call window.refreshSidebarData() to manually update', 
-        'font-size:12px; color:#6EA8FE;');
-    console.log('%c📱 Click ☰ in header to open sidebar on mobile', 
-        'font-size:12px; color:#34D399;');
-    console.log('%c🎨 Blue color: #0B5ED7 (same as table header)', 
-        'font-size:12px; color:#0B5ED7;');
+    console.log('%c📊 Pending: <?= $pending_prescriptions ?>, Low Stock: <?= $low_stock_count ?>, Expired: <?= $expired_count ?>', 
+        'font-size:12px; color:#F59E0B;');
 </script>

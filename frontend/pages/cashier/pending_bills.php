@@ -2,12 +2,11 @@
 // ================================================================
 // FILE: frontend/pages/cashier/pending_bills.php
 // CASHIER - PENDING BILLS LIST
-// FIXED: SQL syntax error fixed
-// FIXED: Shows ONLY bills with balance > 0
-// FIXED: Prescription bills show as LOCKED until confirmed
-// FIXED: Added Subtotal column with Dark Green Header
-// FIXED: Discount correctly shows total from bill_items (not double counted)
-// FIXED: OTC discount shows from otc_sales.discount_amount
+// ✅ REMOVED: Cancel button (only View + Process Payment)
+// ✅ Shows ONLY bills with status = 'pending' AND balance > 0
+// ✅ Prescription bills show as LOCKED until confirmed
+// ✅ Premium taken directly from bills.premium_amount column
+// ✅ Scroll Left/Right buttons ON EACH TABLE (per patient card)
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -65,80 +64,6 @@ $currency = 'TSh';
 $all_bills = [];
 
 try {
-    // ================================================================
-    // HANDLE CANCEL BILL ACTION
-    // ================================================================
-    if (isset($_GET['cancel_bill']) && is_numeric($_GET['cancel_bill'])) {
-        $bill_id = (int)$_GET['cancel_bill'];
-        
-        try {
-            $db->beginTransaction();
-            
-            $stmt = $db->prepare("SELECT * FROM bills WHERE id = ? AND branch_id = ?");
-            $stmt->execute([$bill_id, $user_branch_id]);
-            $bill = $stmt->fetch(PDO::FETCH_ASSOC);
-            
-            if ($bill) {
-                if (in_array($bill['status'], ['pending', 'partial'])) {
-                    $stmt = $db->prepare("SELECT COUNT(*) as count FROM payments WHERE bill_id = ?");
-                    $stmt->execute([$bill_id]);
-                    $payment_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
-                    
-                    if ($payment_count == 0) {
-                        $stmt = $db->prepare("
-                            UPDATE bills 
-                            SET status = 'cancelled', 
-                                updated_at = NOW() 
-                            WHERE id = ? AND branch_id = ?
-                        ");
-                        $stmt->execute([$bill_id, $user_branch_id]);
-                        
-                        $stmt = $db->prepare("
-                            UPDATE bill_items 
-                            SET status = 'cancelled',
-                                updated_at = NOW()
-                            WHERE bill_id = ?
-                        ");
-                        $stmt->execute([$bill_id]);
-                        
-                        $db->commit();
-                        $_SESSION['flash_message'] = "✅ Bill #" . $bill['bill_number'] . " cancelled successfully!";
-                        $_SESSION['flash_type'] = 'success';
-                    } else {
-                        $db->rollBack();
-                        $_SESSION['flash_message'] = "❌ Cannot cancel bill with existing payments.";
-                        $_SESSION['flash_type'] = 'error';
-                    }
-                } else {
-                    $db->rollBack();
-                    $_SESSION['flash_message'] = "⚠️ Bill is already " . ucfirst($bill['status']);
-                    $_SESSION['flash_type'] = 'warning';
-                }
-            } else {
-                $db->rollBack();
-                $_SESSION['flash_message'] = "❌ Bill not found.";
-                $_SESSION['flash_type'] = 'error';
-            }
-            
-        } catch (Exception $e) {
-            $db->rollBack();
-            $_SESSION['flash_message'] = "❌ Error: " . $e->getMessage();
-            $_SESSION['flash_type'] = 'error';
-        }
-        
-        $redirect_url = 'pending_bills.php';
-        $params = [];
-        if ($filter !== 'all') $params[] = 'filter=' . $filter;
-        if (!empty($search)) $params[] = 'search=' . urlencode($search);
-        if (!empty($start_date)) $params[] = 'start_date=' . $start_date;
-        if (!empty($end_date)) $params[] = 'end_date=' . $end_date;
-        if (!empty($params)) {
-            $redirect_url .= '?' . implode('&', $params);
-        }
-        header('Location: ' . $redirect_url);
-        exit;
-    }
-    
     if (isset($_SESSION['flash_message'])) {
         $message = $_SESSION['flash_message'];
         $message_type = $_SESSION['flash_type'] ?? 'info';
@@ -193,7 +118,7 @@ try {
     }
     
     // ================================================================
-    // GET PENDING BILLS - SHOW ONLY BILLS WITH BALANCE > 0
+    // GET PENDING BILLS - ONLY status = 'pending'
     // ================================================================
     $sql = "
         SELECT 
@@ -205,6 +130,8 @@ try {
             b.total_discount,
             b.discount_amount,
             b.cashier_discount,
+            b.premium_amount,
+            b.premium_note,
             p.full_name as patient_name,
             p.patient_id as patient_id_number,
             p.phone,
@@ -244,7 +171,7 @@ try {
         LEFT JOIN users u ON b.created_by = u.id
         LEFT JOIN visits v ON b.visit_id = v.id
         WHERE b.branch_id = ? 
-        AND b.status IN ('pending', 'partial')
+        AND b.status = 'pending'
         AND b.balance > 0
         AND b.visit_id IS NOT NULL
         $date_condition
@@ -262,7 +189,6 @@ try {
     
     // ================================================================
     // GET OTC SALES WITH PENDING PAYMENT
-    // ✅ FIXED: Include discount_amount from otc_sales table
     // ================================================================
     $otc_sql = "
         SELECT 
@@ -282,6 +208,8 @@ try {
             o.notes,
             o.created_at,
             o.updated_at,
+            o.premium_amount,
+            o.premium_note,
             'otc' as bill_type,
             o.customer_name as patient_name,
             CONCAT('OTC-', o.id) as patient_id_number,
@@ -395,7 +323,6 @@ try {
     // ================================================================
     $patient_bills = [];
     foreach ($all_bills as $bill) {
-        // ✅ Skip bills with balance <= 0
         if ($bill['bill_type'] !== 'otc') {
             $balance = ($bill['total_amount'] ?? 0) - ($bill['total_paid'] ?? 0);
             if ($balance <= 0) {
@@ -428,6 +355,7 @@ try {
                 'total_balance' => 0,
                 'total_paid' => 0,
                 'total_discount' => 0,
+                'total_premium' => 0,
                 'bill_count' => 0,
                 'total_pending_prescriptions' => 0,
                 'total_confirmed_prescriptions' => 0
@@ -440,19 +368,18 @@ try {
         $patient_bills[$patient_key]['total_balance'] += ($bill['total_amount'] - ($bill['total_paid'] ?? 0));
         $patient_bills[$patient_key]['total_paid'] += ($bill['total_paid'] ?? 0);
         
-        // ✅ FIXED: Get discount based on bill type
         if ($bill['bill_type'] === 'otc') {
-            // ✅ OTC: Use discount_amount from otc_sales table
             $bill_discount = $bill['otc_discount'] ?? $bill['discount_amount'] ?? 0;
         } else {
-            // ✅ Regular: Use total_discount from bills table (aggregated from bill_items)
             $bill_discount = $bill['total_discount'] ?? 0;
-            // If total_discount is 0 but pharmacy_discount has value, use pharmacy_discount
             if ($bill_discount == 0 && ($bill['pharmacy_discount'] ?? 0) > 0) {
                 $bill_discount = $bill['pharmacy_discount'];
             }
         }
         $patient_bills[$patient_key]['total_discount'] += $bill_discount;
+        
+        $bill_premium = isset($bill['premium_amount']) ? (float)$bill['premium_amount'] : 0;
+        $patient_bills[$patient_key]['total_premium'] += $bill_premium;
         
         $patient_bills[$patient_key]['bill_count']++;
         $patient_bills[$patient_key]['total_pending_prescriptions'] += ($bill['pending_prescriptions'] ?? 0);
@@ -480,21 +407,19 @@ try {
     // ================================================================
     $today = date('Y-m-d');
     
-    // Today Payments
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
         FROM bills 
         WHERE branch_id = ? 
         AND DATE(updated_at) = ?
         AND paid_amount > 0
-        AND status IN ('paid', 'partial')
+        AND status = 'paid'
     ");
     $stmt->execute([$user_branch_id, $today]);
     $today_payments = $stmt->fetch(PDO::FETCH_ASSOC);
     $today_payments_count = $today_payments['count'] ?? 0;
     $today_payments_total = $today_payments['total'] ?? 0;
 
-    // Paid Bills
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total
         FROM bills 
@@ -505,7 +430,6 @@ try {
     $paid_bills_count = $paid_bills['count'] ?? 0;
     $paid_bills_total = $paid_bills['total'] ?? 0;
 
-    // Cancelled Bills
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
         FROM bills 
@@ -516,7 +440,6 @@ try {
     $cancelled_bills_count = $cancelled_stats['count'] ?? 0;
     $cancelled_bills_total = $cancelled_stats['total'] ?? 0;
 
-    // Total Bills
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
         FROM bills WHERE branch_id = ?
@@ -526,7 +449,6 @@ try {
     $total_bills_count_all = $total_bills['count'] ?? 0;
     $total_bills_amount = $total_bills['total'] ?? 0;
 
-    // Partial Bills
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(paid_amount), 0) as total_paid, COALESCE(SUM(balance), 0) as total_balance
         FROM bills 
@@ -538,7 +460,6 @@ try {
     $partial_bills_paid = $partial_bills['total_paid'] ?? 0;
     $partial_bills_balance = $partial_bills['total_balance'] ?? 0;
 
-    // OTC Pending count
     $stmt = $db->prepare("
         SELECT COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total
         FROM otc_sales 
@@ -606,6 +527,8 @@ include_once '../../components/cashier_sidebar.php';
             --otc-bg: #EDE9FE;
             --locked-color: #DC2626;
             --locked-bg: #FEE2E2;
+            --premium-color: #D97706;
+            --premium-bg: #FEF3C7;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -625,7 +548,6 @@ include_once '../../components/cashier_sidebar.php';
             --shadow-md: 0 4px 6px rgba(0,0,0,0.07);
             --shadow-lg: 0 10px 15px rgba(0,0,0,0.1);
             --shadow-xl: 0 20px 25px rgba(0,0,0,0.1);
-            --shadow-2xl: 0 25px 50px rgba(0,0,0,0.15);
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
             --bg-nav: #FFFFFF;
@@ -648,7 +570,6 @@ include_once '../../components/cashier_sidebar.php';
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
-            --shadow-xl: 0 20px 25px rgba(0,0,0,0.4);
             --primary-bg: #1E3A5F;
             --success-bg: #1A3A2A;
             --danger-bg: #3A1A1A;
@@ -657,6 +578,7 @@ include_once '../../components/cashier_sidebar.php';
             --purple-bg: #2A1A3A;
             --otc-bg: #2A1A3A;
             --locked-bg: #3A1A1A;
+            --premium-bg: #3D2E0A;
             --gray-100: #1E293B;
             --gray-200: #334155;
             --deep-green: #0D9488;
@@ -700,7 +622,7 @@ include_once '../../components/cashier_sidebar.php';
             overflow: hidden;
         }
         
-        .page-header .header-content { position: relative; z-index: 1; }
+        .page-header .header-content { position: relative; z-index: 1; flex: 1; min-width: 250px; }
         .page-header .page-title {
             color: white;
             font-size: 1.8rem;
@@ -743,6 +665,16 @@ include_once '../../components/cashier_sidebar.php';
             border-color: rgba(52, 211, 153, 0.2);
             color: #34D399;
         }
+        .page-header .header-badge.premium {
+            background: rgba(251, 191, 36, 0.3);
+            border-color: rgba(251, 191, 36, 0.2);
+            color: #FCD34D;
+        }
+        .page-header .header-badge.pending-only {
+            background: rgba(217, 119, 6, 0.35);
+            border-color: rgba(217, 119, 6, 0.3);
+            color: #FBBF24;
+        }
         .page-header .role-badge {
             background: rgba(255,255,255,0.2);
             color: white;
@@ -769,6 +701,7 @@ include_once '../../components/cashier_sidebar.php';
             gap: 8px;
             backdrop-filter: blur(4px);
             cursor: pointer;
+            white-space: nowrap;
         }
         .page-header .btn-outline-light:hover {
             background: rgba(255,255,255,0.25);
@@ -901,6 +834,7 @@ include_once '../../components/cashier_sidebar.php';
         .stat-card.purple::before { background: var(--purple); }
         .stat-card.otc::before { background: #8B5CF6; }
         .stat-card.locked::before { background: #DC2626; }
+        .stat-card.premium::before { background: #D97706; }
         .stat-card:hover {
             transform: translateY(-4px);
             box-shadow: var(--shadow-lg);
@@ -914,6 +848,7 @@ include_once '../../components/cashier_sidebar.php';
         .stat-card .stat-number.purple { color: var(--purple); }
         .stat-card .stat-number.otc { color: #8B5CF6; }
         .stat-card .stat-number.red { color: #DC2626; }
+        .stat-card .stat-number.premium { color: #D97706; }
         .stat-card .stat-label { font-size: 0.65rem; color: var(--text-secondary); font-weight: 500; margin-top: 2px; }
         .stat-card .stat-sub { font-size: 0.55rem; color: var(--text-secondary); opacity: 0.7; margin-top: 1px; }
         
@@ -1008,6 +943,7 @@ include_once '../../components/cashier_sidebar.php';
         .total-badge.purple { background: var(--purple-bg); color: var(--purple); }
         .total-badge.discount { background: #FEF3C7; color: #D97706; border: 1px solid #D97706; }
         .total-badge.locked { background: var(--locked-bg); color: var(--locked-color); border: 1px solid var(--locked-color); }
+        .total-badge.premium { background: var(--premium-bg); color: var(--premium-color); border: 1px solid var(--premium-color); }
         .patient-card-header .total-amount {
             font-weight: 700;
             font-size: 1.1rem;
@@ -1036,6 +972,17 @@ include_once '../../components/cashier_sidebar.php';
             align-items: center;
             gap: 4px;
         }
+        .premium-tag {
+            background: var(--premium-color);
+            color: white;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.55rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
         .chevron-icon {
             transition: transform 0.3s ease;
             font-size: 0.9rem;
@@ -1054,19 +1001,83 @@ include_once '../../components/cashier_sidebar.php';
             padding: 16px 22px 22px;
         }
         
+        .table-header-actions {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 8px;
+            padding: 0 4px;
+        }
+        
+        .table-scroll-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 1.5px solid var(--border-color);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            transition: all 0.25s ease;
+            padding: 0;
+            flex-shrink: 0;
+        }
+        
+        .table-scroll-btn:hover {
+            background: var(--success);
+            color: white;
+            border-color: var(--success);
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
+        }
+        
+        .table-scroll-btn:active {
+            transform: scale(0.9);
+        }
+        
+        .table-scroll-hint {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            margin-right: auto;
+            padding-left: 8px;
+            opacity: 0.7;
+        }
+        
+        .table-scroll-hint i {
+            font-size: 0.65rem;
+        }
+        
+        [data-theme="dark"] .table-scroll-btn:hover {
+            background: #0D9488;
+            border-color: #0D9488;
+        }
+        
         .table-wrap {
             overflow-x: auto;
             border-radius: var(--radius-sm);
             border: 1px solid var(--border-color);
+            position: relative;
+            scroll-behavior: smooth;
         }
+        .table-wrap::-webkit-scrollbar { height: 8px; }
+        .table-wrap::-webkit-scrollbar-track { background: var(--gray-100); border-radius: 10px; }
+        .table-wrap::-webkit-scrollbar-thumb { background: var(--success); border-radius: 10px; }
+        .table-wrap::-webkit-scrollbar-thumb:hover { background: var(--success-dark); }
+        
         .data-table {
             width: 100%;
             border-collapse: collapse;
             font-size: 0.75rem;
-            min-width: 850px;
+            min-width: 950px;
         }
         
-        /* ✅ DEEP GREEN TABLE HEADER */
         .data-table thead th {
             text-align: left;
             padding: 12px 14px;
@@ -1152,6 +1163,22 @@ include_once '../../components/cashier_sidebar.php';
             border-color: #D97706;
         }
         
+        .premium-badge {
+            display: inline-block;
+            padding: 1px 8px;
+            border-radius: 12px;
+            font-size: 0.5rem;
+            font-weight: 600;
+            background: #FEF3C7;
+            color: #D97706;
+            border: 1px solid #D97706;
+        }
+        [data-theme="dark"] .premium-badge {
+            background: #3D2E0A;
+            color: #F59E0B;
+            border-color: #D97706;
+        }
+        
         .action-buttons {
             display: flex;
             flex-direction: column;
@@ -1183,9 +1210,6 @@ include_once '../../components/cashier_sidebar.php';
         .btn-process { background: var(--success); color: white; }
         .btn-process:hover { background: var(--success-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3); }
         .btn-process:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
-        .btn-cancel { background: var(--danger); color: white; }
-        .btn-cancel:hover { background: var(--danger-dark); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3); }
-        .btn-cancel:disabled { opacity: 0.5; cursor: not-allowed; transform: none !important; }
         .btn-otc { background: #8B5CF6; color: white; }
         .btn-otc:hover { background: #6D28D9; transform: translateY(-1px); box-shadow: 0 4px 12px rgba(139, 92, 246, 0.3); }
         .action-status {
@@ -1255,6 +1279,33 @@ include_once '../../components/cashier_sidebar.php';
             opacity: 0;
         }
         
+        @keyframes fadeInOut {
+            0% { opacity: 0; transform: translateY(20px) scale(0.9); }
+            30% { opacity: 1; transform: translateY(0) scale(1); }
+            80% { opacity: 1; transform: translateY(0) scale(1); }
+            100% { opacity: 0; transform: translateY(-15px) scale(0.9); }
+        }
+        
+        .scroll-toast {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            background: var(--success);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 24px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            z-index: 9999;
+            box-shadow: 0 6px 20px rgba(5, 150, 105, 0.4);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            animation: fadeInOut 1.2s ease forwards;
+            pointer-events: none;
+        }
+        .scroll-toast i { font-size: 1rem; }
+        
         @media (max-width: 1024px) {
             .main-content { margin-left: 0; padding: 16px; }
         }
@@ -1267,6 +1318,8 @@ include_once '../../components/cashier_sidebar.php';
             .patient-card-header .patient-totals { width: 100%; justify-content: flex-start; }
             .data-table { min-width: 700px; }
             .action-buttons { min-width: 60px; }
+            .table-scroll-btn { width: 26px; height: 26px; font-size: 0.65rem; }
+            .table-scroll-hint { font-size: 0.55rem; }
         }
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
@@ -1276,6 +1329,7 @@ include_once '../../components/cashier_sidebar.php';
             .date-picker-group { flex-direction: column; }
             .date-picker-group .form-control { width: 100%; }
             .date-picker-group .btn-apply { width: 100%; }
+            .table-scroll-btn { width: 24px; height: 24px; font-size: 0.6rem; }
         }
     </style>
 </head>
@@ -1290,11 +1344,17 @@ include_once '../../components/cashier_sidebar.php';
                 <i class="fas fa-clock"></i>
                 Pending Bills
                 <span class="role-badge"><?= strtoupper($user_role) ?></span>
+                <span class="header-badge pending-only">
+                    <i class="fas fa-filter"></i> PENDING ONLY
+                </span>
                 <span class="header-badge locked">
                     <i class="fas fa-lock"></i> Prescriptions Locked
                 </span>
                 <span class="header-badge confirmed">
                     <i class="fas fa-check-circle"></i> Confirmed Ready
+                </span>
+                <span class="header-badge premium">
+                    <i class="fas fa-crown"></i> Premium
                 </span>
                 <?php if ($is_admin): ?>
                     <span class="role-badge" style="background:rgba(124,58,237,0.4);">
@@ -1320,14 +1380,11 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-shopping-cart"></i> OTC: <?= $otc_pending_count ?? 0 ?>
                 </span>
                 <span class="header-badge" style="background:rgba(5,150,105,0.2);border-color:rgba(5,150,105,0.2);color:#34D399;">
-                    <i class="fas fa-check"></i> Balance &gt; 0 Only
-                </span>
-                <span class="header-badge" style="background:rgba(251,191,36,0.2);border-color:rgba(251,191,36,0.2);">
-                    <i class="fas fa-tag"></i> Total Discount from bill_items
+                    <i class="fas fa-info-circle"></i> Excludes PARTIAL bills
                 </span>
             </p>
         </div>
-        <div class="header-actions">
+        <div class="header-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
             <a href="dashboard.php" class="btn-outline-light">
                 <i class="fas fa-arrow-left"></i> Dashboard
             </a>
@@ -1401,7 +1458,7 @@ include_once '../../components/cashier_sidebar.php';
             <div class="stat-icon">📋</div>
             <p class="stat-number orange"><?= $total_bills_count ?></p>
             <p class="stat-label">Total Pending Bills</p>
-            <p class="stat-sub">(Balance &gt; 0)</p>
+            <p class="stat-sub">(Status = PENDING only)</p>
         </div>
         <div class="stat-card blue">
             <div class="stat-icon">👤</div>
@@ -1422,6 +1479,20 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-label">Locked Prescriptions</p>
             <p class="stat-sub">Pending Pharmacy Confirmation</p>
         </div>
+        <div class="stat-card premium">
+            <div class="stat-icon">👑</div>
+            <p class="stat-number premium">
+                <?php 
+                    $total_premium = 0;
+                    foreach ($patient_bills as $patient) {
+                        $total_premium += $patient['total_premium'] ?? 0;
+                    }
+                    echo number_format($total_premium, 0);
+                ?>
+            </p>
+            <p class="stat-label">Total Premium</p>
+            <p class="stat-sub"><?= $currency ?> <?= number_format($total_premium, 0) ?></p>
+        </div>
         <div class="stat-card purple">
             <div class="stat-icon">🛒</div>
             <p class="stat-number purple"><?= $otc_pending_count ?? 0 ?></p>
@@ -1437,6 +1508,8 @@ include_once '../../components/cashier_sidebar.php';
             $card_class = $is_otc ? 'otc-card' : '';
             $has_pending_prescriptions = ($patient['total_pending_prescriptions'] ?? 0) > 0;
             $has_confirmed_prescriptions = ($patient['total_confirmed_prescriptions'] ?? 0) > 0;
+            $has_premium = ($patient['total_premium'] ?? 0) > 0;
+            $table_id = 'table_' . $patient['patient_id'];
         ?>
             <div class="patient-card <?= $card_class ?> animate-fade-in-up">
                 <!-- Patient Header -->
@@ -1453,6 +1526,9 @@ include_once '../../components/cashier_sidebar.php';
                                 <?php endif; ?>
                                 <?php if ($has_pending_prescriptions): ?>
                                     <span class="locked-tag"><i class="fas fa-lock"></i> <?= $patient['total_pending_prescriptions'] ?> Prescriptions Locked</span>
+                                <?php endif; ?>
+                                <?php if ($has_premium): ?>
+                                    <span class="premium-tag"><i class="fas fa-crown"></i> Premium: <?= $currency ?> <?= number_format($patient['total_premium'], 0) ?></span>
                                 <?php endif; ?>
                             </div>
                             <div class="patient-meta">
@@ -1476,6 +1552,11 @@ include_once '../../components/cashier_sidebar.php';
                                 <i class="fas fa-tag"></i> Disc: <?= $currency ?> <?= number_format($patient['total_discount'], 0) ?>
                             </span>
                         <?php endif; ?>
+                        <?php if ($patient['total_premium'] > 0): ?>
+                            <span class="total-badge premium">
+                                <i class="fas fa-crown"></i> Premium: <?= $currency ?> <?= number_format($patient['total_premium'], 0) ?>
+                            </span>
+                        <?php endif; ?>
                         <?php if ($is_admin): ?>
                             <span class="total-badge red">
                                 <i class="fas fa-money-bill"></i> Balance: <?= $currency ?> <?= number_format($patient['total_balance'], 0) ?>
@@ -1495,7 +1576,25 @@ include_once '../../components/cashier_sidebar.php';
                 
                 <!-- Patient Bills Table -->
                 <div class="patient-card-body" id="patient_<?= $patient['patient_id'] ?>">
-                    <div class="table-wrap">
+                    
+                    <div class="table-header-actions">
+                        <span class="table-scroll-hint">
+                            <i class="fas fa-arrows-alt-h"></i>
+                            Scroll table:
+                        </span>
+                        <button class="table-scroll-btn" 
+                                onclick="scrollTableById('<?= $table_id ?>', 'left')" 
+                                title="Scroll Left">
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <button class="table-scroll-btn" 
+                                onclick="scrollTableById('<?= $table_id ?>', 'right')" 
+                                title="Scroll Right">
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="table-wrap" id="<?= $table_id ?>">
                         <table class="data-table <?= $is_otc ? 'otc-table' : '' ?>">
                             <thead>
                                 <tr>
@@ -1508,6 +1607,7 @@ include_once '../../components/cashier_sidebar.php';
                                     <?php endif; ?>
                                     <th style="min-width:80px;text-align:right;">Subtotal</th>
                                     <th style="min-width:80px;text-align:right;">Discount</th>
+                                    <th style="min-width:80px;text-align:right;">Premium</th>
                                     <th style="min-width:80px;text-align:right;">Paid</th>
                                     <?php if ($is_admin): ?>
                                         <th style="min-width:80px;text-align:right;">Balance</th>
@@ -1522,27 +1622,26 @@ include_once '../../components/cashier_sidebar.php';
                                 <?php $i = 1; foreach ($patient['bills'] as $bill): 
                                     $is_otc_bill = ($bill['bill_type'] ?? '') === 'otc';
                                     $has_payments = ($bill['payment_count'] ?? 0) > 0;
-                                    $can_cancel = !$is_otc_bill && in_array($bill['status'], ['pending', 'partial']) && !$has_payments;
                                     
-                                    // ✅ FIXED: Get discount based on bill type
                                     if ($is_otc_bill) {
-                                        // ✅ OTC: Use discount_amount from otc_sales table
                                         $discount = $bill['otc_discount'] ?? $bill['discount_amount'] ?? 0;
                                     } else {
-                                        // ✅ Regular: Use total_discount from bills table (aggregated from bill_items)
                                         $discount = $bill['total_discount'] ?? 0;
                                         if ($discount == 0 && ($bill['pharmacy_discount'] ?? 0) > 0) {
                                             $discount = $bill['pharmacy_discount'];
                                         }
                                     }
                                     
+                                    $premium_amount = isset($bill['premium_amount']) ? (float)$bill['premium_amount'] : 0;
+                                    $premium_note = $bill['premium_note'] ?? '';
+                                    
                                     $has_discount = $discount > 0;
+                                    $has_premium_bill = $premium_amount > 0;
                                     $status = $bill['status'] ?? ($is_otc_bill ? 'pending' : 'pending');
                                     $status_class = $is_otc_bill ? 'otc-pending' : $status;
                                     $bill_balance = ($bill['total_amount'] ?? 0) - ($bill['total_paid'] ?? 0);
                                     $subtotal = $bill['subtotal'] ?? $bill['total_amount'] ?? 0;
                                     
-                                    // ✅ Check if this bill has pending prescriptions (locked)
                                     $has_pending_prescriptions = ($bill['pending_prescriptions'] ?? 0) > 0;
                                     $has_confirmed_prescriptions = ($bill['confirmed_prescriptions'] ?? 0) > 0;
                                     $is_locked = $has_pending_prescriptions;
@@ -1562,6 +1661,14 @@ include_once '../../components/cashier_sidebar.php';
                                             <?php if ($has_confirmed_prescriptions): ?>
                                                 <span style="font-size:0.45rem;color:var(--success);display:block;margin-top:2px;">
                                                     <i class="fas fa-check-circle"></i> <?= $bill['confirmed_prescriptions'] ?> Confirmed
+                                                </span>
+                                            <?php endif; ?>
+                                            <?php if ($has_premium_bill): ?>
+                                                <span class="premium-badge" style="display:inline-block;margin-top:2px;font-size:0.45rem;">
+                                                    <i class="fas fa-crown"></i> Premium: <?= $currency ?> <?= number_format($premium_amount, 0) ?>
+                                                    <?php if ($premium_note): ?>
+                                                        (<?= htmlspecialchars($premium_note) ?>)
+                                                    <?php endif; ?>
                                                 </span>
                                             <?php endif; ?>
                                         </td>
@@ -1614,6 +1721,20 @@ include_once '../../components/cashier_sidebar.php';
                                             <?php endif; ?>
                                         </td>
                                         <td style="text-align:right;">
+                                            <?php if ($has_premium_bill): ?>
+                                                <span style="color:var(--premium-color);font-weight:600;">
+                                                    <?= $currency ?> <?= number_format($premium_amount, 0) ?>
+                                                    <?php if ($premium_note): ?>
+                                                        <span style="font-size:0.5rem;display:block;color:var(--text-secondary);">
+                                                            <?= htmlspecialchars($premium_note) ?>
+                                                        </span>
+                                                    <?php endif; ?>
+                                                </span>
+                                            <?php else: ?>
+                                                <span class="text-xs text-gray-400">-</span>
+                                            <?php endif; ?>
+                                        </td>
+                                        <td style="text-align:right;">
                                             <span style="color:var(--success);">
                                                 <?= $currency ?> <?= number_format($bill['total_paid'] ?? 0, 0) ?>
                                             </span>
@@ -1652,6 +1773,7 @@ include_once '../../components/cashier_sidebar.php';
                                         <td style="text-align:center;">
                                             <div class="action-buttons">
                                                 <?php if ($is_otc_bill): ?>
+                                                    <!-- OTC: View + Pay -->
                                                     <a href="view_otc_sale.php?id=<?= $bill['id'] ?>" class="btn btn-otc" title="View OTC Sale">
                                                         <i class="fas fa-eye"></i> View
                                                     </a>
@@ -1661,6 +1783,7 @@ include_once '../../components/cashier_sidebar.php';
                                                         </a>
                                                     <?php endif; ?>
                                                 <?php else: ?>
+                                                    <!-- Regular Bill: View + Process Payment ONLY -->
                                                     <a href="view_bill.php?id=<?= $bill['id'] ?>" class="btn btn-view" title="View Details">
                                                         <i class="fas fa-eye"></i> View
                                                     </a>
@@ -1678,21 +1801,6 @@ include_once '../../components/cashier_sidebar.php';
                                                             <i class="fas fa-check-circle"></i> Paid
                                                         </span>
                                                     <?php endif; ?>
-                                                    
-                                                    <?php if ($can_cancel && !$is_locked): ?>
-                                                        <a href="?cancel_bill=<?= $bill['id'] ?>&filter=<?= $filter ?>&search=<?= urlencode($search) ?>" 
-                                                           class="btn btn-cancel" 
-                                                           title="Cancel this bill"
-                                                           onclick="return confirm('⚠️ Cancel Bill #<?= htmlspecialchars($bill['bill_number']) ?>?\nPatient: <?= htmlspecialchars($patient['patient_name']) ?>\nAmount: <?= $currency ?> <?= number_format($bill['total_amount'], 0) ?>\n\nThis cannot be undone!');">
-                                                            <i class="fas fa-times"></i> Cancel
-                                                        </a>
-                                                    <?php elseif ($has_payments): ?>
-                                                        <span class="action-status" title="Has payments">🔒 Has payments</span>
-                                                    <?php elseif ($bill['status'] === 'cancelled'): ?>
-                                                        <span class="action-status">Already cancelled</span>
-                                                    <?php else: ?>
-                                                        <span class="action-status">🔒 <?= ucfirst($bill['status'] ?? 'N/A') ?></span>
-                                                    <?php endif; ?>
                                                 <?php endif; ?>
                                             </div>
                                         </td>
@@ -1709,14 +1817,18 @@ include_once '../../components/cashier_sidebar.php';
                                         <?php if ($patient['total_discount'] > 0): ?>
                                             <span style="color:var(--warning);font-weight:600;">
                                                 <?= $currency ?> <?= number_format($patient['total_discount'], 0) ?>
-                                                <?php if ($is_otc): ?>
-                                                    <span style="font-size:0.5rem;display:block;color:var(--text-secondary);">
-                                                        (OTC Discount)
-                                                    </span>
-                                                <?php endif; ?>
                                             </span>
                                         <?php else: ?>
                                             <span class="text-xs text-gray-400">None</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td style="text-align:right;">
+                                        <?php if ($patient['total_premium'] > 0): ?>
+                                            <span style="color:var(--premium-color);font-weight:600;">
+                                                <?= $currency ?> <?= number_format($patient['total_premium'], 0) ?>
+                                            </span>
+                                        <?php else: ?>
+                                            <span class="text-xs text-gray-400">-</span>
                                         <?php endif; ?>
                                     </td>
                                     <td style="text-align:right;"><?= $currency ?> <?= number_format($patient['total_paid'], 0) ?></td>
@@ -1773,6 +1885,10 @@ include_once '../../components/cashier_sidebar.php';
             <i class="fas fa-check-circle" style="color:var(--success);"></i>
             <h3>No Pending Bills</h3>
             <p>All bills have been cleared or paid. Check back later for new pending bills.</p>
+            <p style="font-size:0.75rem;margin-top:8px;color:var(--text-secondary);">
+                <i class="fas fa-info-circle"></i> Only bills with <strong>status = PENDING</strong> are shown here.
+                Bills with partial payments are excluded.
+            </p>
         </div>
     <?php endif; ?>
 
@@ -1795,9 +1911,7 @@ include_once '../../components/cashier_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle"></i>
     <div>
@@ -1806,11 +1920,32 @@ include_once '../../components/cashier_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // Dark mode sync
+    function scrollTableById(tableId, direction) {
+        var wrapper = document.getElementById(tableId);
+        if (!wrapper) return;
+        var scrollAmount = 300;
+        if (direction === 'left') {
+            wrapper.scrollLeft -= scrollAmount;
+        } else {
+            wrapper.scrollLeft += scrollAmount;
+        }
+        var msg = direction === 'left' ? '⬅️ Scrolled Left' : '➡️ Scrolled Right';
+        showScrollToast(msg);
+    }
+    
+    function showScrollToast(message) {
+        var existing = document.querySelector('.scroll-toast');
+        if (existing) existing.remove();
+        var toast = document.createElement('div');
+        toast.className = 'scroll-toast';
+        toast.innerHTML = '<i class="fas fa-arrows-alt-h"></i> ' + message;
+        document.body.appendChild(toast);
+        setTimeout(function() {
+            if (toast.parentNode) toast.remove();
+        }, 1200);
+    }
+    
     (function() {
         var html = document.documentElement;
         function syncDark() {
@@ -1824,38 +1959,23 @@ include_once '../../components/cashier_sidebar.php';
         window.addEventListener('storage', function(e) {
             if (e.key === 'darkMode') syncDark();
         });
-        document.addEventListener('darkModeChanged', function(e) {
-            if (e.detail && e.detail.isDark) {
-                html.setAttribute('data-theme', 'dark');
-            } else {
-                html.removeAttribute('data-theme');
-            }
-        });
     })();
 
-    // Toggle patient bills
     function togglePatient(patientId) {
         var body = document.getElementById('patient_' + patientId);
         var chevron = document.getElementById('chevron_' + patientId);
         var header = body ? body.closest('.patient-card').querySelector('.patient-card-header') : null;
-        
         if (body) {
             body.classList.toggle('open');
-            if (header) {
-                header.classList.toggle('expanded');
-            }
+            if (header) header.classList.toggle('expanded');
         }
-        if (chevron) {
-            chevron.classList.toggle('rotated');
-        }
+        if (chevron) chevron.classList.toggle('rotated');
     }
 
-    // Open first patient by default
     document.addEventListener('DOMContentLoaded', function() {
         var firstBody = document.querySelector('.patient-card-body');
         var firstHeader = document.querySelector('.patient-card-header');
         var firstChevron = document.querySelector('.chevron-icon');
-        
         if (firstBody) {
             setTimeout(function() {
                 firstBody.classList.add('open');
@@ -1865,17 +1985,13 @@ include_once '../../components/cashier_sidebar.php';
         }
     });
 
-    // Manual refresh
     function manualRefresh() {
         var btn = document.getElementById('refreshBtn');
-        btn.innerHTML = '<span class="spinner"></span> Loading...';
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
         btn.disabled = true;
-        setTimeout(function() {
-            window.location.reload();
-        }, 800);
+        setTimeout(function() { window.location.reload(); }, 800);
     }
 
-    // Update footer time
     function updateFooterTime() {
         var now = new Date();
         var timeStr = now.toLocaleTimeString('en-US', {
@@ -1887,15 +2003,10 @@ include_once '../../components/cashier_sidebar.php';
     updateFooterTime();
     setInterval(updateFooterTime, 1000);
 
-    console.log('%c🏥 Braick - Pending Bills (DEEP GREEN HEADER)', 'font-size:18px;font-weight:bold;color:#059669;');
-    console.log('%c✅ FIXED: SQL syntax error fixed', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ FIXED: Shows ONLY bills with balance > 0', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ ADDED: Subtotal column with Dark Green Header', 'font-size:13px;color:#0D9488;');
-    console.log('%c🔒 Prescription bills show as LOCKED until confirmed', 'font-size:13px;color:#DC2626;');
-    console.log('%c✅ Confirmed prescriptions ready for payment', 'font-size:13px;color:#34D399;');
-    console.log('%c✅ FIXED: Discount uses total_discount from bills table (no double counting)', 'font-size:13px;color:#F59E0B;');
-    console.log('%c✅ FIXED: OTC discount uses otc_sales.discount_amount', 'font-size:13px;color:#8B5CF6;');
-    console.log('%c📊 Total Bills: <?= $total_bills_count ?>', 'font-size:13px;color:#64748B;');
+    console.log('%c🏥 Braick - Pending Bills (VIEW + PROCESS ONLY)', 'font-size:18px;font-weight:bold;color:#059669;');
+    console.log('%c❌ REMOVED: Cancel button', 'font-size:13px;color:#DC2626;');
+    console.log('%c✅ ONLY: View + Process Payment', 'font-size:13px;color:#34D399;');
+    console.log('%c📊 Total Pending Bills: <?= $total_bills_count ?>', 'font-size:13px;color:#64748B;');
 </script>
 
 </body>

@@ -2,19 +2,15 @@
 // ================================================================
 // FILE: frontend/pages/admin/branches.php
 // SUPER ADMIN - BRANCHES MANAGEMENT
-// BRAICK DISPENSARY - FIXED FOR EXISTING DATABASE
+// ✅ Uses SHARED admin_sidebar.php
+// ✅ Branch filter in header
+// ✅ NO sidebar CSS conflicts
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// CHECK LOGIN SESSION
-// ================================================================
 if (!isset($_SESSION['user_id'])) {
     header('Location: ../../login.php');
     exit();
@@ -25,9 +21,6 @@ if ($_SESSION['role'] !== 'admin') {
     exit();
 }
 
-// ================================================================
-// INCLUDE DATABASE
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
@@ -66,6 +59,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ================================================================
+// GET BRANCHES FOR HEADER FILTER
+// ================================================================
+$branches_for_filter = [];
+try {
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches_for_filter = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) {
+    $branches_for_filter = [];
+}
+
+// ================================================================
 // FETCH BRANCHES
 // ================================================================
 $query = "SELECT b.* FROM branches b WHERE 1=1";
@@ -94,7 +98,6 @@ $total_patients = 0;
 $active_branches = 0;
 
 foreach ($branches_raw as $branch) {
-    // Get staff counts - using users table
     $staff_stmt = $db->prepare("
         SELECT role, COUNT(*) as count 
         FROM users 
@@ -125,13 +128,11 @@ foreach ($branches_raw as $branch) {
     $branch_total_staff = $admin_count + $doctor_count + $reception_count + $pharmacy_count + $cashier_count + $lab_count;
     $total_staff += $branch_total_staff;
     
-    // Get patient count from patients table
     $patient_stmt = $db->prepare("SELECT COUNT(*) as count FROM patients WHERE branch_id = ?");
     $patient_stmt->execute([$branch['id']]);
     $patient_count = $patient_stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
     $total_patients += $patient_count;
     
-    // Get visits count from visits table
     $visits_stmt = $db->prepare("
         SELECT 
             COUNT(CASE WHEN status IN ('pending', 'assigned', 'with_doctor') THEN 1 END) as active_visits,
@@ -163,19 +164,24 @@ foreach ($branches_raw as $branch) {
 $total_branches = count($branches);
 
 // ================================================================
-// GET USER DATA FOR SIDEBAR
+// GET USER DATA
 // ================================================================
 $user_name = $_SESSION['full_name'] ?? 'Admin';
 $user_role = $_SESSION['role'] ?? 'admin';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
 // ================================================================
-// LOGO PATH
+// LOGO & PROFILE URLS
 // ================================================================
 $logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// ================================================================
+// INCLUDE SHARED ADMIN SIDEBAR
+// ================================================================
+include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
@@ -240,7 +246,6 @@ $profile_pic_url = !empty($profile_pic)
             --border-color: #E2E8F0;
             --radius: 12px;
             --radius-lg: 18px;
-            --table-hover: #F8FAFC;
         }
         
         [data-theme="dark"] {
@@ -259,7 +264,6 @@ $profile_pic_url = !empty($profile_pic)
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --purple-bg: #2D1B5F;
-            --table-hover: #1E293B;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -304,7 +308,7 @@ $profile_pic_url = !empty($profile_pic)
             border: 2px solid var(--border-color);
             transition: all 0.3s;
             flex: 1;
-            max-width: 500px;
+            max-width: 400px;
         }
         
         .top-nav .search-wrapper:focus-within {
@@ -341,6 +345,30 @@ $profile_pic_url = !empty($profile_pic)
         .top-nav .search-wrapper .search-btn:hover {
             background: var(--primary-dark);
             transform: scale(1.02);
+        }
+        
+        /* ✅ BRANCH SELECTOR IN HEADER */
+        .top-nav .branch-selector-header {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 8px 14px;
+            font-size: 0.8rem;
+            color: var(--text-primary);
+            outline: none;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            min-width: 180px;
+        }
+        
+        .top-nav .branch-selector-header:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(26, 86, 219, 0.12);
+        }
+        
+        .top-nav .branch-selector-header:hover {
+            border-color: var(--primary);
         }
         
         .top-nav .datetime {
@@ -561,7 +589,7 @@ $profile_pic_url = !empty($profile_pic)
         }
         
         /* ================================================================
-           STATS CARDS - BLUE BACKGROUND
+           STATS CARDS
            ================================================================ */
         .stats-grid {
             display: grid;
@@ -1033,39 +1061,20 @@ $profile_pic_url = !empty($profile_pic)
         }
         
         /* ================================================================
-           SIDEBAR
-           ================================================================ */
-        .sidebar {
-            position: fixed !important;
-            top: 0 !important;
-            left: 0 !important;
-            bottom: 0 !important;
-            width: 270px !important;
-            background: #0B4EA8 !important;
-            color: white !important;
-            z-index: 50 !important;
-            overflow-y: auto !important;
-            overflow-x: hidden !important;
-            transition: transform 0.3s ease-in-out !important;
-            transform: translateX(0) !important;
-            box-shadow: 4px 0 20px rgba(0,0,0,0.15) !important;
-        }
-        
-        /* ================================================================
            RESPONSIVE
            ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .top-nav .search-wrapper { max-width: 300px; }
+            .top-nav .search-wrapper { max-width: 250px; }
             .branches-grid { grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
-            .sidebar { transform: translateX(-100%) !important; }
-            .sidebar.open { transform: translateX(0) !important; }
+            .top-nav .branch-selector-header { min-width: 140px; font-size: 0.75rem; padding: 6px 10px; }
         }
         
         @media (max-width: 768px) {
-            .top-nav .search-wrapper { max-width: 180px; }
+            .top-nav .search-wrapper { max-width: 150px; }
             .top-nav .datetime { display: none; }
+            .top-nav .branch-selector-header { min-width: 120px; font-size: 0.7rem; padding: 5px 8px; }
             
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
@@ -1085,6 +1094,8 @@ $profile_pic_url = !empty($profile_pic)
             .branch-card-header { flex-direction: column; align-items: stretch; text-align: center; }
             .branch-info { flex-direction: column; text-align: center; }
             .branch-status { text-align: center; }
+            .top-nav .search-wrapper { max-width: 100px; }
+            .top-nav .branch-selector-header { min-width: 100px; font-size: 0.65rem; padding: 4px 6px; }
         }
         
         @keyframes fadeInUp {
@@ -1096,204 +1107,16 @@ $profile_pic_url = !empty($profile_pic)
             animation: fadeInUp 0.5s ease forwards;
             opacity: 0;
         }
-        
-        #sidebarOverlay {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.5);
-            z-index: 45;
-            display: none;
-            backdrop-filter: blur(2px);
-            -webkit-backdrop-filter: blur(2px);
-        }
-        
-        #sidebarOverlay.active {
-            display: block !important;
-        }
-        
-        @media print {
-            .top-nav, .sidebar, .btn, .dark-toggle-btn, .icon-btn,
-            .search-wrapper, .branch-actions, .page-header .btn-outline-light,
-            .footer, #sidebarToggle { display: none !important; }
-            
-            .main-content { margin: 0; padding: 20px; }
-            .branch-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #ddd; }
-            .branch-card-header { background: #1A56DB !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        }
     </style>
 </head>
 <body>
 
 <!-- ================================================================ -->
-<!-- SIDEBAR OVERLAY (Mobile) -->
-<!-- ================================================================ -->
-<div id="sidebarOverlay"></div>
-
-<!-- ================================================================ -->
-<!-- SIDEBAR -->
-<!-- ================================================================ -->
-<aside class="sidebar" id="sidebar">
-    
-    <!-- ================================================================ -->
-    <!-- BRAND / HEADER -->
-    <!-- ================================================================ -->
-    <div class="sidebar-brand" style="padding:18px 16px 14px;border-bottom:2px solid #0B3D8A;background:#0B4EA8;position:sticky;top:0;z-index:5;">
-        <div style="display:flex;align-items:center;gap:12px;">
-            <img src="<?= $logo_url ?>" alt="Braick Logo" style="width:42px;height:42px;border-radius:10px;object-fit:cover;background:white;padding:4px;border:2px solid rgba(255,255,255,0.1);"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2248%22 height=%2248%22%3E%3Crect width=%2248%22 height=%2248%22 fill=%22%230B4EA8%22 rx=%2212%22/%3E%3Ctext x=%2224%22 y=%2232%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2220%22 font-weight=%22bold%22%3EB%3C/text%3E%3C/svg%3E'">
-            <div>
-                <p style="color:white;font-weight:700;font-size:0.95rem;line-height:1.2;margin:0;">Braick Dispensary</p>
-                <p style="color:#9EC5FE;font-size:0.65rem;font-weight:500;margin:0;">Super Admin</p>
-            </div>
-        </div>
-    </div>
-    
-    <!-- ================================================================ -->
-    <!-- BRANCH SELECTOR -->
-    <!-- ================================================================ -->
-    <div style="padding:10px 14px;border-bottom:2px solid #0B3D8A;background:#0B4EA8;">
-        <select id="sidebarBranchSelector" onchange="switchBranch(this.value)" style="width:100%;padding:7px 10px;border-radius:8px;border:none;background:rgba(255,255,255,0.12);color:white;font-size:0.75rem;cursor:pointer;outline:none;transition:all 0.3s ease;appearance:none;-webkit-appearance:none;background-image:url('data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2212%22 height=%2212%22 viewBox=%220 0 12 12%22%3E%3Cpath fill=%22white%22 d=%22M6 8L1 3h10z%22/%3E%3C/svg%3E');background-repeat:no-repeat;background-position:right 10px center;">
-            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
-            <?php
-            try {
-                $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-                while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-                    $sel = ($selected_branch_id == $row['id']) ? 'selected' : '';
-                    echo '<option value="' . $row['id'] . '" ' . $sel . ' style="background:#0B4EA8;color:white;padding:8px;">🏥 ' . htmlspecialchars($row['name']) . '</option>';
-                }
-            } catch (Exception $e) {}
-            ?>
-        </select>
-    </div>
-    
-    <!-- ================================================================ -->
-    <!-- NAVIGATION -->
-    <!-- ================================================================ -->
-    <nav style="padding:10px 8px 20px;">
-        
-        <!-- ============================================================ -->
-        <!-- MAIN MENU -->
-        <!-- ============================================================ -->
-        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Main Menu</div>
-        
-        <a href="/dispensary_system/frontend/pages/admin/dashboard.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-home"></i> Dashboard
-        </a>
-        
-        <a href="/dispensary_system/frontend/pages/admin/employees.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-users"></i> Employees
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeEmployees"><?= $total_staff ?></span>
-        </a>
-        
-        <a href="/dispensary_system/frontend/pages/admin/patients.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-injured"></i> Patients
-            <span style="margin-left:auto;background:rgba(255,255,255,0.15);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgePatients"><?= $total_patients ?></span>
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- MODULES -->
-        <!-- ============================================================ -->
-        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Modules</div>
-        
-        <a href="/dispensary_system/frontend/pages/admin/doctors_list.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-md"></i> Doctors
-        </a>
-        
-        <a href="/dispensary_system/frontend/pages/admin/view_pharmacy.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-prescription"></i> Pharmacy
-        </a>
-        
-        <a href="/dispensary_system/frontend/pages/admin/view_reception.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-headset"></i> Reception
-        </a>
-        
-        <a href="/dispensary_system/frontend/pages/admin/view_laboratory.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-flask"></i> Laboratory
-        </a>
-        
-        <a href="/dispensary_system/frontend/pages/admin/view_cashier.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-cash-register"></i> Cashier
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- SERVICES -->
-        <!-- ============================================================ -->
-        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Services</div>
-        
-        <a href="/dispensary_system/frontend/pages/admin/services.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-concierge-bell"></i> Services
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- MANAGEMENT -->
-        <!-- ============================================================ -->
-        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Management</div>
-        
-        <a href="/dispensary_system/frontend/pages/admin/branches.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:#0AA84F;color:white;box-shadow:0 4px 12px rgba(10,168,79,0.35);">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-store-alt"></i> Branches
-            <span style="margin-left:auto;background:rgba(255,255,255,0.25);padding:1px 8px;border-radius:20px;font-size:0.6rem;font-weight:600;color:white;flex-shrink:0;min-width:20px;text-align:center;" id="badgeBranches"><?= $total_branches ?></span>
-        </a>
-        
-        <a href="/dispensary_system/frontend/pages/admin/departments.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-building"></i> Departments
-        </a>
-        
-        <a href="/dispensary_system/frontend/pages/admin/reports.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-chart-bar"></i> Reports
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- SYSTEM -->
-        <!-- ============================================================ -->
-        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">System</div>
-        
-        <a href="/dispensary_system/frontend/pages/admin/settings.php?branch=<?= $selected_branch_id ?>" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-cog"></i> Settings
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- ACCOUNT -->
-        <!-- ============================================================ -->
-        <div style="font-size:0.5rem;text-transform:uppercase;letter-spacing:0.08em;color:#6EA8FE;padding:0 10px;margin:12px 0 4px;font-weight:700;">Account</div>
-        
-        <a href="/dispensary_system/frontend/pages/admin/profile.php" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-user-circle"></i> Profile
-        </a>
-        
-        <!-- ============================================================ -->
-        <!-- LOGOUT -->
-        <!-- ============================================================ -->
-        <a href="/dispensary_system/frontend/pages/logout.php" 
-           style="display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;color:#D2E3FC;text-decoration:none;transition:all 0.25s ease;font-size:0.8rem;font-weight:500;margin:1px 0;background:transparent;cursor:pointer;border:none;width:100%;text-align:left;position:relative;border-top:2px solid rgba(255,255,255,0.08);padding-top:10px;margin-top:6px;color:#FCA5A5;">
-            <i style="width:20px;text-align:center;font-size:0.9rem;flex-shrink:0;" class="fas fa-sign-out-alt"></i> Logout
-        </a>
-        
-    </nav>
-</aside>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
+<!-- TOP NAVIGATION (WITH BRANCH FILTER) -->
 <!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn" style="background:transparent;border:none;cursor:pointer;color:var(--text-secondary);font-size:1.2rem;padding:8px;">
+        <button id="sidebarToggle" class="lg:hidden icon-btn" style="background:transparent;border:none;cursor:pointer;color:var(--text-secondary);font-size:1.2rem;padding:8px;display:none;">
             <i class="fas fa-bars"></i>
         </button>
         
@@ -1307,6 +1130,18 @@ $profile_pic_url = !empty($profile_pic)
     </div>
     
     <div class="flex items-center gap-3">
+        <!-- ✅ BRANCH FILTER IN HEADER -->
+        <select id="headerBranchSelector" 
+                class="branch-selector-header"
+                onchange="switchBranch(this.value)">
+            <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
+            <?php foreach ($branches_for_filter as $branch_filter): ?>
+                <option value="<?= $branch_filter['id'] ?>" <?= $selected_branch_id == $branch_filter['id'] ? 'selected' : '' ?>>
+                    🏥 <?= htmlspecialchars($branch_filter['name']) ?>
+                </option>
+            <?php endforeach; ?>
+        </select>
+        
         <span class="datetime" id="currentDateTime"></span>
         
         <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
@@ -1374,9 +1209,7 @@ $profile_pic_url = !empty($profile_pic)
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- STATISTICS CARDS - BLUE BACKGROUND -->
-    <!-- ================================================================ -->
+    <!-- STATISTICS CARDS -->
     <div class="stats-grid animate-fade-in-up">
         <div class="stat-card">
             <div class="stat-icon">
@@ -1416,9 +1249,7 @@ $profile_pic_url = !empty($profile_pic)
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- BRANCHES GRID -->
-    <!-- ================================================================ -->
     <?php if (count($branches) > 0): ?>
         <div class="branches-grid animate-fade-in-up" style="animation-delay:0.05s;">
             <?php foreach ($branches as $branch): 
@@ -1567,9 +1398,7 @@ $profile_pic_url = !empty($profile_pic)
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -1610,68 +1439,98 @@ $profile_pic_url = !empty($profile_pic)
     }
 
     // ================================================================
-    // SIDEBAR TOGGLE
+    // SIDEBAR TOGGLE - Uses SHARED sidebar
     // ================================================================
-    document.addEventListener('DOMContentLoaded', function() {
-        var sidebar = document.getElementById('sidebar');
-        var sidebarToggle = document.getElementById('sidebarToggle');
-        var overlay = document.getElementById('sidebarOverlay');
-        
-        if (!overlay) {
-            overlay = document.createElement('div');
-            overlay.id = 'sidebarOverlay';
-            overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.5);z-index:45;display:none;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px);';
-            document.body.appendChild(overlay);
-        }
-        
-        function toggleSidebar() {
-            var isOpen = sidebar.classList.contains('open');
-            if (isOpen) {
-                sidebar.classList.remove('open');
-                overlay.style.display = 'none';
-                document.body.style.overflow = '';
-            } else {
+    (function() {
+        function initSidebar() {
+            var sidebar = document.getElementById('sidebar');
+            var toggleBtn = document.getElementById('sidebarToggle');
+            var overlay = document.getElementById('sidebarOverlay');
+            
+            if (!sidebar) {
+                console.warn('⚠️ Sidebar not found');
+                return;
+            }
+            
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.id = 'sidebarOverlay';
+                document.body.appendChild(overlay);
+            }
+            
+            function updateToggleVisibility() {
+                if (!toggleBtn) return;
+                toggleBtn.style.display = window.innerWidth <= 1024 ? 'block' : 'none';
+            }
+            
+            updateToggleVisibility();
+            window.addEventListener('resize', updateToggleVisibility);
+            
+            function openSidebar() {
                 sidebar.classList.add('open');
-                overlay.style.display = 'block';
+                if (overlay) {
+                    overlay.style.display = 'block';
+                    overlay.classList.add('active');
+                }
                 document.body.style.overflow = 'hidden';
+                document.body.classList.add('sidebar-open');
             }
-        }
-        
-        if (sidebarToggle) {
-            sidebarToggle.addEventListener('click', function(e) {
-                e.stopPropagation();
-                toggleSidebar();
+            
+            function closeSidebar() {
+                sidebar.classList.remove('open');
+                if (overlay) {
+                    overlay.style.display = 'none';
+                    overlay.classList.remove('active');
+                }
+                document.body.style.overflow = '';
+                document.body.classList.remove('sidebar-open');
+            }
+            
+            function toggleSidebar() {
+                if (sidebar.classList.contains('open')) {
+                    closeSidebar();
+                } else {
+                    openSidebar();
+                }
+            }
+            
+            if (toggleBtn && !toggleBtn.dataset.wired) {
+                toggleBtn.dataset.wired = 'true';
+                toggleBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleSidebar();
+                });
+            }
+            
+            if (overlay && !overlay.dataset.wired) {
+                overlay.dataset.wired = 'true';
+                overlay.addEventListener('click', function(e) {
+                    if (e.target === overlay) closeSidebar();
+                });
+            }
+            
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
             });
+            
+            window.addEventListener('resize', function() {
+                if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
+                    closeSidebar();
+                }
+            });
+            
+            console.log('✅ Sidebar initialized with shared component');
         }
         
-        overlay.addEventListener('click', function() {
-            sidebar.classList.remove('open');
-            overlay.style.display = 'none';
-            document.body.style.overflow = '';
-        });
-        
-        document.addEventListener('keydown', function(e) {
-            if (e.key === 'Escape' && sidebar.classList.contains('open')) {
-                sidebar.classList.remove('open');
-                overlay.style.display = 'none';
-                document.body.style.overflow = '';
-            }
-        });
-        
-        // Close sidebar on resize to desktop
-        window.addEventListener('resize', function() {
-            if (window.innerWidth > 1024 && sidebar.classList.contains('open')) {
-                sidebar.classList.remove('open');
-                overlay.style.display = 'none';
-                document.body.style.overflow = '';
-            }
-        });
-        
-        console.log('✅ Sidebar initialized successfully');
-        console.log('📱 Window width:', window.innerWidth);
-        console.log('📱 Is mobile:', window.innerWidth <= 1024);
-        console.log('👤 Admin: <?= htmlspecialchars($user_name) ?>');
-    });
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initSidebar);
+        } else {
+            initSidebar();
+        }
+    })();
 
     // ================================================================
     // DARK MODE
@@ -1759,11 +1618,9 @@ $profile_pic_url = !empty($profile_pic)
     setInterval(updateDateTime, 1000);
 
     console.log('%c🏢 Braick Dispensary - Branches Management', 'font-size:18px; font-weight:bold; color:#1A56DB;');
+    console.log('%c✅ Using SHARED admin_sidebar.php', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ Branch filter in header', 'font-size:13px; color:#34D399;');
     console.log('%c📊 Total Branches: <?= $total_branches ?>', 'font-size:13px; color:#1A56DB;');
-    console.log('%c✅ Active: <?= $active_branches ?>, ❌ Inactive: <?= $total_branches - $active_branches ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c👥 Total Staff: <?= number_format($total_staff) ?>', 'font-size:13px; color:#7B2FBE;');
-    console.log('%c🩺 Total Patients: <?= number_format($total_patients) ?>', 'font-size:13px; color:#D97706;');
-    console.log('%c✅ Using tables: branches, users, patients, visits', 'font-size:13px; color:#059669;');
 </script>
 
 </body>

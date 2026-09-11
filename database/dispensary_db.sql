@@ -3,7 +3,7 @@
 -- https://www.phpmyadmin.net/
 --
 -- Host: 127.0.0.1
--- Generation Time: Sep 09, 2026 at 08:53 PM
+-- Generation Time: Sep 10, 2026 at 02:37 PM
 -- Server version: 10.4.32-MariaDB
 -- PHP Version: 8.2.12
 
@@ -1146,7 +1146,40 @@ INSERT INTO `activity_logs` (`id`, `user_id`, `branch_id`, `patient_id`, `action
 (1096, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Mode: general_blue, Role: laboratory)', NULL, NULL, '2026-09-09 18:29:14', '2026-09-09 18:29:14'),
 (1097, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 163 - KICHOCHO', NULL, NULL, '2026-09-09 18:29:22', '2026-09-09 18:29:22'),
 (1098, 13, 1, NULL, 'user_logout', 'User logged out: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-09-09 18:29:37', '2026-09-09 18:29:37'),
-(1099, 4, 1, NULL, 'user_login', 'User logged in: Dr.ERICK JOHN (Mode: general_blue, Role: doctor)', NULL, NULL, '2026-09-09 18:29:40', '2026-09-09 18:29:40');
+(1099, 4, 1, NULL, 'user_login', 'User logged in: Dr.ERICK JOHN (Mode: general_blue, Role: doctor)', NULL, NULL, '2026-09-09 18:29:40', '2026-09-09 18:29:40'),
+(1100, 12, 1, NULL, 'user_login', 'User logged in: JUDITH SOLOMONI (Mode: general_blue, Role: reception)', NULL, NULL, '2026-09-10 09:34:07', '2026-09-10 09:34:07'),
+(1101, 12, 1, NULL, 'user_logout', 'User logged out: JUDITH SOLOMONI (Role: reception)', NULL, NULL, '2026-09-10 09:44:11', '2026-09-10 09:44:11'),
+(1102, 1, 1, NULL, 'user_login', 'User logged in: System Admin (Mode: general_blue, Role: admin)', NULL, NULL, '2026-09-10 09:44:18', '2026-09-10 09:44:18'),
+(1103, 1, 1, NULL, 'user_logout', 'User logged out: System Admin (Role: admin)', NULL, NULL, '2026-09-10 09:47:43', '2026-09-10 09:47:43'),
+(1104, 12, 1, NULL, 'user_login', 'User logged in: JUDITH SOLOMONI (Mode: general_blue, Role: reception)', NULL, NULL, '2026-09-10 09:47:48', '2026-09-10 09:47:48'),
+(1105, 12, 1, NULL, 'user_logout', 'User logged out: JUDITH SOLOMONI (Role: reception)', NULL, NULL, '2026-09-10 09:48:09', '2026-09-10 09:48:09'),
+(1106, 4, 1, NULL, 'user_login', 'User logged in: Dr.ERICK JOHN (Mode: general_blue, Role: doctor)', NULL, NULL, '2026-09-10 09:48:17', '2026-09-10 09:48:17'),
+(1107, 4, 1, NULL, 'user_logout', 'User logged out: Dr.ERICK JOHN (Role: doctor)', NULL, NULL, '2026-09-10 09:48:59', '2026-09-10 09:48:59'),
+(1108, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Mode: general_blue, Role: laboratory)', NULL, NULL, '2026-09-10 09:49:09', '2026-09-10 09:49:09'),
+(1109, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 165 - Renal Function Test (RFT)', NULL, NULL, '2026-09-10 09:49:15', '2026-09-10 09:49:15'),
+(1110, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 166 - Blood Check', NULL, NULL, '2026-09-10 09:49:18', '2026-09-10 09:49:18'),
+(1111, 13, 1, NULL, 'lab_test_started', 'Started lab test ID: 167 - Echocardiogram', NULL, NULL, '2026-09-10 09:49:22', '2026-09-10 09:49:22'),
+(1112, 13, 1, NULL, 'user_logout', 'User logged out: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-09-10 09:55:25', '2026-09-10 09:55:25'),
+(1113, 1, 1, NULL, 'user_login', 'User logged in: System Admin (Mode: general_blue, Role: admin)', NULL, NULL, '2026-09-10 09:55:29', '2026-09-10 09:55:29'),
+(1114, 1, 1, NULL, 'user_logout', 'User logged out: System Admin (Role: admin)', NULL, NULL, '2026-09-10 09:56:56', '2026-09-10 09:56:56'),
+(1115, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Mode: general_blue, Role: laboratory)', NULL, NULL, '2026-09-10 09:57:03', '2026-09-10 09:57:03'),
+(1116, 13, 1, NULL, 'lab_tests_bulk_started', 'Started 4 lab test(s) in bulk', NULL, NULL, '2026-09-10 09:57:35', '2026-09-10 09:57:35'),
+(1117, 13, 1, NULL, 'user_logout', 'User logged out: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-09-10 10:01:05', '2026-09-10 10:01:05'),
+(1118, 4, 1, NULL, 'user_login', 'User logged in: Dr.ERICK JOHN (Mode: general_blue, Role: doctor)', NULL, NULL, '2026-09-10 10:01:12', '2026-09-10 10:01:12'),
+(1119, 4, 1, NULL, 'user_logout', 'User logged out: Dr.ERICK JOHN (Role: doctor)', NULL, NULL, '2026-09-10 10:02:14', '2026-09-10 10:02:14'),
+(1120, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Mode: general_blue, Role: laboratory)', NULL, NULL, '2026-09-10 10:02:31', '2026-09-10 10:02:31'),
+(1121, 13, 1, NULL, 'user_logout', 'User logged out: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-09-10 10:04:03', '2026-09-10 10:04:03'),
+(1122, 4, 1, NULL, 'user_login', 'User logged in: Dr.ERICK JOHN (Mode: general_blue, Role: doctor)', NULL, NULL, '2026-09-10 10:04:07', '2026-09-10 10:04:07'),
+(1123, 4, 1, NULL, 'user_logout', 'User logged out: Dr.ERICK JOHN (Role: doctor)', NULL, NULL, '2026-09-10 10:05:05', '2026-09-10 10:05:05'),
+(1124, 13, 1, NULL, 'user_login', 'User logged in: ANGERITHA KIMARO (Mode: general_blue, Role: laboratory)', NULL, NULL, '2026-09-10 10:05:09', '2026-09-10 10:05:09'),
+(1125, 13, 1, NULL, 'user_logout', 'User logged out: ANGERITHA KIMARO (Role: laboratory)', NULL, NULL, '2026-09-10 10:06:01', '2026-09-10 10:06:01'),
+(1126, 1, 1, NULL, 'user_login', 'User logged in: System Admin (Mode: general_blue, Role: admin)', NULL, NULL, '2026-09-10 10:06:05', '2026-09-10 10:06:05'),
+(1127, 10, 1, NULL, 'user_login', 'User logged in: SALOME SANGA (Mode: general_green, Role: reception)', NULL, NULL, '2026-09-10 10:16:01', '2026-09-10 10:16:01'),
+(1128, 10, 1, NULL, 'user_logout', 'User logged out: SALOME SANGA (Role: reception)', NULL, NULL, '2026-09-10 10:33:59', '2026-09-10 10:33:59'),
+(1129, 11, 1, NULL, 'user_login', 'User logged in: Rose Mwangi (Mode: general_blue, Role: reception)', NULL, NULL, '2026-09-10 10:42:00', '2026-09-10 10:42:00'),
+(1130, 1, 1, NULL, 'user_logout', 'User logged out: System Admin (Role: admin)', NULL, NULL, '2026-09-10 12:05:11', '2026-09-10 12:05:11'),
+(1131, 12, 1, NULL, 'user_login', 'User logged in: JUDITH SOLOMONI (Mode: general_blue, Role: reception)', NULL, NULL, '2026-09-10 12:05:16', '2026-09-10 12:05:16'),
+(1132, 10, 1, NULL, 'user_login', 'User logged in: SALOME SANGA (Mode: general_blue, Role: reception)', NULL, NULL, '2026-09-10 12:08:24', '2026-09-10 12:08:24');
 
 -- --------------------------------------------------------
 
@@ -1192,6 +1225,8 @@ CREATE TABLE `bills` (
   `discount_amount` decimal(12,2) DEFAULT 0.00,
   `pharmacy_discount` decimal(12,2) NOT NULL DEFAULT 0.00,
   `cashier_discount` decimal(12,2) NOT NULL DEFAULT 0.00,
+  `premium_amount` decimal(12,2) DEFAULT 0.00,
+  `premium_note` varchar(255) DEFAULT NULL,
   `total_discount` decimal(12,2) NOT NULL DEFAULT 0.00,
   `total_amount` decimal(12,2) DEFAULT 0.00,
   `paid_amount` decimal(12,2) DEFAULT 0.00,
@@ -1202,6 +1237,17 @@ CREATE TABLE `bills` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `bills`
+--
+
+INSERT INTO `bills` (`id`, `bill_number`, `patient_id`, `visit_id`, `branch_id`, `created_by`, `subtotal`, `discount_percent`, `discount_amount`, `pharmacy_discount`, `cashier_discount`, `premium_amount`, `premium_note`, `total_discount`, `total_amount`, `paid_amount`, `balance`, `status`, `payment_method`, `notes`, `created_at`, `updated_at`) VALUES
+(317, 'BILL-LAB-20260910-0061-1571', 61, 157, 1, 10, 40000.00, 0.00, 0.00, 0.00, 0.00, 5000.00, 'Premium Charge', 0.00, 45000.00, 45000.00, 0.00, 'paid', 'cash', NULL, '2026-09-10 12:08:52', '2026-09-10 12:10:32'),
+(318, 'BILL-CONS-20260910-0062-8487', 62, 158, 1, 12, 10000.00, 0.00, 0.00, 0.00, 0.00, 0.00, NULL, 0.00, 10000.00, 0.00, 10000.00, 'pending', 'cash', NULL, '2026-09-10 12:29:24', '2026-09-10 12:29:24'),
+(319, 'BILL-LAB-20260910-0060-3081', 60, 159, 1, 10, 7000.00, 0.00, 0.00, 0.00, 0.00, 0.00, NULL, 0.00, 7000.00, 0.00, 7000.00, 'pending', 'cash', NULL, '2026-09-10 12:34:32', '2026-09-10 12:34:32'),
+(320, 'BILL-CONS-20260910-0059-6858', 59, 160, 1, 10, 100000.00, 0.00, 0.00, 0.00, 0.00, 0.00, NULL, 0.00, 100000.00, 0.00, 100000.00, 'pending', 'cash', NULL, '2026-09-10 12:35:40', '2026-09-10 12:35:40'),
+(321, 'BILL-CONS-20260910-0058-7187', 58, 161, 1, 10, 10000.00, 0.00, 0.00, 0.00, 0.00, 0.00, NULL, 0.00, 10000.00, 0.00, 10000.00, 'pending', 'cash', NULL, '2026-09-10 12:36:36', '2026-09-10 12:36:36');
 
 --
 -- Triggers `bills`
@@ -1247,6 +1293,19 @@ CREATE TABLE `bill_items` (
   `created_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `bill_items`
+--
+
+INSERT INTO `bill_items` (`id`, `bill_id`, `patient_id`, `branch_id`, `item_type`, `item_id`, `item_name`, `item_code`, `description`, `quantity`, `unit_price`, `total_price`, `discount_amount`, `tax_amount`, `final_price`, `reference_id`, `reference_type`, `status`, `created_at`, `updated_at`) VALUES
+(641, 317, 61, 1, 'lab_test', NULL, 'Blood Glucose (Fasting)', NULL, NULL, 1, 8000.00, 8000.00, 0.00, 0.00, 0.00, NULL, NULL, 'paid', '2026-09-10 12:08:52', '2026-09-10 12:10:32'),
+(642, 317, 61, 1, 'lab_test', NULL, 'Liver Function Test (LFT)', NULL, NULL, 1, 25000.00, 25000.00, 0.00, 0.00, 0.00, NULL, NULL, 'paid', '2026-09-10 12:08:52', '2026-09-10 12:10:32'),
+(643, 317, 61, 1, 'lab_test', NULL, 'Blood Check', NULL, NULL, 1, 7000.00, 7000.00, 0.00, 0.00, 0.00, NULL, NULL, 'paid', '2026-09-10 12:08:52', '2026-09-10 12:10:32'),
+(644, 318, 62, 1, 'consultation', NULL, 'New Patient', NULL, NULL, 1, 10000.00, 10000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-09-10 12:29:24', '2026-09-10 12:29:24'),
+(645, 319, 60, 1, 'lab_test', NULL, 'Blood Check', NULL, NULL, 1, 7000.00, 7000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-09-10 12:34:32', '2026-09-10 12:34:32'),
+(646, 320, 59, 1, 'consultation', NULL, 'visit_mpya', NULL, NULL, 1, 100000.00, 100000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-09-10 12:35:40', '2026-09-10 12:35:40'),
+(647, 321, 58, 1, 'consultation', NULL, 'New Patient', NULL, NULL, 1, 10000.00, 10000.00, 0.00, 0.00, 0.00, NULL, NULL, 'pending', '2026-09-10 12:36:36', '2026-09-10 12:36:36');
 
 -- --------------------------------------------------------
 
@@ -1500,6 +1559,16 @@ CREATE TABLE `lab_tests` (
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+--
+-- Dumping data for table `lab_tests`
+--
+
+INSERT INTO `lab_tests` (`id`, `visit_id`, `patient_id`, `doctor_id`, `lab_technician_id`, `technician_id`, `test_id`, `test_name`, `test_price`, `equipment_used`, `batch_number`, `test_type`, `sample_type`, `test_date`, `results`, `formatted_result`, `reference_range`, `interpretation`, `performed_by`, `status`, `started_at`, `bill_created`, `branch_id`, `notes`, `created_at`, `completed_at`, `printed_at`, `printed_by`, `updated_at`) VALUES
+(177, 157, 61, NULL, NULL, NULL, 2, 'Blood Glucose (Fasting)', 8000.00, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, 0, 1, NULL, '2026-09-10 12:08:52', NULL, NULL, NULL, '2026-09-10 12:08:52'),
+(178, 157, 61, NULL, NULL, NULL, 5, 'Liver Function Test (LFT)', 25000.00, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, 0, 1, NULL, '2026-09-10 12:08:52', NULL, NULL, NULL, '2026-09-10 12:08:52'),
+(179, 157, 61, NULL, NULL, NULL, 58, 'Blood Check', 7000.00, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, 0, 1, NULL, '2026-09-10 12:08:52', NULL, NULL, NULL, '2026-09-10 12:08:52'),
+(180, 159, 60, NULL, NULL, NULL, 58, 'Blood Check', 7000.00, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'pending', NULL, 0, 1, NULL, '2026-09-10 12:34:32', NULL, NULL, NULL, '2026-09-10 12:34:32');
+
 -- --------------------------------------------------------
 
 --
@@ -1659,7 +1728,7 @@ INSERT INTO `medical_equipment` (`id`, `equipment_name`, `category`, `unit`, `qu
 (8, 'Surgical Gloves (Sterile)', 'Surgery', 'box', 30, 5, 2000.00, 5000.00, 'Ansell', '2027-09-30', 'EQP-20260909-GLOVE-001', 1, 1, 'active', 1, 'System Admin', '2026-09-08 21:00:00', '2026-09-08 21:00:00'),
 (9, 'Suture Kit', 'Surgery', 'kit', 12, 4, 25000.00, 10000.00, 'Ethicon', NULL, 'EQP-20260909-SUT-001', 1, 1, 'active', 1, 'System Admin', '2026-09-08 21:00:00', '2026-09-08 21:00:00'),
 (40, 'BANDAGE', 'Lab Equipment', 'box', 300, 50, 500.00, 1500.00, 'WAKATI', '0000-00-00', 'EQP-20260909-8495C2', 1, NULL, 'active', 1, 'System Admin', '2026-09-09 13:35:41', '2026-09-09 13:37:29'),
-(41, 'SINDANO', 'Wound Care', 'set', 299, 50, 500.00, 1200.00, 'AMANA', '0000-00-00', 'EQP-20260909-40E8C8', 1, NULL, 'active', 7, 'LUCY MUSSA', '2026-09-09 13:36:49', '2026-09-09 18:26:53');
+(41, 'SINDANO', 'Wound Care', 'set', 298, 50, 500.00, 1200.00, 'AMANA', '0000-00-00', 'EQP-20260909-40E8C8', 1, NULL, 'active', 7, 'LUCY MUSSA', '2026-09-09 13:36:49', '2026-09-10 10:04:59');
 
 -- --------------------------------------------------------
 
@@ -1957,7 +2026,16 @@ INSERT INTO `notifications` (`id`, `user_id`, `branch_id`, `patient_id`, `title`
 (225, 11, 1, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr.ERICK JOHN is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-09-09 15:46:47', '2026-09-09 15:46:47'),
 (226, 12, 1, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr.ERICK JOHN is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/reception/assign_doctor.php', 0, '2026-09-09 15:46:47', '2026-09-09 15:46:47'),
 (227, 1, 1, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr.ERICK JOHN is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-09-09 15:46:47', '2026-09-09 15:46:47'),
-(228, 3, 1, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr.ERICK JOHN is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-09-09 15:46:47', '2026-09-09 15:46:47');
+(228, 3, 1, NULL, 'Doctor Status: 🟢 Online', 'Dr. Dr.ERICK JOHN is now ONLINE and available for patient assignments.', 'success', '/dispensary_system/frontend/pages/admin/doctors.php', 0, '2026-09-09 15:46:47', '2026-09-09 15:46:47'),
+(229, 16, 1, NULL, '💰 Consultation Bill Created', 'Consultation bill #BILL-CONS-20260910-0061-1474 (TSh 10,000) for patient ID #61 - New Patient', '', 'cashier_dashboard.php', 0, '2026-09-10 09:48:07', '2026-09-10 09:48:07'),
+(230, 16, 1, NULL, '💰 New Bill Created', 'Consultation bill #BILL-20260910-0062-5872 (TSh 10,000) for patient JACKSON MYULA - New Patient', '', 'cashier_dashboard.php', 0, '2026-09-10 10:30:45', '2026-09-10 10:30:45'),
+(231, 16, 1, NULL, '💰 Consultation Bill Created', 'Consultation bill #BILL-CONS-20260910-0060-3094 (TSh 30,000) for patient ID #60 - Specialist Consultation', '', 'cashier_dashboard.php', 0, '2026-09-10 10:33:14', '2026-09-10 10:33:14'),
+(232, 16, 1, NULL, '🧪 Lab Test Bill Created', 'Lab Test bill #BILL-LAB-20260910-0058-9649 (TSh 11,000) for patient ID #58 - BLOOD, BLOOD', '', 'cashier_dashboard.php', 0, '2026-09-10 10:33:50', '2026-09-10 10:33:50'),
+(233, 16, 1, NULL, '🧪 Lab Test Bill Created', 'Lab Test bill #BILL-LAB-20260910-0061-1571 (TSh 40,000) for patient ID #61 - Blood Glucose (Fasting), Liver Function Test (LFT), Blood Check', '', 'cashier_dashboard.php', 0, '2026-09-10 12:08:52', '2026-09-10 12:08:52'),
+(234, 16, 1, NULL, '💰 Consultation Bill Created', 'Consultation bill #BILL-CONS-20260910-0062-8487 (TSh 10,000) for patient ID #62 - New Patient', '', 'cashier_dashboard.php', 0, '2026-09-10 12:29:24', '2026-09-10 12:29:24'),
+(235, 16, 1, NULL, '🧪 Lab Test Bill Created', 'Lab Test bill #BILL-LAB-20260910-0060-3081 (TSh 7,000) for patient ID #60 - Blood Check', '', 'cashier_dashboard.php', 0, '2026-09-10 12:34:32', '2026-09-10 12:34:32'),
+(236, 16, 1, NULL, '💰 Consultation Bill Created', 'Consultation bill #BILL-CONS-20260910-0059-6858 (TSh 100,000) for patient ID #59 - visit_mpya', '', 'cashier_dashboard.php', 0, '2026-09-10 12:35:40', '2026-09-10 12:35:40'),
+(237, 16, 1, NULL, '💰 Consultation Bill Created', 'Consultation bill #BILL-CONS-20260910-0058-7187 (TSh 10,000) for patient ID #58 - New Patient', '', 'cashier_dashboard.php', 0, '2026-09-10 12:36:36', '2026-09-10 12:36:36');
 
 -- --------------------------------------------------------
 
@@ -2082,10 +2160,11 @@ INSERT INTO `patients` (`id`, `patient_id`, `full_name`, `date_of_birth`, `gende
 (55, 'P-2026-01-0009', 'ALPHONSE MABULA', '1998-02-12', 'Male', '', '0787615242', 'alphonce@gmail.com', '', '0678723133', 'AB-', 'Sulfa Drugs', 1, 11, 6, '2026-08-26 19:59:21', '2026-08-29 17:59:00'),
 (56, 'P-2026-01-0010', 'julieth kalinde', '2001-09-13', 'Male', '', '0789189123', 'juliath@gmail.com', '', '', 'AB+', 'Penicillin', 1, 11, 4, '2026-08-26 20:07:21', '2026-09-02 22:34:17'),
 (57, 'P-2026-01-0011', 'VICTORIA SALINGO', '2008-03-12', 'Male', 'Single', '074671827361', 'victoria@gmail.com', '', '', '', '', 1, 11, 6, '2026-08-26 20:22:10', '2026-09-02 22:33:39'),
-(58, 'P-2026-01-0012', 'AYUBU NZAL', '1992-08-12', 'Male', 'Married', '0765457899', 'ayubunzali@gmail.com', '', '', 'A+', '', 1, 11, 4, '2026-08-26 20:35:50', '2026-08-26 20:35:50'),
+(58, 'P-2026-01-0012', 'AYUBU NZAL', '1992-08-12', 'Male', 'Married', '0765457899', 'ayubunzali@gmail.com', '', '', 'A+', '', 1, 11, 4, '2026-08-26 20:35:50', '2026-09-10 12:36:36'),
 (59, 'P-2026-01-0013', 'AMOSI NGOMENI', '2000-12-12', 'Male', 'Single', '0756176210', 'amosi@gmail.com', '', '', 'A+', '', 1, 11, 4, '2026-08-26 20:52:13', '2026-09-09 09:42:09'),
-(60, 'P-2026-01-0014', 'ANDREW VICENT CHIKUPE', '1993-07-10', 'Male', '', '0746826243', 'endrew@gmail.com', 'mtakumbuka', '0678723129', 'B-', 'Aspirin', 1, 11, 4, '2026-08-26 21:00:03', '2026-09-06 08:49:26'),
-(61, 'P-2026-01-0015', 'MUSSA MONGI MASNGI', '2003-08-01', 'Male', 'Single', '0789878980', 'musa@gmail.com', '', '', '', 'Sulfa Drugs', 1, 11, 4, '2026-08-26 21:11:23', '2026-08-28 22:55:58');
+(60, 'P-2026-01-0014', 'ANDREW VICENT CHIKUPE', '1993-07-10', 'Male', '', '0746826243', 'endrew@gmail.com', 'mtakumbuka', '0678723129', 'B-', 'Aspirin', 1, 11, NULL, '2026-08-26 21:00:03', '2026-09-10 12:34:32'),
+(61, 'P-2026-01-0015', 'MUSSA MONGI MASNGI', '2003-08-01', 'Male', 'Single', '0789878980', 'musa@gmail.com', '', '', '', 'Sulfa Drugs', 1, 11, NULL, '2026-08-26 21:11:23', '2026-09-10 12:08:52'),
+(62, 'P-2026-01-0016', 'JACKSON MYULA', '1999-06-09', 'Male', 'Single', '0678176542', 'jacksonmyula3@gmail.com', 'mtakumbuka', '', 'O+', 'Penicillin, Milk', 1, 10, 4, '2026-09-10 10:30:45', '2026-09-10 10:30:45');
 
 -- --------------------------------------------------------
 
@@ -2143,6 +2222,13 @@ CREATE TABLE `payments` (
   `received_at` timestamp NOT NULL DEFAULT current_timestamp(),
   `updated_at` timestamp NOT NULL DEFAULT current_timestamp() ON UPDATE current_timestamp()
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `payments`
+--
+
+INSERT INTO `payments` (`id`, `receipt_number`, `bill_id`, `patient_id`, `amount`, `payment_method`, `reference_number`, `notes`, `received_by`, `branch_id`, `received_at`, `updated_at`) VALUES
+(108, 'RCP-20260910-7918', 317, 61, 45000.00, 'cash', NULL, 'Payment | Pharm Disc: TSh 0 | Cashier Disc: TSh 0 | Premium: TSh 5,000 (Premium Charge)', 11, 1, '2026-09-10 12:10:32', '2026-09-10 12:10:32');
 
 -- --------------------------------------------------------
 
@@ -2706,7 +2792,8 @@ INSERT INTO `stock_movements` (`id`, `inventory_id`, `equipment_id`, `patient_id
 (192, NULL, NULL, NULL, '', 10, 0, 0, '', 18, 7, 1, 'OTC Sale - PENDING: OTC-20260906-7628 - Customer: HANIFA', '2026-09-06 12:53:35'),
 (193, NULL, NULL, NULL, 'out', 20, 0, 0, 'otc', 19, 7, 1, 'OTC Sale - PAID: OTC-20260908-3495 - Customer: kelvin', '2026-09-08 08:36:03'),
 (194, NULL, NULL, NULL, 'out', 10, 0, 0, 'otc', 20, 7, 1, 'OTC Sale - PAID: OTC-20260908-0455 - Customer: Walk-in Customer | Premium: TSh 5,000', '2026-09-08 09:26:54'),
-(195, NULL, 41, 61, 'out', 1, 300, 299, 'lab_test', 67, 4, 1, 'Lab test: KICHOCHO - Equipment used', '2026-09-09 18:26:53');
+(195, NULL, 41, 61, 'out', 1, 300, 299, 'lab_test', 67, 4, 1, 'Lab test: KICHOCHO - Equipment used', '2026-09-09 18:26:53'),
+(196, NULL, 41, 61, 'out', 1, 299, 298, 'lab_test', 68, 4, 1, 'Lab test: KFADURO - Equipment used', '2026-09-10 10:04:59');
 
 -- --------------------------------------------------------
 
@@ -2766,18 +2853,18 @@ CREATE TABLE `users` (
 --
 
 INSERT INTO `users` (`id`, `username`, `password`, `password_changed_at`, `is_default_password`, `full_name`, `email`, `phone`, `role`, `branch_id`, `specialty`, `is_online`, `last_online`, `profile_pic`, `status`, `created_at`, `updated_at`) VALUES
-(1, 'admin1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'System Admin', 'admin@braick.com', '+255 613 234 123', 'admin', 1, NULL, 0, '2026-09-09 16:30:38', 'user_1_1788291272.png', 'active', '2026-08-23 12:26:10', '2026-09-09 16:30:38'),
+(1, 'admin1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'System Admin', 'admin@braick.com', '+255 613 234 123', 'admin', 1, NULL, 0, '2026-09-10 10:06:05', 'user_1_1788291272.png', 'active', '2026-08-23 12:26:10', '2026-09-10 10:06:05'),
 (3, 'admin2', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'BRAICK', 'braick.admin@braick.com', '+255 732 123 030', 'admin', 1, NULL, 0, '2026-08-26 14:10:40', NULL, 'active', '2026-08-23 12:41:40', '2026-09-04 17:59:45'),
-(4, 'Dr.Dodoma1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Dr.ERICK JOHN', 'erick.dodoma@braick.com', '+255 700 000 011', 'doctor', 1, 'General Medicine', 1, '2026-09-09 18:29:40', 'user_4_1787697956.png', 'active', '2026-08-23 12:41:40', '2026-09-09 18:29:40'),
+(4, 'Dr.Dodoma1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Dr.ERICK JOHN', 'erick.dodoma@braick.com', '+255 700 000 011', 'doctor', 1, 'General Medicine', 0, '2026-09-10 10:05:05', 'user_4_1787697956.png', 'active', '2026-08-23 12:41:40', '2026-09-10 10:05:05'),
 (5, 'Dr.Dodoma2', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Dr. Grace Peter', 'grace.dodoma@braick.com', '+255 700 000 012', 'doctor', 1, 'Pediatrics', 0, '2026-08-29 06:27:23', NULL, 'active', '2026-08-23 12:41:40', '2026-09-02 09:37:37'),
 (6, 'Dr.Dodoma3', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Dr. John Mushi', 'john.dodoma@braick.com', '+255 700 000 013', 'doctor', 1, 'Cardiology', 0, NULL, NULL, 'active', '2026-08-23 12:41:40', '2026-09-02 09:37:37'),
 (7, 'Pharm.Dodoma3', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'LUCY MUSSA', 'pharm.dodoma@braick.com', '+255 700 000 014', 'pharmacy', 1, NULL, 0, '2026-09-09 17:26:48', 'user_7_1787493390.png', 'active', '2026-08-23 12:41:40', '2026-09-09 17:26:48'),
 (8, 'Pharm.Dodoma2', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Mary John', 'mary.dodoma@braick.com', '+255 700 000 015', 'pharmacy', 1, NULL, 0, '2026-09-08 09:45:00', NULL, 'active', '2026-08-23 12:41:40', '2026-09-08 09:45:00'),
 (9, 'Pharm.Dodoma1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'James Mwangi', 'james.dodoma@braick.com', '+255 700 000 016', 'pharmacy', 1, NULL, 0, '2026-09-05 13:24:29', NULL, 'active', '2026-08-23 12:41:40', '2026-09-05 13:24:29'),
-(10, 'Recpt.Dodoma1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'SALOME SANGA', 'salome.dodoma@braick.com', '+255 700 000 017', 'reception', 1, NULL, 0, '2026-09-06 14:53:24', 'reception_10_1787518197.png', 'active', '2026-08-23 12:41:40', '2026-09-06 14:53:24'),
-(11, 'Recpt.Dodoma2', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Rose Mwangi', 'rose.dodoma@braick.com', '+255 700 000 018', 'reception', 1, NULL, 0, '2026-09-05 22:13:57', NULL, 'active', '2026-08-23 12:41:40', '2026-09-05 22:13:57'),
-(12, 'Recpt.Dodoma3', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'JUDITH SOLOMONI', 'anna.dodoma@braick.com', '+255 700 000 019', 'reception', 1, NULL, 0, '2026-09-09 15:21:33', NULL, 'active', '2026-08-23 12:41:40', '2026-09-09 15:21:33'),
-(13, 'Lab.Dodoma1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'ANGERITHA KIMARO', 'lab.dodoma@braick.com', '+255 700 000 020', 'laboratory', 1, '', 0, '2026-09-09 18:29:14', 'user_13_1787502536.png', 'active', '2026-08-23 12:41:40', '2026-09-09 18:29:14'),
+(10, 'Recpt.Dodoma1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'SALOME SANGA', 'salome.dodoma@braick.com', '+255 700 000 017', 'reception', 1, NULL, 0, '2026-09-10 12:08:24', 'reception_10_1787518197.png', 'active', '2026-08-23 12:41:40', '2026-09-10 12:08:24'),
+(11, 'Recpt.Dodoma2', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Rose Mwangi', 'rose.dodoma@braick.com', '+255 700 000 018', 'reception', 1, NULL, 0, '2026-09-10 10:42:00', NULL, 'active', '2026-08-23 12:41:40', '2026-09-10 10:42:00'),
+(12, 'Recpt.Dodoma3', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'JUDITH SOLOMONI', 'anna.dodoma@braick.com', '+255 700 000 019', 'reception', 1, NULL, 0, '2026-09-10 12:05:16', NULL, 'active', '2026-08-23 12:41:40', '2026-09-10 12:05:16'),
+(13, 'Lab.Dodoma1', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'ANGERITHA KIMARO', 'lab.dodoma@braick.com', '+255 700 000 020', 'laboratory', 1, '', 0, '2026-09-10 10:05:09', 'user_13_1787502536.png', 'active', '2026-08-23 12:41:40', '2026-09-10 10:05:09'),
 (14, 'Lab.Dodoma2', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Peter Lema', 'peter.dodoma@braick.com', '+255 700 000 021', 'laboratory', 1, NULL, 0, '2026-09-05 13:14:13', NULL, 'active', '2026-08-23 12:41:40', '2026-09-05 13:14:13'),
 (15, 'Lab.Dodoma3', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Sarah Mwamba', 'sarah.dodoma@braick.com', '+255 700 000 022', 'laboratory', 1, NULL, 0, '2026-08-28 22:37:29', NULL, 'active', '2026-08-23 12:41:40', '2026-09-02 09:37:37'),
 (16, 'cashier.dodoma', '$2y$10$4SErCssRNRm8SXyKU.wGw.dSdvzA.p1xbEELciT.2HRYEpji6mSUe', '2026-09-02 09:37:37', 1, 'Cashier Dodoma', 'cashier.dodoma@braick.com', '+255 700 000 023', 'cashier', 1, NULL, 0, NULL, NULL, 'active', '2026-08-23 12:41:40', '2026-09-02 09:37:37'),
@@ -2855,6 +2942,17 @@ CREATE TABLE `visits` (
   `total_discount` decimal(15,2) DEFAULT 0.00,
   `discount_percent` decimal(5,2) DEFAULT 0.00
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+--
+-- Dumping data for table `visits`
+--
+
+INSERT INTO `visits` (`id`, `visit_number`, `visit_date`, `patient_id`, `doctor_id`, `assigned_at`, `receptionist_id`, `branch_id`, `visit_type`, `service_id`, `consultation_fee`, `status`, `symptoms`, `hpi`, `physical_exam`, `complaint`, `diagnosis`, `disease_id`, `disease_code`, `treatment`, `follow_up_date`, `notes`, `is_referred`, `referred_by_doctor_id`, `referred_to_doctor_id`, `referral_id`, `created_at`, `updated_at`, `is_completed`, `completed_at`, `lab_fees_total`, `pharmacy_fees_total`, `other_fees_total`, `visit_total`, `payment_status`, `total_discount`, `discount_percent`) VALUES
+(157, 'VIS-20260910-1953', '2026-09-10 15:08:52', 61, NULL, NULL, 10, 1, 'Lab Tests Only', NULL, 0.00, 'lab_test', '', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, NULL, NULL, NULL, '2026-09-10 12:08:52', '2026-09-10 12:08:52', 0, NULL, 40000.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00),
+(158, 'VIS-20260910-6871', '2026-09-10 15:29:24', 62, 4, NULL, 12, 1, 'New Patient', 17, 10000.00, 'assigned', '', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'ANAKUJA NA HASIRA ZAKE', 0, NULL, NULL, NULL, '2026-09-10 12:29:24', '2026-09-10 12:29:24', 0, NULL, 0.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00),
+(159, 'VIS-20260910-1032', '2026-09-10 15:34:32', 60, NULL, NULL, 10, 1, 'Lab Tests Only', NULL, 0.00, 'lab_test', '', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, '', 0, NULL, NULL, NULL, '2026-09-10 12:34:32', '2026-09-10 12:34:32', 0, NULL, 7000.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00),
+(160, 'VIS-20260910-3706', '2026-09-10 15:35:40', 59, 4, NULL, 10, 1, 'visit_mpya', 21, 100000.00, 'assigned', 'Shortness of Breath', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'EMERGENCE CARE', 0, NULL, NULL, NULL, '2026-09-10 12:35:40', '2026-09-10 12:35:40', 0, NULL, 0.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00),
+(161, 'VIS-20260910-8328', '2026-09-10 15:36:36', 58, 4, NULL, 10, 1, 'New Patient', 17, 10000.00, 'assigned', '', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'ANA PESA AFU MAKARIMU SANA', 0, NULL, NULL, NULL, '2026-09-10 12:36:36', '2026-09-10 12:36:36', 0, NULL, 0.00, 0.00, 0.00, 0.00, 'pending', 0.00, 0.00);
 
 -- --------------------------------------------------------
 
@@ -2964,7 +3062,15 @@ INSERT INTO `vital_signs` (`id`, `patient_id`, `visit_id`, `appointment_id`, `re
 (113, 61, NULL, NULL, 10, 1, 34.0, 123, 78, 78, NULL, NULL, NULL, 80.00, 178.00, 25.2, NULL, NULL, NULL, '2026-09-06 14:45:42', '2026-09-06 14:45:42', '2026-09-06 14:45:42'),
 (114, 61, NULL, NULL, 12, 1, 34.0, 123, 78, 78, NULL, NULL, NULL, 80.00, 178.00, 25.2, NULL, NULL, NULL, '2026-09-09 14:32:23', '2026-09-09 14:32:23', '2026-09-09 14:32:23'),
 (115, 61, NULL, NULL, 12, 1, 34.0, 123, 78, 78, NULL, NULL, NULL, 80.00, 178.00, 25.2, NULL, NULL, NULL, '2026-09-09 15:08:13', '2026-09-09 15:08:13', '2026-09-09 15:08:13'),
-(116, 61, NULL, NULL, 12, 1, 34.0, 123, 78, 78, NULL, NULL, NULL, 80.00, 178.00, 25.2, NULL, NULL, NULL, '2026-09-09 15:17:20', '2026-09-09 15:17:20', '2026-09-09 15:17:20');
+(116, 61, NULL, NULL, 12, 1, 34.0, 123, 78, 78, NULL, NULL, NULL, 80.00, 178.00, 25.2, NULL, NULL, NULL, '2026-09-09 15:17:20', '2026-09-09 15:17:20', '2026-09-09 15:17:20'),
+(117, 61, NULL, NULL, 12, 1, 34.0, 123, 78, 78, NULL, NULL, NULL, 80.00, 178.00, 25.2, NULL, NULL, NULL, '2026-09-10 09:48:07', '2026-09-10 09:48:07', '2026-09-10 09:48:07'),
+(118, 62, NULL, NULL, 10, 1, 39.0, 126, 80, 73, NULL, NULL, NULL, 78.00, 180.00, 24.1, NULL, NULL, NULL, '2026-09-10 10:30:45', '2026-09-10 10:30:45', '2026-09-10 10:30:45'),
+(119, 60, NULL, NULL, 10, 1, 39.0, 122, 90, 75, NULL, NULL, NULL, 68.00, 175.00, 22.2, NULL, NULL, NULL, '2026-09-10 10:33:14', '2026-09-10 10:33:14', '2026-09-10 10:33:14'),
+(120, 61, 157, NULL, 10, 1, 34.0, 123, 78, 78, NULL, NULL, NULL, 80.00, 178.00, 25.2, NULL, NULL, NULL, '2026-09-10 12:08:52', '2026-09-10 12:08:52', '2026-09-10 12:08:52'),
+(121, 62, 158, NULL, 12, 1, 39.0, 126, 80, 73, NULL, NULL, NULL, 78.00, 180.00, 24.1, NULL, NULL, NULL, '2026-09-10 12:29:24', '2026-09-10 12:29:24', '2026-09-10 12:29:24'),
+(122, 60, 159, NULL, 10, 1, 35.0, 120, 89, 70, NULL, NULL, NULL, 70.00, 175.00, 22.9, NULL, NULL, NULL, '2026-09-10 12:34:32', '2026-09-10 12:34:32', '2026-09-10 12:34:32'),
+(123, 59, 160, NULL, 10, 1, 33.0, 123, 89, 69, NULL, NULL, NULL, 100.00, 173.00, 33.4, NULL, NULL, NULL, '2026-09-10 12:35:40', '2026-09-10 12:35:40', '2026-09-10 12:35:40'),
+(124, 58, 161, NULL, 10, 1, 44.0, 133, 88, 77, NULL, NULL, NULL, 66.00, 177.00, 21.1, NULL, NULL, NULL, '2026-09-10 12:36:36', '2026-09-10 12:36:36', '2026-09-10 12:36:36');
 
 -- --------------------------------------------------------
 
@@ -3514,7 +3620,7 @@ ALTER TABLE `vital_signs`
 -- AUTO_INCREMENT for table `activity_logs`
 --
 ALTER TABLE `activity_logs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1100;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=1133;
 
 --
 -- AUTO_INCREMENT for table `appointments`
@@ -3526,13 +3632,13 @@ ALTER TABLE `appointments`
 -- AUTO_INCREMENT for table `bills`
 --
 ALTER TABLE `bills`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=313;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=322;
 
 --
 -- AUTO_INCREMENT for table `bill_items`
 --
 ALTER TABLE `bill_items`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=626;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=648;
 
 --
 -- AUTO_INCREMENT for table `branches`
@@ -3580,7 +3686,7 @@ ALTER TABLE `lab_result_templates`
 -- AUTO_INCREMENT for table `lab_tests`
 --
 ALTER TABLE `lab_tests`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=165;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=181;
 
 --
 -- AUTO_INCREMENT for table `lab_tests_catalog`
@@ -3610,7 +3716,7 @@ ALTER TABLE `medications_inventory`
 -- AUTO_INCREMENT for table `notifications`
 --
 ALTER TABLE `notifications`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=229;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=238;
 
 --
 -- AUTO_INCREMENT for table `otc_sales`
@@ -3634,7 +3740,7 @@ ALTER TABLE `password_resets`
 -- AUTO_INCREMENT for table `patients`
 --
 ALTER TABLE `patients`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=62;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=63;
 
 --
 -- AUTO_INCREMENT for table `patient_documents`
@@ -3646,7 +3752,7 @@ ALTER TABLE `patient_documents`
 -- AUTO_INCREMENT for table `payments`
 --
 ALTER TABLE `payments`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=108;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=109;
 
 --
 -- AUTO_INCREMENT for table `prescriptions`
@@ -3718,7 +3824,7 @@ ALTER TABLE `service_categories`
 -- AUTO_INCREMENT for table `stock_movements`
 --
 ALTER TABLE `stock_movements`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=196;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=197;
 
 --
 -- AUTO_INCREMENT for table `system_settings`
@@ -3736,13 +3842,13 @@ ALTER TABLE `users`
 -- AUTO_INCREMENT for table `visits`
 --
 ALTER TABLE `visits`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=153;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=162;
 
 --
 -- AUTO_INCREMENT for table `vital_signs`
 --
 ALTER TABLE `vital_signs`
-  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=117;
+  MODIFY `id` int(11) NOT NULL AUTO_INCREMENT, AUTO_INCREMENT=125;
 
 --
 -- Constraints for dumped tables

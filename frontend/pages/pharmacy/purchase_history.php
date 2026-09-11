@@ -56,6 +56,17 @@ try {
 }
 
 // ================================================================
+// CHECK AND ADD branch_id COLUMN IF NOT EXISTS
+// ================================================================
+try {
+    $stmt = $db->query("SHOW COLUMNS FROM purchases LIKE 'branch_id'");
+    if ($stmt->rowCount() == 0) {
+        $db->exec("ALTER TABLE `purchases` ADD COLUMN `branch_id` INT NULL AFTER `created_by_name`");
+        $db->exec("UPDATE `purchases` SET `branch_id` = 1 WHERE `branch_id` IS NULL");
+    }
+} catch (Exception $e) {}
+
+// ================================================================
 // MONEY FORMAT FUNCTIONS
 // ================================================================
 function formatMoney($amount) {
@@ -90,7 +101,7 @@ function formatMoneyShort($amount) {
 }
 
 // ================================================================
-// GET SINGLE PURCHASE FOR VIEW
+// GET SINGLE PURCHASE FOR VIEW (With Branch Filter)
 // ================================================================
 $view_purchase = null;
 $view_items = [];
@@ -101,9 +112,9 @@ if ($view_id > 0) {
         SELECT p.*, u.full_name as creator_name 
         FROM purchases p
         LEFT JOIN users u ON p.created_by = u.id
-        WHERE p.id = ?
+        WHERE p.id = ? AND p.branch_id = ?
     ");
-    $stmt->execute([$view_id]);
+    $stmt->execute([$view_id, $user_branch_id]);
     $view_purchase = $stmt->fetch(PDO::FETCH_ASSOC);
     
     if ($view_purchase) {
@@ -140,16 +151,15 @@ if ($view_id > 0) {
 }
 
 // ================================================================
-// GET FILTERS
+// GET FILTERS (Search imeondolewa hapa - iko kwenye table sasa)
 // ================================================================
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
 $status_filter = isset($_GET['status']) ? $_GET['status'] : 'all';
 $type_filter = isset($_GET['type']) ? $_GET['type'] : 'all';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
 // ================================================================
-// BUILD QUERY
+// BUILD QUERY (With Branch Filter)
 // ================================================================
 $query = "
     SELECT 
@@ -159,10 +169,10 @@ $query = "
         (SELECT SUM(quantity) FROM purchase_items WHERE purchase_id = p.id) as total_qty
     FROM purchases p
     LEFT JOIN users u ON p.created_by = u.id
-    WHERE 1=1
+    WHERE p.branch_id = ?
 ";
 
-$params = [];
+$params = [$user_branch_id];
 
 if ($status_filter !== 'all') {
     $query .= " AND p.status = ?";
@@ -172,12 +182,6 @@ if ($status_filter !== 'all') {
 if ($type_filter !== 'all') {
     $query .= " AND p.purchase_type = ?";
     $params[] = $type_filter;
-}
-
-if (!empty($search)) {
-    $query .= " AND (p.invoice_number LIKE ? OR p.created_by_name LIKE ?)";
-    $params[] = "%$search%";
-    $params[] = "%$search%";
 }
 
 if (!empty($date_from)) {
@@ -197,27 +201,32 @@ $stmt->execute($params);
 $purchases = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET STATISTICS
+// GET STATISTICS (Filtered by Branch)
 // ================================================================
 
-// Total Purchases
-$stmt = $db->query("SELECT COUNT(*) as count FROM purchases");
+// Total Purchases (Branch)
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM purchases WHERE branch_id = ?");
+$stmt->execute([$user_branch_id]);
 $total_purchases = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// Completed Purchases
-$stmt = $db->query("SELECT COUNT(*) as count FROM purchases WHERE status = 'COMPLETED'");
+// Completed Purchases (Branch)
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM purchases WHERE status = 'COMPLETED' AND branch_id = ?");
+$stmt->execute([$user_branch_id]);
 $completed_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// In Progress Purchases
-$stmt = $db->query("SELECT COUNT(*) as count FROM purchases WHERE status = 'IN_PROGRESS'");
+// In Progress Purchases (Branch)
+$stmt = $db->prepare("SELECT COUNT(*) as count FROM purchases WHERE status = 'IN_PROGRESS' AND branch_id = ?");
+$stmt->execute([$user_branch_id]);
 $in_progress_count = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
 
-// Total Spending (Buying Cost)
-$stmt = $db->query("SELECT COALESCE(SUM(total_buying_cost), 0) as total FROM purchases WHERE status = 'COMPLETED'");
+// Total Spending (Buying Cost) - Branch
+$stmt = $db->prepare("SELECT COALESCE(SUM(total_buying_cost), 0) as total FROM purchases WHERE status = 'COMPLETED' AND branch_id = ?");
+$stmt->execute([$user_branch_id]);
 $total_spending = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
-// Total Selling Value
-$stmt = $db->query("SELECT COALESCE(SUM(total_selling_value), 0) as total FROM purchases WHERE status = 'COMPLETED'");
+// Total Selling Value - Branch
+$stmt = $db->prepare("SELECT COALESCE(SUM(total_selling_value), 0) as total FROM purchases WHERE status = 'COMPLETED' AND branch_id = ?");
+$stmt->execute([$user_branch_id]);
 $total_selling = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
 
 // Total Profit
@@ -279,6 +288,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             --danger: #DC2626;
             --danger-light: #FEE2E2;
             --purple: #7C3AED;
+            --purple-light: #EDE9FE;
             --teal: #0D9488;
             --bg-body: #F1F5F9;
             --bg-card: #FFFFFF;
@@ -554,16 +564,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             color: white;
         }
         
-        .search-form {
+        .date-form {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
             align-items: center;
         }
         
-        .search-form input[type="text"],
-        .search-form select,
-        .search-form input[type="date"] {
+        .date-form input[type="date"] {
             padding: 6px 12px;
             border: 2px solid var(--border-color);
             border-radius: 8px;
@@ -572,12 +580,9 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             color: var(--text-primary);
             outline: none;
             transition: all 0.3s ease;
-            flex: 1;
-            min-width: 100px;
         }
         
-        .search-form input:focus,
-        .search-form select:focus {
+        .date-form input:focus {
             border-color: var(--primary);
             box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
         }
@@ -618,16 +623,139 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             color: var(--danger);
         }
         
-        /* Table */
+        /* ================================================================
+           TABLE HEADER WITH SCROLL BUTTONS + SEARCH
+           ================================================================ */
+        .table-header-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-bottom: 12px;
+        }
+        
+        .table-header-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .table-header-right {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .scroll-btn-header {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: 2px solid var(--border-color);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            font-size: 0.75rem;
+        }
+        
+        .scroll-btn-header:hover {
+            background: var(--primary);
+            border-color: var(--primary);
+            color: white;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
+        }
+        
+        .scroll-btn-header:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .scroll-btn-header:disabled:hover {
+            background: var(--bg-card);
+            border-color: var(--border-color);
+            color: var(--text-primary);
+            box-shadow: none;
+        }
+        
+        .table-search-box {
+            position: relative;
+            min-width: 220px;
+        }
+        
+        .table-search-box i {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+            font-size: 0.8rem;
+            pointer-events: none;
+        }
+        
+        .table-search-box input {
+            width: 100%;
+            padding: 8px 12px 8px 36px;
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            font-size: 0.8rem;
+            background: var(--bg-card);
+            color: var(--text-primary);
+            outline: none;
+            transition: all 0.3s ease;
+        }
+        
+        .table-search-box input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.1);
+        }
+        
+        .table-search-box input::placeholder {
+            color: var(--text-muted);
+        }
+        
+        .search-results-info {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            padding: 4px 10px;
+            background: var(--bg-body);
+            border-radius: 8px;
+            white-space: nowrap;
+        }
+        
+        .search-results-info strong {
+            color: var(--primary);
+        }
+        
+        /* ================================================================
+           TABLE WRAPPER
+           ================================================================ */
+        .table-container {
+            position: relative;
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
         .table-wrap {
             overflow-x: auto;
-            max-height: 500px;
             overflow-y: auto;
+            max-height: 500px;
+            scroll-behavior: smooth;
+            position: relative;
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
         }
         
         .table-wrap::-webkit-scrollbar {
-            height: 6px;
-            width: 6px;
+            height: 8px;
+            width: 8px;
         }
         
         .table-wrap::-webkit-scrollbar-track {
@@ -640,9 +768,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             border-radius: 4px;
         }
         
+        .table-wrap::-webkit-scrollbar-thumb:hover {
+            background: var(--primary-dark);
+        }
+        
+        /* Table */
         .data-table {
             width: 100%;
-            min-width: 1000px;
+            min-width: 1100px;
             border-collapse: separate;
             border-spacing: 0;
             font-size: 0.78rem;
@@ -654,7 +787,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             z-index: 10;
             background: var(--primary);
             color: white;
-            padding: 8px 12px;
+            padding: 10px 12px;
             font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 0.05em;
@@ -690,21 +823,21 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             white-space: nowrap;
         }
         
-        .col-sno { width: 35px; text-align: center; }
-        .col-invoice { min-width: 140px; }
-        .col-type { min-width: 80px; }
-        .col-creator { min-width: 120px; }
+        .col-sno { width: 40px; text-align: center; }
+        .col-invoice { min-width: 150px; }
+        .col-type { min-width: 90px; }
+        .col-creator { min-width: 130px; }
         .col-items { min-width: 60px; text-align: center; }
         .col-qty { min-width: 60px; text-align: center; }
-        .col-buying { min-width: 120px; }
-        .col-selling { min-width: 120px; }
-        .col-profit { min-width: 120px; }
-        .col-status { min-width: 90px; text-align: center; }
-        .col-date { min-width: 140px; }
-        .col-actions { min-width: 100px; text-align: center; }
+        .col-buying { min-width: 130px; }
+        .col-selling { min-width: 130px; }
+        .col-profit { min-width: 130px; }
+        .col-status { min-width: 100px; text-align: center; }
+        .col-date { min-width: 150px; }
+        .col-actions { min-width: 110px; text-align: center; }
         
         .status-badge {
-            padding: 2px 8px;
+            padding: 3px 10px;
             border-radius: 10px;
             font-size: 0.6rem;
             font-weight: 600;
@@ -803,6 +936,19 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         .empty-state .sub {
             font-size: 0.8rem;
             margin-top: 4px;
+        }
+        
+        .no-results-row td {
+            text-align: center;
+            padding: 30px 20px !important;
+            color: var(--text-secondary);
+        }
+        
+        .no-results-row i {
+            font-size: 2rem;
+            color: var(--border-color);
+            display: block;
+            margin-bottom: 8px;
         }
         
         .footer {
@@ -933,194 +1079,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             color: #DC2626;
         }
         
-        /* ================================================================
-           INVOICE PRINT STYLES
-           ================================================================ */
-        .invoice-container {
-            background: white;
-            padding: 20px;
-            font-family: Arial, sans-serif;
-            max-width: 800px;
-            margin: 0 auto;
-        }
-        
-        .invoice-header {
-            text-align: center;
-            border-bottom: 3px solid #0B5ED7;
-            padding-bottom: 15px;
-            margin-bottom: 20px;
-        }
-        
-        .invoice-header .logo {
-            max-height: 70px;
-            width: auto;
-            display: block;
-            margin: 0 auto 10px;
-        }
-        
-        .invoice-header h1 {
-            font-size: 24px;
-            color: #0B5ED7;
-            margin: 0;
-        }
-        
-        .invoice-header p {
-            font-size: 12px;
-            color: #64748B;
-            margin: 2px 0;
-        }
-        
-        .invoice-title {
-            text-align: center;
-            margin-bottom: 20px;
-        }
-        
-        .invoice-title h2 {
-            font-size: 20px;
-            color: #0B5ED7;
-            margin: 0;
-        }
-        
-        .invoice-title p {
-            font-size: 12px;
-            color: #64748B;
-            margin: 2px 0;
-        }
-        
-        .invoice-info {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 10px;
-            padding: 12px;
-            background: #F8FAFC;
-            border-radius: 8px;
-            border: 1px solid #E2E8F0;
-            margin-bottom: 20px;
-        }
-        
-        .invoice-info .label {
-            font-size: 11px;
-            color: #64748B;
-            margin: 0;
-            font-weight: 600;
-        }
-        
-        .invoice-info .value {
-            font-size: 14px;
-            font-weight: 600;
-            margin: 2px 0;
-        }
-        
-        .invoice-info .text-right {
-            text-align: right;
-        }
-        
-        .invoice-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-            margin-bottom: 20px;
-        }
-        
-        .invoice-table thead th {
-            background: #0B5ED7;
-            color: white;
-            padding: 8px 10px;
-            text-align: left;
-            border: 1px solid #0B5ED7;
-        }
-        
-        .invoice-table thead th.text-center {
-            text-align: center;
-        }
-        
-        .invoice-table thead th.text-right {
-            text-align: right;
-        }
-        
-        .invoice-table tbody td {
-            padding: 6px 10px;
-            border: 1px solid #E2E8F0;
-        }
-        
-        .invoice-table tbody td.text-center {
-            text-align: center;
-        }
-        
-        .invoice-table tbody td.text-right {
-            text-align: right;
-        }
-        
-        .invoice-table tbody td .batch-info {
-            font-size: 11px;
-            color: #64748B;
-        }
-        
-        .invoice-table tbody tr:nth-child(even) {
-            background: #F8FAFC;
-        }
-        
-        .invoice-table tfoot td {
-            padding: 8px 10px;
-            border-top: 2px solid #0B5ED7;
-            font-weight: 700;
-        }
-        
-        .invoice-summary {
-            display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
-            gap: 10px;
-            padding: 12px;
-            background: #F8FAFC;
-            border-radius: 8px;
-            border: 1px solid #E2E8F0;
-            margin-bottom: 20px;
-        }
-        
-        .invoice-summary .label {
-            font-size: 11px;
-            color: #64748B;
-            margin: 0;
-            font-weight: 600;
-        }
-        
-        .invoice-summary .value {
-            font-size: 18px;
-            font-weight: 700;
-            margin: 2px 0;
-        }
-        
-        .invoice-summary .text-right {
-            text-align: right;
-        }
-        
-        .invoice-added-by {
-            font-size: 11px;
-            color: #64748B;
-            border-top: 1px solid #E2E8F0;
-            padding-top: 10px;
-            margin-top: 10px;
-        }
-        
-        .invoice-footer {
-            text-align: center;
-            border-top: 2px solid #0B5ED7;
-            padding-top: 12px;
-            margin-top: 15px;
-        }
-        
-        .invoice-footer p {
-            font-size: 11px;
-            color: #64748B;
-            margin: 0;
-        }
-        
-        .invoice-footer .thank-you {
-            font-size: 10px;
-            color: #94A3B8;
-            margin: 2px 0;
-        }
-        
         @media print {
             .modal-overlay {
                 position: static;
@@ -1146,8 +1104,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         
         @media (max-width: 768px) {
             .stats-grid { grid-template-columns: repeat(2, 1fr); }
-            .search-form { flex-direction: column; align-items: stretch; }
-            .search-form input, .search-form select { min-width: 100%; }
+            .date-form { flex-direction: column; align-items: stretch; }
             .filter-group { justify-content: center; }
             .card { padding: 12px 14px; }
             .page-header-box .page-title { font-size: 1.1rem; }
@@ -1155,12 +1112,11 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             .stat-card { padding: 10px 12px; min-height: 65px; }
             .header-actions { flex-direction: column; align-items: stretch; width: 100%; }
             .header-actions .btn-back { width: 100%; justify-content: center; }
-            .invoice-info { grid-template-columns: 1fr; }
-            .invoice-summary { grid-template-columns: 1fr; }
-            .invoice-summary .text-right { text-align: left; }
-            .data-table { min-width: 750px; font-size: 0.65rem; }
-            .data-table th, .data-table td { padding: 4px 6px; }
-            .col-profit { min-width: 90px; }
+            .data-table { min-width: 900px; font-size: 0.65rem; }
+            .data-table th, .data-table td { padding: 5px 7px; }
+            .table-header-bar { flex-direction: column; align-items: stretch; }
+            .table-search-box { min-width: 100%; }
+            .table-header-right { width: 100%; }
         }
         
         @media (max-width: 480px) {
@@ -1202,14 +1158,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- STATS CARDS -->
+    <!-- STATS CARDS (Branch Filtered) -->
     <!-- ================================================================ -->
     <div class="stats-grid animate-fade-in-up">
         <div class="stat-card blue">
             <span class="stat-icon"><i class="fas fa-shopping-cart"></i></span>
             <div class="stat-number"><?= $total_purchases ?></div>
             <div class="stat-label">Total Purchases</div>
-            <div class="stat-sub">All purchases</div>
+            <div class="stat-sub"><?= htmlspecialchars($user_branch_name) ?> branch</div>
         </div>
         <div class="stat-card green">
             <span class="stat-icon"><i class="fas fa-check-circle"></i></span>
@@ -1240,7 +1196,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- FILTERS -->
+    <!-- FILTERS (Search imeondolewa - iko kwenye table sasa) -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
         <div class="filter-group">
@@ -1249,130 +1205,176 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             <a href="purchase_history.php?status=IN_PROGRESS" class="filter-btn <?= $status_filter === 'IN_PROGRESS' ? 'active' : '' ?>">In Progress</a>
             <a href="purchase_history.php?type=medicine" class="filter-btn <?= $type_filter === 'medicine' ? 'active' : '' ?>">💊 Medicine</a>
             <a href="purchase_history.php?type=equipment" class="filter-btn <?= $type_filter === 'equipment' ? 'active' : '' ?>">🔧 Equipment</a>
-            <?php if ($status_filter !== 'all' || $type_filter !== 'all' || !empty($search) || !empty($date_from) || !empty($date_to)): ?>
+            <?php if ($status_filter !== 'all' || $type_filter !== 'all' || !empty($date_from) || !empty($date_to)): ?>
                 <a href="purchase_history.php" class="filter-btn clear-filter">
                     <i class="fas fa-times"></i> Clear
                 </a>
             <?php endif; ?>
         </div>
         
-        <form method="GET" class="search-form">
+        <form method="GET" class="date-form">
             <input type="hidden" name="status" value="<?= $status_filter ?>">
             <input type="hidden" name="type" value="<?= $type_filter ?>">
-            <input type="text" name="search" placeholder="🔍 Search invoice or creator..." value="<?= htmlspecialchars($search) ?>">
             <input type="date" name="date_from" value="<?= $date_from ?>" placeholder="From">
             <input type="date" name="date_to" value="<?= $date_to ?>" placeholder="To">
-            <button type="submit" class="btn-search"><i class="fas fa-search"></i> Filter</button>
+            <button type="submit" class="btn-search"><i class="fas fa-filter"></i> Filter by Date</button>
             <a href="purchase_history.php" class="btn-reset"><i class="fas fa-times"></i> Reset</a>
         </form>
     </div>
 
     <!-- ================================================================ -->
-    <!-- PURCHASE TABLE -->
+    <!-- PURCHASE TABLE (Branch Filtered + Scroll Buttons + Auto Search) -->
     <!-- ================================================================ -->
     <div class="card animate-fade-in-up">
-        <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-list title-blue"></i> Purchase List
-                <span class="result-count">(<strong><?= count($purchases) ?></strong> purchases)</span>
-            </h3>
+        
+        <!-- TABLE HEADER BAR: Title + Scroll Buttons + Search -->
+        <div class="table-header-bar">
+            <div class="table-header-left">
+                <h3 class="card-title">
+                    <i class="fas fa-list title-blue"></i> Purchase List
+                    <span class="result-count" id="purchaseCountDisplay">(<strong><?= count($purchases) ?></strong> purchases)</span>
+                </h3>
+                <span style="font-size:0.65rem;font-weight:400;color:var(--text-secondary);">
+                    <i class="fas fa-store-alt"></i> <?= htmlspecialchars($user_branch_name) ?>
+                </span>
+            </div>
+            
+            <div class="table-header-right">
+                <!-- Scroll Buttons < > -->
+                <button type="button" class="scroll-btn-header" id="scrollBtnLeft" onclick="scrollTableLeft()" title="Sogeza Kushoto">
+                    <i class="fas fa-chevron-left"></i>
+                </button>
+                <button type="button" class="scroll-btn-header" id="scrollBtnRight" onclick="scrollTableRight()" title="Sogeza Kulia">
+                    <i class="fas fa-chevron-right"></i>
+                </button>
+                
+                <!-- Auto Search Box -->
+                <div class="table-search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="tableSearchInput" placeholder="Search invoice, creator, status..." autocomplete="off">
+                </div>
+                
+                <span class="search-results-info" id="searchResultsInfo" style="display:none;">
+                    <i class="fas fa-filter"></i> <strong id="searchMatchCount">0</strong> match
+                </span>
+            </div>
         </div>
         
         <?php if (count($purchases) > 0): ?>
-            <div class="table-wrap">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th class="col-sno">#</th>
-                            <th class="col-invoice">Invoice</th>
-                            <th class="col-type">Type</th>
-                            <th class="col-creator">Created By</th>
-                            <th class="col-items">Items</th>
-                            <th class="col-qty">Qty</th>
-                            <th class="col-buying">Buying Cost</th>
-                            <th class="col-selling">Selling Value</th>
-                            <th class="col-profit">Profit</th>
-                            <th class="col-status">Status</th>
-                            <th class="col-date">Date</th>
-                            <th class="col-actions">Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <?php $counter = 1; ?>
-                        <?php foreach ($purchases as $purchase): ?>
-                            <?php 
-                                $profit = ($purchase['total_selling_value'] ?? 0) - ($purchase['total_buying_cost'] ?? 0);
-                                $profit_class = $profit >= 0 ? 'profit-positive' : 'profit-negative';
-                                $status_class = strtolower($purchase['status']);
-                                $status_icon = $purchase['status'] === 'COMPLETED' ? 'fa-check-circle' : 'fa-spinner fa-spin';
-                                $has_items = ($purchase['items_count'] ?? 0) > 0;
-                            ?>
+            <div class="table-container">
+                <div class="table-wrap" id="purchaseTableWrap">
+                    <table class="data-table" id="purchaseTable">
+                        <thead>
                             <tr>
-                                <td class="col-sno"><?= $counter++ ?></td>
-                                <td class="col-invoice">
-                                    <strong><?= htmlspecialchars($purchase['invoice_number']) ?></strong>
-                                </td>
-                                <td class="col-type">
-                                    <span class="type-badge <?= $purchase['purchase_type'] ?>">
-                                        <?= ucfirst($purchase['purchase_type']) ?>
-                                    </span>
-                                </td>
-                                <td class="col-creator">
-                                    <i class="fas fa-user" style="color:var(--primary);font-size:0.65rem;"></i>
-                                    <?= htmlspecialchars($purchase['creator_name'] ?? $purchase['created_by_name'] ?? 'Unknown') ?>
-                                </td>
-                                <td class="col-items"><?= number_format($purchase['items_count'] ?? 0) ?></td>
-                                <td class="col-qty"><?= number_format($purchase['total_qty'] ?? 0) ?></td>
-                                <td class="col-buying" style="color:var(--danger);font-weight:600;">
-                                    TSh <?= number_format($purchase['total_buying_cost'] ?? 0) ?>
-                                </td>
-                                <td class="col-selling" style="color:var(--success);font-weight:600;">
-                                    TSh <?= number_format($purchase['total_selling_value'] ?? 0) ?>
-                                </td>
-                                <td class="col-profit">
-                                    <span class="<?= $profit_class ?>" style="font-weight:600;">
-                                        TSh <?= number_format($profit) ?>
-                                        <?php if ($purchase['total_buying_cost'] > 0 && $purchase['status'] === 'COMPLETED'): ?>
-                                            <span style="font-size:0.55rem;">
-                                                (<?= round(($profit / $purchase['total_buying_cost']) * 100, 1) ?>%)
+                                <th class="col-sno">#</th>
+                                <th class="col-invoice">Invoice</th>
+                                <th class="col-type">Type</th>
+                                <th class="col-creator">Created By</th>
+                                <th class="col-items">Items</th>
+                                <th class="col-qty">Qty</th>
+                                <th class="col-buying">Buying Cost</th>
+                                <th class="col-selling">Selling Value</th>
+                                <th class="col-profit">Profit</th>
+                                <th class="col-status">Status</th>
+                                <th class="col-date">Date</th>
+                                <th class="col-actions">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="purchaseTableBody">
+                            <?php $counter = 1; ?>
+                            <?php foreach ($purchases as $purchase): ?>
+                                <?php 
+                                    $profit = ($purchase['total_selling_value'] ?? 0) - ($purchase['total_buying_cost'] ?? 0);
+                                    $profit_class = $profit >= 0 ? 'profit-positive' : 'profit-negative';
+                                    $status_class = strtolower($purchase['status']);
+                                    $status_icon = $purchase['status'] === 'COMPLETED' ? 'fa-check-circle' : 'fa-spinner fa-spin';
+                                    $has_items = ($purchase['items_count'] ?? 0) > 0;
+                                    
+                                    // Search data (lowercase for filtering)
+                                    $search_data = strtolower(
+                                        $purchase['invoice_number'] . ' ' .
+                                        $purchase['purchase_type'] . ' ' .
+                                        ($purchase['creator_name'] ?? $purchase['created_by_name'] ?? '') . ' ' .
+                                        $purchase['status'] . ' ' .
+                                        date('d/m/Y H:i', strtotime($purchase['created_at']))
+                                    );
+                                ?>
+                                <tr class="purchase-row" data-search="<?= htmlspecialchars($search_data) ?>">
+                                    <td class="col-sno"><?= $counter++ ?></td>
+                                    <td class="col-invoice">
+                                        <strong><?= htmlspecialchars($purchase['invoice_number']) ?></strong>
+                                    </td>
+                                    <td class="col-type">
+                                        <span class="type-badge <?= $purchase['purchase_type'] ?>">
+                                            <?= ucfirst($purchase['purchase_type']) ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-creator">
+                                        <i class="fas fa-user" style="color:var(--primary);font-size:0.65rem;"></i>
+                                        <?= htmlspecialchars($purchase['creator_name'] ?? $purchase['created_by_name'] ?? 'Unknown') ?>
+                                    </td>
+                                    <td class="col-items"><?= number_format($purchase['items_count'] ?? 0) ?></td>
+                                    <td class="col-qty"><?= number_format($purchase['total_qty'] ?? 0) ?></td>
+                                    <td class="col-buying" style="color:var(--danger);font-weight:600;">
+                                        TSh <?= number_format($purchase['total_buying_cost'] ?? 0) ?>
+                                    </td>
+                                    <td class="col-selling" style="color:var(--success);font-weight:600;">
+                                        TSh <?= number_format($purchase['total_selling_value'] ?? 0) ?>
+                                    </td>
+                                    <td class="col-profit">
+                                        <span class="<?= $profit_class ?>" style="font-weight:600;">
+                                            TSh <?= number_format($profit) ?>
+                                            <?php if ($purchase['total_buying_cost'] > 0 && $purchase['status'] === 'COMPLETED'): ?>
+                                                <span style="font-size:0.55rem;">
+                                                    (<?= round(($profit / $purchase['total_buying_cost']) * 100, 1) ?>%)
+                                                </span>
+                                            <?php endif; ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-status">
+                                        <span class="status-badge <?= $status_class ?>">
+                                            <i class="fas <?= $status_icon ?>"></i>
+                                            <?= $purchase['status'] ?>
+                                        </span>
+                                    </td>
+                                    <td class="col-date">
+                                        <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
+                                        <?php if ($purchase['status'] === 'COMPLETED' && $purchase['completed_at']): ?>
+                                            <br><span style="font-size:0.55rem;color:var(--text-muted);">
+                                                <i class="fas fa-check-circle" style="color:var(--success);"></i>
+                                                <?= date('d/m/Y H:i', strtotime($purchase['completed_at'])) ?>
                                             </span>
                                         <?php endif; ?>
-                                    </span>
-                                </td>
-                                <td class="col-status">
-                                    <span class="status-badge <?= $status_class ?>">
-                                        <i class="fas <?= $status_icon ?>"></i>
-                                        <?= $purchase['status'] ?>
-                                    </span>
-                                </td>
-                                <td class="col-date">
-                                    <?= date('d/m/Y H:i', strtotime($purchase['created_at'])) ?>
-                                    <?php if ($purchase['status'] === 'COMPLETED' && $purchase['completed_at']): ?>
-                                        <br><span style="font-size:0.55rem;color:var(--text-muted);">
-                                            <i class="fas fa-check-circle" style="color:var(--success);"></i>
-                                            <?= date('d/m/Y H:i', strtotime($purchase['completed_at'])) ?>
-                                        </span>
-                                    <?php endif; ?>
-                                </td>
-                                <td class="col-actions">
-                                    <?php if ($purchase['status'] === 'COMPLETED' && $has_items): ?>
-                                        <button onclick="openPDFView(<?= $purchase['id'] ?>)" class="action-btn pdf" title="View Invoice PDF">
-                                            <i class="fas fa-file-pdf"></i> PDF
-                                        </button>
-                                    <?php endif; ?>
-                                    <a href="purchases.php?id=<?= $purchase['id'] ?>&type=<?= $purchase['purchase_type'] ?>" class="action-btn view" title="View Details">
-                                        <i class="fas fa-eye"></i>
-                                    </a>
+                                    </td>
+                                    <td class="col-actions">
+                                        <?php if ($purchase['status'] === 'COMPLETED' && $has_items): ?>
+                                            <button onclick="openPDFView(<?= $purchase['id'] ?>)" class="action-btn pdf" title="View Invoice PDF">
+                                                <i class="fas fa-file-pdf"></i> PDF
+                                            </button>
+                                        <?php endif; ?>
+                                        <a href="purchases.php?id=<?= $purchase['id'] ?>&type=<?= $purchase['purchase_type'] ?>" class="action-btn view" title="View Details">
+                                            <i class="fas fa-eye"></i>
+                                        </a>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                            
+                            <!-- No Results Row (hidden by default) -->
+                            <tr class="no-results-row" id="noResultsRow" style="display:none;">
+                                <td colspan="12">
+                                    <i class="fas fa-search-minus"></i>
+                                    <p>No purchases match your search</p>
+                                    <p style="font-size:0.75rem;margin-top:4px;">Try different keywords</p>
                                 </td>
                             </tr>
-                        <?php endforeach; ?>
-                    </tbody>
-                </table>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         <?php else: ?>
             <div class="empty-state">
                 <i class="fas fa-history"></i>
-                <p>No purchases found</p>
+                <p>No purchases found for <?= htmlspecialchars($user_branch_name) ?></p>
                 <p class="sub">Try adjusting your filters or create a new purchase</p>
             </div>
         <?php endif; ?>
@@ -1433,6 +1435,152 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 <!-- ================================================================ -->
 <script>
 // ================================================================
+// TABLE SCROLL FUNCTIONS (◄ ►)
+// ================================================================
+var scrollAmount = 400;
+
+function scrollTableLeft() {
+    var wrap = document.getElementById('purchaseTableWrap');
+    if (wrap) {
+        wrap.scrollBy({
+            left: -scrollAmount,
+            behavior: 'smooth'
+        });
+    }
+}
+
+function scrollTableRight() {
+    var wrap = document.getElementById('purchaseTableWrap');
+    if (wrap) {
+        wrap.scrollBy({
+            left: scrollAmount,
+            behavior: 'smooth'
+        });
+    }
+}
+
+// ================================================================
+// UPDATE SCROLL BUTTONS STATE
+// ================================================================
+function updateScrollButtons() {
+    var wrap = document.getElementById('purchaseTableWrap');
+    var btnLeft = document.getElementById('scrollBtnLeft');
+    var btnRight = document.getElementById('scrollBtnRight');
+    
+    if (!wrap || !btnLeft || !btnRight) return;
+    
+    var scrollLeft = wrap.scrollLeft;
+    var maxScroll = wrap.scrollWidth - wrap.clientWidth;
+    
+    // Disable left button kama tuko mwanzo
+    if (scrollLeft <= 5) {
+        btnLeft.disabled = true;
+    } else {
+        btnLeft.disabled = false;
+    }
+    
+    // Disable right button kama tuko mwisho
+    if (scrollLeft >= maxScroll - 5 || maxScroll <= 0) {
+        btnRight.disabled = true;
+    } else {
+        btnRight.disabled = false;
+    }
+}
+
+// ================================================================
+// AUTO SEARCH FILTER (Inafilter automatic unapoandika)
+// ================================================================
+(function() {
+    'use strict';
+    
+    var searchInput = document.getElementById('tableSearchInput');
+    var tableBody = document.getElementById('purchaseTableBody');
+    var noResultsRow = document.getElementById('noResultsRow');
+    var countDisplay = document.getElementById('purchaseCountDisplay');
+    var searchInfo = document.getElementById('searchResultsInfo');
+    var searchMatchCount = document.getElementById('searchMatchCount');
+    
+    if (!searchInput || !tableBody) return;
+    
+    var totalRows = document.querySelectorAll('.purchase-row').length;
+    
+    function filterTable() {
+        var query = searchInput.value.toLowerCase().trim();
+        var rows = document.querySelectorAll('.purchase-row');
+        var visibleCount = 0;
+        
+        rows.forEach(function(row) {
+            var searchData = row.getAttribute('data-search') || '';
+            
+            if (query === '' || searchData.includes(query)) {
+                row.style.display = '';
+                visibleCount++;
+            } else {
+                row.style.display = 'none';
+            }
+        });
+        
+        // Update counter display
+        if (countDisplay) {
+            if (query === '') {
+                countDisplay.innerHTML = '(<strong>' + totalRows + '</strong> purchases)';
+            } else {
+                countDisplay.innerHTML = '(<strong>' + visibleCount + '</strong> of ' + totalRows + ')';
+            }
+        }
+        
+        // Show/hide search info badge
+        if (searchInfo && searchMatchCount) {
+            if (query === '') {
+                searchInfo.style.display = 'none';
+            } else {
+                searchInfo.style.display = 'inline-flex';
+                searchMatchCount.textContent = visibleCount;
+            }
+        }
+        
+        // Show/hide "No results" row
+        if (noResultsRow) {
+            if (visibleCount === 0 && query !== '') {
+                noResultsRow.style.display = '';
+            } else {
+                noResultsRow.style.display = 'none';
+            }
+        }
+        
+        // Update scroll buttons baada ya filter
+        setTimeout(updateScrollButtons, 100);
+    }
+    
+    // Listen kwa kila input (automatic filtering)
+    searchInput.addEventListener('input', filterTable);
+    
+    // Clear kwa Escape key
+    searchInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            this.value = '';
+            filterTable();
+            this.blur();
+        }
+    });
+})();
+
+// ================================================================
+// INITIALIZE SCROLL
+// ================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    var wrap = document.getElementById('purchaseTableWrap');
+    
+    if (wrap) {
+        wrap.addEventListener('scroll', updateScrollButtons);
+        window.addEventListener('resize', updateScrollButtons);
+        
+        // Initial update
+        setTimeout(updateScrollButtons, 200);
+    }
+});
+
+// ================================================================
 // OPEN PDF VIEW - Loads invoice via AJAX
 // ================================================================
 function openPDFView(purchaseId) {
@@ -1449,7 +1597,6 @@ function openPDFView(purchaseId) {
         </div>
     `;
     
-    // Fetch invoice data
     fetch('get_invoice.php?id=' + purchaseId)
         .then(function(response) {
             return response.text();
@@ -1489,7 +1636,6 @@ function printPDFInvoice() {
     
     var win = window.open('', '_blank', 'width=900,height=700');
     if (!win) {
-        // Fallback: print on current page
         var originalContents = document.body.innerHTML;
         document.body.innerHTML = printContents;
         window.print();
@@ -1573,12 +1719,13 @@ document.getElementById('pdfModal').addEventListener('click', function(e) {
 // CONSOLE LOG
 // ================================================================
 console.log('%c📜 Braick - Purchase History', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+console.log('%c✅ Branch Filter: <?= htmlspecialchars($user_branch_name) ?> (ID: <?= $user_branch_id ?>)', 'font-size:13px; color:#7C3AED;');
+console.log('%c◄ ► Scroll Buttons: Juu kwenye header ya table', 'font-size:13px; color:#0B5ED7;');
+console.log('%c🔍 Auto Search: Andika tu kwenye search box, inafilter automatic', 'font-size:13px; color:#059669;');
 console.log('%c✅ Total Purchases: <?= $total_purchases ?>', 'font-size:13px; color:#059669;');
 console.log('%c✅ Completed: <?= $completed_count ?> | In Progress: <?= $in_progress_count ?>', 'font-size:13px; color:#D97706;');
 console.log('%c💰 Total Spending: TSh <?= formatMoney($total_spending) ?>', 'font-size:13px; color:#DC2626;');
-console.log('%c💰 Total Selling: TSh <?= formatMoney($total_selling) ?>', 'font-size:13px; color:#059669;');
 console.log('%c📈 Total Profit: TSh <?= formatMoney($total_profit) ?>', 'font-size:13px; color:<?= $total_profit >= 0 ? '#059669' : '#DC2626' ?>;');
-console.log('%c📄 PDF View: Click PDF button to view invoice', 'font-size:13px; color:#7C3AED;');
 </script>
 
 </body>

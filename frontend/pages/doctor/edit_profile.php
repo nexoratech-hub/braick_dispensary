@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/doctor/edit_profile.php
 // DOCTOR - EDIT PROFILE
+// ✅ WITH REMOVE PROFILE PICTURE BUTTON
+// ✅ WITH CONFIRMATION MODAL
 // BRAICK DISPENSARY - USING dispensary_db
 // ================================================================
 
@@ -49,7 +51,7 @@ $profile_pic = $_SESSION['profile_pic'] ?? '';
 $is_admin = ($_SESSION['role'] === 'admin');
 
 // ================================================================
-// INCLUDE DATABASE - USING dispensary_db
+// INCLUDE DATABASE
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -119,7 +121,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $phone = trim($_POST['phone'] ?? '');
         $specialty = trim($_POST['specialty'] ?? '');
         
-        // Validation
         $errors = [];
         if (empty($full_name)) {
             $errors[] = 'Full name is required';
@@ -131,7 +132,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Invalid email format';
         }
         
-        // Check if email exists (excluding current user)
         if (empty($errors) && $email !== $user_email) {
             $stmt = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ?");
             $stmt->execute([$email, $user_id]);
@@ -142,7 +142,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if (empty($errors)) {
             if ($is_admin) {
-                // Admin can update any user
                 $stmt = $db->prepare("
                     UPDATE users 
                     SET full_name = ?, email = ?, phone = ?, specialty = ?
@@ -150,7 +149,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $stmt->execute([$full_name, $email, $phone, $specialty, $user_id]);
             } else {
-                // Doctor can only update their own profile
                 $stmt = $db->prepare("
                     UPDATE users 
                     SET full_name = ?, email = ?, phone = ?, specialty = ?
@@ -159,13 +157,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute([$full_name, $email, $phone, $specialty, $user_id]);
             }
             
-            // Update session
             $_SESSION['full_name'] = $full_name;
             $_SESSION['email'] = $email;
             $_SESSION['phone'] = $phone;
             $_SESSION['specialty'] = $specialty;
             
-            // Log activity
             try {
                 $stmt = $db->prepare("
                     INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
@@ -182,7 +178,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message_type = 'success';
             $success = true;
             
-            // Refresh variables
             $user_full_name = $full_name;
             $user_email = $email;
             $user_phone = $phone;
@@ -218,7 +213,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $filename = 'user_' . $user_id . '_' . time() . '.' . $file_ext;
                 $filepath = $upload_dir . $filename;
                 
-                // Delete old profile picture if exists
                 if (!empty($profile_pic)) {
                     $old_file = $upload_dir . $profile_pic;
                     if (file_exists($old_file)) {
@@ -263,6 +257,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message_type = 'error';
         }
     }
+    
+    // ================================================================
+    // ✅ REMOVE AVATAR (NEW)
+    // ================================================================
+    if ($action === 'delete_avatar') {
+        try {
+            // Get current profile picture from DB
+            $stmt = $db->prepare("SELECT profile_pic FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $current = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_pic = $current['profile_pic'] ?? '';
+            
+            // Delete file from disk if exists and not default
+            if (!empty($current_pic) && $current_pic !== 'default_avatar.png') {
+                // Try all possible upload directories
+                foreach ($upload_dirs as $dir) {
+                    $file_to_delete = $dir . $current_pic;
+                    if (file_exists($file_to_delete)) {
+                        @unlink($file_to_delete);
+                    }
+                }
+            }
+            
+            // Update database - set to NULL
+            $stmt = $db->prepare("UPDATE users SET profile_pic = NULL WHERE id = ?");
+            $stmt->execute([$user_id]);
+            
+            // Update session
+            $_SESSION['profile_pic'] = '';
+            $profile_pic = '';
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                    VALUES (?, ?, 'profile_picture_removed', ?, NOW())
+                ");
+                $stmt->execute([
+                    $user_id,
+                    $user_branch_id,
+                    "Profile picture removed for: " . $user_full_name
+                ]);
+            } catch (Exception $e) {}
+            
+            $message = "✅ Profile picture removed successfully!";
+            $message_type = 'success';
+            $success = true;
+            
+            echo '<script>
+                setTimeout(function(){ 
+                    window.location.href = "edit_profile.php?success=1"; 
+                }, 1500);
+            </script>';
+        } catch (Exception $e) {
+            $message = "❌ Failed to remove profile picture: " . $e->getMessage();
+            $message_type = 'error';
+        }
+    }
 }
 
 // ================================================================
@@ -273,9 +325,12 @@ $profile_pic_url = !empty($profile_pic)
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
 // Check if file exists
+$has_custom_pic = false;
 if (!empty($profile_pic)) {
     $check_path = $upload_dir . $profile_pic;
-    if (!file_exists($check_path)) {
+    if (file_exists($check_path)) {
+        $has_custom_pic = true;
+    } else {
         $profile_pic_url = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
     }
 }
@@ -314,9 +369,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           COMPLETE STYLES
-           ================================================================ */
         :root {
             --primary: #0B5ED7;
             --primary-dark: #0A4CA8;
@@ -502,10 +554,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
            CARDS
            ================================================================ */
         .consultation-card {
-            background: var(--bg-card);
+            background: white;
             border-radius: var(--radius-lg);
             padding: 24px 28px;
-            border: 2px solid var(--border-color);
+            border: 2px solid var(--gray-200);
             transition: all 0.3s ease;
             box-shadow: var(--shadow-md);
         }
@@ -521,8 +573,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .card-title {
             font-size: 1rem;
             font-weight: 700;
-            color: var(--text-primary);
-            border-bottom: 2px solid var(--border-color);
+            color: var(--gray-800);
+            border-bottom: 2px solid var(--gray-200);
             padding-bottom: 14px;
             margin-bottom: 18px;
             display: flex;
@@ -531,6 +583,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         [data-theme="dark"] .card-title {
             color: var(--gray-100);
+            border-color: var(--gray-700);
         }
         .title-blue { color: var(--primary); }
         
@@ -545,7 +598,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             padding: 16px;
             background: var(--gray-50);
             border-radius: var(--radius);
-            border: 2px dashed var(--border-color);
+            border: 2px dashed var(--gray-300);
         }
         [data-theme="dark"] .avatar-upload {
             background: var(--gray-700);
@@ -579,10 +632,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             flex-shrink: 0;
         }
         
-        .avatar-upload-info { flex: 1; }
+        .avatar-upload-info { flex: 1; min-width: 200px; }
         .avatar-label {
             font-weight: 600;
-            color: var(--text-primary);
+            color: var(--gray-800);
             margin: 0 0 2px 0;
             font-size: 0.95rem;
         }
@@ -591,8 +644,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .avatar-desc {
             font-size: 0.75rem;
-            color: var(--text-secondary);
+            color: var(--gray-500);
             margin: 0 0 8px 0;
+        }
+        [data-theme="dark"] .avatar-desc {
+            color: var(--gray-400);
         }
         
         .file-input-wrapper {
@@ -604,11 +660,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         
         .file-input {
             padding: 6px 10px;
-            border: 2px solid var(--border-color);
+            border: 2px solid var(--gray-200);
             border-radius: 8px;
             font-size: 0.8rem;
-            background: var(--bg-card);
-            color: var(--text-primary);
+            background: white;
+            color: var(--gray-800);
             cursor: pointer;
             flex: 1;
             min-width: 150px;
@@ -634,8 +690,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         
         .avatar-help {
             font-size: 0.65rem;
-            color: var(--text-secondary);
+            color: var(--gray-500);
             margin-top: 4px;
+        }
+        [data-theme="dark"] .avatar-help {
+            color: var(--gray-400);
         }
         
         /* ================================================================
@@ -648,8 +707,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             display: block;
             font-size: 0.75rem;
             font-weight: 600;
-            color: var(--text-secondary);
+            color: var(--gray-600);
             margin-bottom: 4px;
+        }
+        [data-theme="dark"] .form-label {
+            color: var(--gray-300);
         }
         .required {
             color: var(--danger);
@@ -657,20 +719,23 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .help-text {
             font-size: 0.7rem;
-            color: var(--text-secondary);
+            color: var(--gray-500);
             margin-top: 4px;
+        }
+        [data-theme="dark"] .help-text {
+            color: var(--gray-400);
         }
         
         .form-control {
             width: 100%;
             padding: 10px 14px;
-            border: 2px solid var(--border-color);
+            border: 2px solid var(--gray-200);
             border-radius: var(--radius);
             font-size: 0.85rem;
             transition: all 0.3s ease;
             outline: none;
-            background: var(--bg-card);
-            color: var(--text-primary);
+            background: white;
+            color: var(--gray-800);
             font-family: inherit;
         }
         [data-theme="dark"] .form-control {
@@ -687,8 +752,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             box-shadow: 0 0 0 3px rgba(110, 168, 254, 0.1);
         }
         .form-control::placeholder {
-            color: var(--text-secondary);
-            opacity: 0.5;
+            color: var(--gray-400);
+            opacity: 0.7;
         }
         .form-control:disabled {
             opacity: 0.7;
@@ -734,10 +799,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             transform: translateY(-2px);
             box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4);
         }
+        .btn-danger {
+            background: linear-gradient(135deg, #DC2626, #EF4444);
+            color: white;
+            box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+        }
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(220, 38, 38, 0.4);
+        }
         .btn-outline {
             background: transparent;
-            color: var(--text-secondary);
-            border: 2px solid var(--border-color);
+            color: var(--gray-600);
+            border: 2px solid var(--gray-200);
         }
         .btn-outline:hover {
             background: var(--gray-50);
@@ -745,8 +819,14 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             color: var(--primary);
             transform: translateY(-2px);
         }
+        [data-theme="dark"] .btn-outline {
+            color: var(--gray-300);
+            border-color: var(--gray-600);
+        }
         [data-theme="dark"] .btn-outline:hover {
             background: var(--gray-700);
+            border-color: var(--primary-light);
+            color: var(--primary-light);
         }
         .btn-sm { padding: 6px 16px; font-size: 0.75rem; }
         
@@ -755,8 +835,21 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             gap: 12px;
             padding-top: 16px;
             margin-top: 16px;
-            border-top: 2px solid var(--border-color);
+            border-top: 2px solid var(--gray-200);
             flex-wrap: wrap;
+        }
+        [data-theme="dark"] .form-actions {
+            border-color: var(--gray-700);
+        }
+        
+        /* ================================================================
+           AVATAR ACTION BUTTONS (NEW)
+           ================================================================ */
+        .avatar-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 10px;
         }
         
         /* ================================================================
@@ -794,6 +887,103 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         /* ================================================================
+           MODAL (NEW)
+           ================================================================ */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 9999;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(4px);
+            animation: fadeIn 0.3s ease;
+        }
+        
+        .modal-overlay.show {
+            display: flex;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+        
+        @keyframes slideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+        
+        .modal-box {
+            background: white;
+            border-radius: 16px;
+            padding: 32px 36px;
+            max-width: 420px;
+            width: 90%;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            animation: slideUp 0.3s ease;
+            border: 2px solid var(--gray-200);
+        }
+        [data-theme="dark"] .modal-box {
+            background: var(--gray-800);
+            border-color: var(--gray-700);
+        }
+        
+        .modal-icon {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #FEE2E2, #FECACA);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+            font-size: 2.5rem;
+            color: var(--danger);
+            border: 4px solid #FCA5A5;
+        }
+        [data-theme="dark"] .modal-icon {
+            background: linear-gradient(135deg, #3A1A1A, #4A1A1A);
+            border-color: #7F1D1D;
+        }
+        
+        .modal-title {
+            font-size: 1.3rem;
+            font-weight: 700;
+            color: var(--gray-800);
+            margin-bottom: 10px;
+        }
+        [data-theme="dark"] .modal-title {
+            color: var(--gray-100);
+        }
+        
+        .modal-message {
+            font-size: 0.9rem;
+            color: var(--gray-500);
+            margin-bottom: 24px;
+            line-height: 1.6;
+        }
+        [data-theme="dark"] .modal-message {
+            color: var(--gray-400);
+        }
+        
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+        }
+        
+        .modal-actions .btn {
+            flex: 1;
+            justify-content: center;
+        }
+        
+        /* ================================================================
            TOAST
            ================================================================ */
         .toast-custom {
@@ -802,7 +992,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             right: 24px;
             padding: 12px 18px;
             border-radius: var(--radius);
-            z-index: 999;
+            z-index: 9999;
             max-width: 360px;
             transform: translateY(100px);
             opacity: 0;
@@ -824,11 +1014,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
            ================================================================ */
         .footer {
             padding: 14px 0;
-            border-top: 2px solid var(--border-color);
+            border-top: 2px solid var(--gray-200);
             margin-top: 20px;
             text-align: center;
             font-size: 0.7rem;
-            color: var(--text-secondary);
+            color: var(--gray-500);
         }
         [data-theme="dark"] .footer {
             border-color: var(--gray-700);
@@ -856,6 +1046,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .file-input { min-width: 100%; }
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; justify-content: center; }
+            .avatar-actions { justify-content: center; }
             .page-title { font-size: 1.2rem; }
             .page-subtitle { flex-direction: column; align-items: flex-start; gap: 4px; }
         }
@@ -865,13 +1056,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .consultation-card { padding: 12px; }
             .form-control { font-size: 0.8rem; padding: 8px 10px; }
             .page-title { font-size: 1rem; }
-        }
-        
-        @media print {
-            .top-nav, .sidebar, .btn, .footer { display: none !important; }
-            .main-content { margin: 0 !important; padding: 20px !important; }
-            .consultation-card { border: 1px solid #ddd !important; box-shadow: none !important; }
-            .page-header { background: #0B5ED7 !important; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+            .modal-box { padding: 24px 20px; }
+            .modal-actions { flex-direction: column; }
         }
     </style>
 </head>
@@ -930,16 +1116,16 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <i class="fas fa-camera title-blue"></i> Profile Picture
             </h3>
             
+            <!-- ================================================================ -->
+            <!-- UPLOAD FORM -->
+            <!-- ================================================================ -->
             <form method="POST" action="" enctype="multipart/form-data" id="avatarForm">
                 <input type="hidden" name="action" value="update_avatar">
                 
                 <div class="avatar-upload">
                     <!-- Avatar Display -->
                     <div class="avatar-display" id="avatarDisplay">
-                        <?php 
-                        $avatar_file = $upload_dir . $profile_pic;
-                        if (!empty($profile_pic) && file_exists($avatar_file)): 
-                        ?>
+                        <?php if ($has_custom_pic): ?>
                             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar-preview" id="avatarPreview">
                         <?php else: ?>
                             <div class="avatar-placeholder" id="avatarPlaceholder">
@@ -949,8 +1135,12 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     </div>
                     
                     <div class="avatar-upload-info">
-                        <p class="avatar-label">Change Profile Picture</p>
-                        <p class="avatar-desc">Upload a new profile picture</p>
+                        <p class="avatar-label">
+                            <?= $has_custom_pic ? 'Change Profile Picture' : 'Upload Profile Picture' ?>
+                        </p>
+                        <p class="avatar-desc">
+                            <?= $has_custom_pic ? 'Upload a new picture or remove current' : 'Choose a picture to upload' ?>
+                        </p>
                         
                         <div class="file-input-wrapper">
                             <input type="file" name="profile_pic" accept="image/*" id="profilePicInput" class="file-input">
@@ -959,8 +1149,26 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                             </button>
                         </div>
                         <p class="avatar-help">Allowed: JPG, PNG, GIF, WEBP (Max 5MB)</p>
+                        
+                        <!-- ================================================================ -->
+                        <!-- ✅ REMOVE PICTURE BUTTON (NEW) -->
+                        <!-- ================================================================ -->
+                        <?php if ($has_custom_pic): ?>
+                            <div class="avatar-actions">
+                                <button type="button" class="btn btn-danger btn-sm" onclick="openRemoveModal()" id="removeBtn">
+                                    <i class="fas fa-trash-alt"></i> Remove Picture
+                                </button>
+                            </div>
+                        <?php endif; ?>
                     </div>
                 </div>
+            </form>
+            
+            <!-- ================================================================ -->
+            <!-- ✅ HIDDEN FORM FOR DELETE -->
+            <!-- ================================================================ -->
+            <form method="POST" action="" id="deleteAvatarForm" style="display:none;">
+                <input type="hidden" name="action" value="delete_avatar">
             </form>
         </div>
         
@@ -1047,6 +1255,30 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </footer>
 
 </main>
+
+<!-- ================================================================ -->
+<!-- ✅ REMOVE PICTURE CONFIRMATION MODAL -->
+<!-- ================================================================ -->
+<div class="modal-overlay" id="removeModal">
+    <div class="modal-box">
+        <div class="modal-icon">
+            <i class="fas fa-trash-alt"></i>
+        </div>
+        <h3 class="modal-title">Remove Profile Picture?</h3>
+        <p class="modal-message">
+            Are you sure you want to remove your profile picture?<br>
+            This action cannot be undone.
+        </p>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-outline" onclick="closeRemoveModal()">
+                <i class="fas fa-times"></i> Cancel
+            </button>
+            <button type="button" class="btn btn-danger" onclick="confirmRemove()">
+                <i class="fas fa-trash-alt"></i> Yes, Remove
+            </button>
+        </div>
+    </div>
+</div>
 
 <!-- ================================================================ -->
 <!-- TOAST -->
@@ -1165,15 +1397,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             var file = this.files[0];
             if (!file) return;
             
-            // Validate file size
-            var maxSize = 5 * 1024 * 1024; // 5MB
+            var maxSize = 5 * 1024 * 1024;
             if (file.size > maxSize) {
                 showToast('Error', 'File size exceeds 5MB limit!', 'error');
                 this.value = '';
                 return;
             }
             
-            // Validate file type
             var allowedTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
             if (!allowedTypes.includes(file.type)) {
                 showToast('Error', 'Only JPG, PNG, GIF and WEBP files are allowed!', 'error');
@@ -1181,7 +1411,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 return;
             }
             
-            // Preview image
             var reader = new FileReader();
             reader.onload = function(e) {
                 var preview = document.getElementById('avatarPreview');
@@ -1208,6 +1437,60 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     }
 
     // ================================================================
+    // ✅ REMOVE PICTURE MODAL FUNCTIONS
+    // ================================================================
+    function openRemoveModal() {
+        var modal = document.getElementById('removeModal');
+        if (modal) {
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+        }
+    }
+    
+    function closeRemoveModal() {
+        var modal = document.getElementById('removeModal');
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+    }
+    
+    function confirmRemove() {
+        // Submit the hidden delete form
+        var form = document.getElementById('deleteAvatarForm');
+        if (form) {
+            // Show loading state
+            var removeBtn = document.querySelector('#removeModal .btn-danger');
+            if (removeBtn) {
+                removeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Removing...';
+                removeBtn.disabled = true;
+            }
+            
+            // Submit after a short delay
+            setTimeout(function() {
+                form.submit();
+            }, 300);
+        }
+    }
+    
+    // Close modal when clicking outside
+    var removeModal = document.getElementById('removeModal');
+    if (removeModal) {
+        removeModal.addEventListener('click', function(e) {
+            if (e.target === removeModal) {
+                closeRemoveModal();
+            }
+        });
+    }
+    
+    // Close modal with ESC key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeRemoveModal();
+        }
+    });
+
+    // ================================================================
     // SHOW TOAST FOR MESSAGES
     // ================================================================
     <?php if ($message && $message_type): ?>
@@ -1225,7 +1508,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     <?php if ($is_admin): ?>
     console.log('%c👑 Admin Mode', 'font-size:13px; color:#DC2626;');
     <?php endif; ?>
-    console.log('%c✅ Using your database structure - dispensary_db', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ REMOVE PICTURE BUTTON ADDED', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Confirmation modal for safety', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 No password change option', 'font-size:13px; color:#64748B;');
 </script>
 

@@ -4,6 +4,8 @@
 // CASHIER - VIEW PAID BILLS FOR A SPECIFIC PATIENT
 // FIXED: Uses bills table (not patient_bills)
 // DISPLAYS ONLY PAID BILLS WITH "PAID" WATERMARK
+// ✅ ADDED: Premium from bills.premium_amount column
+// ✅ ADDED: Premium in bill details and summary
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -89,10 +91,13 @@ try {
 
     // ================================================================
     // GET ONLY PAID BILLS FOR THIS PATIENT - USING bills TABLE
+    // ✅ ADDED: premium_amount and premium_note
     // ================================================================
     $stmt = $db->prepare("
         SELECT 
             b.*,
+            b.premium_amount,
+            b.premium_note,
             v.visit_number,
             v.visit_type,
             v.visit_date,
@@ -130,10 +135,12 @@ try {
     $total_bills = count($bills);
     $total_amount = 0;
     $total_paid = 0;
+    $total_premium = 0;
 
     foreach ($bills as $bill) {
         $total_amount += (float)$bill['total_amount'];
         $total_paid += (float)$bill['paid_amount'];
+        $total_premium += (float)($bill['premium_amount'] ?? 0);
     }
 
 } catch (Exception $e) {
@@ -144,6 +151,7 @@ try {
     $total_bills = 0;
     $total_amount = 0;
     $total_paid = 0;
+    $total_premium = 0;
     $currency = 'TSh';
     error_log("Patient bills error: " . $e->getMessage());
 }
@@ -183,6 +191,8 @@ include_once '../../components/cashier_sidebar.php';
             --danger-bg: #FEE2E2;
             --warning: #D97706;
             --warning-bg: #FEF3C7;
+            --premium-color: #D97706;
+            --premium-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
             --white: #FFFFFF;
@@ -233,6 +243,7 @@ include_once '../../components/cashier_sidebar.php';
             --success-bg: #1A3A2A;
             --danger-bg: #3A1A1A;
             --warning-bg: #3D2E0A;
+            --premium-bg: #3D2E0A;
             --purple-bg: #2D1B5F;
             --page-header-bg-from: #047857;
             --page-header-bg-to: #065F46;
@@ -320,6 +331,11 @@ include_once '../../components/cashier_sidebar.php';
             align-items: center;
             gap: 6px;
             border: 1px solid rgba(255,255,255,0.1);
+        }
+        .page-header .header-badge.premium {
+            background: rgba(251, 191, 36, 0.3);
+            border-color: rgba(251, 191, 36, 0.2);
+            color: #FCD34D;
         }
         .page-header .btn-outline-light {
             background: rgba(255,255,255,0.15);
@@ -428,6 +444,7 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--success);
         }
         .summary-stat .stat-number.purple { color: var(--purple); }
+        .summary-stat .stat-number.premium { color: var(--premium-color); }
         .summary-stat .stat-label {
             font-size: 0.7rem;
             color: var(--text-secondary);
@@ -514,6 +531,23 @@ include_once '../../components/cashier_sidebar.php';
         .bill-row-header .bill-amount .amount-paid {
             color: var(--success);
         }
+        .bill-row-header .premium-tag {
+            font-size: 0.55rem;
+            font-weight: 600;
+            padding: 2px 10px;
+            border-radius: 12px;
+            background: var(--premium-bg);
+            color: var(--premium-color);
+            border: 1px solid var(--premium-color);
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        [data-theme="dark"] .premium-tag {
+            background: #3D2E0A;
+            color: #F59E0B;
+            border-color: #D97706;
+        }
         
         .bill-row-body {
             padding: 16px 20px;
@@ -546,6 +580,7 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
         }
         .bill-row-body .bill-detail-item .value.doctor { color: var(--primary); }
+        .bill-row-body .bill-detail-item .value.premium { color: var(--premium-color); font-weight: 600; }
         
         .bill-items-table {
             width: 100%;
@@ -603,6 +638,7 @@ include_once '../../components/cashier_sidebar.php';
             color: var(--text-primary);
         }
         .bill-row-footer .total-summary .paid { color: var(--success); }
+        .bill-row-footer .total-summary .premium-amount { color: var(--premium-color); font-weight: 600; }
         
         .btn {
             display: inline-flex;
@@ -766,6 +802,11 @@ include_once '../../components/cashier_sidebar.php';
                         <i class="fas fa-user-shield"></i> ADMIN VIEW
                     </span>
                 <?php endif; ?>
+                <?php if ($total_premium > 0): ?>
+                    <span class="header-badge premium">
+                        <i class="fas fa-crown"></i> Premium: <?= $currency ?> <?= number_format($total_premium, 0) ?>
+                    </span>
+                <?php endif; ?>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-user"></i>
@@ -781,6 +822,13 @@ include_once '../../components/cashier_sidebar.php';
                     <i class="fas fa-check-circle"></i>
                     <?= $total_bills ?> paid bill(s)
                 </span>
+                
+                <?php if ($total_premium > 0): ?>
+                <span class="header-badge premium">
+                    <i class="fas fa-crown"></i>
+                    Total Premium: <?= $currency ?> <?= number_format($total_premium, 0) ?>
+                </span>
+                <?php endif; ?>
             </p>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
@@ -832,6 +880,12 @@ include_once '../../components/cashier_sidebar.php';
             <p class="stat-number purple"><?= $currency ?> <?= number_format($total_amount, 0) ?></p>
             <p class="stat-label">Total Amount</p>
         </div>
+        <?php if ($total_premium > 0): ?>
+        <div class="summary-stat">
+            <p class="stat-number premium"><?= $currency ?> <?= number_format($total_premium, 0) ?></p>
+            <p class="stat-label">Total Premium</p>
+        </div>
+        <?php endif; ?>
         <div class="summary-stat">
             <p class="stat-number" style="color: var(--success);">✅ All Paid</p>
             <p class="stat-label">Status</p>
@@ -842,6 +896,8 @@ include_once '../../components/cashier_sidebar.php';
     <?php if (count($bills) > 0): ?>
         <?php foreach ($bills as $bill): 
             $items = $bill_items[$bill['id']] ?? [];
+            $premium_amount = (float)($bill['premium_amount'] ?? 0);
+            $has_premium = $premium_amount > 0;
         ?>
         <div class="bill-row animate-fade-in-up">
             <!-- PAID WATERMARK -->
@@ -854,6 +910,11 @@ include_once '../../components/cashier_sidebar.php';
                     <span class="bill-status">
                         <i class="fas fa-check-circle"></i> Paid
                     </span>
+                    <?php if ($has_premium): ?>
+                        <span class="premium-tag">
+                            <i class="fas fa-crown"></i> Premium: <?= $currency ?> <?= number_format($premium_amount, 0) ?>
+                        </span>
+                    <?php endif; ?>
                     <?php if ($bill['item_count'] > 0): ?>
                         <span class="text-xs" style="color:var(--text-secondary);">(<?= $bill['item_count'] ?> items)</span>
                     <?php endif; ?>
@@ -897,6 +958,17 @@ include_once '../../components/cashier_sidebar.php';
                         <span class="label">Paid At</span>
                         <span class="value"><?= date('M d, Y h:i A', strtotime($bill['updated_at'])) ?></span>
                     </div>
+                    <?php if ($has_premium): ?>
+                    <div class="bill-detail-item">
+                        <span class="label">Premium Amount</span>
+                        <span class="value premium">
+                            <i class="fas fa-crown"></i> <?= $currency ?> <?= number_format($premium_amount, 0) ?>
+                            <?php if (!empty($bill['premium_note'])): ?>
+                                <span class="text-xs" style="color:var(--text-secondary);font-weight:400;display:block;"><?= htmlspecialchars($bill['premium_note']) ?></span>
+                            <?php endif; ?>
+                        </span>
+                    </div>
+                    <?php endif; ?>
                 </div>
                 
                 <!-- Bill Items -->
@@ -938,6 +1010,9 @@ include_once '../../components/cashier_sidebar.php';
                     <span>Subtotal: <span class="strong"><?= $currency ?> <?= number_format($bill['subtotal'] ?? $bill['total_amount'] ?? 0, 0) ?></span></span>
                     <?php if (($bill['discount_amount'] ?? 0) > 0): ?>
                         <span>Discount: <span class="strong" style="color:var(--warning);">-<?= $currency ?> <?= number_format($bill['discount_amount'], 0) ?></span></span>
+                    <?php endif; ?>
+                    <?php if ($has_premium): ?>
+                        <span>Premium: <span class="premium-amount">+<?= $currency ?> <?= number_format($premium_amount, 0) ?></span></span>
                     <?php endif; ?>
                     <span>Total: <span class="strong"><?= $currency ?> <?= number_format($bill['total_amount'] ?? 0, 0) ?></span></span>
                     <span>✅ <span class="paid">Fully Paid</span></span>
@@ -1148,9 +1223,11 @@ include_once '../../components/cashier_sidebar.php';
     console.log('%c💰 Braick - Paid Bills (Using Your Database)', 'font-size:18px; font-weight:bold; color:#059669;');
     console.log('%c✅ Uses bills table (not patient_bills)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Uses bill_items table', 'font-size:13px; color:#34D399;');
+    console.log('%c👑 ADDED: Premium from bills.premium_amount column', 'font-size:13px; color:#D97706;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c📊 Total Paid Bills: <?= $total_bills ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💰 Total Paid: <?= $currency ?> <?= number_format($total_paid, 0) ?>', 'font-size:13px; color:#059669;');
+    console.log('%c👑 Total Premium: <?= $currency ?> <?= number_format($total_premium, 0) ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Each bill has a "PAID" watermark', 'font-size:13px; color:#34D399;');
 </script>
 

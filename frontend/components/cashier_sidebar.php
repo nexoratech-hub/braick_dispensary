@@ -6,6 +6,9 @@
 // BRAICK DISPENSARY
 // FIXED: Real-time auto-update when data changes
 // REMOVED: Cancelled Bills
+// ✅ FIXED: Paid Bills now includes BOTH bills and OTC sales
+// ✅ FIXED: Paid badge shows correct count
+// ✅ FIXED: Pending badge includes OTC pending
 // ================================================================
 
 // ================================================================
@@ -62,6 +65,7 @@ try {
 
 // ================================================================
 // GET INITIAL DATA FOR BADGES
+// ✅ FIXED: Include OTC sales in counts
 // ================================================================
 $pending_bills = 0;
 $partial_payments = 0;
@@ -71,25 +75,48 @@ $patients_waiting = 0;
 
 if ($db !== null && isset($_SESSION['user_id'])) {
     try {
+        // ✅ Pending bills - from bills table
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'pending'");
         $stmt->execute([$user_branch_id]);
-        $pending_bills = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $pending_bills_regular = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // ✅ Pending OTC sales
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND payment_status = 'pending'");
+        $stmt->execute([$user_branch_id]);
+        $pending_otc = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Total pending = regular + OTC
+        $pending_bills = $pending_bills_regular + $pending_otc;
+        
+        // ✅ Partial payments
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'partial'");
         $stmt->execute([$user_branch_id]);
         $partial_payments = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        // ✅ FIXED: Paid bills - from BOTH bills and OTC sales
         $stmt = $db->prepare("SELECT COUNT(*) as count FROM bills WHERE branch_id = ? AND status = 'paid'");
         $stmt->execute([$user_branch_id]);
-        $total_paid = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        $paid_regular = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
         
+        $stmt = $db->prepare("SELECT COUNT(*) as count FROM otc_sales WHERE branch_id = ? AND payment_status = 'paid'");
+        $stmt->execute([$user_branch_id]);
+        $paid_otc = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Total paid = regular + OTC
+        $total_paid = $paid_regular + $paid_otc;
+        
+        // ✅ Total expenses
         $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE branch_id = ? AND status = 'paid'");
         $stmt->execute([$user_branch_id]);
         $total_expenses = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
         
+        // ✅ Patients waiting
         $stmt = $db->prepare("SELECT COUNT(DISTINCT patient_id) as count FROM bills WHERE branch_id = ? AND status IN ('pending', 'partial')");
         $stmt->execute([$user_branch_id]);
         $patients_waiting = $stmt->fetch(PDO::FETCH_ASSOC)['count'] ?? 0;
+        
+        // Log for debugging
+        error_log("Cashier Sidebar - Pending: $pending_bills (regular: $pending_bills_regular + otc: $pending_otc), Paid: $total_paid (regular: $paid_regular + otc: $paid_otc), Partial: $partial_payments, Expenses: $total_expenses");
         
     } catch (Exception $e) {
         error_log("Cashier sidebar initial data error: " . $e->getMessage());
@@ -1210,8 +1237,9 @@ $initial_data = [
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 
         'font-size:13px; color:#6EA8FE;');
     console.log('%c📊 Initial Data:', 'font-size:13px; font-weight:bold; color:#D97706;');
-    console.log('   Pending: <?= $pending_bills ?>, Partial: <?= $partial_payments ?>');
-    console.log('   Paid: <?= $total_paid ?>');
+    console.log('   Pending: <?= $pending_bills ?> (regular + OTC)');
+    console.log('   Partial: <?= $partial_payments ?>');
+    console.log('   Paid: <?= $total_paid ?> (bills + OTC)');
     console.log('   Expenses: TSh <?= number_format($total_expenses) ?>');
     console.log('   Patients Waiting: <?= $patients_waiting ?>');
     console.log('%c🔑 Initial Hash: <?= $initial_hash ?>', 'font-size:12px; color:#94A3B8;');
@@ -1219,5 +1247,5 @@ $initial_data = [
     console.log('%c🔄 Force refresh: Every 5s (safety net)', 'font-size:13px; color:#F59E0B;');
     console.log('%c📡 AJAX URL: ' + SIDEBAR_CONFIG.AJAX_URL, 'font-size:12px; color:#94A3B8;');
     console.log('%c💡 Call window.refreshSidebarData() for manual update', 'font-size:12px; color:#6EA8FE;');
-    console.log('%c✅ Data updates AUTOMATICALLY when database changes!', 'font-size:13px; font-weight:bold; color:#34D399;');
+    console.log('%c✅ Paid Bills = Bills table (paid) + OTC sales (paid)', 'font-size:13px; font-weight:bold; color:#34D399;');
 </script>

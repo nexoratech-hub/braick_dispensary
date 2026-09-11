@@ -2,6 +2,8 @@
 // ================================================================
 // FILE: frontend/pages/pharmacy/edit_profile.php
 // PHARMACY - EDIT PROFILE (UPDATED FOR NEW DATABASE)
+// ✅ WITH REMOVE PROFILE PICTURE BUTTON
+// ✅ WITH CONFIRMATION MODAL
 // WITHOUT CHANGE PASSWORD
 // WITH SESSION MANAGEMENT & LOGIN PROTECTION
 // BRAICK DISPENSARY - dispensary_db
@@ -15,7 +17,7 @@ if (session_status() === PHP_SESSION_NONE) {
 }
 
 // ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
+// LOGIN PROTECTION
 // ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
@@ -91,7 +93,7 @@ if ($user_id <= 0) {
 }
 
 // ================================================================
-// DATABASE CONNECTION - NEW DATABASE
+// DATABASE CONNECTION
 // ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
 
@@ -102,15 +104,31 @@ try {
 }
 
 // ================================================================
-// UPLOAD DIRECTORY
+// UPLOAD DIRECTORY - MULTIPLE PATHS
 // ================================================================
-$upload_dir = $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/';
-$upload_url = '/dispensary_system/frontend/assets/uploads/profiles/';
+$upload_dirs = [
+    $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/',
+    $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/assets/uploads/profiles/',
+    __DIR__ . '/../../assets/uploads/profiles/',
+    __DIR__ . '/../../../assets/uploads/profiles/',
+    'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/profiles/',
+    'C:/xampp/htdocs/dispensary_system/assets/uploads/profiles/'
+];
 
-// Create directory if not exists
-if (!is_dir($upload_dir)) {
+$upload_dir = null;
+foreach ($upload_dirs as $dir) {
+    if (is_dir($dir) || mkdir($dir, 0777, true)) {
+        $upload_dir = $dir;
+        break;
+    }
+}
+
+if (!$upload_dir) {
+    $upload_dir = __DIR__ . '/../../assets/uploads/profiles/';
     mkdir($upload_dir, 0777, true);
 }
+
+$upload_url = '/dispensary_system/frontend/assets/uploads/profiles/';
 
 // ================================================================
 // PROCESS FORM SUBMISSION
@@ -130,7 +148,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $email = trim($_POST['email'] ?? '');
         $phone = trim($_POST['phone'] ?? '');
         
-        // Validation
         $errors = [];
         if (empty($full_name)) {
             $errors[] = 'Full name is required';
@@ -142,7 +159,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $errors[] = 'Invalid email format';
         }
         
-        // Check if email exists (excluding current user)
         if (empty($errors) && $email !== $user_email) {
             $stmt = $db->prepare("SELECT id FROM users WHERE email = ? AND id != ? AND status = 'active'");
             $stmt->execute([$email, $user_id]);
@@ -153,7 +169,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         
         if (empty($errors)) {
             try {
-                // Update profile (no password)
                 $stmt = $db->prepare("
                     UPDATE users 
                     SET full_name = ?, email = ?, phone = ?
@@ -161,12 +176,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ");
                 $stmt->execute([$full_name, $email, $phone, $user_id]);
                 
-                // Update session
                 $_SESSION['full_name'] = $full_name;
                 $_SESSION['email'] = $email;
                 $_SESSION['phone'] = $phone;
                 
-                // Log activity
                 try {
                     $stmt = $db->prepare("
                         INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
@@ -177,20 +190,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $user_branch_id,
                         "User updated profile: " . $full_name
                     ]);
-                } catch (Exception $e) {
-                    // Silent fail
-                }
+                } catch (Exception $e) {}
                 
                 $message = "Profile updated successfully!";
                 $message_type = 'success';
                 $success = true;
                 
-                // Refresh variables
                 $user_full_name = $full_name;
                 $user_email = $email;
                 $user_phone = $phone;
                 
-                // Redirect after success
                 echo '<script>
                     setTimeout(function(){ 
                         window.location.href = "profile.php?success=1"; 
@@ -216,7 +225,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
             $allowed_exts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
             
-            // Validate file
             if (!in_array($file_ext, $allowed_exts)) {
                 $message = "Only JPG, PNG, GIF, and WEBP files are allowed!";
                 $message_type = 'error';
@@ -224,11 +232,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $message = "File size exceeds 5MB limit!";
                 $message_type = 'error';
             } else {
-                // Generate unique filename
                 $filename = 'user_' . $user_id . '_' . time() . '.' . $file_ext;
                 $filepath = $upload_dir . $filename;
                 
-                // Delete old profile picture if exists
                 if (!empty($profile_pic)) {
                     $old_file = $upload_dir . $profile_pic;
                     if (file_exists($old_file) && is_file($old_file)) {
@@ -236,17 +242,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
                 
-                // Move uploaded file
                 if (move_uploaded_file($file['tmp_name'], $filepath)) {
-                    // Update database
                     $stmt = $db->prepare("UPDATE users SET profile_pic = ? WHERE id = ?");
                     $stmt->execute([$filename, $user_id]);
                     
-                    // Update session
                     $_SESSION['profile_pic'] = $filename;
                     $profile_pic = $filename;
                     
-                    // Log activity
                     try {
                         $stmt = $db->prepare("
                             INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
@@ -257,9 +259,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             $user_branch_id,
                             "User updated profile picture"
                         ]);
-                    } catch (Exception $e) {
-                        // Silent fail
-                    }
+                    } catch (Exception $e) {}
                     
                     $message = "Profile picture updated successfully!";
                     $message_type = 'success';
@@ -279,6 +279,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $message_type = 'error';
         }
     }
+    
+    // ================================================================
+    // ✅ REMOVE AVATAR (NEW)
+    // ================================================================
+    if ($action === 'delete_avatar') {
+        try {
+            // Get current profile picture from DB
+            $stmt = $db->prepare("SELECT profile_pic FROM users WHERE id = ?");
+            $stmt->execute([$user_id]);
+            $current = $stmt->fetch(PDO::FETCH_ASSOC);
+            $current_pic = $current['profile_pic'] ?? '';
+            
+            // Delete file from disk from all possible directories
+            if (!empty($current_pic) && $current_pic !== 'default_avatar.png') {
+                foreach ($upload_dirs as $dir) {
+                    $file_to_delete = $dir . $current_pic;
+                    if (file_exists($file_to_delete) && is_file($file_to_delete)) {
+                        @unlink($file_to_delete);
+                    }
+                }
+            }
+            
+            // Update database - set to NULL
+            $stmt = $db->prepare("UPDATE users SET profile_pic = NULL WHERE id = ?");
+            $stmt->execute([$user_id]);
+            
+            // Update session
+            $_SESSION['profile_pic'] = '';
+            $profile_pic = '';
+            
+            // Log activity
+            try {
+                $stmt = $db->prepare("
+                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at)
+                    VALUES (?, ?, 'profile_pic_removed', ?, NOW())
+                ");
+                $stmt->execute([
+                    $user_id,
+                    $user_branch_id,
+                    "User removed profile picture"
+                ]);
+            } catch (Exception $e) {}
+            
+            $message = "Profile picture removed successfully!";
+            $message_type = 'success';
+            $success = true;
+            
+            echo '<script>
+                setTimeout(function(){ 
+                    window.location.href = "profile.php?success=1"; 
+                }, 1500);
+            </script>';
+        } catch (Exception $e) {
+            $message = "Failed to remove profile picture: " . $e->getMessage();
+            $message_type = 'error';
+        }
+    }
 }
 
 // ================================================================
@@ -287,6 +344,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $profile_pic_url = !empty($profile_pic) 
     ? $upload_url . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+
+// Check if file exists
+$has_custom_pic = false;
+if (!empty($profile_pic)) {
+    $check_path = $upload_dir . $profile_pic;
+    if (file_exists($check_path)) {
+        $has_custom_pic = true;
+    } else {
+        $profile_pic_url = '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
+    }
+}
 
 // ================================================================
 // GET STATISTICS FOR SIDEBAR
@@ -607,6 +675,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         cursor: pointer;
         border: none;
         text-decoration: none;
+        font-family: inherit;
     }
     
     .btn-primary {
@@ -644,6 +713,24 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         background: #047857;
         transform: translateY(-2px);
         box-shadow: 0 8px 20px rgba(5, 150, 105, 0.4);
+    }
+    
+    /* ✅ NEW: DANGER BUTTON */
+    .btn-danger {
+        background: linear-gradient(135deg, #DC2626, #EF4444);
+        color: white;
+        box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
+    }
+    
+    .btn-danger:hover {
+        background: linear-gradient(135deg, #B91C1C, #DC2626);
+        transform: translateY(-2px);
+        box-shadow: 0 8px 20px rgba(220, 38, 38, 0.4);
+    }
+    
+    .btn-sm {
+        padding: 6px 16px;
+        font-size: 0.75rem;
     }
     
     .form-actions {
@@ -737,6 +824,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         background: var(--primary-dark);
     }
     
+    /* ✅ NEW: Avatar Actions */
+    .avatar-actions {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 10px;
+    }
+    
     /* ================================================================
        MESSAGE
        ================================================================ */
@@ -774,6 +869,99 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     }
     
     /* ================================================================
+       ✅ NEW: MODAL
+       ================================================================ */
+    .modal-overlay {
+        display: none;
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.6);
+        z-index: 9999;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(4px);
+        animation: fadeIn 0.3s ease;
+    }
+    
+    .modal-overlay.show {
+        display: flex;
+    }
+    
+    @keyframes fadeIn {
+        from { opacity: 0; }
+        to { opacity: 1; }
+    }
+    
+    @keyframes slideUp {
+        from { transform: translateY(30px); opacity: 0; }
+        to { transform: translateY(0); opacity: 1; }
+    }
+    
+    .modal-box {
+        background: white;
+        border-radius: 16px;
+        padding: 32px 36px;
+        max-width: 420px;
+        width: 90%;
+        text-align: center;
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        animation: slideUp 0.3s ease;
+        border: 2px solid var(--border-color);
+    }
+    
+    [data-theme="dark"] .modal-box {
+        background: var(--bg-card);
+        border-color: var(--border-color);
+    }
+    
+    .modal-icon {
+        width: 80px;
+        height: 80px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #FEE2E2, #FECACA);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0 auto 20px;
+        font-size: 2.5rem;
+        color: var(--danger);
+        border: 4px solid #FCA5A5;
+    }
+    
+    [data-theme="dark"] .modal-icon {
+        background: linear-gradient(135deg, #3A1A1A, #4A1A1A);
+        border-color: #7F1D1D;
+    }
+    
+    .modal-title {
+        font-size: 1.3rem;
+        font-weight: 700;
+        color: var(--text-primary);
+        margin-bottom: 10px;
+    }
+    
+    .modal-message {
+        font-size: 0.9rem;
+        color: var(--text-secondary);
+        margin-bottom: 24px;
+        line-height: 1.6;
+    }
+    
+    .modal-actions {
+        display: flex;
+        gap: 12px;
+        justify-content: center;
+    }
+    
+    .modal-actions .btn {
+        flex: 1;
+        justify-content: center;
+    }
+    
+    /* ================================================================
        TOAST
        ================================================================ */
     .toast-custom {
@@ -782,7 +970,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         right: 24px;
         padding: 14px 20px;
         border-radius: 12px;
-        z-index: 999;
+        z-index: 9999;
         max-width: 400px;
         transform: translateY(100px);
         opacity: 0;
@@ -823,7 +1011,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
        ================================================================ */
     .grid { display: grid; }
     .grid-cols-1 { grid-template-columns: 1fr; }
-    .grid-cols-2 { grid-template-columns: 1fr 1fr; }
     .grid-cols-3 { grid-template-columns: 1fr 1fr 1fr; }
     .gap-4 { gap: 16px; }
     .gap-5 { gap: 20px; }
@@ -838,6 +1025,8 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
        ================================================================ */
     @media (max-width: 1024px) {
         .main-content { margin-left: 0; padding: 16px; }
+        .grid-cols-3 { grid-template-columns: 1fr; }
+        .lg\:col-span-2 { grid-column: span 1; }
     }
     
     @media (max-width: 768px) {
@@ -858,12 +1047,17 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             width: 100%;
             justify-content: center;
         }
+        .avatar-actions {
+            justify-content: center;
+        }
         .md\:grid-cols-2 {
             grid-template-columns: 1fr;
         }
-        .lg\:col-span-1,
-        .lg\:col-span-2 {
-            grid-column: span 1;
+        .modal-box {
+            padding: 24px 20px;
+        }
+        .modal-actions {
+            flex-direction: column;
         }
     }
     
@@ -908,7 +1102,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- EDIT PROFILE FORM (NO PASSWORD) -->
+    <!-- EDIT PROFILE FORM -->
     <!-- ================================================================ -->
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-5">
         
@@ -920,11 +1114,14 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                     Profile Picture
                 </div>
                 
+                <!-- ================================================================ -->
+                <!-- UPLOAD FORM -->
+                <!-- ================================================================ -->
                 <form method="POST" action="" enctype="multipart/form-data">
                     <input type="hidden" name="action" value="update_avatar">
                     
                     <div class="avatar-upload">
-                        <?php if (!empty($profile_pic)): ?>
+                        <?php if ($has_custom_pic): ?>
                             <img src="<?= $profile_pic_url ?>" alt="Profile" class="current-avatar" id="avatarPreview">
                         <?php else: ?>
                             <div class="avatar-placeholder" id="avatarPreview">
@@ -933,8 +1130,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                         <?php endif; ?>
                         
                         <div class="upload-info">
-                            <div class="upload-label">Change Profile Picture</div>
-                            <div class="upload-desc">Upload a new profile picture</div>
+                            <div class="upload-label">
+                                <?= $has_custom_pic ? 'Change Profile Picture' : 'Upload Profile Picture' ?>
+                            </div>
+                            <div class="upload-desc">
+                                <?= $has_custom_pic ? 'Upload a new picture or remove current' : 'Choose a picture to upload' ?>
+                            </div>
                             <div class="file-input-wrapper">
                                 <input type="file" name="profile_pic" accept="image/*" id="profilePicInput">
                                 <button type="submit" class="btn btn-success" style="padding: 6px 16px; font-size:0.8rem;">
@@ -942,8 +1143,26 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                                 </button>
                             </div>
                             <div class="help-text">Allowed: JPG, PNG, GIF, WEBP (Max 5MB)</div>
+                            
+                            <!-- ================================================================ -->
+                            <!-- ✅ REMOVE PICTURE BUTTON (NEW) -->
+                            <!-- ================================================================ -->
+                            <?php if ($has_custom_pic): ?>
+                                <div class="avatar-actions">
+                                    <button type="button" class="btn btn-danger btn-sm" onclick="openRemoveModal()" id="removeBtn">
+                                        <i class="fas fa-trash-alt"></i> Remove Picture
+                                    </button>
+                                </div>
+                            <?php endif; ?>
                         </div>
                     </div>
+                </form>
+                
+                <!-- ================================================================ -->
+                <!-- ✅ HIDDEN FORM FOR DELETE -->
+                <!-- ================================================================ -->
+                <form method="POST" action="" id="deleteAvatarForm" style="display:none;">
+                    <input type="hidden" name="action" value="delete_avatar">
                 </form>
             </div>
         </div>
@@ -1043,6 +1262,30 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
 </main>
 
 <!-- ================================================================ -->
+<!-- ✅ REMOVE PICTURE CONFIRMATION MODAL -->
+<!-- ================================================================ -->
+<div class="modal-overlay" id="removeModal">
+    <div class="modal-box">
+        <div class="modal-icon">
+            <i class="fas fa-trash-alt"></i>
+        </div>
+        <h3 class="modal-title">Remove Profile Picture?</h3>
+        <p class="modal-message">
+            Are you sure you want to remove your profile picture?<br>
+            This action cannot be undone.
+        </p>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-outline" onclick="closeRemoveModal()">
+                <i class="fas fa-times"></i> Cancel
+            </button>
+            <button type="button" class="btn btn-danger" onclick="confirmRemove()">
+                <i class="fas fa-trash-alt"></i> Yes, Remove
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- ================================================================ -->
 <!-- TOAST -->
 <!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
@@ -1063,7 +1306,7 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
     document.getElementById('profilePicInput')?.addEventListener('change', function(e) {
         var file = this.files[0];
         if (file) {
-            var maxSize = 5 * 1024 * 1024; // 5MB
+            var maxSize = 5 * 1024 * 1024;
             if (file.size > maxSize) {
                 showToast('Error', 'File size exceeds 5MB limit!', 'error');
                 this.value = '';
@@ -1077,7 +1320,6 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
                 return;
             }
             
-            // Preview image
             var reader = new FileReader();
             var preview = document.getElementById('avatarPreview');
             reader.onload = function(e) {
@@ -1092,6 +1334,57 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
             reader.readAsDataURL(file);
             
             showToast('Success', 'Image preview loaded. Click Upload to save.', 'info');
+        }
+    });
+
+    // ================================================================
+    // ✅ REMOVE PICTURE MODAL FUNCTIONS
+    // ================================================================
+    function openRemoveModal() {
+        var modal = document.getElementById('removeModal');
+        if (modal) {
+            modal.classList.add('show');
+            document.body.style.overflow = 'hidden';
+        }
+    }
+    
+    function closeRemoveModal() {
+        var modal = document.getElementById('removeModal');
+        if (modal) {
+            modal.classList.remove('show');
+            document.body.style.overflow = '';
+        }
+    }
+    
+    function confirmRemove() {
+        var form = document.getElementById('deleteAvatarForm');
+        if (form) {
+            var removeBtn = document.querySelector('#removeModal .btn-danger');
+            if (removeBtn) {
+                removeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Removing...';
+                removeBtn.disabled = true;
+            }
+            
+            setTimeout(function() {
+                form.submit();
+            }, 300);
+        }
+    }
+    
+    // Close modal when clicking outside
+    var removeModal = document.getElementById('removeModal');
+    if (removeModal) {
+        removeModal.addEventListener('click', function(e) {
+            if (e.target === removeModal) {
+                closeRemoveModal();
+            }
+        });
+    }
+    
+    // Close modal with ESC key
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            closeRemoveModal();
         }
     });
 
@@ -1136,12 +1429,12 @@ include_once __DIR__ . '/../../components/pharmacy_sidebar.php';
         }, 3500);
     }
 
-    console.log('%c💊 Braick - Pharmacy Edit Profile (NO PASSWORD)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c💊 Braick - Pharmacy Edit Profile', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c✅ REMOVE PICTURE BUTTON ADDED', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Confirmation modal for safety', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Removed Change Password section', 'font-size:13px; color:#DC2626;');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (ID: <?= $user_id ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($user_branch_name) ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c✅ Uses shared header with date & time', 'font-size:13px; color:#34D399;');
 </script>
 
 </body>

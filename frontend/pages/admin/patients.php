@@ -2,58 +2,48 @@
 // ================================================================
 // FILE: frontend/pages/admin/patients.php
 // SUPER ADMIN - MANAGE PATIENTS
-// WITH TIME PERIOD FILTERS
-// BRAICK DISPENSARY - USING EXISTING DB TABLES
-// FULL DELETE FUNCTIONALITY - WITH LOGIN SESSION
+// ✅ VIEW, EDIT, DELETE buttons
+// ✅ DELETE: Removes ALL patient data + Adjusts Revenue
+// ✅ Scroll buttons <> in table header
+// ✅ Compact search filter (left) + <> buttons (right)
+// ✅ Majina: BLACK color text
+// ✅ Table: LARGER size
+// ✅ Search bar: SMALL size only
+// ✅ REGISTERED BY column (Admin/Reception name)
 // ================================================================
 
-// ================================================================
-// START SESSION
-// ================================================================
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
 
-// ================================================================
-// LOGIN PROTECTION - CHECK IF USER IS LOGGED IN
-// ================================================================
 if (!isset($_SESSION['user_id']) || !isset($_SESSION['role'])) {
     header('Location: ../login.php');
     exit;
 }
 
-// ================================================================
-// CHECK IF USER HAS ADMIN ACCESS
-// ================================================================
-if ($_SESSION['role'] !== 'admin') {
+$allowed_roles = ['admin'];
+if (!in_array($_SESSION['role'], $allowed_roles)) {
     $role = $_SESSION['role'];
     switch ($role) {
         case 'doctor': header('Location: ../doctor/dashboard.php'); break;
-        case 'reception': header('Location: ../reception/dashboard.php'); break;
         case 'pharmacy': header('Location: ../pharmacy/dashboard.php'); break;
         case 'laboratory': header('Location: ../laboratory/dashboard.php'); break;
         case 'cashier': header('Location: ../cashier/dashboard.php'); break;
+        case 'reception': header('Location: ../reception/dashboard.php'); break;
         default: header('Location: ../login.php'); break;
     }
     exit;
 }
 
-// ================================================================
-// GET ADMIN DATA FROM SESSION
-// ================================================================
 $user_id = $_SESSION['user_id'] ?? 0;
-$user_full_name = $_SESSION['full_name'] ?? 'Admin';
-$user_role = $_SESSION['role'] ?? 'admin';
+$full_name = $_SESSION['full_name'] ?? 'Admin';
+$role = $_SESSION['role'] ?? 'admin';
 $user_branch_id = $_SESSION['branch_id'] ?? 1;
 $user_branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? '';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ================================================================
-// INCLUDE DATABASE AND HELPERS
-// ================================================================
 require_once __DIR__ . '/../../../backend/config/database.php';
-require_once __DIR__ . '/../../../backend/helpers/functions.php';
 
 try {
     $db = Database::getInstance()->getConnection();
@@ -61,942 +51,1144 @@ try {
     die("Database connection error: " . $e->getMessage());
 }
 
-// ================================================================
-// GET UNREAD NOTIFICATIONS
-// ================================================================
-$unread_notifications = 0;
+// BRANCH FILTER
+$selected_branch_id = isset($_GET['branch']) ? trim($_GET['branch']) : 'all';
+
+$branches_list = [];
 try {
-    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
-    $stmt->execute([$user_id]);
-    $unread_notifications = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
+    $stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
+    $branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) {
-    $unread_notifications = 0;
+    $branches_list = [];
 }
 
-// ================================================================
-// VARIABLES
-// ================================================================
+$filter_by_branch = ($selected_branch_id !== 'all' && is_numeric($selected_branch_id));
+$filter_branch_id = $filter_by_branch ? (int)$selected_branch_id : 0;
+
+$display_branch_name = 'All Branches';
+if ($filter_by_branch) {
+    foreach ($branches_list as $b) {
+        if ($b['id'] == $filter_branch_id) {
+            $display_branch_name = $b['name'];
+            break;
+        }
+    }
+}
+
+// PARAMETERS
+$search = isset($_GET['search']) ? trim($_GET['search']) : '';
+$filter = isset($_GET['filter']) ? $_GET['filter'] : 'all';
+$delete_id = isset($_GET['delete']) ? (int)$_GET['delete'] : 0;
+
+$error = isset($_GET['error']) ? $_GET['error'] : '';
+$success = isset($_GET['success']) ? $_GET['success'] : '';
+
 $message = '';
 $message_type = '';
-$per_page = 15;
-$page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
-$offset = ($page - 1) * $per_page;
-$search = isset($_GET['search']) ? trim($_GET['search']) : '';
-$selected_branch_id = $_GET['branch'] ?? 'all';
-$time_period = isset($_GET['period']) ? $_GET['period'] : 'all';
 
-// ================================================================
-// BUILD TIME PERIOD FILTER
-// ================================================================
-$date_condition = '';
-
-switch ($time_period) {
-    case 'today':
-        $date_condition = "DATE(p.created_at) = CURDATE()";
-        break;
-    case 'week':
-        $date_condition = "p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
-        break;
-    case 'month':
-        $date_condition = "p.created_at >= DATE_SUB(NOW(), INTERVAL 1 MONTH)";
-        break;
-    case '3months':
-        $date_condition = "p.created_at >= DATE_SUB(NOW(), INTERVAL 3 MONTH)";
-        break;
-    case '6months':
-        $date_condition = "p.created_at >= DATE_SUB(NOW(), INTERVAL 6 MONTH)";
-        break;
-    case 'year':
-        $date_condition = "p.created_at >= DATE_SUB(NOW(), INTERVAL 1 YEAR)";
-        break;
-    case 'all':
-    default:
-        $date_condition = "1=1";
-        break;
-}
-
-// ================================================================
-// DELETE PATIENT - FULL DELETION WITH ALL TABLES
-// ================================================================
-if (isset($_GET['delete']) && is_numeric($_GET['delete'])) {
-    $patient_id = (int)$_GET['delete'];
-    
+// DELETE PATIENT
+if ($delete_id > 0) {
     try {
         $db->beginTransaction();
         
-        // Get patient info first
-        $stmt = $db->prepare("SELECT full_name, patient_id FROM patients WHERE id = ?");
-        $stmt->execute([$patient_id]);
+        $stmt = $db->prepare("SELECT full_name, patient_id, branch_id FROM patients WHERE id = ?");
+        $stmt->execute([$delete_id]);
         $patient = $stmt->fetch(PDO::FETCH_ASSOC);
         
-        if ($patient) {
-            $patient_name = $patient['full_name'];
-            $patient_number = $patient['patient_id'];
-            
-            // ============================================================
-            // DELETE FROM ALL TABLES WITH patient_id
-            // ============================================================
-            
-            $tables = [
-                'activity_logs',
-                'appointments',
-                'bill_items',
-                'bills',
-                'notifications',
-                'otc_sales',
-                'otc_sale_items',
-                'patient_documents',
-                'payments',
-                'prescriptions',
-                'prescription_items',
-                'receipts',
-                'referrals',
-                'stock_movements',
-                'visits',
-                'vital_signs',
-                'lab_tests'
-            ];
-            
-            // Delete from each table
-            $deleted_count = 0;
-            foreach ($tables as $table) {
-                try {
-                    $stmt = $db->prepare("DELETE FROM `$table` WHERE patient_id = ?");
-                    $stmt->execute([$patient_id]);
-                    $deleted_count++;
-                } catch (Exception $e) {
-                    // Log error but continue
-                    error_log("Warning: Could not delete from $table: " . $e->getMessage());
-                }
-            }
-            
-            // ============================================================
-            // FINAL: DELETE PATIENT
-            // ============================================================
-            $stmt = $db->prepare("DELETE FROM patients WHERE id = ?");
-            $stmt->execute([$patient_id]);
-            
-            // Log activity
+        if (!$patient) throw new Exception("Patient not found");
+        
+        $patient_name = $patient['full_name'];
+        $patient_number = $patient['patient_id'];
+        $patient_branch = $patient['branch_id'];
+        
+        $revenue_to_subtract = 0;
+        try {
+            $stmt = $db->prepare("SELECT COALESCE(SUM(amount), 0) as total_paid FROM payments WHERE patient_id = ?");
+            $stmt->execute([$delete_id]);
+            $revenue_to_subtract = (float)$stmt->fetch(PDO::FETCH_ASSOC)['total_paid'];
+        } catch (Exception $e) {}
+        
+        $tables_to_delete = [
+            'payments', 'bill_items', 'bills', 'prescription_items',
+            'prescriptions', 'lab_tests', 'vital_signs', 'appointments',
+            'referrals', 'visits', 'otc_sale_items', 'otc_sales',
+            'patient_documents', 'stock_movements', 'receipts'
+        ];
+        
+        $items_deleted = 0;
+        foreach ($tables_to_delete as $table) {
             try {
-                $log_stmt = $db->prepare("
-                    INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
-                    VALUES (?, ?, 'patient_deleted', ?, NOW())
-                ");
-                $log_stmt->execute([
-                    $user_id, 
-                    $user_branch_id,
-                    "Patient deleted: $patient_name (ID: $patient_number) by " . $user_full_name
-                ]);
-            } catch (Exception $e) {
-                // Silent fail
-            }
-            
-            $db->commit();
-            
-            $message = "✅ Patient '$patient_name' (ID: $patient_number) deleted successfully!";
-            $message .= " (Deleted from $deleted_count tables)";
-            $message_type = 'success';
-            
-            header("Location: patients.php?page=$page&period=$time_period" . 
-                   ($search ? "&search=" . urlencode($search) : "") . 
-                   "&branch=" . urlencode($selected_branch_id));
-            exit();
-            
-        } else {
-            $db->rollBack();
-            $message = "❌ Patient not found!";
-            $message_type = 'error';
+                if ($table === 'bill_items') {
+                    $stmt = $db->prepare("DELETE bi FROM bill_items bi INNER JOIN bills b ON bi.bill_id = b.id WHERE b.patient_id = ?");
+                } elseif ($table === 'prescription_items') {
+                    $stmt = $db->prepare("DELETE pi FROM prescription_items pi INNER JOIN prescriptions p ON pi.prescription_id = p.id WHERE p.patient_id = ?");
+                } elseif ($table === 'otc_sale_items') {
+                    $stmt = $db->prepare("DELETE osi FROM otc_sale_items osi INNER JOIN otc_sales os ON osi.sale_id = os.id WHERE os.patient_id = ?");
+                } else {
+                    $stmt = $db->prepare("DELETE FROM `$table` WHERE patient_id = ?");
+                }
+                $stmt->execute([$delete_id]);
+                $items_deleted += $stmt->rowCount();
+            } catch (Exception $e) {}
         }
+        
+        try {
+            $stmt = $db->prepare("DELETE FROM notifications WHERE patient_id = ?");
+            $stmt->execute([$delete_id]);
+        } catch (Exception $e) {}
+        
+        $stmt = $db->prepare("DELETE FROM patients WHERE id = ?");
+        $stmt->execute([$delete_id]);
+        
+        try {
+            $log_stmt = $db->prepare("
+                INSERT INTO activity_logs (user_id, branch_id, action, details, created_at) 
+                VALUES (?, ?, 'patient_deleted', ?, NOW())
+            ");
+            $log_stmt->execute([
+                $user_id, $patient_branch,
+                "Patient deleted: $patient_name (ID: $patient_number) | Revenue removed: TSh " . number_format($revenue_to_subtract, 0) . " | By: " . $full_name
+            ]);
+        } catch (Exception $e) {}
+        
+        $db->commit();
+        
+        $_SESSION['flash_message'] = "✅ Patient deleted successfully!<br>" .
+                                     "👤 <strong>$patient_name</strong> (ID: $patient_number)<br>" .
+                                     "🗑️ <strong>" . number_format($items_deleted) . " records</strong> deleted<br>" .
+                                     "💰 Revenue adjusted: <strong>- TSh " . number_format($revenue_to_subtract, 0) . "</strong>";
+        $_SESSION['flash_type'] = 'success';
+        
+        header("Location: patients.php?branch=" . urlencode($selected_branch_id) . "&success=deleted");
+        exit();
         
     } catch (Exception $e) {
         $db->rollBack();
         $message = "❌ Error deleting patient: " . $e->getMessage();
         $message_type = 'error';
-        error_log("Delete Patient Error: " . $e->getMessage());
     }
 }
 
-// ================================================================
-// GET BRANCHES FOR FILTER
-// ================================================================
-$branches_list = [];
-$stmt = $db->query("SELECT id, name FROM branches WHERE status = 'active' ORDER BY name");
-$branches_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// GET PATIENTS WITH PAGINATION, SEARCH, DATE FILTER AND BRANCH FILTER
-// ================================================================
-$where_clause = "";
-$params = [];
-
-// Add date condition
-$where_clause .= " WHERE $date_condition";
-
-// Add search filter
-if (!empty($search)) {
-    $where_clause .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ? OR p.email LIKE ?)";
-    $search_param = "%$search%";
-    $params[] = $search_param;
-    $params[] = $search_param;
-    $params[] = $search_param;
-    $params[] = $search_param;
+if (isset($_SESSION['flash_message'])) {
+    $message = $_SESSION['flash_message'];
+    $message_type = $_SESSION['flash_type'] ?? 'success';
+    unset($_SESSION['flash_message']);
+    unset($_SESSION['flash_type']);
 }
 
-// Add branch filter
-if ($selected_branch_id !== 'all') {
-    $where_clause .= " AND p.branch_id = ?";
-    $params[] = (int)$selected_branch_id;
+// GET PATIENTS
+try {
+    // ================================================================
+    // ✅ QUERY WITH REGISTERED BY
+    // ================================================================
+    $sql = "
+        SELECT DISTINCT p.*, 
+               u.full_name as assigned_doctor_name, 
+               b.name as branch_name,
+               COALESCE(
+                   NULLIF(p.registered_by_name, ''),
+                   reg_user.full_name,
+                   creator.full_name,
+                   'System'
+               ) as registered_by_display,
+               COALESCE(reg_user.role, creator.role, 'reception') as registered_by_role
+        FROM patients p
+        LEFT JOIN users u ON p.assigned_doctor_id = u.id
+        LEFT JOIN branches b ON p.branch_id = b.id
+        LEFT JOIN users reg_user ON p.registered_by = reg_user.id
+        LEFT JOIN users creator ON p.created_by = creator.id
+        WHERE 1=1
+    ";
+    $params = [];
+    
+    if ($filter_by_branch) {
+        $sql .= " AND p.branch_id = ?";
+        $params[] = $filter_branch_id;
+    }
+    
+    if (!empty($search)) {
+        $sql .= " AND (p.full_name LIKE ? OR p.patient_id LIKE ? OR p.phone LIKE ?)";
+        $search_param = "%$search%";
+        $params[] = $search_param;
+        $params[] = $search_param;
+        $params[] = $search_param;
+    }
+    
+    if ($filter === 'with_doctor') $sql .= " AND p.assigned_doctor_id IS NOT NULL";
+    elseif ($filter === 'without_doctor') $sql .= " AND p.assigned_doctor_id IS NULL";
+    elseif ($filter === 'new') $sql .= " AND p.created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)";
+    elseif ($filter === 'no_visit') $sql .= " AND NOT EXISTS (SELECT 1 FROM visits WHERE patient_id = p.id)";
+    
+    $sql .= " ORDER BY p.created_at DESC";
+    
+    $stmt = $db->prepare($sql);
+    $stmt->execute($params);
+    $patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    
+    $unique_patients = [];
+    $seen_ids = [];
+    foreach ($patients as $patient) {
+        if (!in_array($patient['id'], $seen_ids)) {
+            $seen_ids[] = $patient['id'];
+            $unique_patients[] = $patient;
+        }
+    }
+    $patients = $unique_patients;
+    
+    foreach ($patients as $key => $patient) {
+        $stmt = $db->prepare("SELECT COUNT(*) FROM visits WHERE patient_id = ?");
+        $stmt->execute([$patient['id']]);
+        $patients[$key]['total_visits'] = (int)$stmt->fetchColumn();
+        
+        $stmt = $db->prepare("SELECT COUNT(*) FROM appointments WHERE patient_id = ? AND status IN ('scheduled', 'confirmed')");
+        $stmt->execute([$patient['id']]);
+        $patients[$key]['active_appointments'] = (int)$stmt->fetchColumn();
+        
+        $stmt = $db->prepare("SELECT DATEDIFF(NOW(), created_at) FROM patients WHERE id = ?");
+        $stmt->execute([$patient['id']]);
+        $patients[$key]['patient_days'] = (int)$stmt->fetchColumn();
+        
+        $patients[$key]['patient_status'] = ($patients[$key]['patient_days'] <= 7) ? 'new' : 'existing';
+        
+        $stmt = $db->prepare("SELECT id, visit_number, status, created_at FROM visits WHERE patient_id = ? ORDER BY created_at DESC LIMIT 1");
+        $stmt->execute([$patient['id']]);
+        $patients[$key]['latest_visit'] = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+    
+    $total_patients = count($patients);
+    
+    $stats_sql = "
+        SELECT 
+            COUNT(DISTINCT id) as total,
+            SUM(CASE WHEN assigned_doctor_id IS NOT NULL THEN 1 ELSE 0 END) as with_doctor,
+            SUM(CASE WHEN assigned_doctor_id IS NULL THEN 1 ELSE 0 END) as without_doctor,
+            SUM(CASE WHEN created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY) THEN 1 ELSE 0 END) as new_patients
+        FROM patients 
+        WHERE 1=1
+    ";
+    $stats_params = [];
+    if ($filter_by_branch) {
+        $stats_sql .= " AND branch_id = ?";
+        $stats_params[] = $filter_branch_id;
+    }
+    $stmt = $db->prepare($stats_sql);
+    $stmt->execute($stats_params);
+    $stats = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+} catch (Exception $e) {
+    $message = "Database error: " . $e->getMessage();
+    $message_type = 'error';
+    $patients = [];
+    $stats = ['total' => 0, 'with_doctor' => 0, 'without_doctor' => 0, 'new_patients' => 0];
+    $total_patients = 0;
 }
 
-// ================================================================
-// GET STATISTICS WITH TIME PERIOD
-// ================================================================
-$stats_where = "WHERE $date_condition";
-$stats_params = [];
+$unread_notifications = 0;
+try {
+    $stmt = $db->prepare("SELECT COUNT(*) as total FROM notifications WHERE user_id = ? AND is_read = 0");
+    $stmt->execute([$user_id]);
+    $unread_notifications = $stmt->fetch()['total'] ?? 0;
+} catch (Exception $e) {}
 
-if ($selected_branch_id !== 'all') {
-    $stats_where .= " AND branch_id = ?";
-    $stats_params[] = (int)$selected_branch_id;
-}
-
-if (!empty($search)) {
-    $stats_where .= " AND (full_name LIKE ? OR patient_id LIKE ? OR phone LIKE ? OR email LIKE ?)";
-    $stats_params[] = "%$search%";
-    $stats_params[] = "%$search%";
-    $stats_params[] = "%$search%";
-    $stats_params[] = "%$search%";
-}
-
-$stats_sql = "SELECT COUNT(*) as total FROM patients p $stats_where";
-$stmt = $db->prepare($stats_sql);
-$stmt->execute($stats_params);
-$total_all = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// Today's patients
-$today_sql = "SELECT COUNT(*) as total FROM patients WHERE DATE(created_at) = CURDATE()";
-if ($selected_branch_id !== 'all') {
-    $today_sql .= " AND branch_id = " . (int)$selected_branch_id;
-}
-$stmt = $db->query($today_sql);
-$today_patients = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// With branch assigned
-$branch_sql = "SELECT COUNT(*) as total FROM patients WHERE branch_id IS NOT NULL";
-if ($selected_branch_id !== 'all') {
-    $branch_sql .= " AND branch_id = " . (int)$selected_branch_id;
-}
-$stmt = $db->query($branch_sql);
-$with_branch = $stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-
-// ================================================================
-// GET TOTAL COUNT FOR PAGINATION
-// ================================================================
-$count_sql = "SELECT COUNT(*) as total FROM patients p $where_clause";
-$count_stmt = $db->prepare($count_sql);
-$count_stmt->execute($params);
-$total_patients = $count_stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0;
-$total_pages = ceil($total_patients / $per_page);
-
-// ================================================================
-// GET PATIENTS FOR CURRENT PAGE
-// ================================================================
-$sql = "
-    SELECT p.*, b.name as branch_name, 
-           (SELECT COUNT(*) FROM visits WHERE patient_id = p.id AND status != 'cancelled') as total_visits,
-           (SELECT COUNT(*) FROM bills WHERE patient_id = p.id AND status != 'cancelled') as total_bills
-    FROM patients p
-    LEFT JOIN branches b ON p.branch_id = b.id
-    $where_clause
-    ORDER BY p.created_at DESC
-    LIMIT ? OFFSET ?
-";
-$stmt = $db->prepare($sql);
-$params[] = $per_page;
-$params[] = $offset;
-$stmt->execute($params);
-$patients = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// ================================================================
-// GET TIME PERIOD LABEL
-// ================================================================
-$period_labels = [
-    'today' => 'Today',
-    'week' => 'This Week',
-    'month' => 'This Month',
-    '3months' => '3 Months',
-    '6months' => '6 Months',
-    'year' => '1 Year',
-    'all' => 'All Time'
-];
-$period_label = $period_labels[$time_period] ?? 'All Time';
-
-// ================================================================
-// PROFILE PICTURE URL
-// ================================================================
 $profile_pic_url = !empty($profile_pic) 
     ? '/dispensary_system/frontend/assets/uploads/profiles/' . $profile_pic 
     : '/dispensary_system/frontend/assets/uploads/profiles/default_avatar.png';
 
-$logo_url = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
+$logo_path = '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png';
 
-// ================================================================
-// INCLUDE SHARED HEADER & SIDEBAR
-// ================================================================
-include_once __DIR__ . '/../../components/admin_header.php';
 include_once __DIR__ . '/../../components/admin_sidebar.php';
 ?>
+<!DOCTYPE html>
+<html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Patients - Braick Dispensary</title>
+    
+    <link rel="icon" href="<?= $logo_path ?>" type="image/png">
+    <link rel="shortcut icon" href="<?= $logo_path ?>" type="image/png">
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --primary: #2563EB;
+            --primary-dark: #1D4ED8;
+            --primary-light: #60A5FA;
+            --primary-bg: #EFF6FF;
+            --primary-gradient: linear-gradient(135deg, #2563EB, #1D4ED8);
+            --success: #059669;
+            --success-dark: #047857;
+            --success-bg: #D1FAE5;
+            --danger: #DC2626;
+            --danger-dark: #B91C1C;
+            --danger-bg: #FEE2E2;
+            --warning: #D97706;
+            --warning-bg: #FEF3C7;
+            --purple: #7C3AED;
+            --purple-dark: #5B21B6;
+            --purple-bg: #EDE9FE;
+            --gray-100: #F1F5F9;
+            --gray-200: #E2E8F0;
+            --gray-300: #CBD5E1;
+            --gray-400: #94A3B8;
+            --gray-500: #64748B;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,0.05);
+            --shadow-md: 0 4px 12px rgba(0,0,0,0.08);
+            --shadow-lg: 0 10px 25px rgba(0,0,0,0.1);
+            --bg-body: #F0F4F8;
+            --bg-card: #FFFFFF;
+            --bg-nav: #FFFFFF;
+            --text-primary: #1E293B;
+            --text-secondary: #64748B;
+            --text-muted: #94A3B8;
+            --text-black: #0F172A;
+            --border-color: #E2E8F0;
+            --radius: 12px;
+            --radius-lg: 18px;
+        }
+        
+        [data-theme="dark"] {
+            --bg-body: #0F172A;
+            --bg-card: #1E293B;
+            --bg-nav: #1E293B;
+            --text-primary: #F1F5F9;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --text-black: #F1F5F9;
+            --border-color: #334155;
+            --primary: #3B82F6;
+            --primary-dark: #2563EB;
+            --primary-bg: #1E3A5F;
+            --purple-bg: #2D1B5F;
+        }
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Inter', 'Segoe UI', -apple-system, sans-serif;
+            background: var(--bg-body);
+            color: var(--text-primary);
+        }
+        
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        
+        /* TOP NAV */
+        .top-nav {
+            position: fixed;
+            top: 0;
+            left: 270px;
+            right: 0;
+            height: 68px;
+            background: var(--bg-nav);
+            z-index: 40;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 24px;
+            border-bottom: 2px solid var(--border-color);
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .top-nav .search-wrapper {
+            display: flex;
+            align-items: center;
+            background: var(--bg-body);
+            border-radius: var(--radius);
+            border: 2px solid var(--border-color);
+            flex: 1;
+            max-width: 280px;
+        }
+        
+        .top-nav .search-wrapper:focus-within {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
+        }
+        
+        .top-nav .search-wrapper i {
+            color: var(--text-secondary) !important;
+            font-size: 0.75rem;
+            margin-left: 10px;
+        }
+        
+        .top-nav .search-wrapper input {
+            border: none;
+            background: transparent;
+            padding: 6px 10px;
+            width: 100%;
+            font-size: 0.78rem;
+            outline: none;
+            color: var(--text-primary);
+        }
+        
+        .top-nav .search-wrapper .search-btn {
+            background: var(--primary-gradient);
+            color: white;
+            border: none;
+            padding: 6px 12px;
+            border-radius: 0 var(--radius) var(--radius) 0;
+            cursor: pointer;
+            font-size: 0.72rem;
+            font-weight: 600;
+        }
+        
+        .top-nav .datetime {
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .top-nav .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            object-fit: cover;
+            border: 2px solid var(--border-color);
+            cursor: pointer;
+        }
+        
+        .top-nav .icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .notif-dot {
+            position: absolute;
+            top: 6px;
+            right: 6px;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            border: 2px solid var(--bg-nav);
+        }
+        
+        .notif-dot.has-notif { background: var(--danger); }
+        .notif-dot.no-notif { background: var(--gray-400); }
+        
+        .dark-toggle-btn {
+            background: var(--bg-body);
+            border: 2px solid var(--border-color);
+            border-radius: var(--radius);
+            padding: 6px 12px;
+            cursor: pointer;
+            font-size: 0.82rem;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .main-content {
+            margin-left: 270px;
+            margin-top: 68px;
+            padding: 28px 32px;
+            min-height: calc(100vh - 68px);
+        }
+        
+        /* PAGE HEADER */
+        .page-header {
+            background: var(--primary-gradient);
+            border-radius: var(--radius-lg);
+            padding: 28px 36px;
+            margin-bottom: 28px;
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: space-between;
+            align-items: center;
+            gap: 16px;
+            box-shadow: 0 8px 32px rgba(37, 99, 235, 0.25);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -60%;
+            right: -10%;
+            width: 400px;
+            height: 400px;
+            background: rgba(255,255,255,0.05);
+            border-radius: 50%;
+            pointer-events: none;
+        }
+        
+        .page-header .page-title {
+            color: white;
+            font-size: 1.8rem;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .page-title i { font-size: 2rem; opacity: 0.9; }
+        
+        .page-header .page-subtitle {
+            color: rgba(255,255,255,0.85);
+            font-size: 0.95rem;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .role-badge-display {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.65rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            backdrop-filter: blur(4px);
+        }
+        
+        .page-header .header-badge {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.7rem;
+            font-weight: 500;
+            backdrop-filter: blur(4px);
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .page-header .btn-outline-light {
+            background: rgba(255,255,255,0.12);
+            color: white;
+            border: 1px solid rgba(255,255,255,0.2);
+            padding: 8px 18px;
+            border-radius: var(--radius);
+            font-weight: 500;
+            font-size: 0.82rem;
+            transition: all 0.3s;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            backdrop-filter: blur(4px);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .page-header .btn-outline-light:hover {
+            background: rgba(255,255,255,0.25);
+            transform: translateY(-2px);
+        }
+        
+        /* STATS */
+        .stat-card {
+            background: var(--bg-card);
+            border-radius: var(--radius);
+            padding: 16px 20px;
+            border: 2px solid var(--border-color);
+            text-align: center;
+            transition: all 0.3s ease;
+        }
+        
+        .stat-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .stat-card .stat-number {
+            font-size: 1.8rem;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        .stat-card .stat-number.green { color: var(--success); }
+        .stat-card .stat-number.orange { color: var(--warning); }
+        .stat-card .stat-number.purple { color: var(--purple); }
+        
+        .stat-card .stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+        
+        /* TABLE CARD */
+        .table-card {
+            background: var(--bg-card);
+            border-radius: var(--radius-lg);
+            padding: 24px 28px;
+            border: 2px solid var(--border-color);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .table-card .card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-bottom: 16px;
+            padding-bottom: 14px;
+            border-bottom: 2px solid var(--border-color);
+        }
+        
+        .table-card .card-title {
+            font-size: 1rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .table-card .card-title i { color: var(--primary); }
+        
+        /* COMPACT FILTER BAR */
+        .filter-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            width: 100%;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--primary-gradient);
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(37, 99, 235, 0.2);
+        }
+        
+        .filter-bar-left {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            flex: 1;
+        }
+        
+        .filter-bar-right {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-shrink: 0;
+        }
+        
+        .filter-input {
+            padding: 6px 10px;
+            border: 1.5px solid rgba(255,255,255,0.3);
+            border-radius: 8px;
+            font-size: 0.72rem;
+            background: rgba(255,255,255,0.95);
+            color: #1E293B;
+            outline: none;
+            font-weight: 500;
+            height: 34px;
+        }
+        
+        .filter-input:focus {
+            border-color: white;
+            box-shadow: 0 0 0 2px rgba(255,255,255,0.3);
+        }
+        
+        select.filter-input {
+            min-width: 120px;
+            cursor: pointer;
+        }
+        
+        .search-input-wrapper {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+        
+        .search-input-wrapper i {
+            position: absolute;
+            left: 10px;
+            color: var(--primary);
+            font-size: 0.7rem;
+            pointer-events: none;
+        }
+        
+        /* ✅ SEARCH INPUT - SMALL SIZE */
+        .search-input-wrapper input {
+            padding-left: 28px;
+            min-width: 140px;
+            width: 140px;
+            font-size: 0.7rem;
+        }
+        
+        .clear-filter-btn {
+            display: none;
+            align-items: center;
+            gap: 4px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: 0.68rem;
+            font-weight: 600;
+            background: rgba(255,255,255,0.95);
+            color: var(--danger);
+            border: 1.5px solid white;
+            cursor: pointer;
+            text-decoration: none;
+            height: 34px;
+        }
+        
+        .clear-filter-btn.show { display: inline-flex; }
+        .clear-filter-btn:hover { background: var(--danger); color: white; }
+        
+        .auto-filter-loading {
+            display: none;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.62rem;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 20px;
+            background: rgba(255,255,255,0.2);
+            height: 34px;
+        }
+        
+        .auto-filter-loading.show { display: inline-flex; }
+        
+        .auto-filter-loading .spinner-small {
+            width: 10px;
+            height: 10px;
+            border: 2px solid rgba(255,255,255,0.4);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        
+        @keyframes spin { to { transform: rotate(360deg); } }
+        
+        .filter-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 3px;
+            font-size: 0.6rem;
+            color: white;
+            padding: 4px 10px;
+            background: rgba(255,255,255,0.15);
+            border-radius: 20px;
+            border: 1px solid rgba(255,255,255,0.2);
+            height: 34px;
+        }
+        
+        /* SCROLL BUTTONS */
+        .scroll-controls {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .scroll-btn-header {
+            width: 34px;
+            height: 34px;
+            border-radius: 8px;
+            border: 1.5px solid rgba(255,255,255,0.3);
+            background: rgba(255,255,255,0.95);
+            color: var(--primary);
+            font-size: 0.8rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+        }
+        
+        .scroll-btn-header:hover {
+            background: white;
+            transform: scale(1.08);
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        
+        .scroll-btn-header:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+        
+        /* TABLE WRAPPER */
+        .table-scroll-wrapper {
+            overflow-x: auto;
+            overflow-y: auto;
+            max-height: 600px;
+            scroll-behavior: smooth;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+        }
+        
+        .table-scroll-wrapper::-webkit-scrollbar { height: 8px; width: 8px; }
+        .table-scroll-wrapper::-webkit-scrollbar-track { background: var(--bg-body); border-radius: 10px; }
+        .table-scroll-wrapper::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
+        
+        /* ✅ TABLE - LARGER SIZE */
+        .patient-table {
+            width: 100%;
+            min-width: 1650px;
+            border-collapse: collapse;
+            font-size: 0.95rem;
+        }
+        
+        .patient-table thead {
+            background: var(--primary-gradient);
+            color: white;
+            position: sticky;
+            top: 0;
+            z-index: 5;
+        }
+        
+        .patient-table thead th {
+            padding: 14px 16px;
+            text-align: left;
+            font-weight: 700;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: white;
+            white-space: nowrap;
+        }
+        
+        .patient-table thead th:first-child { border-radius: 8px 0 0 0; }
+        .patient-table thead th:last-child { border-radius: 0 8px 0 0; }
+        
+        .patient-table .col-sno {
+            width: 55px;
+            text-align: center;
+            font-weight: 700;
+            color: var(--primary);
+            font-size: 0.9rem;
+        }
+        
+        .patient-table tbody td {
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border-color);
+            font-size: 0.9rem;
+        }
+        
+        .patient-table tbody tr:hover td {
+            background: var(--primary-bg);
+        }
+        
+        /* ✅ MAJINA - BLACK COLOR TEXT */
+        .patient-name-link {
+            color: #0F172A !important;
+            font-weight: 700 !important;
+            font-size: 0.95rem !important;
+            text-decoration: none !important;
+            transition: all 0.2s ease;
+        }
+        
+        .patient-name-link:hover {
+            color: var(--primary) !important;
+            text-decoration: underline !important;
+        }
+        
+        [data-theme="dark"] .patient-name-link {
+            color: #F1F5F9 !important;
+        }
+        
+        [data-theme="dark"] .patient-name-link:hover {
+            color: #60A5FA !important;
+        }
+        
+        /* ✅ PATIENT ID - BLACK */
+        .patient-id-text {
+            color: #0F172A !important;
+            font-family: 'Courier New', monospace !important;
+            font-size: 0.85rem !important;
+            font-weight: 700 !important;
+        }
+        
+        [data-theme="dark"] .patient-id-text {
+            color: #F1F5F9 !important;
+        }
+        
+        /* ✅ CONTACT - BLACK */
+        .patient-contact-link {
+            color: #0F172A !important;
+            text-decoration: none !important;
+            font-weight: 500 !important;
+        }
+        
+        .patient-contact-link:hover {
+            color: var(--primary) !important;
+            text-decoration: underline !important;
+        }
+        
+        [data-theme="dark"] .patient-contact-link {
+            color: #F1F5F9 !important;
+        }
+        
+        /* ✅ REGISTERED BY BADGE */
+        .registered-by-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 5px 12px;
+            border-radius: 12px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            background: var(--purple-bg);
+            color: var(--purple);
+            white-space: nowrap;
+        }
+        
+        [data-theme="dark"] .registered-by-badge {
+            background: #2D1B5F;
+            color: #C4B5FD;
+        }
+        
+        .registered-by-badge.role-admin {
+            background: #FEF3C7;
+            color: #B45309;
+        }
+        
+        [data-theme="dark"] .registered-by-badge.role-admin {
+            background: #3D2E0A;
+            color: #FBBF24;
+        }
+        
+        .registered-by-badge.role-reception {
+            background: #EDE9FE;
+            color: #7C3AED;
+        }
+        
+        [data-theme="dark"] .registered-by-badge.role-reception {
+            background: #2D1B5F;
+            color: #C4B5FD;
+        }
+        
+        /* STATUS BADGES */
+        .patient-table .status-badge {
+            display: inline-block;
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 12px;
+        }
+        
+        .status-badge.new { background: var(--success-bg); color: var(--success); }
+        .status-badge.existing { background: var(--primary-bg); color: var(--primary); }
+        .status-badge.with_doctor { background: var(--success-bg); color: var(--success); }
+        .status-badge.without_doctor { background: var(--warning-bg); color: var(--warning); }
+        
+        .days-badge-blue {
+            display: inline-block;
+            background: var(--primary) !important;
+            color: #ffffff !important;
+            padding: 4px 12px !important;
+            border-radius: 12px !important;
+            font-size: 0.68rem !important;
+            font-weight: 600 !important;
+        }
+        
+        .days-badge-blue.new {
+            background: var(--success) !important;
+        }
+        
+        /* BUTTONS */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 7px 14px;
+            border-radius: 7px;
+            font-weight: 600;
+            font-size: 0.75rem;
+            transition: all 0.3s;
+            cursor: pointer;
+            border: none;
+            text-decoration: none;
+            white-space: nowrap;
+        }
+        
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-primary:hover { background: var(--primary-dark); transform: translateY(-1px); }
+        
+        .btn-success { background: var(--success); color: white; }
+        .btn-success:hover { background: var(--success-dark); transform: translateY(-1px); }
+        
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-danger:hover { background: var(--danger-dark); transform: translateY(-1px); }
+        
+        .action-buttons-group {
+            display: flex;
+            gap: 5px;
+            flex-wrap: nowrap;
+        }
+        
+        /* MESSAGE */
+        .message-box {
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            margin-bottom: 20px;
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            font-weight: 500;
+        }
+        
+        .message-box.success { background: var(--success-bg); color: var(--success-dark); border-left: 5px solid var(--success); }
+        .message-box.error { background: var(--danger-bg); color: var(--danger-dark); border-left: 5px solid var(--danger); }
+        .message-box i { font-size: 1.2rem; margin-top: 2px; }
+        
+        /* TOAST */
+        .toast-custom {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 14px 20px;
+            border-radius: var(--radius);
+            z-index: 9999;
+            max-width: 450px;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: white;
+            box-shadow: var(--shadow-lg);
+        }
+        
+        .toast-custom.show { transform: translateY(0); opacity: 1; }
+        .toast-custom.success { background: var(--success); }
+        .toast-custom.error { background: var(--danger); }
+        .toast-custom.info { background: var(--primary); }
+        
+        /* FOOTER */
+        .footer-modern {
+            padding: 14px 0;
+            border-top: 1px solid var(--border-color);
+            margin-top: 24px;
+            text-align: center;
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+        }
+        
+        .footer-modern .footer-brand {
+            color: var(--primary);
+            font-weight: 500;
+        }
+        
+        .branch-badge-display {
+            display: inline-block;
+            font-size: 0.7rem;
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 20px;
+            background: var(--success-bg);
+            color: var(--success);
+        }
+        
+        .live-indicator-modern {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #34D399;
+            animation: pulse-dot 1.5s infinite;
+            margin-right: 4px;
+        }
+        
+        @keyframes pulse-dot {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+        
+        .update-badge-light {
+            background: rgba(255,255,255,0.12);
+            color: rgba(255,255,255,0.8);
+            padding: 3px 12px;
+            border-radius: 20px;
+            font-size: 0.6rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        /* RESPONSIVE */
+        @media (max-width: 1024px) {
+            .top-nav { left: 0; }
+            .main-content { margin-left: 0; padding: 16px; }
+        }
+        
+        @media (max-width: 768px) {
+            .page-header { padding: 16px 18px; }
+            .page-header .page-title { font-size: 1.3rem; }
+            .table-card { padding: 16px; }
+            
+            .filter-bar {
+                flex-direction: column;
+                align-items: stretch;
+            }
+            
+            .filter-bar-left,
+            .filter-bar-right {
+                width: 100%;
+                justify-content: flex-start;
+            }
+            
+            .search-input-wrapper input {
+                width: 100%;
+                min-width: unset;
+            }
+        }
+        
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .animate-fade-in-up {
+            animation: fadeInUp 0.5s ease forwards;
+            opacity: 0;
+        }
+    </style>
+</head>
+<body>
 
-<style>
-    /* ================================================================
-       ADDITIONAL STYLES
-       ================================================================ */
-    
-    /* Stat Cards */
-    .stat-card-mini {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 14px 18px;
-        border: 1px solid var(--border-color);
-        transition: all 0.3s ease;
-        text-align: center;
-    }
-    
-    .stat-card-mini:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 8px 25px rgba(0,0,0,0.08);
-        border-color: #0B5ED7;
-    }
-    
-    .stat-card-mini .stat-number {
-        font-size: 1.8rem;
-        font-weight: 700;
-        color: #0B5ED7;
-    }
-    
-    .stat-card-mini .stat-number.green { color: #059669; }
-    .stat-card-mini .stat-number.orange { color: #F59E0B; }
-    
-    .stat-card-mini .stat-label {
-        font-size: 0.7rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        text-transform: uppercase;
-        letter-spacing: 0.03em;
-    }
-    
-    .stat-card-mini .stat-icon {
-        font-size: 1.5rem;
-        margin-bottom: 4px;
-    }
-    
-    [data-theme="dark"] .stat-card-mini {
-        background: #1E293B;
-        border-color: #334155;
-    }
-    
-    [data-theme="dark"] .stat-card-mini:hover {
-        border-color: #0B5ED7;
-    }
-    
-    [data-theme="dark"] .stat-card-mini .stat-number {
-        color: #6EA8FE;
-    }
-    
-    /* Time Period Filters */
-    .period-filters {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 6px;
-        margin-bottom: 16px;
-    }
-    
-    .period-btn {
-        padding: 5px 14px;
-        border-radius: 20px;
-        font-size: 0.7rem;
-        font-weight: 500;
-        border: 2px solid var(--border-color);
-        background: transparent;
-        color: var(--text-secondary);
-        cursor: pointer;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-block;
-    }
-    
-    .period-btn:hover {
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-        background: #E8F0FE;
-    }
-    
-    .period-btn.active {
-        background: #0B5ED7;
-        color: white;
-        border-color: #0B5ED7;
-    }
-    
-    .period-btn.active:hover {
-        background: #0A4CA8;
-        border-color: #0A4CA8;
-    }
-    
-    [data-theme="dark"] .period-btn:hover {
-        background: #1E3A5F;
-        border-color: #6EA8FE;
-        color: #6EA8FE;
-    }
-    
-    .period-btn i {
-        margin-right: 4px;
-    }
-    
-    /* Table Container */
-    .table-container {
-        position: relative;
-        overflow: hidden;
-        border-radius: 12px;
-    }
-    
-    .table-scroll-wrapper {
-        overflow-x: auto;
-        overflow-y: visible;
-        -webkit-overflow-scrolling: touch;
-        scroll-behavior: smooth;
-        position: relative;
-    }
-    
-    .table-scroll-wrapper::-webkit-scrollbar {
-        height: 6px;
-    }
-    
-    .table-scroll-wrapper::-webkit-scrollbar-track {
-        background: var(--bg-body);
-        border-radius: 10px;
-    }
-    
-    .table-scroll-wrapper::-webkit-scrollbar-thumb {
-        background: #0B5ED7;
-        border-radius: 10px;
-    }
-    
-    /* Scroll Controls */
-    .scroll-controls {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        margin-left: auto;
-    }
-    
-    .scroll-btn-header {
-        width: 34px;
-        height: 34px;
-        border-radius: 8px;
-        border: none;
-        background: linear-gradient(135deg, #0B5ED7, #1A73E8);
-        color: white;
-        font-size: 0.85rem;
-        cursor: pointer;
-        transition: all 0.3s ease;
-        box-shadow: 0 2px 8px rgba(11, 94, 215, 0.25);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-    }
-    
-    .scroll-btn-header:hover {
-        background: linear-gradient(135deg, #0A4CA8, #0B5ED7);
-        transform: scale(1.05);
-        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.35);
-    }
-    
-    .scroll-btn-header:disabled {
-        opacity: 0.4;
-        cursor: not-allowed;
-        transform: none !important;
-    }
-    
-    [data-theme="dark"] .scroll-btn-header {
-        background: linear-gradient(135deg, #1A73E8, #0B5ED7);
-    }
-    
-    .scroll-indicator {
-        font-size: 0.65rem;
-        color: var(--text-secondary);
-        font-weight: 500;
-        padding: 0 4px;
-    }
-    
-    /* Table Header - Blue Theme */
-    .table-blue thead th {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8) !important;
-        color: #FFFFFF !important;
-        font-weight: 700 !important;
-        font-size: 0.7rem !important;
-        text-transform: uppercase !important;
-        letter-spacing: 0.05em !important;
-        padding: 12px 16px !important;
-        border-bottom: 3px solid #0A4CA8 !important;
-        white-space: nowrap !important;
-        position: sticky;
-        top: 0;
-        z-index: 5;
-    }
-    
-    .table-blue thead th:first-child { border-radius: 8px 0 0 0 !important; }
-    .table-blue thead th:last-child { border-radius: 0 8px 0 0 !important; }
-    
-    .table-blue tbody td {
-        padding: 10px 16px !important;
-        border-bottom: 1px solid #E2E8F0 !important;
-        color: #1E293B !important;
-        vertical-align: middle !important;
-        white-space: nowrap;
-    }
-    
-    .table-blue tbody tr:hover td {
-        background: #E8F0FE !important;
-    }
-    
-    [data-theme="dark"] .table-blue tbody td {
-        color: #F1F5F9 !important;
-        border-bottom-color: #334155 !important;
-    }
-    
-    [data-theme="dark"] .table-blue tbody tr:hover td {
-        background: #1A3A5F !important;
-    }
-    
-    /* Table Header Wrapper */
-    .table-header-wrapper {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 12px;
-        padding-bottom: 10px;
-        border-bottom: 2px solid var(--border-color);
-    }
-    
-    .table-header-wrapper .search-box {
-        position: relative;
-        flex: 1;
-        min-width: 200px;
-        max-width: 350px;
-    }
-    
-    .table-header-wrapper .search-box input {
-        width: 100%;
-        padding: 8px 16px 8px 38px;
-        border: 2px solid var(--border-color);
-        border-radius: 10px;
-        font-size: 0.85rem;
-        transition: all 0.3s ease;
-        background: #FFFFFF !important;
-        color: #1E293B !important;
-        outline: none;
-    }
-    
-    .table-header-wrapper .search-box input:focus {
-        border-color: #0B5ED7;
-        box-shadow: 0 0 0 3px rgba(11, 94, 215, 0.15);
-    }
-    
-    [data-theme="dark"] .table-header-wrapper .search-box input {
-        background: #1E293B !important;
-        color: #F1F5F9 !important;
-        border-color: #334155 !important;
-    }
-    
-    .table-header-wrapper .search-box .search-icon {
-        position: absolute;
-        left: 12px;
-        top: 50%;
-        transform: translateY(-50%);
-        color: var(--text-secondary);
-        font-size: 0.9rem;
-    }
-    
-    .table-header-wrapper .search-info {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-        white-space: nowrap;
-    }
-    
-    .table-header-wrapper .search-info strong {
-        color: #0B5ED7;
-    }
-    
-    [data-theme="dark"] .table-header-wrapper .search-info strong {
-        color: #6EA8FE;
-    }
-    
-    /* Badge styles */
-    .badge {
-        padding: 3px 12px !important;
-        border-radius: 20px !important;
-        font-size: 0.6rem !important;
-        font-weight: 600 !important;
-        display: inline-flex !important;
-        align-items: center !important;
-        gap: 4px !important;
-        border: none !important;
-    }
-    
-    .badge-blue {
-        background: #E8F0FE !important;
-        color: #0B5ED7 !important;
-    }
-    
-    .badge-green {
-        background: #D1FAE5 !important;
-        color: #059669 !important;
-    }
-    
-    [data-theme="dark"] .badge-blue {
-        background: #1E3A5F !important;
-        color: #6EA8FE !important;
-    }
-    
-    [data-theme="dark"] .badge-green {
-        background: #1A3A2A !important;
-        color: #34D399 !important;
-    }
-    
-    /* Action Buttons */
-    .action-buttons {
-        display: flex;
-        gap: 5px;
-        flex-wrap: wrap;
-    }
-    
-    .btn-action {
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-        padding: 5px 12px;
-        border-radius: 6px;
-        font-size: 0.65rem;
-        font-weight: 600;
-        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        text-decoration: none;
-        border: none;
-        cursor: pointer;
-        letter-spacing: 0.01em;
-        white-space: nowrap;
-    }
-    
-    .btn-action i {
-        font-size: 0.7rem;
-    }
-    
-    .btn-view {
-        background: #E8F0FE;
-        color: #0B5ED7;
-        border: 1px solid rgba(11, 94, 215, 0.15);
-    }
-    
-    .btn-view:hover {
-        background: #0B5ED7;
-        color: white;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.3);
-    }
-    
-    .btn-edit {
-        background: #D1FAE5;
-        color: #059669;
-        border: 1px solid rgba(5, 150, 105, 0.15);
-    }
-    
-    .btn-edit:hover {
-        background: #059669;
-        color: white;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.3);
-    }
-    
-    .btn-delete {
-        background: #FEE2E2;
-        color: #EF4444;
-        border: 1px solid rgba(239, 68, 68, 0.15);
-    }
-    
-    .btn-delete:hover {
-        background: #EF4444;
-        color: white;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
-    }
-    
-    [data-theme="dark"] .btn-view {
-        background: #1E3A5F;
-        color: #6EA8FE;
-        border-color: rgba(110, 168, 254, 0.15);
-    }
-    
-    [data-theme="dark"] .btn-view:hover {
-        background: #0B5ED7;
-        color: white;
-    }
-    
-    [data-theme="dark"] .btn-edit {
-        background: #1A3A2A;
-        color: #34D399;
-        border-color: rgba(52, 211, 153, 0.15);
-    }
-    
-    [data-theme="dark"] .btn-edit:hover {
-        background: #059669;
-        color: white;
-    }
-    
-    [data-theme="dark"] .btn-delete {
-        background: #3A1A1A;
-        color: #F87171;
-        border-color: rgba(248, 113, 113, 0.15);
-    }
-    
-    [data-theme="dark"] .btn-delete:hover {
-        background: #EF4444;
-        color: white;
-    }
-    
-    /* Pagination */
-    .pagination {
-        display: flex;
-        gap: 4px;
-        flex-wrap: wrap;
-    }
-    
-    .pagination .page-link {
-        padding: 6px 12px;
-        border-radius: 6px;
-        border: 1px solid var(--border-color);
-        color: var(--text-primary);
-        text-decoration: none;
-        font-size: 0.8rem;
-        transition: all 0.3s;
-        background: var(--bg-card);
-    }
-    
-    .pagination .page-link:hover {
-        background: #0B5ED7;
-        color: white;
-        border-color: #0B5ED7;
-    }
-    
-    .pagination .page-link.active {
-        background: #0B5ED7;
-        color: white;
-        border-color: #0B5ED7;
-    }
-    
-    .pagination .page-link.disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
-    }
-    
-    [data-theme="dark"] .pagination .page-link {
-        background: #1E293B;
-        border-color: #334155;
-    }
-    
-    /* Period label in header */
-    .period-label {
-        display: inline-block;
-        padding: 2px 12px;
-        border-radius: 12px;
-        font-size: 0.6rem;
-        font-weight: 600;
-        background: #E8F0FE;
-        color: #0B5ED7;
-    }
-    
-    [data-theme="dark"] .period-label {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    
-    /* Card */
-    .card {
-        background: var(--bg-card);
-        border-radius: 16px;
-        padding: 18px 20px;
-        border: 1px solid var(--border-color);
-        transition: all 0.3s;
-    }
-    
-    .card:hover {
-        border-color: #0B5ED7;
-        box-shadow: 0 4px 12px rgba(11, 94, 215, 0.05);
-    }
-    
-    .card-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 10px;
-        flex-wrap: wrap;
-        gap: 8px;
-    }
-    
-    .card-title {
-        font-size: 0.9rem;
-        font-weight: 600;
-        color: var(--text-primary);
-    }
-    
-    .title-blue { color: #0B5ED7; }
-    
-    /* Page Header */
-    .page-header {
-        margin-bottom: 20px;
-    }
-    
-    .page-title {
-        font-size: 1.5rem;
-        font-weight: 700;
-        color: var(--text-primary);
-    }
-    
-    .page-subtitle {
-        font-size: 0.85rem;
-        color: var(--text-secondary);
-    }
-    
-    .btn-blue {
-        background: linear-gradient(135deg, #0B5ED7, #0A4CA8);
-        color: white;
-        border: none;
-        padding: 8px 18px;
-        border-radius: 8px;
-        font-weight: 600;
-        font-size: 0.8rem;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    
-    .btn-blue:hover {
-        background: linear-gradient(135deg, #0A4CA8, #083C8A);
-        transform: translateY(-2px);
-        box-shadow: 0 4px 14px rgba(11, 94, 215, 0.3);
-        color: white;
-    }
-    
-    .btn-outline {
-        background: transparent;
-        color: var(--text-primary);
-        border: 2px solid var(--border-color);
-        padding: 6px 14px;
-        border-radius: 8px;
-        font-weight: 500;
-        font-size: 0.8rem;
-        transition: all 0.3s ease;
-        text-decoration: none;
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-    }
-    
-    .btn-outline:hover {
-        border-color: #0B5ED7;
-        color: #0B5ED7;
-    }
-    
-    .btn-sm {
-        padding: 5px 12px;
-        font-size: 0.7rem;
-    }
-    
-    .branch-tag {
-        background: #E8F0FE;
-        color: #0B5ED7;
-        padding: 2px 10px;
-        border-radius: 12px;
-        font-size: 0.7rem;
-        font-weight: 500;
-    }
-    
-    [data-theme="dark"] .branch-tag {
-        background: #1E3A5F;
-        color: #6EA8FE;
-    }
-    
-    /* Toast */
-    .toast-custom {
-        position: fixed;
-        bottom: 24px;
-        right: 24px;
-        padding: 14px 20px;
-        border-radius: 12px;
-        z-index: 999;
-        max-width: 400px;
-        transform: translateY(100px);
-        opacity: 0;
-        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        color: white;
-        box-shadow: 0 8px 30px rgba(0,0,0,0.15);
-    }
-    .toast-custom.show { transform: translateY(0); opacity: 1; }
-    .toast-custom.success { background: #059669; }
-    .toast-custom.error { background: #DC2626; }
-    .toast-custom.info { background: #0B5ED7; }
-    .toast-custom.warning { background: #D97706; }
-    
-    /* Footer */
-    .footer {
-        margin-top: 30px;
-        padding-top: 15px;
-        border-top: 1px solid var(--border-color);
-        text-align: center;
-        font-size: 0.75rem;
-        color: var(--text-secondary);
-    }
-    
-    .footer-brand {
-        font-weight: 600;
-        color: #0B5ED7;
-    }
-    
-    [data-theme="dark"] .footer-brand {
-        color: #6EA8FE;
-    }
-</style>
-
-<!-- ================================================================ -->
-<!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
+<!-- TOP NAV -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
-        <button id="sidebarToggle" class="lg:hidden icon-btn">
+        <button id="sidebarToggle" class="lg:hidden icon-btn" style="display:none;">
             <i class="fas fa-bars text-lg"></i>
         </button>
         
         <div class="search-wrapper">
-            <i class="fas fa-search text-gray-400 ml-3"></i>
-            <form method="GET" action="" class="flex-1 flex">
-                <input type="hidden" name="branch" value="<?= htmlspecialchars($selected_branch_id) ?>">
-                <input type="hidden" name="period" value="<?= htmlspecialchars($time_period) ?>">
-                <input type="text" name="search" value="<?= htmlspecialchars($search) ?>" 
-                       placeholder="Search patients..." 
-                       class="flex-1 px-3 py-2 bg-transparent border-none outline-none text-sm" 
-                       style="color: var(--text-primary);">
-                <button type="submit" class="search-btn">
-                    <i class="fas fa-search mr-1"></i> Search
-                </button>
-            </form>
+            <i class="fas fa-search"></i>
+            <input type="text" id="searchInput" placeholder="Search..." value="<?= htmlspecialchars($search) ?>">
+            <button id="searchBtn" class="search-btn">
+                <i class="fas fa-search"></i>
+            </button>
         </div>
     </div>
     
     <div class="flex items-center gap-3">
-        <select id="branchSelector" class="branch-selector" onchange="switchBranch(this.value)">
+        <select class="branch-selector" onchange="switchBranch(this.value)" style="background:var(--bg-body);border:2px solid var(--border-color);border-radius:8px;padding:6px 12px;font-size:0.78rem;color:var(--text-primary);outline:none;cursor:pointer;font-weight:600;">
             <option value="all" <?= $selected_branch_id === 'all' ? 'selected' : '' ?>>🌐 All Branches</option>
             <?php foreach ($branches_list as $branch): ?>
                 <option value="<?= $branch['id'] ?>" <?= $selected_branch_id == $branch['id'] ? 'selected' : '' ?>>
@@ -1005,306 +1197,335 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <?php endforeach; ?>
         </select>
         
-        <span class="datetime" id="currentDateTime"></span>
+        <span class="datetime">
+            <i class="fas fa-clock" style="color:var(--primary-light);"></i>
+            <span id="clockDisplay"><?= date('d M Y • h:i:s A') ?></span>
+        </span>
         
-        <button id="darkModeToggle" class="dark-toggle-btn" title="Toggle Dark Mode">
+        <button id="darkModeToggle" class="dark-toggle-btn">
             <i id="darkIcon" class="fas fa-moon"></i>
             <span id="darkText">Dark</span>
         </button>
         
         <button class="icon-btn">
             <i class="fas fa-bell text-lg"></i>
-            <span class="notif-dot <?= $unread_notifications > 0 ? 'has-notif' : 'no-notif' ?>"></span>
+            <span class="notif-dot <?= ($unread_notifications ?? 0) > 0 ? 'has-notif' : 'no-notif' ?>"></span>
         </button>
         
         <a href="profile.php">
             <img src="<?= $profile_pic_url ?>" alt="Profile" class="avatar"
-                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($user_full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
+                 onerror="this.src='data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 width=%2240%22 height=%2240%22%3E%3Crect width=%2240%22 height=%2240%22 fill=%22%230B5ED7%22 rx=%2250%25%22/%3E%3Ctext x=%2220%22 y=%2226%22 text-anchor=%22middle%22 fill=%22white%22 font-size=%2218%22 font-weight=%22bold%22%3E<?= strtoupper(substr($full_name, 0, 1)) ?>%3C/text%3E%3C/svg%3E'">
         </a>
     </div>
 </nav>
 
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- Page Header -->
-    <div class="page-header flex flex-wrap justify-between items-center gap-3 mb-5">
+    <!-- PAGE HEADER -->
+    <div class="page-header">
         <div>
             <h1 class="page-title">
-                <i class="fas fa-users mr-2"></i> Manage Patients
+                <i class="fas fa-users"></i>
+                Patients
+                <span class="role-badge-display">ADMIN</span>
+                <span class="update-badge-light">
+                    <span class="live-indicator-modern"></span> Live
+                </span>
             </h1>
             <p class="page-subtitle">
-                View and manage all patients in the system
-                <span class="branch-tag ml-2">
-                    <i class="fas fa-user-injured"></i> <?= $total_all ?> Total Patients
+                <i class="fas fa-hospital"></i>
+                Manage patients in <strong><?= htmlspecialchars($display_branch_name) ?></strong>
+                <span class="header-badge">
+                    <i class="fas fa-users"></i>
+                    <span id="totalPatients"><?= $stats['total'] ?? 0 ?></span> Total
                 </span>
-                <span class="period-label ml-2">
-                    <i class="fas fa-calendar-alt"></i> <?= $period_label ?>
+                <span class="header-badge">
+                    <i class="fas fa-user-md"></i>
+                    <span style="color:#34D399;"><?= $stats['with_doctor'] ?? 0 ?></span> With Doctor
+                </span>
+                <span class="header-badge">
+                    <i class="fas fa-user"></i>
+                    <span style="color:#F87171;"><?= $stats['without_doctor'] ?? 0 ?></span> No Doctor
+                </span>
+                <span class="header-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.3);color:#34D399;">
+                    <i class="fas fa-bolt"></i>
+                    <?= $stats['new_patients'] ?? 0 ?> New (7 days)
                 </span>
             </p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-            <a href="dashboard.php" class="btn btn-outline btn-sm">
-                <i class="fas fa-arrow-left"></i> Dashboard
+        <div class="header-right" style="display:flex;gap:8px;flex-wrap:wrap;position:relative;z-index:1;">
+            <a href="add_patient.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
+                <i class="fas fa-plus"></i> New Patient
             </a>
-            <a href="add_patient.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-blue btn-sm">
-                <i class="fas fa-plus"></i> Add Patient
+            <a href="dashboard.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn-outline-light">
+                <i class="fas fa-arrow-left"></i> Dashboard
             </a>
         </div>
     </div>
 
-    <!-- Message -->
+    <!-- MESSAGE -->
     <?php if ($message): ?>
-        <div class="p-4 rounded-xl mb-4 <?= $message_type === 'success' ? 'bg-green-100 text-green-700 border border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800' : 'bg-red-100 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-300 dark:border-red-800' ?>">
-            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?> mr-2"></i>
-            <?= $message ?>
+        <div class="message-box <?= $message_type ?>">
+            <i class="fas <?= $message_type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle' ?>"></i>
+            <div><?= $message ?></div>
         </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
-    <!-- STATISTICS CARDS -->
-    <!-- ================================================================ -->
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-5">
-        
-        <div class="stat-card-mini">
-            <div class="stat-icon">👤</div>
-            <p class="stat-number"><?= $total_all ?></p>
-            <p class="stat-label">Total Patients (<?= $period_label ?>)</p>
+    <!-- STATS CARDS -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5 animate-fade-in-up">
+        <div class="stat-card">
+            <p class="stat-number"><?= $stats['total'] ?? 0 ?></p>
+            <p class="stat-label">Total Patients</p>
         </div>
-        
-        <div class="stat-card-mini">
-            <div class="stat-icon">📅</div>
-            <p class="stat-number green"><?= $today_patients ?></p>
-            <p class="stat-label">Today's Patients</p>
+        <div class="stat-card">
+            <p class="stat-number green"><?= $stats['with_doctor'] ?? 0 ?></p>
+            <p class="stat-label">With Doctor</p>
         </div>
-        
-        <div class="stat-card-mini">
-            <div class="stat-icon">🏥</div>
-            <p class="stat-number orange"><?= $with_branch ?></p>
-            <p class="stat-label">With Branch Assigned</p>
+        <div class="stat-card">
+            <p class="stat-number orange"><?= $stats['without_doctor'] ?? 0 ?></p>
+            <p class="stat-label">No Doctor</p>
         </div>
-        
+        <div class="stat-card">
+            <p class="stat-number purple"><?= $stats['new_patients'] ?? 0 ?></p>
+            <p class="stat-label">New (7 days)</p>
+        </div>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- TIME PERIOD FILTERS -->
-    <!-- ================================================================ -->
-    <div class="period-filters">
-        <a href="?period=all&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-           class="period-btn <?= $time_period === 'all' ? 'active' : '' ?>">
-            <i class="fas fa-globe"></i> All
-        </a>
-        <a href="?period=today&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-           class="period-btn <?= $time_period === 'today' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-day"></i> Today
-        </a>
-        <a href="?period=week&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-           class="period-btn <?= $time_period === 'week' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-week"></i> Week
-        </a>
-        <a href="?period=month&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-           class="period-btn <?= $time_period === 'month' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-alt"></i> Month
-        </a>
-        <a href="?period=3months&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-           class="period-btn <?= $time_period === '3months' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-alt"></i> 3 Months
-        </a>
-        <a href="?period=6months&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-           class="period-btn <?= $time_period === '6months' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-alt"></i> 6 Months
-        </a>
-        <a href="?period=year&branch=<?= $selected_branch_id ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-           class="period-btn <?= $time_period === 'year' ? 'active' : '' ?>">
-            <i class="fas fa-calendar-alt"></i> 1 Year
-        </a>
-    </div>
-
-    <!-- ================================================================ -->
-    <!-- PATIENTS LIST -->
-    <!-- ================================================================ -->
-    <div class="card">
+    <!-- TABLE CARD -->
+    <div class="table-card animate-fade-in-up" style="animation-delay:0.1s;">
         <div class="card-header">
-            <h3 class="card-title">
-                <i class="fas fa-list title-blue mr-2"></i>
-                Patients List
-                <span class="text-sm font-normal text-gray-400">(<?= $total_patients ?> patients)</span>
-            </h3>
-            <div class="flex gap-2">
-                <?php if (!empty($search)): ?>
-                    <a href="patients.php?period=<?= $time_period ?>&branch=<?= $selected_branch_id ?>" class="btn btn-outline btn-sm">
-                        <i class="fas fa-times"></i> Clear Search
-                    </a>
-                <?php endif; ?>
-            </div>
-        </div>
-        
-        <!-- Table Header with Search and Scroll Controls -->
-        <div class="table-header-wrapper">
-            <div class="search-box">
-                <i class="fas fa-search search-icon"></i>
-                <input type="text" id="tableSearch" placeholder="Filter patients in table..." onkeyup="filterTable()">
-            </div>
-            
-            <div class="search-info">
-                Showing <strong id="visibleCount"><?= count($patients) ?></strong> of <strong id="totalCount"><?= $total_patients ?></strong> patients
-            </div>
-            
-            <div class="scroll-controls">
-                <button class="scroll-btn-header" id="scrollLeftBtn" onclick="scrollTable('left')" title="Scroll Left">
-                    <i class="fas fa-chevron-left"></i>
-                </button>
-                <span class="scroll-indicator">
-                    <i class="fas fa-arrows-alt-h"></i>
+            <div class="card-title">
+                <i class="fas fa-list"></i> Patient List
+                <span id="patientCountBadge" style="background:var(--primary-bg);color:var(--primary);padding:2px 12px;border-radius:20px;font-size:0.7rem;font-weight:500;">
+                    <?= $total_patients ?> patients
                 </span>
-                <button class="scroll-btn-header" id="scrollRightBtn" onclick="scrollTable('right')" title="Scroll Right">
-                    <i class="fas fa-chevron-right"></i>
-                </button>
             </div>
         </div>
         
-        <!-- Table -->
-        <div class="table-container">
+        <!-- COMPACT FILTER BAR -->
+        <div class="filter-bar">
+            <div class="filter-bar-left">
+                <div class="auto-filter-loading" id="filterLoading">
+                    <div class="spinner-small"></div>
+                    <span>Filtering...</span>
+                </div>
+                
+                <!-- ✅ SMALL SEARCH INPUT -->
+                <div class="search-input-wrapper">
+                    <i class="fas fa-search"></i>
+                    <input type="text" 
+                           id="searchFilter" 
+                           class="filter-input" 
+                           placeholder="Search..." 
+                           value="<?= htmlspecialchars($search) ?>"
+                           oninput="autoFilter()">
+                </div>
+                
+                <select id="filterSelect" class="filter-input" onchange="autoFilter()">
+                    <option value="all" <?= $filter === 'all' ? 'selected' : '' ?>>👥 All</option>
+                    <option value="new" <?= $filter === 'new' ? 'selected' : '' ?>>🆕 New (7d)</option>
+                    <option value="with_doctor" <?= $filter === 'with_doctor' ? 'selected' : '' ?>>✅ With Doctor</option>
+                    <option value="without_doctor" <?= $filter === 'without_doctor' ? 'selected' : '' ?>>⚠️ No Doctor</option>
+                    <option value="no_visit" <?= $filter === 'no_visit' ? 'selected' : '' ?>>📋 No Visit</option>
+                </select>
+                
+                <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="clear-filter-btn <?= (!empty($search) || $filter !== 'all') ? 'show' : '' ?>" id="clearFilterBtn">
+                    <i class="fas fa-times"></i> Clear
+                </a>
+                
+                <span class="filter-status" id="filterStatus">
+                    <i class="fas fa-bolt"></i>
+                    <span id="filterStatusText">Auto-filter</span>
+                </span>
+            </div>
+            
+            <!-- SCROLL BUTTONS -->
+            <div class="filter-bar-right">
+                <div class="scroll-controls">
+                    <button type="button" class="scroll-btn-header" id="scrollLeftBtn" onclick="scrollTable('left')" title="Scroll Left">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    <button type="button" class="scroll-btn-header" id="scrollRightBtn" onclick="scrollTable('right')" title="Scroll Right">
+                        <i class="fas fa-chevron-right"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PATIENT TABLE -->
+        <div id="tableContainer" style="overflow:hidden;">
+            <?php if (!empty($patients) && count($patients) > 0): ?>
             <div class="table-scroll-wrapper" id="tableScrollWrapper">
-                <table class="data-table table-blue w-full" id="patientsTable">
+                <table class="patient-table" id="patientsTable">
                     <thead>
                         <tr>
-                            <th style="width: 50px; min-width: 50px;">#</th>
-                            <th style="min-width: 120px;">Patient ID</th>
-                            <th style="min-width: 150px;">Full Name</th>
-                            <th style="min-width: 120px;">Phone</th>
-                            <th style="min-width: 180px;">Email</th>
-                            <th style="min-width: 120px;">Branch</th>
-                            <th style="width: 80px; min-width: 80px;">Visits</th>
-                            <th style="width: 80px; min-width: 80px;">Bills</th>
-                            <th style="min-width: 110px;">Registered</th>
-                            <th style="min-width: 200px;">Actions</th>
+                            <th class="col-sno">#</th>
+                            <th><i class="fas fa-user mr-1"></i> Patient</th>
+                            <th><i class="fas fa-id-card mr-1"></i> Patient ID</th>
+                            <th><i class="fas fa-phone mr-1"></i> Contact</th>
+                            <th><i class="fas fa-store-alt mr-1"></i> Branch</th>
+                            <th><i class="fas fa-calendar mr-1"></i> Days</th>
+                            <th><i class="fas fa-user-md mr-1"></i> Doctor</th>
+                            <th><i class="fas fa-notes-medical mr-1"></i> Visits</th>
+                            <!-- ✅ REGISTERED BY COLUMN -->
+                            <th><i class="fas fa-user-plus mr-1"></i> Registered By</th>
+                            <th><i class="fas fa-circle mr-1"></i> Status</th>
+                            <th style="min-width:230px;"><i class="fas fa-cog mr-1"></i> Actions</th>
                         </tr>
                     </thead>
-                    <tbody id="tableBody">
-                        <?php if (count($patients) > 0): ?>
-                            <?php $i = $offset + 1; foreach ($patients as $patient): ?>
-                                <tr>
-                                    <td class="font-bold text-blue-600 dark:text-blue-400"><?= $i++ ?></td>
-                                    <td class="font-mono text-xs font-bold text-blue-600 dark:text-blue-400">
-                                        <?= htmlspecialchars($patient['patient_id']) ?>
-                                    </td>
-                                    <td class="font-semibold"><?= htmlspecialchars($patient['full_name']) ?></td>
-                                    <td><?= htmlspecialchars($patient['phone'] ?? 'N/A') ?></td>
-                                    <td><?= htmlspecialchars($patient['email'] ?? 'N/A') ?></td>
-                                    <td>
-                                        <span class="badge badge-blue">
-                                            <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>
-                                        </span>
-                                    </td>
-                                    <td class="text-center">
-                                        <span class="badge badge-green">
-                                            <?= $patient['total_visits'] ?? 0 ?>
-                                        </span>
-                                    </td>
-                                    <td class="text-center">
-                                        <span class="badge badge-blue">
-                                            <?= $patient['total_bills'] ?? 0 ?>
-                                        </span>
-                                    </td>
-                                    <td class="text-xs text-gray-500 dark:text-gray-400">
-                                        <?= date('M d, Y', strtotime($patient['created_at'])) ?>
-                                    </td>
-                                    <td>
-                                        <div class="action-buttons">
-                                            <a href="patient_details.php?id=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                                               class="btn-action btn-view" title="View Patient">
-                                                <i class="fas fa-eye"></i> View
-                                            </a>
-                                            <a href="edit_patient.php?id=<?= $patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
-                                               class="btn-action btn-edit" title="Edit Patient">
-                                                <i class="fas fa-edit"></i> Edit
-                                            </a>
-                                            <a href="?delete=<?= $patient['id'] ?>&page=<?= $page ?>&period=<?= $time_period ?>&branch=<?= urlencode($selected_branch_id) ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-                                               class="btn-action btn-delete" 
-                                               onclick="return confirmDelete('<?= htmlspecialchars($patient['full_name']) ?>', '<?= htmlspecialchars($patient['patient_id']) ?>')" 
-                                               title="Delete Patient">
-                                                <i class="fas fa-trash"></i> Delete
-                                            </a>
-                                        </div>
-                                    </td>
-                                </tr>
-                            <?php endforeach; ?>
-                        <?php else: ?>
-                            <tr>
-                                <td colspan="10" class="text-center py-8 text-gray-400">
-                                    <i class="fas fa-user-injured text-4xl block mb-3" style="color: #0B5ED7;"></i>
-                                    <p class="text-lg font-medium" style="color: #1E293B; dark:text-white;">
-                                        <?= !empty($search) ? 'No patients found matching "' . htmlspecialchars($search) . '"' : 'No patients found' ?>
-                                    </p>
-                                    <p class="text-sm">
-                                        <?= !empty($search) ? 'Try a different search term' : 'Click "Add Patient" to create one' ?>
-                                    </p>
+                    <tbody id="patientTableBody">
+                        <?php $counter = 1; ?>
+                        <?php foreach ($patients as $patient): 
+                            $patient_days = isset($patient['patient_days']) ? (int)$patient['patient_days'] : 0;
+                            $days_text = $patient_days > 0 ? '<span class="days-badge-blue">📅 ' . $patient_days . ' days</span>' : '<span class="days-badge-blue new">📅 New</span>';
+                            
+                            $status_class = $patient['patient_status'] ?? 'existing';
+                            $status_text = $status_class === 'new' ? 'New' : 'Existing';
+                            
+                            if (!empty($patient['assigned_doctor_name'])) {
+                                $doctor_status = '<span class="status-badge with_doctor">✅ Dr. ' . htmlspecialchars($patient['assigned_doctor_name']) . '</span>';
+                            } else {
+                                $doctor_status = '<span class="status-badge without_doctor">⚠️ No Doctor</span>';
+                            }
+                            
+                            $appointment_count = $patient['active_appointments'] ?? 0;
+                            
+                            // ✅ Registered By info
+                            $reg_by_name = $patient['registered_by_display'] ?? 'System';
+                            $reg_by_role = $patient['registered_by_role'] ?? 'reception';
+                            
+                            // Icon & class kulingana na role
+                            $reg_icon = 'fa-user';
+                            $reg_class = '';
+                            if ($reg_by_role === 'admin') {
+                                $reg_icon = 'fa-user-shield';
+                                $reg_class = 'role-admin';
+                            } elseif ($reg_by_role === 'reception') {
+                                $reg_icon = 'fa-user-tie';
+                                $reg_class = 'role-reception';
+                            } elseif ($reg_by_role === 'doctor') {
+                                $reg_icon = 'fa-user-md';
+                            }
+                        ?>
+                            <tr class="patient-row" 
+                                data-name="<?= strtolower(htmlspecialchars($patient['full_name'] ?? '')) ?>"
+                                data-id="<?= strtolower(htmlspecialchars($patient['patient_id'] ?? '')) ?>"
+                                data-phone="<?= strtolower(htmlspecialchars($patient['phone'] ?? '')) ?>"
+                                data-days="<?= $patient_days ?>"
+                                data-has-doctor="<?= !empty($patient['assigned_doctor_name']) ? '1' : '0' ?>"
+                                data-visits="<?= $patient['total_visits'] ?? 0 ?>"
+                                data-status="<?= $status_class ?>">
+                                <td class="col-sno"><?= $counter++ ?></td>
+                                <td>
+                                    <a href="patient_details.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                                       class="patient-name-link">
+                                        <?= htmlspecialchars($patient['full_name'] ?? 'Unknown') ?>
+                                    </a>
+                                </td>
+                                <td>
+                                    <span class="patient-id-text"><?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?></span>
+                                </td>
+                                <td>
+                                    <?php if (!empty($patient['phone'])): ?>
+                                        <a href="tel:<?= htmlspecialchars($patient['phone']) ?>" class="patient-contact-link">
+                                            <?= htmlspecialchars($patient['phone']) ?>
+                                        </a>
+                                    <?php else: ?>
+                                        <span style="color:var(--text-muted);">N/A</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <span class="branch-badge-display">
+                                        🏥 <?= htmlspecialchars($patient['branch_name'] ?? 'N/A') ?>
+                                    </span>
+                                </td>
+                                <td><?= $days_text ?></td>
+                                <td><?= $doctor_status ?></td>
+                                <td>
+                                    <span style="font-weight:700;color:#0F172A;font-size:0.9rem;"><?= $patient['total_visits'] ?? 0 ?></span>
+                                    <?php if (!empty($patient['latest_visit']['status'])): ?>
+                                        <span style="font-size:0.7rem;color:var(--text-muted);display:block;"><?= ucfirst($patient['latest_visit']['status']) ?></span>
+                                    <?php endif; ?>
+                                </td>
+                                <!-- ✅ REGISTERED BY CELL -->
+                                <td>
+                                    <span class="registered-by-badge <?= $reg_class ?>">
+                                        <i class="fas <?= $reg_icon ?>"></i>
+                                        <?= htmlspecialchars($reg_by_name) ?>
+                                    </span>
+                                </td>
+                                <td>
+                                    <span class="status-badge <?= $status_class ?>"><?= $status_text ?></span>
+                                    <?php if ($appointment_count > 0): ?>
+                                        <span style="font-size:0.7rem;color:var(--purple);display:block;font-weight:600;">📅 <?= $appointment_count ?> appt(s)</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <div class="action-buttons-group">
+                                        <a href="patient_details.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                                           class="btn btn-primary" title="View Patient">
+                                            <i class="fas fa-eye"></i> View
+                                        </a>
+                                        
+                                        <a href="edit_patient.php?id=<?= (int)$patient['id'] ?>&branch=<?= urlencode($selected_branch_id) ?>" 
+                                           class="btn btn-success" title="Edit Patient">
+                                            <i class="fas fa-edit"></i> Edit
+                                        </a>
+                                        
+                                        <button type="button" 
+                                                class="btn btn-danger" 
+                                                onclick="confirmDelete(<?= (int)$patient['id'] ?>, '<?= htmlspecialchars(addslashes($patient['full_name'])) ?>', '<?= htmlspecialchars($patient['patient_id']) ?>')" 
+                                                title="Delete Patient">
+                                            <i class="fas fa-trash"></i> Delete
+                                        </button>
+                                    </div>
                                 </td>
                             </tr>
-                        <?php endif; ?>
+                        <?php endforeach; ?>
                     </tbody>
                 </table>
             </div>
-        </div>
-        
-        <!-- Pagination -->
-        <?php if ($total_pages > 1): ?>
-            <div class="flex flex-wrap justify-between items-center gap-3 mt-4 pt-3 border-t border-gray-200 dark:border-gray-700">
-                <div class="text-sm text-gray-500 dark:text-gray-400">
-                    Showing <?= $offset + 1 ?> - <?= min($offset + $per_page, $total_patients) ?> of <?= $total_patients ?> patients
-                </div>
-                
-                <div class="pagination">
-                    <?php if ($page > 1): ?>
-                        <a href="?page=<?= $page - 1 ?>&period=<?= $time_period ?>&branch=<?= urlencode($selected_branch_id) ?><?= $search ? '&search='.urlencode($search) : '' ?>" class="page-link">
-                            <i class="fas fa-chevron-left"></i>
-                        </a>
-                    <?php else: ?>
-                        <span class="page-link disabled">
-                            <i class="fas fa-chevron-left"></i>
-                        </span>
-                    <?php endif; ?>
-                    
-                    <?php for ($p = 1; $p <= $total_pages; $p++): ?>
-                        <a href="?page=<?= $p ?>&period=<?= $time_period ?>&branch=<?= urlencode($selected_branch_id) ?><?= $search ? '&search='.urlencode($search) : '' ?>" 
-                           class="page-link <?= $p === $page ? 'active' : '' ?>">
-                            <?= $p ?>
-                        </a>
-                    <?php endfor; ?>
-                    
-                    <?php if ($page < $total_pages): ?>
-                        <a href="?page=<?= $page + 1 ?>&period=<?= $time_period ?>&branch=<?= urlencode($selected_branch_id) ?><?= $search ? '&search='.urlencode($search) : '' ?>" class="page-link">
-                            <i class="fas fa-chevron-right"></i>
-                        </a>
-                    <?php else: ?>
-                        <span class="page-link disabled">
-                            <i class="fas fa-chevron-right"></i>
-                        </span>
-                    <?php endif; ?>
-                </div>
+            
+            <!-- NO RESULTS -->
+            <div id="noResultsMessage" style="display:none;text-align:center;padding:40px 20px;">
+                <i class="fas fa-search text-4xl text-gray-300 block mb-3"></i>
+                <p style="color:var(--text-secondary);font-size:0.9rem;">No patients match your search</p>
+                <p style="color:var(--text-muted);font-size:0.75rem;">Try adjusting your filter criteria</p>
+                <button onclick="clearFilter()" class="btn btn-primary mt-3">
+                    <i class="fas fa-times"></i> Clear Filter
+                </button>
             </div>
-        <?php endif; ?>
+            
+            <?php else: ?>
+            <div style="text-align:center;padding:40px 20px;">
+                <i class="fas fa-users" style="font-size:2rem;color:var(--border-color);display:block;margin-bottom:8px;"></i>
+                <p style="color:var(--text-secondary);">No patients found</p>
+                <?php if (!empty($search)): ?>
+                    <p style="color:var(--text-muted);font-size:0.85rem;">Try adjusting your search criteria</p>
+                <?php endif; ?>
+                <a href="patients.php?branch=<?= urlencode($selected_branch_id) ?>" class="btn btn-primary mt-3">Clear Filters</a>
+            </div>
+            <?php endif; ?>
+        </div>
     </div>
 
-    <!-- Footer -->
-    <footer class="footer">
+    <!-- FOOTER -->
+    <footer class="footer-modern">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
-            <span class="text-gray-300 mx-2">|</span>
-            Patients Management
-            <span class="text-gray-300 mx-2">|</span>
+            <span style="color:var(--gray-300);margin:0 8px;">|</span>
+            Patients Management (Admin)
+            <span style="color:var(--gray-300);margin:0 8px;">|</span>
+            <span id="footerTimestamp"><?= date('h:i:s A') ?></span>
+            <span style="color:var(--gray-300);margin:0 8px;">|</span>
             &copy; <?= date('Y') ?> All rights reserved
         </p>
     </footer>
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -1313,20 +1534,281 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
+<!-- DELETE MODAL -->
+<div id="deleteModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.7);z-index:10000;justify-content:center;align-items:center;padding:20px;">
+    <div style="background:var(--bg-card);border-radius:16px;max-width:550px;width:100%;padding:24px;border:2px solid var(--border-color);box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="text-align:center;margin-bottom:20px;">
+            <div style="width:70px;height:70px;border-radius:50%;background:var(--danger-bg);color:var(--danger);display:flex;align-items:center;justify-content:center;margin:0 auto 12px;font-size:2rem;">
+                <i class="fas fa-exclamation-triangle"></i>
+            </div>
+            <h3 style="font-size:1.3rem;font-weight:700;color:var(--danger);margin-bottom:6px;">
+                ⚠️ DELETE PATIENT?
+            </h3>
+            <p style="font-size:0.85rem;color:var(--text-secondary);">
+                This action <strong>CANNOT</strong> be undone!
+            </p>
+        </div>
+        
+        <div style="background:var(--danger-bg);border:2px solid var(--danger);border-radius:12px;padding:14px 18px;margin-bottom:16px;">
+            <p style="font-size:0.85rem;color:var(--danger-dark);margin:0 0 8px 0;font-weight:600;">
+                Patient to delete:
+            </p>
+            <p style="font-size:1rem;color:var(--danger-dark);margin:0;font-weight:700;" id="deletePatientName">-</p>
+            <p style="font-size:0.8rem;color:var(--danger-dark);margin:4px 0 0 0;font-family:monospace;" id="deletePatientId">-</p>
+        </div>
+        
+        <div style="background:var(--warning-bg);border:2px solid var(--warning);border-radius:12px;padding:14px 18px;margin-bottom:16px;">
+            <p style="font-size:0.8rem;color:var(--warning);margin:0 0 8px 0;font-weight:600;">
+                🗑️ This will DELETE ALL related data:
+            </p>
+            <ul style="font-size:0.75rem;color:var(--warning);margin:0;padding-left:20px;line-height:1.8;">
+                <li>💰 Bills, Payments & Receipts</li>
+                <li>📋 Visits & Appointments</li>
+                <li>💊 Prescriptions & Medications</li>
+                <li>🔬 Lab Tests & Results</li>
+                <li>📊 Vital Signs</li>
+                <li>🔄 Referrals</li>
+                <li>💳 OTC Sales</li>
+                <li>📝 Patient Documents</li>
+                <li>📦 Stock Movements</li>
+                <li>📧 Notifications</li>
+            </ul>
+        </div>
+        
+        <div style="background:var(--primary-bg);border:2px solid var(--primary);border-radius:12px;padding:14px 18px;margin-bottom:20px;">
+            <p style="font-size:0.8rem;color:var(--primary);margin:0;font-weight:600;">
+                💡 <strong>Revenue Adjustment:</strong>
+            </p>
+            <p style="font-size:0.75rem;color:var(--primary);margin:4px 0 0 0;">
+                All payments made by this patient will be <strong>subtracted</strong> from Total Revenue automatically.
+            </p>
+        </div>
+        
+        <div style="display:flex;gap:10px;">
+            <button type="button" onclick="closeDeleteModal()" style="flex:1;padding:12px 20px;border-radius:10px;border:2px solid var(--border-color);background:transparent;color:var(--text-secondary);font-weight:600;font-size:0.85rem;cursor:pointer;">
+                <i class="fas fa-times"></i> Cancel
+            </button>
+            <a id="confirmDeleteBtn" href="#" style="flex:1;padding:12px 20px;border-radius:10px;border:none;background:var(--danger);color:white;font-weight:700;font-size:0.85rem;cursor:pointer;text-align:center;text-decoration:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;">
+                <i class="fas fa-trash"></i> YES, DELETE
+            </a>
+        </div>
+    </div>
+</div>
+
 <script>
-    // ================================================================
-    // DARK MODE
-    // ================================================================
+    var filterTimeout = null;
+
+    function autoFilter() {
+        var searchValue = document.getElementById('searchFilter').value;
+        var filterValue = document.getElementById('filterSelect').value;
+        
+        var loading = document.getElementById('filterLoading');
+        if (loading) loading.classList.add('show');
+        
+        var clearBtn = document.getElementById('clearFilterBtn');
+        if (clearBtn) {
+            if (searchValue.trim() !== '' || filterValue !== 'all') {
+                clearBtn.classList.add('show');
+            } else {
+                clearBtn.classList.remove('show');
+            }
+        }
+        
+        if (filterTimeout) clearTimeout(filterTimeout);
+        
+        filterTimeout = setTimeout(function() {
+            filterTableRows(searchValue, filterValue);
+            setTimeout(function() {
+                if (loading) loading.classList.remove('show');
+            }, 300);
+        }, 300);
+    }
+
+    function filterTableRows(searchValue, filterValue) {
+        var rows = document.querySelectorAll('.patient-row');
+        var visibleCount = 0;
+        var searchLower = searchValue.toLowerCase().trim();
+        
+        rows.forEach(function(row) {
+            var name = row.getAttribute('data-name') || '';
+            var id = row.getAttribute('data-id') || '';
+            var phone = row.getAttribute('data-phone') || '';
+            var days = parseInt(row.getAttribute('data-days')) || 0;
+            var hasDoctor = row.getAttribute('data-has-doctor') === '1';
+            var visits = parseInt(row.getAttribute('data-visits')) || 0;
+            
+            var show = true;
+            
+            if (searchLower !== '') {
+                var matchesSearch = name.includes(searchLower) || id.includes(searchLower) || phone.includes(searchLower);
+                if (!matchesSearch) show = false;
+            }
+            
+            if (filterValue === 'new' && days > 7) show = false;
+            if (filterValue === 'with_doctor' && !hasDoctor) show = false;
+            if (filterValue === 'without_doctor' && hasDoctor) show = false;
+            if (filterValue === 'no_visit' && visits > 0) show = false;
+            
+            if (show) { row.style.display = ''; visibleCount++; }
+            else { row.style.display = 'none'; }
+        });
+        
+        updateRowNumbers();
+        
+        var countBadge = document.getElementById('patientCountBadge');
+        if (countBadge) countBadge.textContent = visibleCount + ' patient' + (visibleCount !== 1 ? 's' : '');
+        
+        var statusText = document.getElementById('filterStatusText');
+        if (statusText) {
+            if (searchLower !== '' || filterValue !== 'all') {
+                statusText.textContent = 'Filtered: ' + visibleCount;
+            } else {
+                statusText.textContent = 'Auto-filter';
+            }
+        }
+        
+        var noResults = document.getElementById('noResultsMessage');
+        var tableWrapper = document.getElementById('tableScrollWrapper');
+        
+        if (visibleCount === 0 && rows.length > 0) {
+            if (noResults) noResults.style.display = 'block';
+            if (tableWrapper) tableWrapper.style.display = 'none';
+        } else {
+            if (noResults) noResults.style.display = 'none';
+            if (tableWrapper) tableWrapper.style.display = 'block';
+        }
+        
+        setTimeout(updateScrollButtons, 150);
+    }
+
+    function updateRowNumbers() {
+        var rows = document.querySelectorAll('.patient-row');
+        var counter = 1;
+        rows.forEach(function(row) {
+            if (row.style.display !== 'none') {
+                var snoCell = row.querySelector('.col-sno');
+                if (snoCell) snoCell.textContent = counter;
+                counter++;
+            }
+        });
+    }
+
+    function clearFilter() {
+        document.getElementById('searchFilter').value = '';
+        document.getElementById('filterSelect').value = 'all';
+        autoFilter();
+        
+        var url = new URL(window.location.href);
+        url.searchParams.delete('search');
+        url.searchParams.delete('filter');
+        window.history.replaceState({}, '', url.toString());
+        
+        showToast('🔄 Cleared', 'Filters have been cleared', 'info');
+    }
+
+    function scrollTable(direction) {
+        var wrapper = document.getElementById('tableScrollWrapper');
+        if (!wrapper) return;
+        var scrollAmount = 400;
+        
+        if (direction === 'left') {
+            wrapper.scrollLeft -= scrollAmount;
+        } else {
+            wrapper.scrollLeft += scrollAmount;
+        }
+        
+        setTimeout(updateScrollButtons, 350);
+    }
+
+    function updateScrollButtons() {
+        var wrapper = document.getElementById('tableScrollWrapper');
+        var leftBtn = document.getElementById('scrollLeftBtn');
+        var rightBtn = document.getElementById('scrollRightBtn');
+        
+        if (!wrapper || !leftBtn || !rightBtn) return;
+        
+        var maxScroll = wrapper.scrollWidth - wrapper.clientWidth;
+        
+        leftBtn.disabled = wrapper.scrollLeft <= 10;
+        rightBtn.disabled = wrapper.scrollLeft >= maxScroll - 10 || maxScroll <= 0;
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var wrapper = document.getElementById('tableScrollWrapper');
+        if (wrapper) {
+            wrapper.addEventListener('scroll', updateScrollButtons);
+            setTimeout(updateScrollButtons, 300);
+        }
+        
+        window.addEventListener('resize', function() {
+            setTimeout(updateScrollButtons, 200);
+        });
+    });
+
+    function confirmDelete(patientId, patientName, patientNumber) {
+        document.getElementById('deletePatientName').textContent = patientName;
+        document.getElementById('deletePatientId').textContent = 'ID: ' + patientNumber;
+        
+        var branchParam = '<?= urlencode($selected_branch_id) ?>';
+        document.getElementById('confirmDeleteBtn').href = 'patients.php?branch=' + branchParam + '&delete=' + patientId;
+        
+        document.getElementById('deleteModal').style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+    }
+
+    function closeDeleteModal() {
+        document.getElementById('deleteModal').style.display = 'none';
+        document.body.style.overflow = '';
+    }
+
+    document.getElementById('deleteModal')?.addEventListener('click', function(e) {
+        if (e.target === this) closeDeleteModal();
+    });
+
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') closeDeleteModal();
+        
+        if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+            e.preventDefault();
+            document.getElementById('searchFilter').focus();
+        }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+        var searchValue = document.getElementById('searchFilter').value;
+        var filterValue = document.getElementById('filterSelect').value;
+        
+        if (searchValue !== '' || filterValue !== 'all') {
+            filterTableRows(searchValue, filterValue);
+        }
+        
+        if (searchValue !== '') {
+            document.getElementById('searchFilter').focus();
+        }
+    });
+
+    function updateClock() {
+        var now = new Date();
+        var dateStr = now.toLocaleDateString('en-US', {
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        var timeStr = now.toLocaleTimeString('en-US', {
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
+        });
+        var el = document.getElementById('clockDisplay');
+        if (el) el.textContent = dateStr + ' • ' + timeStr;
+        var ft = document.getElementById('footerTimestamp');
+        if (ft) ft.textContent = timeStr;
+    }
+    setInterval(updateClock, 1000);
+    updateClock();
+
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
     var htmlElement = document.documentElement;
     
-    var savedDarkMode = localStorage.getItem('darkMode');
-    if (savedDarkMode === 'true') {
+    if (localStorage.getItem('darkMode') === 'true') {
         htmlElement.setAttribute('data-theme', 'dark');
         darkIcon.className = 'fas fa-sun';
         darkText.textContent = 'Light';
@@ -1349,136 +1831,68 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
-    var sidebar = document.getElementById('sidebar');
-    var sidebarToggle = document.getElementById('sidebarToggle');
-
-    // ================================================================
-    // SIDEBAR TOGGLE
-    // ================================================================
-    sidebarToggle?.addEventListener('click', function() {
-        sidebar.classList.toggle('open');
-    });
-    
-    document.addEventListener('click', function(e) {
-        if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
-                sidebar.classList.remove('open');
-            }
+    (function() {
+        function updateToggleVisibility() {
+            var btn = document.getElementById('sidebarToggle');
+            if (!btn) return;
+            btn.style.display = window.innerWidth <= 1024 ? 'flex' : 'none';
         }
-    });
-
-    // ================================================================
-    // TABLE SEARCH FILTER
-    // ================================================================
-    function filterTable() {
-        var input = document.getElementById('tableSearch');
-        var filter = input.value.toLowerCase();
-        var table = document.getElementById('patientsTable');
-        var rows = table.getElementsByTagName('tr');
-        var visibleCount = 0;
+        updateToggleVisibility();
+        window.addEventListener('resize', updateToggleVisibility);
         
-        for (var i = 1; i < rows.length; i++) {
-            var row = rows[i];
-            var text = row.textContent.toLowerCase();
-            if (text.includes(filter)) {
-                row.style.display = '';
-                visibleCount++;
-            } else {
-                row.style.display = 'none';
-            }
+        var btn = document.getElementById('sidebarToggle');
+        if (btn && !btn.dataset.wired) {
+            btn.dataset.wired = 'true';
+            btn.addEventListener('click', function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                var sidebar = document.getElementById('sidebar');
+                var overlay = document.getElementById('sidebarOverlay');
+                if (!sidebar) return;
+                var isOpen = sidebar.classList.contains('open');
+                if (isOpen) {
+                    sidebar.classList.remove('open');
+                    if (overlay) { overlay.classList.remove('active'); overlay.style.display = 'none'; }
+                    document.body.classList.remove('sidebar-open');
+                    document.body.style.overflow = '';
+                    document.body.style.position = '';
+                } else {
+                    sidebar.classList.add('open');
+                    if (overlay) { overlay.classList.add('active'); overlay.style.display = 'block'; }
+                    document.body.classList.add('sidebar-open');
+                    document.body.style.overflow = 'hidden';
+                    document.body.style.position = 'fixed';
+                }
+            });
         }
-        
-        document.getElementById('visibleCount').textContent = visibleCount;
-    }
+    })();
 
-    // ================================================================
-    // TABLE SCROLL
-    // ================================================================
-    function scrollTable(direction) {
-        var wrapper = document.getElementById('tableScrollWrapper');
-        var scrollAmount = 350;
-        
-        if (direction === 'left') {
-            wrapper.scrollLeft -= scrollAmount;
-        } else {
-            wrapper.scrollLeft += scrollAmount;
-        }
-        
-        updateScrollButtons();
-    }
-    
-    function updateScrollButtons() {
-        var wrapper = document.getElementById('tableScrollWrapper');
-        var leftBtn = document.getElementById('scrollLeftBtn');
-        var rightBtn = document.getElementById('scrollRightBtn');
-        
-        if (wrapper.scrollLeft <= 10) {
-            leftBtn.disabled = true;
-        } else {
-            leftBtn.disabled = false;
-        }
-        
-        if (wrapper.scrollLeft >= wrapper.scrollWidth - wrapper.clientWidth - 10) {
-            rightBtn.disabled = true;
-        } else {
-            rightBtn.disabled = false;
-        }
-    }
-    
-    document.getElementById('tableScrollWrapper')?.addEventListener('scroll', updateScrollButtons);
-    
-    window.addEventListener('load', function() {
-        setTimeout(updateScrollButtons, 200);
-    });
-    
-    window.addEventListener('resize', updateScrollButtons);
-
-    // ================================================================
-    // CONFIRM DELETE - FULL WARNING
-    // ================================================================
-    function confirmDelete(patientName, patientId) {
-        return confirm(
-            '⚠️⚠️⚠️ WARNING: THIS ACTION CANNOT BE UNDONE! ⚠️⚠️⚠️\n\n' +
-            'Are you sure you want to permanently delete patient:\n' +
-            '┌─────────────────────────────────────────────┐\n' +
-            '│ Name: ' + patientName + '\n' +
-            '│ ID: ' + patientId + '\n' +
-            '└─────────────────────────────────────────────┘\n\n' +
-            'This will DELETE ALL related data from:\n' +
-            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' +
-            '📋 Visits & Appointments\n' +
-            '💰 Bills, Payments & Receipts\n' +
-            '💊 Prescriptions & Medications\n' +
-            '🔬 Lab Tests & Results\n' +
-            '📝 Patient Documents\n' +
-            '💳 OTC Sales\n' +
-            '📊 Vital Signs\n' +
-            '🔄 Referrals\n' +
-            '📧 Notifications\n' +
-            '📜 Activity Logs\n' +
-            '📦 Stock Movements\n' +
-            '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n' +
-            'Click OK to confirm permanent deletion.\n' +
-            'Click Cancel to abort.'
-        );
-    }
-
-    // ================================================================
-    // BRANCH SWITCHER
-    // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
-        url.searchParams.delete('page');
         window.location.href = url.toString();
     }
 
-    // ================================================================
-    // TOAST
-    // ================================================================
+    var searchBtn = document.getElementById('searchBtn');
+    var searchInput = document.getElementById('searchInput');
+    
+    function performTopSearch() {
+        var query = searchInput.value.trim();
+        if (query.length > 0) {
+            document.getElementById('searchFilter').value = query;
+            autoFilter();
+            
+            var url = new URL(window.location.href);
+            url.searchParams.set('search', query);
+            window.history.replaceState({}, '', url.toString());
+        }
+    }
+    
+    searchBtn?.addEventListener('click', performTopSearch);
+    searchInput?.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') performTopSearch();
+    });
+
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -1488,8 +1902,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         toastTitle.textContent = title;
         toastMessage.textContent = message;
         toast.style.display = 'flex';
-        
         toast.classList.add('show');
+        
         clearTimeout(toast.timeout);
         toast.timeout = setTimeout(function() {
             toast.classList.remove('show');
@@ -1497,32 +1911,16 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // DATE & TIME
-    // ================================================================
-    function updateDateTime() {
-        var now = new Date();
-        var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
-        });
-        var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
-        });
-        var el = document.getElementById('currentDateTime');
-        if (el) {
-            el.textContent = dateStr + ' • ' + timeStr;
-        }
-    }
-    updateDateTime();
-    setInterval(updateDateTime, 1000);
+    <?php if ($success === 'deleted'): ?>
+        showToast('🗑️ Deleted', 'Patient and all related data have been deleted', 'success');
+    <?php endif; ?>
 
-    console.log('%c🏥 Braick Dispensary - Patients Management', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c👤 Total Patients: <?= $total_all ?>', 'font-size:13px; color:#059669;');
-    console.log('%c📅 Today\'s Patients: <?= $today_patients ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c🗑️ DELETE PATIENT - Full deletion from tables', 'font-size:13px; color:#EF4444;');
-    console.log('%c📊 Tables: patients, visits, bills, payments, prescriptions, lab_tests', 'font-size:13px; color:#34D399;');
-    console.log('%c🔒 Login protection: ACTIVE', 'font-size:13px; color:#34D399;');
+    console.log('%c👑 Braick - Admin Patients', 'font-size:18px; font-weight:bold; color:#2563EB;');
+    console.log('%c✅ Majina: BLACK color text', 'font-size:13px; color:#0F172A; font-weight:bold;');
+    console.log('%c✅ Table: LARGER (padding 14px, font 0.9-0.95rem)', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ Search bar: SMALL only (140px)', 'font-size:13px; color:#D97706;');
+    console.log('%c✅ Scroll buttons <> enabled', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ REGISTERED BY column added', 'font-size:13px; color:#7C3AED; font-weight:bold;');
 </script>
 
 </body>
