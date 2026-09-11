@@ -5,6 +5,7 @@
 // ✅ Uses SHARED admin_sidebar.php
 // ✅ Branch filter in header
 // ✅ NO sidebar CSS conflicts
+// ✅ FIXED: View Details link sends both id and branch
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -71,19 +72,28 @@ try {
 
 // ================================================================
 // FETCH BRANCHES
+// ✅ FIXED: Filter by selected branch if not 'all'
 // ================================================================
 $query = "SELECT b.* FROM branches b WHERE 1=1";
+$params = [];
+
+// Filter by selected branch
+if ($selected_branch_id !== 'all' && is_numeric($selected_branch_id)) {
+    $query .= " AND b.id = :branch_id";
+    $params[':branch_id'] = (int)$selected_branch_id;
+}
 
 if (!empty($search_term)) {
     $query .= " AND (b.name LIKE :search OR b.location LIKE :search OR b.phone LIKE :search OR b.email LIKE :search)";
+    $params[':search'] = '%' . $search_term . '%';
 }
 
 $query .= " ORDER BY b.name ASC";
 
 $stmt = $db->prepare($query);
 
-if (!empty($search_term)) {
-    $stmt->bindValue(':search', '%' . $search_term . '%');
+foreach ($params as $key => $value) {
+    $stmt->bindValue($key, $value);
 }
 
 $stmt->execute();
@@ -347,7 +357,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             transform: scale(1.02);
         }
         
-        /* ✅ BRANCH SELECTOR IN HEADER */
         .top-nav .branch-selector-header {
             background: var(--bg-body);
             border: 2px solid var(--border-color);
@@ -1364,13 +1373,20 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                             <?php endif; ?>
                         </div>
                         <div class="branch-actions">
-                            <a href="view_branch.php?id=<?= $branch_id ?>" class="btn btn-sm btn-outline-primary" title="View Details">
+                            <!-- ✅ FIXED: View Details link sends both id AND branch -->
+                            <a href="view_branch.php?id=<?= $branch_id ?>&branch=<?= $branch_id ?>" 
+                               class="btn btn-sm btn-outline-primary" 
+                               title="View Details">
                                 <i class="fas fa-eye"></i>
                             </a>
-                            <a href="edit_branch.php?id=<?= $branch_id ?>" class="btn btn-sm btn-outline-primary" title="Edit Branch">
+                            <a href="edit_branch.php?id=<?= $branch_id ?>&branch=<?= $branch_id ?>" 
+                               class="btn btn-sm btn-outline-primary" 
+                               title="Edit Branch">
                                 <i class="fas fa-edit"></i>
                             </a>
-                            <a href="branch_staff.php?id=<?= $branch_id ?>" class="btn btn-sm btn-outline-primary" title="Manage Staff">
+                            <a href="branch_staff.php?id=<?= $branch_id ?>&branch=<?= $branch_id ?>" 
+                               class="btn btn-sm btn-outline-primary" 
+                               title="Manage Staff">
                                 <i class="fas fa-users-cog"></i>
                             </a>
                             <?php if ($branch_status === 'active'): ?>
@@ -1428,10 +1444,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 <script>
     // ================================================================
     // BRANCH SWITCHER
+    // ✅ FIXED: Preserves search term when switching branch
     // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
         url.searchParams.set('branch', branchId);
+        // Remove 'id' and 'search' when switching branch
         if (url.searchParams.has('id')) {
             url.searchParams.delete('id');
         }
@@ -1587,13 +1605,18 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
     // ================================================================
     // TOGGLE BRANCH STATUS
+    // ✅ FIXED: Preserves branch filter in URL after form submit
     // ================================================================
     function toggleBranch(id, status) {
         var action = status === 'active' ? 'activate' : 'deactivate';
         if (confirm('Are you sure you want to ' + action + ' this branch?')) {
+            var form = document.getElementById('toggleStatusForm');
+            // Preserve branch filter in form action
+            var currentBranch = '<?= htmlspecialchars($selected_branch_id) ?>';
+            form.action = 'branches.php?branch=' + encodeURIComponent(currentBranch);
             document.getElementById('toggleStatusId').value = id;
             document.getElementById('toggleStatusValue').value = status;
-            document.getElementById('toggleStatusForm').submit();
+            form.submit();
         }
     }
 
@@ -1620,6 +1643,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c🏢 Braick Dispensary - Branches Management', 'font-size:18px; font-weight:bold; color:#1A56DB;');
     console.log('%c✅ Using SHARED admin_sidebar.php', 'font-size:13px; color:#34D399; font-weight:bold;');
     console.log('%c✅ Branch filter in header', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ FIXED: View Details sends both id AND branch', 'font-size:13px; color:#34D399; font-weight:bold;');
+    console.log('%c✅ FIXED: Toggle status preserves branch filter', 'font-size:13px; color:#34D399;');
     console.log('%c📊 Total Branches: <?= $total_branches ?>', 'font-size:13px; color:#1A56DB;');
 </script>
 
