@@ -5,6 +5,7 @@
 // BRAICK DISPENSARY - BLUE THEME - WITH LOGIN SESSION
 // FIXED: Uses bills table (NOT patient_bills)
 // WITH OFFICIAL STAMP & ADMIN CONTACTS
+// ✅ VITAL SIGNS 7 - WITH HEIGHT & OXYGEN SATURATION (SpO2)
 // ================================================================
 
 // ================================================================
@@ -576,6 +577,93 @@ header('Content-Type: text/html; charset=utf-8');
         }
         
         /* ================================================================
+           VITAL SIGNS BOX - HIGHLIGHTED
+           ================================================================ */
+        .vital-signs-box {
+            background: #F0FDF4;
+            border: 1px solid #86EFAC;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin: 8px 0;
+            page-break-inside: avoid;
+        }
+        
+        .vital-signs-box .vital-header {
+            font-size: 10px;
+            font-weight: 700;
+            color: #059669;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px dashed #86EFAC;
+        }
+        
+        .vital-signs-box .vital-header i {
+            color: #DC2626;
+        }
+        
+        .vital-signs-box .vital-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+        
+        .vital-signs-box .vital-item {
+            background: white;
+            border: 1px solid #D1FAE5;
+            border-radius: 6px;
+            padding: 6px 10px;
+            text-align: center;
+        }
+        
+        .vital-signs-box .vital-item .vital-icon {
+            font-size: 14px;
+            display: block;
+            margin-bottom: 2px;
+        }
+        
+        .vital-signs-box .vital-item .vital-label {
+            font-size: 8px;
+            color: #64748B;
+            text-transform: uppercase;
+            font-weight: 700;
+            letter-spacing: 0.3px;
+            display: block;
+        }
+        
+        .vital-signs-box .vital-item .vital-value {
+            font-size: 13px;
+            font-weight: 800;
+            color: #1E293B;
+            display: block;
+            margin-top: 2px;
+        }
+        
+        .vital-signs-box .vital-item .vital-unit {
+            font-size: 8px;
+            color: #94A3B8;
+            font-weight: 400;
+            margin-left: 2px;
+        }
+        
+        .vital-signs-box .vital-item.spo2-item {
+            background: #ECFEFF;
+            border-color: #67E8F9;
+        }
+        
+        .vital-signs-box .vital-item.spo2-item .vital-value {
+            color: #0891B2;
+        }
+        
+        .vital-signs-box .vital-item.spo2-normal .vital-value { color: #059669; }
+        .vital-signs-box .vital-item.spo2-low .vital-value { color: #D97706; }
+        .vital-signs-box .vital-item.spo2-critical .vital-value { color: #DC2626; }
+        
+        /* ================================================================
            VISIT CARDS
            ================================================================ */
         .visit-card {
@@ -904,10 +992,12 @@ header('Content-Type: text/html; charset=utf-8');
             .report-header .meta-info { text-align: center; }
             .visit-header { flex-direction: column; align-items: flex-start; }
             .official-stamp { flex-direction: column; text-align: center; }
+            .vital-signs-box .vital-grid { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 480px) {
             .summary-grid { grid-template-columns: 1fr; }
+            .vital-signs-box .vital-grid { grid-template-columns: 1fr 1fr; }
         }
         
         /* ================================================================
@@ -932,6 +1022,16 @@ header('Content-Type: text/html; charset=utf-8');
             }
             .diagnosis-box {
                 background: #f0f7ff !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            .vital-signs-box {
+                background: #F0FDF4 !important;
+                -webkit-print-color-adjust: exact !important;
+                print-color-adjust: exact !important;
+            }
+            .vital-signs-box .vital-item {
+                background: white !important;
                 -webkit-print-color-adjust: exact !important;
                 print-color-adjust: exact !important;
             }
@@ -1157,22 +1257,123 @@ header('Content-Type: text/html; charset=utf-8');
                 </div>
                 <?php endif; ?>
                 
-                <!-- Vital Signs -->
+                <!-- ================================================================ -->
+                <!-- VITAL SIGNS - 7 VITALS (Temperature, BP, Pulse, Weight, Height, BMI, SpO2) -->
+                <!-- ================================================================ -->
                 <?php if (!empty($visit['vital_signs'])): 
                     $vs = $visit['vital_signs'];
-                    $vitals = [];
-                    if (!empty($vs['temperature'])) $vitals[] = '🌡️ Temp: ' . $vs['temperature'] . '°C';
-                    if (!empty($vs['blood_pressure_systolic']) && !empty($vs['blood_pressure_diastolic'])) 
-                        $vitals[] = '❤️ BP: ' . $vs['blood_pressure_systolic'] . '/' . $vs['blood_pressure_diastolic'];
-                    if (!empty($vs['pulse_rate'])) $vitals[] = '💓 Pulse: ' . $vs['pulse_rate'];
-                    if (!empty($vs['weight'])) $vitals[] = '⚖️ Weight: ' . $vs['weight'] . 'kg';
-                    if (!empty($vs['bmi'])) $vitals[] = 'BMI: ' . $vs['bmi'];
+                    
+                    // Check if any vital sign exists
+                    $has_any_vital = !empty($vs['temperature']) || 
+                                     !empty($vs['blood_pressure_systolic']) || 
+                                     !empty($vs['pulse_rate']) || 
+                                     !empty($vs['weight']) || 
+                                     !empty($vs['height']) || 
+                                     !empty($vs['bmi']) ||
+                                     !empty($vs['oxygen_saturation']);
+                    
+                    if ($has_any_vital):
+                        // SpO2 status
+                        $spo2_value = !empty($vs['oxygen_saturation']) ? (int)$vs['oxygen_saturation'] : null;
+                        $spo2_class = 'spo2-normal';
+                        $spo2_icon = '✅';
+                        $spo2_label = 'Normal';
+                        if ($spo2_value !== null) {
+                            if ($spo2_value < 90) {
+                                $spo2_class = 'spo2-critical';
+                                $spo2_icon = '🚨';
+                                $spo2_label = 'Critical';
+                            } elseif ($spo2_value < 95) {
+                                $spo2_class = 'spo2-low';
+                                $spo2_icon = '⚠️';
+                                $spo2_label = 'Low';
+                            }
+                        }
                 ?>
-                <div class="info-row">
-                    <span class="label">Vital Signs</span>
-                    <span class="value"><?= implode(' | ', $vitals) ?></span>
+                <div class="vital-signs-box">
+                    <div class="vital-header">
+                        <i class="fas fa-heartbeat"></i> Vital Signs (7 Measurements)
+                        <?php if (!empty($vs['recorded_at'])): ?>
+                            <span style="margin-left:auto;font-weight:400;font-size:9px;color:#94A3B8;">
+                                Recorded: <?= date('M d, Y h:i A', strtotime($vs['recorded_at'])) ?>
+                            </span>
+                        <?php endif; ?>
+                    </div>
+                    <div class="vital-grid">
+                        <!-- 1. Temperature -->
+                        <?php if (!empty($vs['temperature'])): ?>
+                        <div class="vital-item">
+                            <span class="vital-icon">🌡️</span>
+                            <span class="vital-label">Temperature</span>
+                            <span class="vital-value"><?= htmlspecialchars($vs['temperature']) ?><span class="vital-unit">°C</span></span>
+                        </div>
+                        <?php endif; ?>
+                        
+                        <!-- 2. Blood Pressure -->
+                        <?php if (!empty($vs['blood_pressure_systolic']) && !empty($vs['blood_pressure_diastolic'])): ?>
+                        <div class="vital-item">
+                            <span class="vital-icon">💓</span>
+                            <span class="vital-label">Blood Pressure</span>
+                            <span class="vital-value"><?= htmlspecialchars($vs['blood_pressure_systolic']) ?>/<?= htmlspecialchars($vs['blood_pressure_diastolic']) ?><span class="vital-unit">mmHg</span></span>
+                        </div>
+                        <?php endif; ?>
+                        
+                        <!-- 3. Pulse Rate -->
+                        <?php if (!empty($vs['pulse_rate'])): ?>
+                        <div class="vital-item">
+                            <span class="vital-icon">❤️</span>
+                            <span class="vital-label">Pulse Rate</span>
+                            <span class="vital-value"><?= htmlspecialchars($vs['pulse_rate']) ?><span class="vital-unit">bpm</span></span>
+                        </div>
+                        <?php endif; ?>
+                        
+                        <!-- 4. Weight -->
+                        <?php if (!empty($vs['weight'])): ?>
+                        <div class="vital-item">
+                            <span class="vital-icon">⚖️</span>
+                            <span class="vital-label">Weight</span>
+                            <span class="vital-value"><?= htmlspecialchars($vs['weight']) ?><span class="vital-unit">kg</span></span>
+                        </div>
+                        <?php endif; ?>
+                        
+                        <!-- 5. Height (NEW) -->
+                        <?php if (!empty($vs['height'])): ?>
+                        <div class="vital-item">
+                            <span class="vital-icon">📏</span>
+                            <span class="vital-label">Height</span>
+                            <span class="vital-value"><?= htmlspecialchars($vs['height']) ?><span class="vital-unit">cm</span></span>
+                        </div>
+                        <?php endif; ?>
+                        
+                        <!-- 6. BMI -->
+                        <?php if (!empty($vs['bmi'])): ?>
+                        <div class="vital-item">
+                            <span class="vital-icon">📊</span>
+                            <span class="vital-label">BMI</span>
+                            <span class="vital-value"><?= htmlspecialchars($vs['bmi']) ?><span class="vital-unit">kg/m²</span></span>
+                        </div>
+                        <?php endif; ?>
+                        
+                        <!-- 7. Oxygen Saturation (SpO2) - NEW -->
+                        <?php if ($spo2_value !== null): ?>
+                        <div class="vital-item spo2-item <?= $spo2_class ?>">
+                            <span class="vital-icon">🫁</span>
+                            <span class="vital-label">Oxygen Saturation</span>
+                            <span class="vital-value"><?= $spo2_value ?><span class="vital-unit">%</span> <?= $spo2_icon ?></span>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+                    
+                    <?php if (!empty($vs['notes'])): ?>
+                    <div style="margin-top:6px;font-size:10px;color:#64748B;padding:4px 8px;background:white;border-radius:4px;">
+                        <strong>Notes:</strong> <?= htmlspecialchars($vs['notes']) ?>
+                    </div>
+                    <?php endif; ?>
                 </div>
-                <?php endif; ?>
+                <?php 
+                    endif;
+                endif; 
+                ?>
                 
                 <!-- Lab Tests -->
                 <?php if (!empty($visit['lab_tests'])): ?>
@@ -1340,6 +1541,7 @@ header('Content-Type: text/html; charset=utf-8');
     console.log('%c👤 User: <?= htmlspecialchars($user_full_name) ?> (<?= htmlspecialchars($user_role) ?>)', 'font-size:13px; color:#0B5ED7;');
     console.log('%c✅ Using: bills table (NOT patient_bills)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Design like expenses with logo & official stamp', 'font-size:13px; color:#34D399;');
+    console.log('%c❤️ VITAL SIGNS: 7 MEASUREMENTS (Temp, BP, Pulse, Weight, Height, BMI, SpO2)', 'font-size:13px; color:#DC2626; font-weight:bold;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient_data['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 Patient ID: <?= htmlspecialchars($patient_data['patient_id']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c💵 Total Paid: TSh <?= number_format($patient_bills_summary['total_paid'], 0) ?>', 'font-size:13px; color:#0B5ED7;');

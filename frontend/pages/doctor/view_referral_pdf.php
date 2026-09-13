@@ -5,6 +5,7 @@
 // Data from referrals table
 // PERFECT PDF - NO TEXT CUTOFF - STAMP WITH FULL TEXT
 // BRAICK DISPENSARY - BLUE THEME WITH GREEN TABLE HEADERS
+// WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION - SpO2)
 // ================================================================
 
 session_start();
@@ -172,14 +173,14 @@ if (empty($disease_name) && !empty($referral['visit_diagnosis'])) {
 }
 
 // ================================================================
-// GET VITAL SIGNS FOR THIS PATIENT
+// GET VITAL SIGNS FOR THIS PATIENT - 7 SIGNS WITH OXYGEN SATURATION
 // ================================================================
 $vital_signs = null;
 try {
     if (!empty($referral['visit_id'])) {
         $stmt = $db->prepare("
             SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
-                   pulse_rate, weight, height, bmi, notes, recorded_at,
+                   pulse_rate, oxygen_saturation, weight, height, bmi, notes, recorded_at,
                    u.full_name as recorded_by_name
             FROM vital_signs vs
             LEFT JOIN users u ON vs.recorded_by = u.id
@@ -346,6 +347,17 @@ function getUrgencyLabel($urgency) {
 }
 
 // ================================================================
+// HELPER: SpO2 STATUS COLOR
+// ================================================================
+function getSpO2Status($spo2) {
+    if ($spo2 === null || $spo2 === '') return ['label' => 'N/A', 'color' => '#64748B', 'bg' => '#F1F5F9'];
+    $spo2 = (int)$spo2;
+    if ($spo2 >= 95) return ['label' => 'Normal', 'color' => '#059669', 'bg' => '#D1FAE5'];
+    if ($spo2 >= 90) return ['label' => 'Low', 'color' => '#D97706', 'bg' => '#FEF3C7'];
+    return ['label' => 'Critical', 'color' => '#DC2626', 'bg' => '#FEE2E2'];
+}
+
+// ================================================================
 // BUILD PDF CONTENT - BLUE THEME WITH GREEN TABLE HEADERS
 // ================================================================
 $pdf_content = '';
@@ -378,9 +390,7 @@ $pdf_content .= '
     </div>
 </div>';
 
-// ================================================================
 // SPACER 1cm (10px)
-// ================================================================
 $pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
@@ -416,9 +426,7 @@ $pdf_content .= '
     </div>
 </div>';
 
-// ================================================================
 // SPACER 1cm (10px)
-// ================================================================
 $pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
@@ -469,9 +477,7 @@ $pdf_content .= '
     </div>
 </div>';
 
-// ================================================================
 // SPACER 1cm (10px)
-// ================================================================
 $pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
@@ -510,43 +516,51 @@ $pdf_content .= '
     </div>
 </div>';
 
-// ================================================================
 // SPACER 1cm (10px)
-// ================================================================
 $pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
-// 3. VITAL SIGNS - GREEN TABLE HEADERS
+// 3. VITAL SIGNS - 7 SIGNS WITH OXYGEN SATURATION - GREEN TABLE HEADERS
 // ================================================================
 if ($vital_signs) {
+    $spo2_status = getSpO2Status($vital_signs['oxygen_saturation'] ?? null);
+    
     $pdf_content .= '
     <div style="page-break-inside: avoid; margin-bottom: 6px;">
         <div style="font-size: 11pt; font-weight: 700; color: #0B5ED7; border-bottom: 2px solid #0B5ED7; padding-bottom: 4px; margin-bottom: 8px;">
-            ❤️ VITAL SIGNS
+            ❤️ VITAL SIGNS (7 Signs)
+            <span style="font-size: 8pt; font-weight: 400; color: #0284C7; margin-left: 8px;">🫁 SpO2 Normal: 95-100%</span>
         </div>
         <table style="width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-bottom: 8px; border: 1px solid #B8D4FE;">
             <thead>
                 <tr>
-                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Temperature</th>
-                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Blood Pressure</th>
-                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Pulse Rate</th>
-                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Weight</th>
-                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">Height</th>
-                    <th style="background: #059669; color: white; padding: 6px 10px; text-align: center; font-size: 7pt; text-transform: uppercase;">BMI</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: center; font-size: 6.5pt; text-transform: uppercase;">Temperature</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: center; font-size: 6.5pt; text-transform: uppercase;">Blood Pressure</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: center; font-size: 6.5pt; text-transform: uppercase;">Pulse Rate</th>
+                    <th style="background: #0284C7; color: white; padding: 6px 8px; text-align: center; font-size: 6.5pt; text-transform: uppercase;">🫁 SpO2 (%)</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: center; font-size: 6.5pt; text-transform: uppercase;">Weight</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: center; font-size: 6.5pt; text-transform: uppercase;">Height</th>
+                    <th style="background: #059669; color: white; padding: 6px 8px; text-align: center; font-size: 6.5pt; text-transform: uppercase;">BMI</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['temperature'] ?? '--') . ' °C</td>
-                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') . ' mmHg</td>
-                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['pulse_rate'] ?? '--') . ' bpm</td>
-                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['weight'] ?? '--') . ' kg</td>
-                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['height'] ?? '--') . ' cm</td>
-                    <td style="padding: 6px 10px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['bmi'] ?? '--') . '</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['temperature'] ?? '--') . ' °C</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') . ' mmHg</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['pulse_rate'] ?? '--') . ' bpm</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 700; background: #E0F2FE; color: #0284C7;">' . ($vital_signs['oxygen_saturation'] ?? '--') . ' %</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['weight'] ?? '--') . ' kg</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['height'] ?? '--') . ' cm</td>
+                    <td style="padding: 6px 8px; border-bottom: 1px solid #E2E8F0; text-align: center; font-weight: 600; background: #FAFAFA;">' . ($vital_signs['bmi'] ?? '--') . '</td>
                 </tr>
             </tbody>
         </table>
-        ' . (!empty($vital_signs['recorded_by_name']) ? '<div style="font-size: 7.5px; color: #94A3B8; text-align: right;">Recorded by: ' . htmlspecialchars($vital_signs['recorded_by_name']) . '</div>' : '') . '
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 4px;">
+            ' . (!empty($vital_signs['recorded_by_name']) ? '<div style="font-size: 7.5px; color: #94A3B8;">Recorded by: ' . htmlspecialchars($vital_signs['recorded_by_name']) . '</div>' : '') . '
+            <div style="font-size: 7px; color: #0284C7; background: #E0F2FE; padding: 2px 8px; border-radius: 4px; border: 1px dashed #0EA5E9;">
+                🫁 SpO2 (Oxygen Saturation) Normal: <strong>95-100%</strong> • 7 Vital Signs Tracked
+            </div>
+        </div>
     </div>';
     
     // SPACER 1cm (10px)
@@ -579,9 +593,7 @@ $pdf_content .= '
     </table>
 </div>';
 
-// ================================================================
 // SPACER 1cm (10px)
-// ================================================================
 $pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
@@ -647,9 +659,7 @@ $pdf_content .= '
     </table>
 </div>';
 
-// ================================================================
 // SPACER 1cm (10px)
-// ================================================================
 $pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
@@ -665,9 +675,7 @@ $pdf_content .= '
     </div>
 </div>';
 
-// ================================================================
 // SPACER 1cm (10px)
-// ================================================================
 $pdf_content .= '<div style="height: 10px;"></div>';
 
 // ================================================================
@@ -776,11 +784,8 @@ if (count($procedures) > 0) {
 }
 
 // ================================================================
-// ================================================================
 // 11. OFFICIAL STAMP - USING TABLE FOR BETTER PDF RENDERING
 // ================================================================
-// ================================================================
-
 $pdf_content .= '
 <div style="border-top: 3px solid #0B5ED7; padding-top: 12px; margin-top: 10px; text-align: center; page-break-inside: avoid;">
     <div style="font-size: 10px; font-weight: 600; color: #059669; margin-bottom: 6px;">
@@ -892,6 +897,11 @@ $pdf_content .= '</div>'; // End page
             body { background: white; padding: 0; }
             .pdf-container { box-shadow: none; padding: 0; border-radius: 0; max-width: 100%; }
             .pdf-content { border: none; padding: 0; }
+            .pdf-content td[style*="background: #E0F2FE"] {
+                background: #E0F2FE !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
         }
         @media (max-width: 600px) {
             .pdf-container { padding: 8px; }
@@ -962,6 +972,9 @@ $pdf_content .= '</div>'; // End page
         console.log('✅ STAMP: Using TABLE for reliable PDF rendering');
         console.log('✅ STAMP TEXT: BRAICK DISPENSARY - Tunajali Afya Yako');
         console.log('✅ STAMP: Approved By, Date, Ref number all included');
+        console.log('❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI');
+        console.log('🫁 SpO2 (Oxygen Saturation): Normal 95-100%');
+        console.log('🫁 SpO2 Value: <?= $vital_signs['oxygen_saturation'] ?? "N/A" ?>%');
     </script>
 </body>
 </html>

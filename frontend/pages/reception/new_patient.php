@@ -3,10 +3,11 @@
 // FILE: frontend/pages/reception/new_patient.php
 // RECEPTION - REGISTER NEW PATIENT
 // ✅ EMBEDDED HEADER (matches reception header)
-// ✅ VITAL SIGNS CARDS 6 - 3 TOP + 3 BOTTOM
+// ✅ VITAL SIGNS CARDS 7 - 3 TOP + 4 BOTTOM (with SpO2)
 // ✅ AUTOCOMPLETE patient names
 // ✅ REMOVED phone/email validation
 // ✅ SAVES created_by, registered_by, registered_by_name
+// ✅ ADDED: Oxygen Saturation (SpO2) with category
 // ================================================================
 
 session_start();
@@ -23,16 +24,14 @@ if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'reception') {
 // GET SESSION DATA
 // ================================================================
 $user_id = $_SESSION['user_id'];
-$user_full_name = $_SESSION['full_name'] ?? 'Receptionist';  // ✅ Jina la reception
+$user_full_name = $_SESSION['full_name'] ?? 'Receptionist';
 $user_role = $_SESSION['role'] ?? 'reception';
 $branch_id = $_SESSION['branch_id'] ?? 1;
 $branch_name = $_SESSION['branch_name'] ?? 'Dodoma';
 $username = $_SESSION['username'] ?? 'reception';
 $profile_pic = $_SESSION['profile_pic'] ?? '';
 
-// ✅ Keep original session full_name for header display
 $full_name = $user_full_name;
-
 $user_branch_id = $branch_id;
 $selected_branch_id = $branch_id;
 $message = '';
@@ -368,7 +367,7 @@ try {
         $allergies = trim($_POST['allergies'] ?? '');
         $branch_id = $selected_branch_id;
         
-        // ✅ registration info - MUHIMU!
+        // ✅ registration info
         $registered_by_id = $user_id;
         $registered_by_name = $user_full_name;
         
@@ -408,6 +407,7 @@ try {
         $pulse_rate = !empty($_POST['pulse_rate']) ? (int)$_POST['pulse_rate'] : null;
         $weight = !empty($_POST['weight']) ? (float)$_POST['weight'] : null;
         $height = !empty($_POST['height']) ? (float)$_POST['height'] : null;
+        $oxygen_saturation = !empty($_POST['oxygen_saturation']) ? (int)$_POST['oxygen_saturation'] : null; // ✅ MPYA: SpO2
         $vital_notes = trim($_POST['vital_notes'] ?? '');
         
         $bmi = null;
@@ -442,7 +442,7 @@ try {
                 
                 $final_patient_id = generateUniquePatientId($db, $branch_id);
                 
-                // ✅ INSERT PATIENT - Ongeza created_by, registered_by, registered_by_name
+                // ✅ INSERT PATIENT
                 $stmt = $db->prepare("
                     INSERT INTO patients (
                         patient_id, full_name, date_of_birth, gender, phone, email, 
@@ -463,10 +463,10 @@ try {
                     $blood_group, 
                     $allergies, 
                     $branch_id,
-                    $registered_by_id,      // ✅ created_by
+                    $registered_by_id,
                     $marital_status,
-                    $registered_by_id,      // ✅ registered_by
-                    $registered_by_name     // ✅ registered_by_name (JINA LA RECEPTION)
+                    $registered_by_id,
+                    $registered_by_name
                 ]);
                 $patient_db_id = $db->lastInsertId();
                 
@@ -492,19 +492,19 @@ try {
                 ]);
                 $visit_id = $db->lastInsertId();
                 
-                // SAVE VITAL SIGNS
-                if ($visit_id && ($temperature || $bp_systolic || $bp_diastolic || $pulse_rate || $weight || $height)) {
+                // SAVE VITAL SIGNS (with SpO2)
+                if ($visit_id && ($temperature || $bp_systolic || $bp_diastolic || $pulse_rate || $weight || $height || $oxygen_saturation)) {
                     $stmt = $db->prepare("
                         INSERT INTO vital_signs (
                             patient_id, visit_id, recorded_by, branch_id,
                             temperature, blood_pressure_systolic, blood_pressure_diastolic,
-                            pulse_rate, weight, height, bmi, notes, recorded_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                            pulse_rate, weight, height, bmi, oxygen_saturation, notes, recorded_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
                         $patient_db_id, $visit_id, $user_id, $branch_id,
                         $temperature, $bp_systolic, $bp_diastolic,
-                        $pulse_rate, $weight, $height, $bmi, $vital_notes ?: null
+                        $pulse_rate, $weight, $height, $bmi, $oxygen_saturation, $vital_notes ?: null
                     ]);
                 }
                 
@@ -595,8 +595,12 @@ try {
                     $message .= "<br>⏳ Doctor: <strong>Not assigned</strong> - Patient is in Pending list";
                 }
                 
-                if ($temperature || $bp_systolic || $pulse_rate || $weight || $height) {
+                if ($temperature || $bp_systolic || $pulse_rate || $weight || $height || $oxygen_saturation) {
                     $message .= "<br>❤️ Vital signs recorded!";
+                    if ($oxygen_saturation) {
+                        $spo2_status = $oxygen_saturation >= 95 ? '✅ Normal' : ($oxygen_saturation >= 90 ? '⚠️ Low' : '🚨 Critical');
+                        $message .= " (SpO₂: {$oxygen_saturation}% - {$spo2_status})";
+                    }
                 }
                 
                 $message_type = 'success';
@@ -1265,6 +1269,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             border: 1px solid var(--warning);
         }
         
+        /* ================================================================
+           VITAL GRID - 3 COLUMNS (Row 1)
+           ================================================================ */
         .vital-grid-6 {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -1272,10 +1279,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             margin-bottom: 12px;
         }
         
-        .vital-grid-6-row2 {
+        /* ================================================================
+           VITAL GRID - 4 COLUMNS (Row 2 with SpO2)
+           ================================================================ */
+        .vital-grid-4 {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
+            margin-bottom: 12px;
         }
         
         .vital-card {
@@ -1411,6 +1422,19 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             color: var(--primary);
         }
         
+        /* ✅ SPO2 CARD STYLES */
+        .vital-card.spo2::before { background: linear-gradient(135deg, #0891B2, #0E7490); }
+        .vital-card.spo2 .vital-icon { color: #0891B2; background: rgba(8, 145, 178, 0.1); }
+        .vital-card.spo2 .vital-input-wrap input {
+            background: rgba(8, 145, 178, 0.05);
+            font-weight: 700;
+            color: #0891B2;
+        }
+        .vital-card.spo2 .vital-input-wrap input:focus {
+            border-color: #0891B2;
+            box-shadow: 0 0 0 3px rgba(8, 145, 178, 0.15);
+        }
+        
         .vital-bmi-category {
             font-size: 0.5rem;
             font-weight: 600;
@@ -1424,6 +1448,28 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         .vital-bmi-category.normal { background: rgba(5, 150, 105, 0.15); color: #059669; }
         .vital-bmi-category.overweight { background: rgba(217, 119, 6, 0.15); color: #D97706; }
         .vital-bmi-category.obese { background: rgba(220, 38, 38, 0.15); color: #DC2626; }
+        
+        /* SpO2 Category Badges */
+        .vital-bmi-category.spo2-normal {
+            background: rgba(5, 150, 105, 0.15);
+            color: #059669;
+        }
+        .vital-bmi-category.spo2-low {
+            background: rgba(217, 119, 6, 0.15);
+            color: #D97706;
+            animation: pulse-spo2 1.5s infinite;
+        }
+        .vital-bmi-category.spo2-critical {
+            background: rgba(220, 38, 38, 0.3);
+            color: #DC2626;
+            font-weight: 700;
+            animation: pulse-spo2 1s infinite;
+        }
+        
+        @keyframes pulse-spo2 {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
         
         .vital-card.bp .vital-input-wrap {
             display: flex;
@@ -1621,6 +1667,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
             .form-card-modern { padding: 20px; }
+            .vital-grid-4 { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -1631,8 +1678,12 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             .page-header { padding: 14px 16px; }
             .page-header .page-title { font-size: 1.1rem; }
             
-            .vital-grid-6, .vital-grid-6-row2 {
+            .vital-grid-6 {
                 grid-template-columns: repeat(3, 1fr);
+                gap: 8px;
+            }
+            .vital-grid-4 {
+                grid-template-columns: repeat(2, 1fr);
                 gap: 8px;
             }
             
@@ -1651,7 +1702,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             .main-content { padding: 8px; }
             .form-card-modern { padding: 10px; }
             
-            .vital-grid-6, .vital-grid-6-row2 {
+            .vital-grid-6,
+            .vital-grid-4 {
                 grid-template-columns: repeat(2, 1fr);
                 gap: 6px;
             }
@@ -1952,7 +2004,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <textarea name="allergies" id="allergiesTextarea" class="form-control" style="margin-top:8px;" placeholder="List any known allergies..." rows="2"><?= htmlspecialchars($_POST['allergies'] ?? '') ?></textarea>
             </div>
             
-            <!-- ✅ VITAL SIGNS -->
+            <!-- ✅ VITAL SIGNS - 7 CARDS -->
             <div class="vital-signs-section">
                 <div class="section-header">
                     <div class="section-title">
@@ -1963,7 +2015,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                         </span>
                     </div>
                     <span class="section-badge">
-                        <i class="fas fa-info-circle"></i> Optional
+                        <i class="fas fa-info-circle"></i> Optional - 7 Vital Signs
                     </span>
                 </div>
                 
@@ -2019,8 +2071,8 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                     </div>
                 </div>
                 
-                <!-- ✅ ROW 2: Weight | Height | BMI -->
-                <div class="vital-grid-6-row2">
+                <!-- ✅ ROW 2: Weight | Height | BMI | SpO2 (4 CARDS) -->
+                <div class="vital-grid-4">
                     <div class="vital-card weight">
                         <div class="vital-header">
                             <span class="vital-icon">⚖️</span>
@@ -2068,6 +2120,24 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                             <span class="vital-unit">kg/m²</span>
                         </div>
                         <span class="vital-bmi-category" id="bmiCategory">Auto</span>
+                    </div>
+                    
+                    <!-- ✅ MPYA: Oxygen Saturation (SpO2) -->
+                    <div class="vital-card spo2">
+                        <div class="vital-header">
+                            <span class="vital-icon">🫁</span>
+                            <div>
+                                <span class="vital-label">Oxygen Saturation</span>
+                                <span class="vital-sublabel">SpO₂ level</span>
+                            </div>
+                        </div>
+                        <div class="vital-input-wrap">
+                            <input type="number" name="oxygen_saturation" step="1" min="0" 
+                                   placeholder="98" id="spo2Input"
+                                   value="<?= htmlspecialchars($_POST['oxygen_saturation'] ?? '') ?>">
+                            <span class="vital-unit">%</span>
+                        </div>
+                        <span class="vital-bmi-category" id="spo2Category">Auto</span>
                     </div>
                 </div>
                 
@@ -2201,8 +2271,6 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             <!-- Hidden Fields -->
             <input type="hidden" name="branch_id" value="<?= $selected_branch_id ?>">
             <input type="hidden" name="register_patient" value="1">
-            
-            <!-- ✅ Hidden Registered By Info -->
             <input type="hidden" name="registered_by_id" value="<?= $user_id ?>">
             <input type="hidden" name="registered_by_name" value="<?= htmlspecialchars($user_full_name) ?>">
             
@@ -2228,7 +2296,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
                 <span style="margin:0 6px;">|</span>
                 <span style="color:var(--primary);"><i class="fas fa-search"></i> Autocomplete enabled</span>
                 <span style="margin:0 6px;">|</span>
-                <span style="color:var(--success);"><i class="fas fa-heartbeat"></i> Vital signs optional</span>
+                <span style="color:var(--success);"><i class="fas fa-heartbeat"></i> 7 Vital signs (with SpO₂)</span>
                 <span style="margin:0 6px;">|</span>
                 <span style="color:var(--purple);"><i class="fas fa-user-tie"></i> Registered by: <strong><?= htmlspecialchars($user_full_name) ?></strong></span>
             </div>
@@ -2490,6 +2558,41 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     }
 
     // ================================================================
+    // SPO2 CATEGORY CALCULATOR
+    // ================================================================
+    function calculateSpO2Category() {
+        var spo2Input = document.getElementById('spo2Input');
+        var spo2Category = document.getElementById('spo2Category');
+        
+        if (!spo2Input || !spo2Category) return;
+        
+        var spo2 = parseFloat(spo2Input.value);
+        
+        if (!spo2 || spo2 <= 0) {
+            spo2Category.textContent = 'Auto';
+            spo2Category.className = 'vital-bmi-category';
+            return;
+        }
+        
+        var category = '';
+        var categoryClass = '';
+        
+        if (spo2 >= 95) {
+            category = 'Normal';
+            categoryClass = 'spo2-normal';
+        } else if (spo2 >= 90) {
+            category = 'Low';
+            categoryClass = 'spo2-low';
+        } else {
+            category = 'Critical';
+            categoryClass = 'spo2-critical';
+        }
+        
+        spo2Category.textContent = category;
+        spo2Category.className = 'vital-bmi-category ' + categoryClass;
+    }
+
+    // ================================================================
     // ALLERGIES
     // ================================================================
     var allergyChips = document.querySelectorAll('.allergy-chip');
@@ -2621,6 +2724,14 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         if (checkbox && !checkbox.checked && feeInfoBox) feeInfoBox.style.display = 'none';
         else if (checkbox && checkbox.checked && feeInfoBox) feeInfoBox.style.display = 'flex';
         updateFeeDisplay();
+        
+        // SpO2 initialization
+        var spo2Input = document.getElementById('spo2Input');
+        if (spo2Input) {
+            spo2Input.addEventListener('input', calculateSpO2Category);
+            spo2Input.addEventListener('change', calculateSpO2Category);
+            calculateSpO2Category();
+        }
     });
 
     // ================================================================
@@ -2777,6 +2888,15 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
             bmiCategory.className = 'vital-bmi-category';
         }
         
+        // ✅ Reset SpO2
+        var spo2Input = document.getElementById('spo2Input');
+        var spo2Category = document.getElementById('spo2Category');
+        if (spo2Input) spo2Input.value = '';
+        if (spo2Category) {
+            spo2Category.textContent = 'Auto';
+            spo2Category.className = 'vital-bmi-category';
+        }
+        
         var assignCheckbox = document.getElementById('assignDoctorCheckbox');
         var assignFields = document.getElementById('assignDoctorFields');
         var feeInfoBox = document.getElementById('feeInfoBox');
@@ -2800,6 +2920,7 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
     // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         calculateBMI();
+        calculateSpO2Category();
         updateFeeDisplay();
         setTimeout(function() { startDoctorAutoUpdate(); }, 2000);
         
@@ -2821,10 +2942,9 @@ include_once __DIR__ . '/../../components/reception_sidebar.php';
         searchInput?.addEventListener('keypress', function(e) { if (e.key === 'Enter') performSearch(); });
         
         console.log('%c👤 Braick - New Patient Registration', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-        console.log('%c✅ Embedded Header ADDED', 'font-size:13px; color:#34D399;');
-        console.log('%c✅ Vital Signs: 3 TOP + 3 BOTTOM', 'font-size:13px; color:#DC2626;');
+        console.log('%c✅ VITAL SIGNS: 7 CARDS (Row 1: 3, Row 2: 4 with SpO2)', 'font-size:13px; color:#DC2626;');
+        console.log('%c✅ SpO2 with category (Normal/Low/Critical)', 'font-size:13px; color:#0891B2;');
         console.log('%c✅ Autocomplete enabled', 'font-size:13px; color:#FBBF24;');
-        console.log('%c✅ No phone/email validation', 'font-size:13px; color:#34D399;');
         console.log('%c✅ REGISTERED BY: Saves receptionist name', 'font-size:13px; color:#7C3AED;');
     });
 </script>

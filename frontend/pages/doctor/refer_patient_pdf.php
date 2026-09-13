@@ -4,6 +4,7 @@
 // DOCTOR - REFER PATIENT PDF (EXTERNAL REFERRAL)
 // PERFECT PDF - NEW WINDOW WITHOUT SIDEBAR/HEADER
 // REDESIGNED WITH SINGLE LOGO, LAST VISIT INFO, REFERRED HOSPITAL
+// WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION)
 // FIXED: Removed 'equipment_used' column error
 // BRAICK DISPENSARY
 // ================================================================
@@ -215,10 +216,10 @@ try {
         $stmt->execute([$visit_info['id']]);
         $lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // Get vital signs
+        // Get vital signs - WITH OXYGEN SATURATION
         $stmt = $db->prepare("
             SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
-                   pulse_rate, weight, height, bmi, notes, recorded_at,
+                   pulse_rate, oxygen_saturation, weight, height, bmi, notes, recorded_at,
                    u.full_name as recorded_by_name
             FROM vital_signs vs
             LEFT JOIN users u ON vs.recorded_by = u.id
@@ -285,6 +286,11 @@ function getVitalStatus($value, $type) {
             if ($value > 100) return ['label' => 'HIGH', 'class' => 'high'];
             if ($value < 60) return ['label' => 'LOW', 'class' => 'low'];
             return ['label' => 'NORMAL', 'class' => 'normal'];
+        case 'spo2':
+            // SpO2 normal range: 95-100%
+            if ($value >= 95) return ['label' => 'NORMAL', 'class' => 'normal'];
+            if ($value >= 90) return ['label' => 'LOW', 'class' => 'low'];
+            return ['label' => 'CRITICAL', 'class' => 'high'];
         case 'bmi':
             if ($value >= 30) return ['label' => 'OBESE', 'class' => 'high'];
             if ($value >= 25) return ['label' => 'OVERWEIGHT', 'class' => 'high'];
@@ -452,56 +458,66 @@ $pdf_content .= '
 </div>';
 
 // ================================================================
-// 4. VITAL SIGNS - 6 CARDS
+// 4. VITAL SIGNS - 7 CARDS (WITH OXYGEN SATURATION)
 // ================================================================
 if ($vital_signs) {
     $temp_status = getVitalStatus($vital_signs['temperature'] ?? null, 'temperature');
     $sys = $vital_signs['blood_pressure_systolic'] ?? null;
     $bp_status = getVitalStatus($sys, 'systolic');
     $pulse_status = getVitalStatus($vital_signs['pulse_rate'] ?? null, 'pulse');
+    $spo2_status = getVitalStatus($vital_signs['oxygen_saturation'] ?? null, 'spo2');
     $bmi_status = getVitalStatus($vital_signs['bmi'] ?? null, 'bmi');
     
     $pdf_content .= '
     <div style="font-size: 11pt; font-weight: 700; color: #DC2626; border-bottom: 2px solid #DC2626; padding-bottom: 4px; margin-top: 10px; margin-bottom: 8px;">
-        ❤️ VITAL SIGNS
+        ❤️ VITAL SIGNS (7 Signs)
         ' . (!empty($vital_signs['recorded_at']) ? '<span style="font-size: 8pt; font-weight: 400; color: #64748B;">(Recorded: ' . date('d/m/Y h:i A', strtotime($vital_signs['recorded_at'])) . ')</span>' : '') . '
         ' . (!empty($vital_signs['recorded_by_name']) ? '<span style="font-size: 8pt; font-weight: 400; color: #64748B;"> | By: ' . htmlspecialchars($vital_signs['recorded_by_name']) . '</span>' : '') . '
     </div>
-    <div style="display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-bottom: 12px;">
-        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 4px; border-left: 3px solid #DC2626; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
-            <div style="font-size: 16px;">🌡️</div>
-            <div style="font-size: 7px; font-weight: 600; color: #64748B; text-transform: uppercase;">Temperature</div>
-            <div style="font-size: 12px; font-weight: 700; color: #DC2626;">' . ($vital_signs['temperature'] ?? '--') . ' <span style="font-size: 7px; color: #64748B;">°C</span></div>
-            <div style="font-size: 7px; font-weight: 700; padding: 1px 6px; border-radius: 4px; display: inline-block; background: ' . ($temp_status['class'] === 'normal' ? '#D1FAE5' : ($temp_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($temp_status['class'] === 'normal' ? '#059669' : ($temp_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $temp_status['label'] . '</div>
+    <div style="display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; margin-bottom: 12px;">
+        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 3px; border-left: 3px solid #DC2626; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+            <div style="font-size: 14px;">🌡️</div>
+            <div style="font-size: 6px; font-weight: 600; color: #64748B; text-transform: uppercase;">Temperature</div>
+            <div style="font-size: 11px; font-weight: 700; color: #DC2626;">' . ($vital_signs['temperature'] ?? '--') . ' <span style="font-size: 6px; color: #64748B;">°C</span></div>
+            <div style="font-size: 6px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; background: ' . ($temp_status['class'] === 'normal' ? '#D1FAE5' : ($temp_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($temp_status['class'] === 'normal' ? '#059669' : ($temp_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $temp_status['label'] . '</div>
         </div>
-        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 4px; border-left: 3px solid #0B5ED7; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
-            <div style="font-size: 16px;">❤️</div>
-            <div style="font-size: 7px; font-weight: 600; color: #64748B; text-transform: uppercase;">Blood Pressure</div>
-            <div style="font-size: 12px; font-weight: 700; color: #0B5ED7;">' . ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') . ' <span style="font-size: 7px; color: #64748B;">mmHg</span></div>
-            <div style="font-size: 7px; font-weight: 700; padding: 1px 6px; border-radius: 4px; display: inline-block; background: ' . ($bp_status['class'] === 'normal' ? '#D1FAE5' : ($bp_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($bp_status['class'] === 'normal' ? '#059669' : ($bp_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $bp_status['label'] . '</div>
+        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 3px; border-left: 3px solid #0B5ED7; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+            <div style="font-size: 14px;">❤️</div>
+            <div style="font-size: 6px; font-weight: 600; color: #64748B; text-transform: uppercase;">BP</div>
+            <div style="font-size: 11px; font-weight: 700; color: #0B5ED7;">' . ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') . ' <span style="font-size: 6px; color: #64748B;">mmHg</span></div>
+            <div style="font-size: 6px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; background: ' . ($bp_status['class'] === 'normal' ? '#D1FAE5' : ($bp_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($bp_status['class'] === 'normal' ? '#059669' : ($bp_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $bp_status['label'] . '</div>
         </div>
-        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 4px; border-left: 3px solid #7C3AED; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
-            <div style="font-size: 16px;">💓</div>
-            <div style="font-size: 7px; font-weight: 600; color: #64748B; text-transform: uppercase;">Pulse Rate</div>
-            <div style="font-size: 12px; font-weight: 700; color: #7C3AED;">' . ($vital_signs['pulse_rate'] ?? '--') . ' <span style="font-size: 7px; color: #64748B;">bpm</span></div>
-            <div style="font-size: 7px; font-weight: 700; padding: 1px 6px; border-radius: 4px; display: inline-block; background: ' . ($pulse_status['class'] === 'normal' ? '#D1FAE5' : ($pulse_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($pulse_status['class'] === 'normal' ? '#059669' : ($pulse_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $pulse_status['label'] . '</div>
+        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 3px; border-left: 3px solid #7C3AED; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+            <div style="font-size: 14px;">💓</div>
+            <div style="font-size: 6px; font-weight: 600; color: #64748B; text-transform: uppercase;">Pulse</div>
+            <div style="font-size: 11px; font-weight: 700; color: #7C3AED;">' . ($vital_signs['pulse_rate'] ?? '--') . ' <span style="font-size: 6px; color: #64748B;">bpm</span></div>
+            <div style="font-size: 6px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; background: ' . ($pulse_status['class'] === 'normal' ? '#D1FAE5' : ($pulse_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($pulse_status['class'] === 'normal' ? '#059669' : ($pulse_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $pulse_status['label'] . '</div>
         </div>
-        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 4px; border-left: 3px solid #D97706; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
-            <div style="font-size: 16px;">⚖️</div>
-            <div style="font-size: 7px; font-weight: 600; color: #64748B; text-transform: uppercase;">Weight</div>
-            <div style="font-size: 12px; font-weight: 700; color: #D97706;">' . ($vital_signs['weight'] ?? '--') . ' <span style="font-size: 7px; color: #64748B;">kg</span></div>
+        <div style="background: linear-gradient(135deg, rgba(14,165,233,0.05), rgba(14,165,233,0.12)); border-radius: 6px; padding: 6px 3px; border-left: 3px solid #0EA5E9; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+            <div style="font-size: 14px;">🫁</div>
+            <div style="font-size: 6px; font-weight: 600; color: #0284C7; text-transform: uppercase;">SpO2</div>
+            <div style="font-size: 11px; font-weight: 700; color: #0284C7;">' . ($vital_signs['oxygen_saturation'] ?? '--') . ' <span style="font-size: 6px; color: #64748B;">%</span></div>
+            <div style="font-size: 6px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; background: ' . ($spo2_status['class'] === 'normal' ? '#D1FAE5' : ($spo2_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($spo2_status['class'] === 'normal' ? '#059669' : ($spo2_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $spo2_status['label'] . '</div>
         </div>
-        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 4px; border-left: 3px solid #0D9488; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
-            <div style="font-size: 16px;">📏</div>
-            <div style="font-size: 7px; font-weight: 600; color: #64748B; text-transform: uppercase;">Height</div>
-            <div style="font-size: 12px; font-weight: 700; color: #0D9488;">' . ($vital_signs['height'] ?? '--') . ' <span style="font-size: 7px; color: #64748B;">cm</span></div>
+        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 3px; border-left: 3px solid #D97706; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+            <div style="font-size: 14px;">⚖️</div>
+            <div style="font-size: 6px; font-weight: 600; color: #64748B; text-transform: uppercase;">Weight</div>
+            <div style="font-size: 11px; font-weight: 700; color: #D97706;">' . ($vital_signs['weight'] ?? '--') . ' <span style="font-size: 6px; color: #64748B;">kg</span></div>
         </div>
-        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 4px; border-left: 3px solid #2563EB; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
-            <div style="font-size: 16px;">📊</div>
-            <div style="font-size: 7px; font-weight: 600; color: #64748B; text-transform: uppercase;">BMI</div>
-            <div style="font-size: 12px; font-weight: 700; color: #2563EB;">' . ($vital_signs['bmi'] ?? '--') . ' <span style="font-size: 7px; color: #64748B;">kg/m²</span></div>
-            <div style="font-size: 7px; font-weight: 700; padding: 1px 6px; border-radius: 4px; display: inline-block; background: ' . ($bmi_status['class'] === 'normal' ? '#D1FAE5' : ($bmi_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($bmi_status['class'] === 'normal' ? '#059669' : ($bmi_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $bmi_status['label'] . '</div>
+        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 3px; border-left: 3px solid #0D9488; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+            <div style="font-size: 14px;">📏</div>
+            <div style="font-size: 6px; font-weight: 600; color: #64748B; text-transform: uppercase;">Height</div>
+            <div style="font-size: 11px; font-weight: 700; color: #0D9488;">' . ($vital_signs['height'] ?? '--') . ' <span style="font-size: 6px; color: #64748B;">cm</span></div>
         </div>
+        <div style="background: #F8FAFC; border-radius: 6px; padding: 6px 3px; border-left: 3px solid #2563EB; text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.06);">
+            <div style="font-size: 14px;">📊</div>
+            <div style="font-size: 6px; font-weight: 600; color: #64748B; text-transform: uppercase;">BMI</div>
+            <div style="font-size: 11px; font-weight: 700; color: #2563EB;">' . ($vital_signs['bmi'] ?? '--') . ' <span style="font-size: 6px; color: #64748B;">kg/m²</span></div>
+            <div style="font-size: 6px; font-weight: 700; padding: 1px 5px; border-radius: 4px; display: inline-block; background: ' . ($bmi_status['class'] === 'normal' ? '#D1FAE5' : ($bmi_status['class'] === 'high' ? '#FEE2E2' : '#FEF3C7')) . '; color: ' . ($bmi_status['class'] === 'normal' ? '#059669' : ($bmi_status['class'] === 'high' ? '#DC2626' : '#D97706')) . ';">' . $bmi_status['label'] . '</div>
+        </div>
+    </div>
+    <div style="font-size: 6.5pt; color: #64748B; margin-top: -8px; margin-bottom: 10px; text-align: right; font-style: italic;">
+        🫁 SpO2 (Oxygen Saturation) Normal Range: 95-100%
     </div>';
 }
 
@@ -816,7 +832,9 @@ $pdf_content .= '</div>'; // End page
         console.log('✅ Patient Information');
         console.log('✅ Last Visit Information');
         console.log('✅ Doctor Information');
-        console.log('✅ Vital Signs (6 cards)');
+        console.log('✅ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI');
+        console.log('🫁 SpO2 (Oxygen Saturation): Normal 95-100%');
+        console.log('🫁 SpO2 Value: <?= $vital_signs['oxygen_saturation'] ?? "N/A" ?>%');
         console.log('✅ Symptoms, HPI, Physical Examination');
         console.log('✅ Lab Tests');
         console.log('✅ Diagnosis (Disease Name, Code, Treatment)');

@@ -5,6 +5,7 @@
 // - External patients saved to external_sick_sheets table
 // - Registered patients saved to patient_documents
 // - PDF Generation with Official Stamp (SAME AS VISIT PDF)
+// - WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -288,12 +289,14 @@ function generateSickSheetHTML($data) {
             .section-title.purple { color: #7C3AED; border-color: #7C3AED; }
             .section-title.orange { color: #D97706; border-color: #D97706; }
             .section-title.red { color: #DC2626; border-color: #DC2626; }
+            .section-title.sky { color: #0284C7; border-color: #0284C7; }
             
             /* Grids */
             .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
             .row-3col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
             .row-4col { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 10px; }
             .row-6col { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr; gap: 8px; }
+            .row-7col { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr 1fr; gap: 6px; }
             
             /* Info Cards */
             .info-card {
@@ -326,6 +329,7 @@ function generateSickSheetHTML($data) {
             .info-card.orange { border-left: 4px solid #D97706; }
             .info-card.red { border-left: 4px solid #DC2626; }
             .info-card.teal { border-left: 4px solid #0D9488; }
+            .info-card.sky { border-left: 4px solid #0EA5E9; }
             
             .info-card .value .external-tag {
                 font-size: 7px;
@@ -337,32 +341,33 @@ function generateSickSheetHTML($data) {
                 display: inline-block;
             }
             
-            /* Vital Signs */
+            /* Vital Signs - 7 SIGNS */
             .vital-item {
                 background: #F8FAFC;
                 border-radius: 6px;
-                padding: 8px 10px;
+                padding: 6px 4px;
                 text-align: center;
                 border: 1px solid #E2E8F0;
             }
             
             .vital-item .vital-label {
-                font-size: 7px;
+                font-size: 6px;
                 font-weight: 600;
                 color: #64748B;
                 text-transform: uppercase;
                 display: block;
+                line-height: 1.2;
             }
             
             .vital-item .vital-value {
-                font-size: 13px;
+                font-size: 11px;
                 font-weight: 700;
                 display: block;
                 margin-top: 2px;
             }
             
             .vital-item .vital-unit {
-                font-size: 8px;
+                font-size: 7px;
                 font-weight: 400;
                 color: #64748B;
             }
@@ -370,8 +375,16 @@ function generateSickSheetHTML($data) {
             .vital-item.temp .vital-value { color: #DC2626; }
             .vital-item.bp .vital-value { color: #0B5ED7; }
             .vital-item.pulse .vital-value { color: #7C3AED; }
+            .vital-item.spo2 .vital-value { color: #0284C7; }
             .vital-item.weight .vital-value { color: #D97706; }
+            .vital-item.height .vital-value { color: #0D9488; }
             .vital-item.bmi .vital-value { color: #059669; }
+            
+            /* SpO2 special background */
+            .vital-item.spo2 {
+                background: #E0F2FE;
+                border-color: #0EA5E9;
+            }
             
             /* Detail Rows */
             .detail-row {
@@ -592,6 +605,11 @@ function generateSickSheetHTML($data) {
                 body { padding: 0; }
                 .info-card { break-inside: avoid; }
                 .stamp { break-inside: avoid; }
+                .vital-item.spo2 { 
+                    background: #E0F2FE !important; 
+                    -webkit-print-color-adjust: exact; 
+                    print-color-adjust: exact; 
+                }
             }
             
             /* Responsive */
@@ -600,6 +618,7 @@ function generateSickSheetHTML($data) {
                 .row-3col { grid-template-columns: 1fr 1fr; }
                 .row-4col { grid-template-columns: 1fr 1fr; }
                 .row-6col { grid-template-columns: 1fr 1fr 1fr; }
+                .row-7col { grid-template-columns: 1fr 1fr 1fr 1fr; }
                 .sick-box .sick-grid { grid-template-columns: 1fr; }
                 .footer-section { flex-direction: column; }
                 .stamp-container { justify-content: flex-start; }
@@ -685,33 +704,40 @@ function generateSickSheetHTML($data) {
             </div>
         </div>
         
-        <!-- Vital Signs -->
-        <div class="section-title purple">❤️ Vital Signs</div>
-        <div class="row-6col">
+        <!-- Vital Signs - 7 SIGNS WITH OXYGEN SATURATION -->
+        <div class="section-title sky">❤️ Vital Signs (7 Signs)</div>
+        <div class="row-7col">
             <div class="vital-item temp">
-                <span class="vital-label">🌡️ Temperature</span>
+                <span class="vital-label">🌡️ Temp</span>
                 <span class="vital-value">' . ($data['temperature'] ?? '--') . ' <span class="vital-unit">°C</span></span>
             </div>
             <div class="vital-item bp">
-                <span class="vital-label">💓 Blood Pressure</span>
+                <span class="vital-label">💓 BP</span>
                 <span class="vital-value">' . ((isset($data['bp_systolic']) && isset($data['bp_diastolic'])) ? $data['bp_systolic'] . '/' . $data['bp_diastolic'] . ' <span class="vital-unit">mmHg</span>' : '--') . '</span>
             </div>
             <div class="vital-item pulse">
-                <span class="vital-label">💓 Pulse Rate</span>
+                <span class="vital-label">💓 Pulse</span>
                 <span class="vital-value">' . ($data['pulse_rate'] ?? '--') . ' <span class="vital-unit">bpm</span></span>
+            </div>
+            <div class="vital-item spo2">
+                <span class="vital-label">🫁 SpO2</span>
+                <span class="vital-value">' . ($data['oxygen_saturation'] ?? '--') . ' <span class="vital-unit">%</span></span>
             </div>
             <div class="vital-item weight">
                 <span class="vital-label">⚖️ Weight</span>
                 <span class="vital-value">' . ($data['weight'] ?? '--') . ' <span class="vital-unit">kg</span></span>
             </div>
-            <div class="vital-item" style="border-color:#E2E8F0;">
+            <div class="vital-item height">
                 <span class="vital-label">📏 Height</span>
-                <span class="vital-value" style="color:#64748B;">' . ($data['height'] ?? '--') . ' <span class="vital-unit">cm</span></span>
+                <span class="vital-value">' . ($data['height'] ?? '--') . ' <span class="vital-unit">cm</span></span>
             </div>
             <div class="vital-item bmi">
                 <span class="vital-label">📊 BMI</span>
                 <span class="vital-value">' . ($data['bmi'] ?? '--') . ' <span class="vital-unit">kg/m²</span></span>
             </div>
+        </div>
+        <div style="font-size:6.5px;color:#64748B;margin-top:4px;text-align:right;font-style:italic;">
+            🫁 SpO2 (Oxygen Saturation) Normal Range: 95-100%
         </div>
         
         <!-- Clinical Details -->
@@ -837,6 +863,8 @@ function generateSickSheetHTML($data) {
                 ' . htmlspecialchars($data['document_number'] ?? 'N/A') . '
                 <span style="color:#94A3B8;">|</span> 
                 Generated: ' . date('d M Y, h:i A') . '
+                <span style="color:#94A3B8;">|</span> 
+                <span style="color:#0284C7;">🫁 7 Vital Signs</span>
             </div>
             <div class="slogan">⭐ Braick Dispensary - Tunajali Afya Yako ⭐</div>
         </div>
@@ -911,6 +939,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $bp_systolic = $_POST['bp_systolic'] ?? null;
     $bp_diastolic = $_POST['bp_diastolic'] ?? null;
     $pulse_rate = $_POST['pulse_rate'] ?? null;
+    $oxygen_saturation = $_POST['oxygen_saturation'] ?? null;  // MPYA - SpO2
     $weight = $_POST['weight'] ?? null;
     $height = $_POST['height'] ?? null;
     
@@ -997,6 +1026,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'bp_systolic' => $bp_systolic,
             'bp_diastolic' => $bp_diastolic,
             'pulse_rate' => $pulse_rate,
+            'oxygen_saturation' => $oxygen_saturation,  // MPYA
             'weight' => $weight,
             'height' => $height,
             'bmi' => null,
@@ -1049,14 +1079,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     document_number, full_name, patient_id, phone, gender, date_of_birth,
                     address, blood_group, allergies, symptoms, diagnosis, treatment,
                     instructions, temperature, bp_systolic, bp_diastolic, pulse_rate,
-                    weight, height, lab_results, medications, procedures,
+                    oxygen_saturation, weight, height, lab_results, medications, procedures,
                     sick_days, sick_from, sick_to, sick_reason, sick_restrictions,
                     doctor_id, branch_id, file_name, file_path, file_type, created_at
                 ) VALUES (
                     ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, NOW()
                 )
@@ -1080,6 +1110,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $bp_systolic,
                 $bp_diastolic,
                 $pulse_rate,
+                $oxygen_saturation,  // MPYA
                 $weight,
                 $height,
                 $lab_results,
@@ -1202,6 +1233,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --warning-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
+            --sky: #0EA5E9;
+            --sky-bg: #E0F2FE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -1460,6 +1493,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         .form-row {
             margin-bottom: 16px;
+        }
+        
+        /* SpO2 Special Styling */
+        .form-row.spo2-field .form-control {
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(14, 165, 233, 0.1));
+            border-color: var(--sky);
+        }
+        .form-row.spo2-field .form-control:focus {
+            border-color: #0284C7;
+            box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.15);
+        }
+        .form-row.spo2-field .form-label {
+            color: #0284C7;
         }
         
         /* ================================================================
@@ -1880,19 +1926,20 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
 
-            <!-- VITAL SIGNS -->
+            <!-- VITAL SIGNS - 7 SIGNS -->
             <div style="margin-top:16px;padding-top:16px;border-top:2px solid var(--border-color);">
                 <h4 style="font-size:0.95rem;font-weight:600;margin-bottom:12px;color:#DC2626;">
-                    <i class="fas fa-heartbeat"></i> Vital Signs
+                    <i class="fas fa-heartbeat"></i> Vital Signs (7 Signs)
+                    <span style="color:#0284C7;font-size:0.7rem;font-weight:400;margin-left:8px;">🫁 SpO2 Normal: 95-100%</span>
                 </h4>
                 <div class="grid-3">
                     <div class="form-row">
-                        <label class="form-label">🌡️ Temperature</label>
+                        <label class="form-label">🌡️ Temperature (°C)</label>
                         <input type="number" name="temperature" class="form-control" step="0.1" 
                                value="<?= $vital_signs ? $vital_signs['temperature'] : '' ?>" placeholder="36.5">
                     </div>
                     <div class="form-row">
-                        <label class="form-label">❤️ Blood Pressure</label>
+                        <label class="form-label">❤️ Blood Pressure (mmHg)</label>
                         <div style="display:flex;gap:8px;align-items:center;">
                             <input type="number" name="bp_systolic" class="form-control" style="flex:1;" 
                                    value="<?= $vital_signs ? $vital_signs['blood_pressure_systolic'] : '' ?>" placeholder="120">
@@ -1902,17 +1949,25 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                         </div>
                     </div>
                     <div class="form-row">
-                        <label class="form-label">💓 Pulse Rate</label>
+                        <label class="form-label">💓 Pulse Rate (bpm)</label>
                         <input type="number" name="pulse_rate" class="form-control" 
                                value="<?= $vital_signs ? $vital_signs['pulse_rate'] : '' ?>" placeholder="72">
                     </div>
+                    <!-- SpO2 - MPYA -->
+                    <div class="form-row spo2-field">
+                        <label class="form-label">🫁 Oxygen Saturation (SpO2 %) <span style="font-size:0.6rem;color:#64748B;">Normal: 95-100%</span></label>
+                        <input type="number" name="oxygen_saturation" class="form-control" 
+                               min="0" max="100" 
+                               value="<?= $vital_signs ? ($vital_signs['oxygen_saturation'] ?? '') : '' ?>" 
+                               placeholder="98">
+                    </div>
                     <div class="form-row">
-                        <label class="form-label">⚖️ Weight</label>
+                        <label class="form-label">⚖️ Weight (kg)</label>
                         <input type="number" name="weight" class="form-control" step="0.1" 
                                value="<?= $vital_signs ? $vital_signs['weight'] : '' ?>" placeholder="65">
                     </div>
                     <div class="form-row">
-                        <label class="form-label">📏 Height</label>
+                        <label class="form-label">📏 Height (cm)</label>
                         <input type="number" name="height" class="form-control" step="0.1" 
                                value="<?= $vital_signs ? $vital_signs['height'] : '' ?>" placeholder="170">
                     </div>
@@ -2016,6 +2071,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
             <div class="mt-4 pt-3 text-xs text-center border-t border-gray-200 dark:border-gray-700" style="color:var(--text-secondary);">
                 <i class="fas fa-info-circle mr-1"></i>
+                <strong>7 Vital Signs:</strong> Temp, BP, Pulse, SpO2, Weight, Height, BMI
+                <span class="mx-2">|</span>
                 <strong>External Patients:</strong> Saved to separate table - NOT in main patients list.
                 <span class="mx-2">|</span>
                 <?php if ($pdf_available): ?>
@@ -2151,6 +2208,39 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     });
 
     // ================================================================
+    // SpO2 VALIDATION (0-100)
+    // ================================================================
+    var spo2Input = document.querySelector('input[name="oxygen_saturation"]');
+    if (spo2Input) {
+        spo2Input.addEventListener('input', function() {
+            var val = parseInt(this.value);
+            if (this.value !== '') {
+                if (val < 0) this.value = 0;
+                if (val > 100) this.value = 100;
+            }
+        });
+        
+        spo2Input.addEventListener('blur', function() {
+            if (this.value !== '') {
+                var val = parseInt(this.value);
+                if (val < 70) {
+                    this.style.color = '#DC2626';
+                    this.title = '⚠️ SpO2 chini sana - Hatari!';
+                } else if (val < 95) {
+                    this.style.color = '#D97706';
+                    this.title = '⚠️ SpO2 chini ya kawaida';
+                } else {
+                    this.style.color = '#059669';
+                    this.title = '✅ SpO2 nzuri';
+                }
+            } else {
+                this.style.color = '';
+                this.title = '';
+            }
+        });
+    }
+
+    // ================================================================
     // TOAST
     // ================================================================
     function showToast(title, message, type) {
@@ -2190,6 +2280,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     console.log('%c📄 Sick Sheet - <?= htmlspecialchars($doctor_name) ?>', 'font-size:16px; font-weight:bold; color:#DC2626;');
     console.log('%c✅ Design matches Visit PDF style', 'font-size:12px; color:#34D399;');
     console.log('%c✅ Official Stamp included', 'font-size:12px; color:#0B5ED7;');
+    console.log('%c❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI', 'font-size:12px; color:#DC2626;');
+    console.log('%c🫁 SpO2 (Oxygen Saturation): Normal 95-100%', 'font-size:12px; color:#0284C7;');
     console.log('%c⭐ Braick Dispensary - Tunajali Afya Yako', 'font-size:12px; color:#DC2626;');
 </script>
 

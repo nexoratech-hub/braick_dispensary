@@ -9,6 +9,7 @@
 // FIXED: PDF starts at top of page
 // FIXED: All 10 sections appear in PDF (even empty ones)
 // FIXED: Removed Complete Button | Reduced Spacing to 1cm
+// ✅ ADDED: Oxygen Saturation (SpO2) in vital signs - 7 vitals
 // ================================================================
 
 // ================================================================
@@ -166,7 +167,6 @@ try {
         $stmt->execute([$visit_id]);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // Get prescription items with medication details
         foreach ($prescriptions as $pres) {
             $stmt = $db->prepare("
                 SELECT pi.*, mi.medication_name as inventory_medication_name,
@@ -204,7 +204,7 @@ try {
     }
     
     // ================================================================
-    // GET VITAL SIGNS FOR THIS VISIT
+    // GET VITAL SIGNS FOR THIS VISIT (WITH SPO2)
     // ================================================================
     $vital_signs = null;
     if ($visit) {
@@ -383,6 +383,8 @@ include_once '../../components/reception_sidebar.php';
             --warning-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
+            --cyan: #0891B2;
+            --cyan-bg: #CFFAFE;
             --green-header: #059669;
             --green-header-dark: #047857;
             --gray-50: #F8FAFC;
@@ -781,12 +783,22 @@ include_once '../../components/reception_sidebar.php';
         .status-badge-visit.confirmed { background: #E8F0FE; color: #0B5ED7; }
         
         /* ================================================================
-           VITAL SIGNS CARDS (6 CARDS)
+           VITAL SIGNS CARDS (7 CARDS WITH SPO2)
            ================================================================ */
-        .vital-grid-6 {
+        .vital-grid-7 {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
+            grid-template-columns: repeat(7, 1fr);
             gap: 8px;
+        }
+        
+        @media (max-width: 1400px) {
+            .vital-grid-7 { grid-template-columns: repeat(4, 1fr); }
+        }
+        @media (max-width: 1024px) {
+            .vital-grid-7 { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (max-width: 768px) {
+            .vital-grid-7 { grid-template-columns: repeat(2, 1fr); }
         }
         
         .vital-card {
@@ -798,6 +810,11 @@ include_once '../../components/reception_sidebar.php';
             transition: all 0.3s ease;
             position: relative;
             overflow: hidden;
+            min-height: 95px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
         }
         
         .vital-card::before {
@@ -815,6 +832,7 @@ include_once '../../components/reception_sidebar.php';
         .vital-card.orange::before { background: var(--warning); }
         .vital-card.red::before { background: var(--danger); }
         .vital-card.teal::before { background: #0D9488; }
+        .vital-card.cyan::before { background: var(--cyan); }
         
         .vital-card:hover {
             transform: translateY(-3px);
@@ -856,6 +874,27 @@ include_once '../../components/reception_sidebar.php';
         .vital-card.orange .vital-value { color: var(--warning); }
         .vital-card.red .vital-value { color: var(--danger); }
         .vital-card.teal .vital-value { color: #0D9488; }
+        .vital-card.cyan .vital-value { color: var(--cyan); }
+        
+        /* SpO2 Category Badge */
+        .spo2-category {
+            display: inline-block;
+            font-size: 0.45rem;
+            font-weight: 700;
+            padding: 1px 8px;
+            border-radius: 8px;
+            margin-top: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .spo2-category.normal { background: rgba(8,145,178,0.15); color: var(--cyan); }
+        .spo2-category.low { background: rgba(217,119,6,0.15); color: var(--warning); }
+        .spo2-category.critical { background: rgba(220,38,38,0.2); color: var(--danger); animation: pulse-spo2 1s infinite; }
+        
+        @keyframes pulse-spo2 {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
         
         /* ================================================================
            BILL SUMMARY CARDS
@@ -962,10 +1001,7 @@ include_once '../../components/reception_sidebar.php';
             max-width: 200px;
         }
         
-        /* Medication table specific styles - Beautiful CSS */
-        .medication-table td {
-            padding: 10px 12px;
-        }
+        .medication-table td { padding: 10px 12px; }
         
         .medication-table .med-name {
             font-weight: 600;
@@ -1193,7 +1229,7 @@ include_once '../../components/reception_sidebar.php';
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(3, 1fr); }
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
             .grid-4 { grid-template-columns: 1fr 1fr; }
             .grid-3 { grid-template-columns: 1fr 1fr; }
@@ -1204,7 +1240,7 @@ include_once '../../components/reception_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .vital-grid-6 { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(2, 1fr); }
             .bill-summary-grid { grid-template-columns: 1fr; }
             .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
             .col-span-2, .col-span-3 { grid-column: span 1; }
@@ -1213,7 +1249,7 @@ include_once '../../components/reception_sidebar.php';
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .vital-grid-6 { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(2, 1fr); }
             .page-header .btn-outline-light { padding: 4px 8px; font-size: 0.65rem; }
         }
         
@@ -1359,7 +1395,6 @@ include_once '../../components/reception_sidebar.php';
             padding-top: 28px;
         }
         
-        /* PDF Styles - Natural page breaks */
         .pdf-content .pdf-section {
             page-break-inside: avoid;
             break-inside: avoid;
@@ -1380,255 +1415,6 @@ include_once '../../components/reception_sidebar.php';
             padding-top: 0;
         }
         
-        /* PDF Content Styles - Logo Centered at Top */
-        .pdf-content .pdf-header {
-            text-align: center;
-            padding-bottom: 12px;
-            border-bottom: 3px solid var(--primary);
-            margin-bottom: 16px;
-            page-break-after: avoid;
-            break-after: avoid;
-            margin-top: 0;
-            padding-top: 0;
-        }
-        
-        .pdf-content .pdf-header .pdf-logo {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 4px;
-        }
-        
-        .pdf-content .pdf-header .pdf-logo img {
-            height: 55px;
-            width: auto;
-            object-fit: contain;
-            display: block;
-            margin: 0 auto;
-        }
-        
-        .pdf-content .pdf-header .clinic-name {
-            font-size: 1.4rem;
-            font-weight: 800;
-            color: var(--primary);
-            letter-spacing: -0.5px;
-            margin-top: 4px;
-        }
-        
-        .pdf-content .pdf-header .clinic-sub {
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            letter-spacing: 0.5px;
-        }
-        
-        .pdf-content .pdf-header .doc-title {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: var(--primary);
-            margin-top: 4px;
-            background: var(--primary-bg);
-            padding: 4px 16px;
-            border-radius: 20px;
-            display: inline-block;
-        }
-        
-        .pdf-content .section-title {
-            font-weight: 700;
-            font-size: 0.95rem;
-            color: var(--primary);
-            border-bottom: 2px solid var(--primary-light);
-            padding-bottom: 4px;
-            margin: 6px 0 4px 0;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            page-break-after: avoid;
-            break-after: avoid;
-        }
-        
-        .pdf-content .pdf-row {
-            display: flex;
-            padding: 2px 0;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 14px;
-        }
-        
-        .pdf-content .pdf-row .pdf-label {
-            font-weight: 600;
-            color: var(--text-secondary);
-            width: 130px;
-            flex-shrink: 0;
-            font-size: 14px;
-        }
-        
-        .pdf-content .pdf-row .pdf-value {
-            flex: 1;
-            color: var(--text-primary);
-            font-size: 14px;
-            word-wrap: break-word;
-            max-width: 400px;
-        }
-        
-        .pdf-content .pdf-grid-2 {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 2px 14px;
-        }
-        
-        .pdf-content .pdf-vital-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 4px;
-            margin: 4px 0;
-        }
-        
-        .pdf-content .pdf-vital-item {
-            background: var(--primary-bg);
-            padding: 4px 8px;
-            border-radius: 6px;
-            border-left: 3px solid var(--primary);
-            text-align: center;
-        }
-        
-        .pdf-content .pdf-vital-item .vital-label {
-            font-size: 0.45rem;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-        }
-        
-        .pdf-content .pdf-vital-item .vital-value {
-            font-size: 0.85rem;
-            font-weight: 700;
-            color: var(--primary-dark);
-        }
-        
-        .pdf-content .pdf-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 14px;
-            margin: 4px 0;
-            word-wrap: break-word;
-            overflow-wrap: break-word;
-        }
-        
-        .pdf-content .pdf-table th {
-            background: var(--green-header);
-            color: white;
-            padding: 5px 10px;
-            text-align: left;
-            font-size: 13px;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            font-weight: 700;
-            border: 1px solid var(--green-header-dark);
-        }
-        
-        .pdf-content .pdf-table td {
-            padding: 5px 10px;
-            border-bottom: 1px solid var(--border-color);
-            font-size: 14px;
-            word-wrap: break-word;
-            overflow-wrap: break-word;
-            max-width: 200px;
-            vertical-align: middle;
-        }
-        
-        .pdf-content .pdf-table td .long-text {
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        
-        .pdf-content .pdf-table tr:nth-child(even) td {
-            background: var(--gray-50);
-        }
-        
-        .pdf-content .pdf-empty {
-            padding: 6px 0;
-            color: var(--text-secondary);
-            font-style: italic;
-            font-size: 14px;
-            text-align: center;
-            background: var(--gray-50);
-            border-radius: 4px;
-            margin: 2px 0;
-        }
-        
-        .pdf-content .pdf-footer {
-            margin-top: 12px;
-            padding-top: 10px;
-            border-top: 2px solid var(--border-color);
-            page-break-inside: avoid;
-            break-inside: avoid;
-        }
-        
-        .pdf-content .pdf-footer .footer-stamp {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 12px;
-        }
-        
-        .pdf-content .pdf-footer .footer-left {
-            font-size: 14px;
-            color: var(--text-secondary);
-        }
-        
-        .pdf-content .pdf-footer .footer-left .signature-line {
-            display: inline-block;
-            width: 120px;
-            border-bottom: 1px solid var(--text-secondary);
-            margin-left: 4px;
-        }
-        
-        .pdf-content .pdf-footer .stamp-box {
-            text-align: center;
-            padding: 6px 14px;
-            border: 3px solid var(--primary);
-            border-radius: 10px;
-            background: var(--primary-bg);
-            min-width: 150px;
-        }
-        
-        .pdf-content .pdf-footer .stamp-box .stamp-title {
-            font-size: 10px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-weight: 700;
-        }
-        
-        .pdf-content .pdf-footer .stamp-box .stamp-name {
-            font-size: 14px;
-            font-weight: 800;
-            color: var(--primary);
-        }
-        
-        .pdf-content .pdf-footer .stamp-box .stamp-line {
-            font-size: 12px;
-            color: var(--text-secondary);
-            margin-top: 2px;
-        }
-        
-        .pdf-content .pdf-footer .stamp-box .stamp-date {
-            font-size: 10px;
-            color: var(--text-muted);
-            margin-top: 2px;
-        }
-        
-        .pdf-content .pdf-footer .footer-bottom {
-            text-align: center;
-            margin-top: 6px;
-            font-size: 12px;
-            color: var(--text-muted);
-        }
-        
-        /* Two row text wrap for PDF */
         .pdf-content .text-wrap-2 {
             display: -webkit-box;
             -webkit-line-clamp: 2;
@@ -1639,8 +1425,13 @@ include_once '../../components/reception_sidebar.php';
             line-height: 1.5em;
         }
         
-        .pdf-content .pdf-table td .text-wrap-2 {
-            max-width: 180px;
+        /* ================================================================
+           PDF VITAL SIGNS GRID
+           ================================================================ */
+        .pdf-vital-grid-7 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 4px;
         }
     </style>
 </head>
@@ -1930,7 +1721,7 @@ include_once '../../components/reception_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 4. VITAL SIGNS (6 CARDS) -->
+    <!-- 4. VITAL SIGNS (7 CARDS WITH SPO2) -->
     <!-- ================================================================ -->
     <?php if ($vital_signs): ?>
     <div class="detail-card animate-fade-in-up">
@@ -1939,7 +1730,7 @@ include_once '../../components/reception_sidebar.php';
             <h3>4. Vital Signs</h3>
             <span class="badge-count"><?= isset($vital_signs['recorded_at']) ? date('M d, Y h:i A', strtotime($vital_signs['recorded_at'])) : 'N/A' ?></span>
         </div>
-        <div class="vital-grid-6">
+        <div class="vital-grid-7">
             <div class="vital-card blue">
                 <span class="vital-icon">🌡️</span>
                 <span class="vital-label">Temperature</span>
@@ -1976,6 +1767,19 @@ include_once '../../components/reception_sidebar.php';
                 <span class="vital-label">BMI</span>
                 <span class="vital-value"><?= $vital_signs['bmi'] ?? 'N/A' ?> <span class="vital-unit">kg/m²</span></span>
             </div>
+            <!-- ✅ MPYA: Oxygen Saturation (SpO2) -->
+            <?php if (!empty($vital_signs['oxygen_saturation'])): 
+                $spo2 = (int)$vital_signs['oxygen_saturation'];
+                $spo2_class = $spo2 >= 95 ? 'normal' : ($spo2 >= 90 ? 'low' : 'critical');
+                $spo2_label = $spo2 >= 95 ? 'Normal' : ($spo2 >= 90 ? 'Low' : 'Critical');
+            ?>
+            <div class="vital-card cyan">
+                <span class="vital-icon">🫁</span>
+                <span class="vital-label">Oxygen Sat.</span>
+                <span class="vital-value"><?= $spo2 ?> <span class="vital-unit">%</span></span>
+                <span class="spo2-category <?= $spo2_class ?>"><?= $spo2_label ?></span>
+            </div>
+            <?php endif; ?>
         </div>
         <?php if (!empty($vital_signs['notes'])): ?>
             <div class="mt-2 text-sm" style="margin-top:8px;font-size:0.75rem;color:var(--text-secondary);">
@@ -2621,7 +2425,7 @@ include_once '../../components/reception_sidebar.php';
     }
 
     // ================================================================
-    // GENERATE PDF - FIXED: Starts at top, All 10 sections included
+    // GENERATE PDF - WITH SPO2
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -2637,14 +2441,25 @@ include_once '../../components/reception_sidebar.php';
         
         var vitalSignsHTML = '';
         if (hasVitalSigns) {
+            var spo2HTML = '';
+            <?php if (!empty($vital_signs['oxygen_saturation'])): 
+                $spo2 = (int)$vital_signs['oxygen_saturation'];
+                $spo2_color = $spo2 >= 95 ? '#0891B2' : ($spo2 >= 90 ? '#D97706' : '#DC2626');
+                $spo2_bg = $spo2 >= 95 ? '#CFFAFE' : ($spo2 >= 90 ? '#FEF3C7' : '#FEE2E2');
+                $spo2_label = $spo2 >= 95 ? 'Normal' : ($spo2 >= 90 ? 'Low' : 'Critical');
+            ?>
+                spo2HTML = `<div style="background:<?= $spo2_bg ?>;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid <?= $spo2_color ?>;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">🫁 Oxygen Sat.</div><div style="font-weight:700;color:<?= $spo2_color ?>;font-size:14px;"><?= $spo2 ?> %</div><div style="font-size:9px;font-weight:700;color:<?= $spo2_color ?>;text-transform:uppercase;margin-top:1px;"><?= $spo2_label ?></div></div>`;
+            <?php endif; ?>
+            
             vitalSignsHTML = `
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;">
                     <div style="background:#E8F0FE;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #0B5ED7;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">🌡️ Temperature</div><div style="font-weight:700;color:#0B5ED7;font-size:14px;"><?= $vital_signs['temperature'] ?? 'N/A' ?> °C</div></div>
                     <div style="background:#D1FAE5;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #059669;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">❤️ Blood Pressure</div><div style="font-weight:700;color:#059669;font-size:14px;"><?= !empty($vital_signs['blood_pressure_systolic']) && !empty($vital_signs['blood_pressure_diastolic']) ? $vital_signs['blood_pressure_systolic'] . ' / ' . $vital_signs['blood_pressure_diastolic'] . ' mmHg' : 'N/A' ?></div></div>
                     <div style="background:#EDE9FE;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #7C3AED;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">💓 Pulse Rate</div><div style="font-weight:700;color:#7C3AED;font-size:14px;"><?= $vital_signs['pulse_rate'] ?? 'N/A' ?> bpm</div></div>
                     <div style="background:#FEF3C7;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #D97706;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">⚖️ Weight</div><div style="font-weight:700;color:#D97706;font-size:14px;"><?= $vital_signs['weight'] ?? 'N/A' ?> kg</div></div>
                     <div style="background:#D1FAE5;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #0D9488;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">📏 Height</div><div style="font-weight:700;color:#0D9488;font-size:14px;"><?= $vital_signs['height'] ?? 'N/A' ?> cm</div></div>
                     <div style="background:#FEE2E2;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #DC2626;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">📊 BMI</div><div style="font-weight:700;color:#DC2626;font-size:14px;"><?= $vital_signs['bmi'] ?? 'N/A' ?> kg/m²</div></div>
+                    ` + spo2HTML + `
                 </div>
             `;
         } else {
@@ -2964,7 +2779,7 @@ include_once '../../components/reception_sidebar.php';
                 <?php endif; ?>
             </div>
             
-            <!-- 4. VITAL SIGNS -->
+            <!-- 4. VITAL SIGNS (WITH SPO2) -->
             <div class="pdf-section">
                 <div style="font-size:14px;font-weight:700;color:#0B5ED7;border-bottom:2px solid #6EA8FE;padding-bottom:4px;margin:6px 0 4px 0;">
                     <i class="fas fa-heartbeat"></i> 4. Vital Signs
@@ -3043,7 +2858,6 @@ include_once '../../components/reception_sidebar.php';
         content.innerHTML = html;
         modal.classList.add('active');
         
-        // Scroll to top of modal body
         var modalBody = document.getElementById('pdfModalBody');
         if (modalBody) {
             modalBody.scrollTop = 0;
@@ -3101,7 +2915,8 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c🏥 Braick Dispensary - Complete Visit Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c✅ FIXED: PDF starts at top | All 10 sections included | Empty sections show "No data" message', 'font-size:13px; color:#0B5ED7;');
+    console.log('%c❤️ VITAL SIGNS: 7 CARDS (with SpO2)', 'font-size:13px; color:#DC2626;');
+    console.log('%c🫁 SpO2 with category (Normal/Low/Critical)', 'font-size:13px; color:#0891B2;');
     console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:13px; color:#D97706;');
 </script>
 

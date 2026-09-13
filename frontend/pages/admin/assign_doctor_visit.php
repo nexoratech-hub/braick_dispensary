@@ -3,6 +3,7 @@
 // FILE: frontend/pages/admin/assign_doctor.php
 // ADMIN / RECEPTION - ASSIGN / CHANGE DOCTOR & LAB REQUESTS
 // BRAICK DISPENSARY - USING EXISTING DB TABLES
+// ✅ VITAL SIGNS 7 - WITH OXYGEN SATURATION (SpO2)
 // ================================================================
 
 // ================================================================
@@ -121,7 +122,6 @@ try {
     
     // ================================================================
     // GET CONSULTATION SERVICES FROM SERVICES TABLE
-    // Using service_categories to find consultation services
     // ================================================================
     $stmt = $db->prepare("
         SELECT s.id, s.service_name, s.description, s.price, s.unit, s.is_active
@@ -143,9 +143,7 @@ try {
     $stmt->execute([$selected_branch_id]);
     $consultation_services = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
-    // If no consultation services found, use fallback
     if (empty($consultation_services)) {
-        // Try to get all services from consultation category
         $stmt = $db->prepare("
             SELECT id, service_name, description, price, unit, is_active
             FROM services 
@@ -194,14 +192,12 @@ try {
             'icon' => $icon
         ];
         
-        // Set default to New Patient / General Consultation
         if (strpos(strtolower($service_name), 'new') !== false || 
             strpos(strtolower($service_name), 'general') !== false) {
             $default_key = $key;
         }
     }
     
-    // Fallback if no consultation services found
     if (empty($visit_type_options)) {
         $visit_type_options = [
             'new_patient' => [
@@ -397,7 +393,6 @@ try {
     // FUNCTION: CREATE VISIT BILL
     // ================================================================
     function createVisitBill($db, $patient_id, $visit_id, $visit_type, $consultation_fee, $user_id, $branch_id) {
-        // Check if there's an existing pending bill for this visit
         $stmt = $db->prepare("
             SELECT id, bill_number, status 
             FROM bills 
@@ -408,7 +403,6 @@ try {
         $existing_bill = $stmt->fetch(PDO::FETCH_ASSOC);
         
         if ($existing_bill) {
-            // Update existing bill
             $stmt = $db->prepare("
                 UPDATE bills 
                 SET subtotal = ?, 
@@ -424,7 +418,6 @@ try {
                 $existing_bill['id']
             ]);
             
-            // Update bill item
             $stmt = $db->prepare("
                 UPDATE bill_items 
                 SET unit_price = ?, total_price = ?, item_name = ?
@@ -441,7 +434,6 @@ try {
             ];
         }
         
-        // CREATE NEW BILL
         $bill_number = 'BILL-' . date('Ymd') . '-' . str_pad($patient_id, 4, '0', STR_PAD_LEFT) . '-' . rand(1000, 9999);
         
         $stmt = $db->prepare("
@@ -462,7 +454,6 @@ try {
         ]);
         $bill_id = $db->lastInsertId();
         
-        // ADD BILL ITEM
         $item_name = 'Consultation (' . ucfirst(str_replace('_', ' ', $visit_type)) . ')';
         
         $stmt = $db->prepare("
@@ -473,7 +464,6 @@ try {
         ");
         $stmt->execute([$bill_id, $patient_id, $branch_id, $item_name, $consultation_fee, $consultation_fee]);
         
-        // NOTIFY CASHIER - Bill created
         try {
             $stmt = $db->prepare("SELECT id FROM users WHERE role = 'cashier' AND status = 'active' AND branch_id = ?");
             $stmt->execute([$branch_id]);
@@ -491,7 +481,6 @@ try {
                     "cashier_dashboard.php"
                 ]);
             }
-            
         } catch (Exception $e) {
             error_log("Cashier notification error: " . $e->getMessage());
         }
@@ -565,7 +554,6 @@ try {
                 }
             }
             
-            // Get consultation services for visit type options
             $stmt = $db->prepare("
                 SELECT s.id, s.service_name, s.description, s.price, s.unit, s.is_active
                 FROM services s
@@ -621,7 +609,6 @@ try {
                 }
             }
             
-            // Build patient options
             $patient_options = '';
             $patient_options .= '<optgroup label="📋 All Patients (' . count($updated_patients) . ')">';
             
@@ -683,7 +670,6 @@ try {
                 $patient_options = '<option value="" disabled>No patients found</option>';
             }
             
-            // Build assigned patients list HTML
             $assigned_html = '';
             $assigned_count_list = 0;
             foreach ($updated_patients as $p) {
@@ -859,7 +845,7 @@ try {
         }
         
         // ================================================================
-        // AJAX: CHANGE DOCTOR
+        // AJAX: CHANGE DOCTOR (WITH SpO2 SUPPORT)
         // ================================================================
         if ($action === 'change_doctor') {
             header('Content-Type: application/json');
@@ -899,7 +885,6 @@ try {
                 $consultation_service_name = $visit_type_options[$visit_type_key]['name'] ?? 'Consultation';
                 $consultation_service_id = $visit_type_options[$visit_type_key]['id'] ?? null;
                 
-                // Check for lab-only visit
                 $stmt = $db->prepare("
                     SELECT id, status, doctor_id, visit_number, consultation_fee, visit_type
                     FROM visits 
@@ -941,7 +926,6 @@ try {
                     ]);
                     
                 } else {
-                    // Check for existing visit
                     $stmt = $db->prepare("
                         SELECT id, status, visit_type, doctor_id, visit_number 
                         FROM visits 
@@ -973,7 +957,6 @@ try {
                             ]);
                             $visit_id = $db->lastInsertId();
                         } else {
-                            // Update existing visit
                             $stmt = $db->prepare("
                                 UPDATE visits 
                                 SET doctor_id = ?, status = 'assigned', 
@@ -993,7 +976,6 @@ try {
                             ]);
                         }
                     } else {
-                        // Create new visit
                         $visit_number = 'VIS-' . date('Ymd') . '-' . str_pad(rand(1, 9999), 4, '0', STR_PAD_LEFT);
                         
                         $stmt = $db->prepare("
@@ -1012,26 +994,29 @@ try {
                     }
                 }
                 
-                // Create bill if consultation fee > 0
                 if ($consultation_fee > 0) {
                     $bill_result = createVisitBill($db, $patient_id, $visit_id, $visit_type_key, $consultation_fee, $user_id, $selected_branch_id);
                 }
                 
-                // Save vital signs
+                // ================================================================
+                // ✅ SAVE VITAL SIGNS - WITH SpO2 (7 VITALS)
+                // ================================================================
                 $temperature = $_POST['temperature'] ?? null;
                 $bp_systolic = $_POST['bp_systolic'] ?? null;
                 $bp_diastolic = $_POST['bp_diastolic'] ?? null;
                 $pulse_rate = $_POST['pulse_rate'] ?? null;
                 $weight = $_POST['weight'] ?? null;
                 $height = $_POST['height'] ?? null;
+                $oxygen_saturation = $_POST['oxygen_saturation'] ?? null; // ✅ MPYA
                 $vital_notes = trim($_POST['vital_notes'] ?? '');
                 
-                $has_vital = $temperature !== null && $temperature !== '' || 
-                             $bp_systolic !== null && $bp_systolic !== '' || 
-                             $bp_diastolic !== null && $bp_diastolic !== '' || 
-                             $pulse_rate !== null && $pulse_rate !== '' || 
-                             $weight !== null && $weight !== '' || 
-                             $height !== null && $height !== '';
+                $has_vital = ($temperature !== null && $temperature !== '') || 
+                             ($bp_systolic !== null && $bp_systolic !== '') || 
+                             ($bp_diastolic !== null && $bp_diastolic !== '') || 
+                             ($pulse_rate !== null && $pulse_rate !== '') || 
+                             ($weight !== null && $weight !== '') || 
+                             ($height !== null && $height !== '') ||
+                             ($oxygen_saturation !== null && $oxygen_saturation !== '');
                 
                 if ($has_vital && $visit_id) {
                     $bmi = null;
@@ -1044,8 +1029,8 @@ try {
                         INSERT INTO vital_signs (
                             patient_id, visit_id, recorded_by, branch_id,
                             temperature, blood_pressure_systolic, blood_pressure_diastolic,
-                            pulse_rate, weight, height, bmi, notes, recorded_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                            pulse_rate, weight, height, bmi, oxygen_saturation, notes, recorded_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
                         $patient_id,
@@ -1059,11 +1044,11 @@ try {
                         $weight ?: null,
                         $height ?: null,
                         $bmi,
+                        $oxygen_saturation ?: null, // ✅ SpO2
                         $vital_notes ?: null
                     ]);
                 }
                 
-                // Update patient assigned doctor
                 $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = ? WHERE id = ?");
                 $stmt->execute([$doctor_id, $patient_id]);
                 
@@ -1103,7 +1088,7 @@ try {
         }
         
         // ================================================================
-        // ORIGINAL ASSIGN DOCTOR (Fallback)
+        // ORIGINAL ASSIGN DOCTOR (Fallback) - WITH SpO2
         // ================================================================
         if ($action === 'assign_doctor' && $assignment_type === 'doctor') {
             $patient_id = (int)($_POST['patient_id'] ?? 0);
@@ -1119,6 +1104,7 @@ try {
             $pulse_rate = $_POST['pulse_rate'] ?? null;
             $weight = $_POST['weight'] ?? null;
             $height = $_POST['height'] ?? null;
+            $oxygen_saturation = $_POST['oxygen_saturation'] ?? null; // ✅ MPYA
             $vital_notes = trim($_POST['vital_notes'] ?? '');
             
             $errors = [];
@@ -1148,7 +1134,6 @@ try {
                     $new_doctor_name = $doctor_data['full_name'] ?? '';
                     $new_doctor_online = $doctor_data['is_online'] ?? 0;
                     
-                    // Check for lab-only visit
                     $stmt = $db->prepare("
                         SELECT id, status, doctor_id, visit_number, visit_type
                         FROM visits 
@@ -1191,7 +1176,6 @@ try {
                         ]);
                         
                     } else {
-                        // Check for existing visit
                         $stmt = $db->prepare("
                             SELECT id, status, visit_type, doctor_id, visit_number 
                             FROM visits 
@@ -1267,12 +1251,13 @@ try {
                         }
                     }
                     
-                    $has_vital = $temperature !== null && $temperature !== '' || 
-                                 $bp_systolic !== null && $bp_systolic !== '' || 
-                                 $bp_diastolic !== null && $bp_diastolic !== '' || 
-                                 $pulse_rate !== null && $pulse_rate !== '' || 
-                                 $weight !== null && $weight !== '' || 
-                                 $height !== null && $height !== '';
+                    $has_vital = ($temperature !== null && $temperature !== '') || 
+                                 ($bp_systolic !== null && $bp_systolic !== '') || 
+                                 ($bp_diastolic !== null && $bp_diastolic !== '') || 
+                                 ($pulse_rate !== null && $pulse_rate !== '') || 
+                                 ($weight !== null && $weight !== '') || 
+                                 ($height !== null && $height !== '') ||
+                                 ($oxygen_saturation !== null && $oxygen_saturation !== '');
                     
                     if ($has_vital && $visit_id) {
                         $bmi = null;
@@ -1285,8 +1270,8 @@ try {
                             INSERT INTO vital_signs (
                                 patient_id, visit_id, recorded_by, branch_id,
                                 temperature, blood_pressure_systolic, blood_pressure_diastolic,
-                                pulse_rate, weight, height, bmi, notes, recorded_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                                pulse_rate, weight, height, bmi, oxygen_saturation, notes, recorded_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                         ");
                         $stmt->execute([
                             $patient_id,
@@ -1300,6 +1285,7 @@ try {
                             $weight ?: null,
                             $height ?: null,
                             $bmi,
+                            $oxygen_saturation ?: null,
                             $vital_notes ?: null
                         ]);
                     }
@@ -1362,7 +1348,6 @@ try {
                 try {
                     $db->beginTransaction();
                     
-                    // Check for existing visit
                     $stmt = $db->prepare("
                         SELECT id, status, doctor_id FROM visits 
                         WHERE patient_id = ? AND status IN ('pending', 'assigned', 'with_doctor', 'lab_test') 
@@ -1413,7 +1398,6 @@ try {
                         $visit_id = $db->lastInsertId();
                     }
                     
-                    // Create lab test records
                     $lab_total = 0;
                     $test_names = [];
                     foreach ($lab_test_ids as $test_id) {
@@ -1445,7 +1429,6 @@ try {
                         }
                     }
                     
-                    // Update patient assigned doctor to NULL
                     $stmt = $db->prepare("UPDATE patients SET assigned_doctor_id = NULL WHERE id = ?");
                     $stmt->execute([$patient_id]);
                     
@@ -1531,9 +1514,6 @@ if ($user_role === 'admin') {
 }
 ?>
 
-<!-- ================================================================ -->
-<!-- HTML CONTENT - SAME AS ORIGINAL WITH MINOR ADJUSTMENTS -->
-<!-- ================================================================ -->
 <!DOCTYPE html>
 <html lang="en" data-theme="<?= isset($_COOKIE['dark_mode']) && $_COOKIE['dark_mode'] === 'true' ? 'dark' : 'light' ?>">
 <head>
@@ -1548,9 +1528,6 @@ if ($user_role === 'admin') {
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
     
     <style>
-        /* ================================================================
-           ROOT VARIABLES - SAME AS ORIGINAL
-           ================================================================ */
         :root {
             --primary: #2563EB;
             --primary-dark: #1D4ED8;
@@ -1632,9 +1609,6 @@ if ($user_role === 'admin') {
         ::-webkit-scrollbar-track { background: var(--bg-body); }
         ::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 10px; }
         
-        /* ================================================================
-           DAYS BADGES - BLUE BACKGROUND
-           ================================================================ */
         .days-badge-blue {
             display: inline-block;
             background: var(--primary) !important;
@@ -1666,9 +1640,6 @@ if ($user_role === 'admin') {
             box-shadow: 0 2px 4px rgba(5, 150, 105, 0.2);
         }
         
-        /* ================================================================
-           TOP NAV
-           ================================================================ */
         .top-nav {
             position: fixed;
             top: 0;
@@ -1804,9 +1775,6 @@ if ($user_role === 'admin') {
             border: 1px solid var(--primary-light);
         }
         
-        /* ================================================================
-           MAIN CONTENT
-           ================================================================ */
         .main-content {
             margin-left: 270px;
             margin-top: 68px;
@@ -1814,9 +1782,6 @@ if ($user_role === 'admin') {
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: var(--radius-lg);
@@ -1940,9 +1905,6 @@ if ($user_role === 'admin') {
             backdrop-filter: blur(4px);
         }
         
-        /* ================================================================
-           MODERN CARD
-           ================================================================ */
         .modern-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -1994,9 +1956,6 @@ if ($user_role === 'admin') {
             color: var(--success);
         }
         
-        /* ================================================================
-           FORM CARD
-           ================================================================ */
         .form-card-modern {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -2048,9 +2007,6 @@ if ($user_role === 'admin') {
             margin-top: 2px;
         }
         
-        /* ================================================================
-           FORM ELEMENTS
-           ================================================================ */
         .form-label {
             font-size: 0.78rem;
             font-weight: 600;
@@ -2111,9 +2067,6 @@ if ($user_role === 'admin') {
         .form-row-modern { margin-bottom: 20px; }
         .form-row-modern:last-child { margin-bottom: 0; }
         
-        /* ================================================================
-           BUTTONS
-           ================================================================ */
         .btn-modern {
             display: inline-flex;
             align-items: center;
@@ -2194,9 +2147,6 @@ if ($user_role === 'admin') {
             flex-wrap: wrap;
         }
         
-        /* ================================================================
-           STATUS BADGES
-           ================================================================ */
         .status-badge-dropdown {
             display: inline-block;
             font-size: 0.55rem;
@@ -2220,9 +2170,6 @@ if ($user_role === 'admin') {
         [data-theme="dark"] .status-badge-dropdown.lab_only { background: #2D1B5F; color: #A78BFA; }
         [data-theme="dark"] .status-badge-dropdown.no_visit { background: var(--gray-700); color: var(--gray-400); }
         
-        /* ================================================================
-           ASSIGNED DOCTOR TAG
-           ================================================================ */
         .assigned-doctor-tag-modern {
             display: inline-flex;
             align-items: center;
@@ -2241,9 +2188,6 @@ if ($user_role === 'admin') {
             border-color: #34D399;
         }
         
-        /* ================================================================
-           STATS CARD
-           ================================================================ */
         .stat-card-modern {
             background: var(--bg-card);
             border-radius: var(--radius);
@@ -2277,12 +2221,19 @@ if ($user_role === 'admin') {
         .stat-card-modern .stat-icon { font-size: 1.4rem; margin-bottom: 4px; }
         
         /* ================================================================
-           VITAL SIGNS
+           VITAL SIGNS - 7 CARDS (Row 1: 3, Row 2: 4)
            ================================================================ */
         .vital-grid-modern {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
             gap: 12px;
+        }
+        
+        .vital-grid-modern-row2 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-top: 12px;
         }
         
         .vital-item-modern {
@@ -2348,9 +2299,60 @@ if ($user_role === 'admin') {
             color: var(--primary);
         }
         
-        /* ================================================================
-           LAB MODAL
-           ================================================================ */
+        /* SpO2 Card */
+        .vital-item-modern.spo2-item {
+            background: linear-gradient(135deg, rgba(8, 145, 178, 0.08), rgba(14, 116, 144, 0.05));
+            border-color: #0891B2;
+        }
+        
+        .vital-item-modern.spo2-item:hover {
+            background: linear-gradient(135deg, rgba(8, 145, 178, 0.15), rgba(14, 116, 144, 0.1));
+            border-color: #0891B2;
+        }
+        
+        .vital-item-modern.spo2-item .vital-label {
+            color: #0891B2;
+        }
+        
+        .vital-item-modern.spo2-item .vital-input {
+            font-weight: 700;
+            color: #0891B2;
+        }
+        
+        .vital-item-modern.spo2-item .vital-input:focus {
+            color: #0E7490;
+        }
+        
+        .spo2-status {
+            font-size: 0.55rem;
+            font-weight: 600;
+            padding: 1px 8px;
+            border-radius: 8px;
+            display: inline-block;
+            margin-top: 2px;
+        }
+        
+        .spo2-status.normal {
+            background: rgba(5, 150, 105, 0.15);
+            color: #059669;
+        }
+        
+        .spo2-status.low {
+            background: rgba(217, 119, 6, 0.15);
+            color: #D97706;
+        }
+        
+        .spo2-status.critical {
+            background: rgba(220, 38, 38, 0.15);
+            color: #DC2626;
+            animation: pulse-spo2 1.5s infinite;
+        }
+        
+        @keyframes pulse-spo2 {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+        
         .lab-modal-container-modern {
             background: var(--bg-card);
             border-radius: var(--radius);
@@ -2466,9 +2468,6 @@ if ($user_role === 'admin') {
             border: 1px solid var(--primary);
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-modern {
             position: fixed;
             bottom: 24px;
@@ -2493,9 +2492,6 @@ if ($user_role === 'admin') {
         .toast-modern.info { background: var(--primary); }
         .toast-modern.warning { background: var(--warning); }
         
-        /* ================================================================
-           ALERT
-           ================================================================ */
         .alert-modern {
             padding: 14px 18px;
             border-radius: var(--radius);
@@ -2519,9 +2515,6 @@ if ($user_role === 'admin') {
         
         .alert-modern i { font-size: 1.1rem; margin-top: 2px; }
         
-        /* ================================================================
-           FOOTER
-           ================================================================ */
         .footer-modern {
             padding: 14px 0;
             border-top: 1px solid var(--border-color);
@@ -2533,9 +2526,6 @@ if ($user_role === 'admin') {
         
         .footer-modern .footer-brand { color: var(--primary); font-weight: 500; }
         
-        /* ================================================================
-           CHANGE MODE
-           ================================================================ */
         .change-mode-active-modern {
             border-color: var(--warning) !important;
             box-shadow: 0 0 0 4px rgba(217, 119, 6, 0.12) !important;
@@ -2549,13 +2539,11 @@ if ($user_role === 'admin') {
             background: linear-gradient(135deg, var(--warning), #B45309) !important;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .form-card-modern { padding: 20px; }
+            .vital-grid-modern-row2 { grid-template-columns: repeat(2, 1fr); }
         }
         
         @media (max-width: 768px) {
@@ -2565,6 +2553,7 @@ if ($user_role === 'admin') {
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
             .vital-grid-modern { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid-modern-row2 { grid-template-columns: repeat(2, 1fr); }
             .grid-2-modern { grid-template-columns: 1fr; gap: 14px; }
             .lab-modal-footer-modern { flex-direction: column; align-items: stretch; }
             .lab-modal-footer-modern .btn-modern { flex: 1; justify-content: center; }
@@ -2576,14 +2565,12 @@ if ($user_role === 'admin') {
             .main-content { padding: 10px; }
             .form-card-modern { padding: 12px; }
             .vital-grid-modern { grid-template-columns: 1fr 1fr; }
+            .vital-grid-modern-row2 { grid-template-columns: 1fr 1fr; }
             .lab-test-item-modern { flex-wrap: wrap; }
             .page-header .header-badge { font-size: 0.6rem; padding: 2px 10px; }
             .page-header .page-subtitle { font-size: 0.8rem; }
         }
         
-        /* ================================================================
-           ANIMATIONS
-           ================================================================ */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -2616,9 +2603,6 @@ if ($user_role === 'admin') {
             margin-right: 4px;
         }
         
-        /* ================================================================
-           SELECT OPTS
-           ================================================================ */
         select optgroup {
             font-weight: 600;
             color: var(--text-secondary);
@@ -2648,9 +2632,6 @@ if ($user_role === 'admin') {
             border-left-style: dotted;
         }
         
-        /* ================================================================
-           NEW PATIENT BADGE
-           ================================================================ */
         .new-patient-badge {
             display: inline-block;
             background: var(--success);
@@ -2672,9 +2653,7 @@ if ($user_role === 'admin') {
 </head>
 <body>
 
-<!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -2719,9 +2698,7 @@ if ($user_role === 'admin') {
     </div>
 </nav>
 
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
     <!-- Page Header -->
@@ -2922,11 +2899,8 @@ if ($user_role === 'admin') {
     </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- ASSIGN FORM -->
-    <!-- ================================================================ -->
     <div class="form-card-modern animate-fade-in-up <?= $change_mode ? 'change-mode-active-modern' : '' ?>" id="mainFormCard" style="animation-delay:0.1s;">
-        <!-- Form Header -->
         <div class="form-header">
             <div class="form-icon">
                 <i class="fas <?= $change_mode ? 'fa-sync-alt' : 'fa-stethoscope' ?>"></i>
@@ -3038,7 +3012,6 @@ if ($user_role === 'admin') {
                         <span class="text-xs text-green-500 ml-2" id="liveUpdateStatus">🔄 Live</span>
                     </div>
                     
-                    <!-- Selected patient info -->
                     <div id="selectedPatientInfo" class="mt-2 p-2 bg-primary-bg rounded-lg border border-primary-light" style="display:<?= $selected_patient_id > 0 && $selected_patient_data ? 'block' : 'none' ?>;">
                         <?php if ($selected_patient_data): 
                             $patient_days = isset($selected_patient_data['patient_days']) ? (int)$selected_patient_data['patient_days'] : 0;
@@ -3299,7 +3272,9 @@ if ($user_role === 'admin') {
                 </div>
             </div>
             
-            <!-- VITAL SIGNS -->
+            <!-- ================================================================
+                 VITAL SIGNS - 7 CARDS (Row 1: 3, Row 2: 4)
+                 ================================================================ -->
             <div class="form-row-modern">
                 <label class="form-label">
                     <i class="fas fa-heartbeat label-icon" style="color:#DC2626;"></i> Vital Signs
@@ -3310,6 +3285,8 @@ if ($user_role === 'admin') {
                         </span>
                     <?php endif; ?>
                 </label>
+                
+                <!-- ROW 1: Temperature | Blood Pressure | Pulse Rate -->
                 <div class="vital-grid-modern">
                     <div class="vital-item-modern">
                         <span class="vital-label">🌡️ Temperature</span>
@@ -3335,7 +3312,10 @@ if ($user_role === 'admin') {
                         <span class="vital-unit">bpm</span>
                         <span class="vital-normal">Any value accepted</span>
                     </div>
-                    
+                </div>
+                
+                <!-- ROW 2: Weight | Height | BMI | SpO2 (4 CARDS) -->
+                <div class="vital-grid-modern-row2">
                     <div class="vital-item-modern">
                         <span class="vital-label">⚖️ Weight</span>
                         <input type="number" name="weight" class="vital-input" step="0.1" placeholder="65" value="<?= $latest_vital_signs['weight'] ?? '' ?>" id="weightInput" oninput="calculateBMI()">
@@ -3355,6 +3335,14 @@ if ($user_role === 'admin') {
                         <input type="number" name="bmi" class="vital-input" id="bmiOutput" readonly step="0.1" placeholder="22.5" value="<?= $latest_vital_signs['bmi'] ?? '' ?>">
                         <span class="vital-unit">kg/m²</span>
                         <span class="vital-normal" id="bmiCategory">Auto-calculated</span>
+                    </div>
+                    
+                    <!-- ✅ MPYA: Oxygen Saturation (SpO2) -->
+                    <div class="vital-item-modern spo2-item">
+                        <span class="vital-label">🫁 Oxygen Saturation</span>
+                        <input type="number" name="oxygen_saturation" class="vital-input" placeholder="98" value="<?= $latest_vital_signs['oxygen_saturation'] ?? '' ?>" id="spo2Input" oninput="updateSpO2Status()">
+                        <span class="vital-unit">SpO₂ %</span>
+                        <span class="spo2-status" id="spo2Status">Auto</span>
                     </div>
                 </div>
                 
@@ -3435,9 +3423,7 @@ if ($user_role === 'admin') {
 
 </main>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-modern" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -3446,12 +3432,9 @@ if ($user_role === 'admin') {
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
     // ================================================================
-    // CLOCK - UPDATE EVERY SECOND
+    // CLOCK
     // ================================================================
     function updateClock() {
         var now = new Date();
@@ -3466,7 +3449,6 @@ if ($user_role === 'admin') {
             el.textContent = dateStr + ' • ' + timeStr;
         }
     }
-    
     setInterval(updateClock, 1000);
     updateClock();
 
@@ -3519,7 +3501,7 @@ if ($user_role === 'admin') {
     });
 
     // ================================================================
-    // BRANCH SWITCHER (Admin)
+    // BRANCH SWITCHER
     // ================================================================
     function switchBranch(branchId) {
         var url = new URL(window.location.href);
@@ -3619,6 +3601,41 @@ if ($user_role === 'admin') {
             bmiOutput.value = '';
             bmiCategory.textContent = 'Auto-calculated';
         }
+    }
+
+    // ================================================================
+    // SPO2 STATUS CALCULATOR
+    // ================================================================
+    function updateSpO2Status() {
+        var spo2Input = document.getElementById('spo2Input');
+        var spo2Status = document.getElementById('spo2Status');
+        
+        if (!spo2Input || !spo2Status) return;
+        
+        var spo2 = parseFloat(spo2Input.value);
+        
+        if (!spo2 || spo2 <= 0) {
+            spo2Status.textContent = 'Auto';
+            spo2Status.className = 'spo2-status';
+            return;
+        }
+        
+        var status = '';
+        var statusClass = '';
+        
+        if (spo2 >= 95) {
+            status = '✅ Normal';
+            statusClass = 'normal';
+        } else if (spo2 >= 90) {
+            status = '⚠️ Low';
+            statusClass = 'low';
+        } else {
+            status = '🚨 Critical';
+            statusClass = 'critical';
+        }
+        
+        spo2Status.textContent = status;
+        spo2Status.className = 'spo2-status ' + statusClass;
     }
 
     // ================================================================
@@ -3916,7 +3933,6 @@ if ($user_role === 'admin') {
             liveUpdateStatus.textContent = '🔄 Live ' + timeStr;
         }
         
-        // Update patient select
         var patientSelect = document.getElementById('patientSelect');
         if (patientSelect && data.patient_options !== undefined) {
             var currentValue = patientSelect.value;
@@ -3942,7 +3958,6 @@ if ($user_role === 'admin') {
             }
         }
         
-        // Update assigned patients list
         var assignedTableBody = document.getElementById('assignedPatientsTableBody');
         if (assignedTableBody && data.assigned_list_html !== undefined) {
             if (data.assigned_list_count > 0) {
@@ -3959,7 +3974,6 @@ if ($user_role === 'admin') {
             }
         }
         
-        // Update doctor select
         var doctorSelect = document.getElementById('doctorSelect');
         if (doctorSelect && data.doctor_options !== undefined) {
             var currentDocValue = doctorSelect.value;
@@ -3978,7 +3992,6 @@ if ($user_role === 'admin') {
             }
         }
         
-        // Update visit type options
         var visitTypeSelect = document.getElementById('visitTypeSelect');
         if (visitTypeSelect && data.visit_type_options !== undefined) {
             var currentVisitValue = visitTypeSelect.value;
@@ -3998,7 +4011,6 @@ if ($user_role === 'admin') {
             }
         }
         
-        // Update lab tests
         var labContainer = document.getElementById('labTestsContainer');
         if (labContainer && data.lab_tests_html !== undefined) {
             labContainer.innerHTML = data.lab_tests_html;
@@ -4059,6 +4071,7 @@ if ($user_role === 'admin') {
         }
         
         calculateBMI();
+        updateSpO2Status();
         updateVisitTypePrice();
         
         setTimeout(function() {
@@ -4261,6 +4274,7 @@ if ($user_role === 'admin') {
     console.log('%c🟡 Pending: <?= $pending_count ?>', 'font-size:13px; color:#D97706;');
     console.log('%c✅ Assigned: <?= $assigned_count ?>', 'font-size:13px; color:#059669;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (🟢 <?= $online_doctors_count ?> online, ⚪ <?= $offline_doctors_count ?> offline)', 'font-size:13px; color:#64748B;');
+    console.log('%c❤️ VITAL SIGNS: 7 CARDS (Temperature, BP, Pulse, Weight, Height, BMI, SpO2)', 'font-size:13px; color:#DC2626; font-weight:bold;');
     console.log('%c🔄 Live updates every 3 seconds', 'font-size:13px; color:#34D399;');
 </script>
 

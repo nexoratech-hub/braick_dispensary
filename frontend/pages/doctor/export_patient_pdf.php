@@ -3,6 +3,7 @@
 // FILE: frontend/pages/doctor/export_patient_pdf.php
 // EXPORT PATIENT PDF - FULL PATIENT REPORT (VISIT STYLE)
 // BRAICK DISPENSARY - WITH OFFICIAL STAMP
+// WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION)
 // ================================================================
 
 // Start session
@@ -104,6 +105,7 @@ if ($is_admin) {
         WHERE v.patient_id = ?
         ORDER BY v.created_at DESC
     ");
+    $stmt->execute([$patient_id]);
 } else {
     $stmt = $db->prepare("
         SELECT v.*, u.full_name as doctor_name
@@ -114,7 +116,6 @@ if ($is_admin) {
     ");
     $stmt->execute([$patient_id, $user_id]);
 }
-$stmt->execute([$patient_id]);
 $all_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get all bills
@@ -136,6 +137,7 @@ if ($is_admin) {
         WHERE p.patient_id = ?
         ORDER BY p.created_at DESC
     ");
+    $stmt->execute([$patient_id]);
 } else {
     $stmt = $db->prepare("
         SELECT p.*, u.full_name as doctor_name
@@ -146,7 +148,6 @@ if ($is_admin) {
     ");
     $stmt->execute([$patient_id, $user_id]);
 }
-$stmt->execute([$patient_id]);
 $all_prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 // Get all lab tests
@@ -159,6 +160,7 @@ if ($is_admin) {
         WHERE v.patient_id = ?
         ORDER BY lt.created_at DESC
     ");
+    $stmt->execute([$patient_id]);
 } else {
     $stmt = $db->prepare("
         SELECT lt.*, u.full_name as doctor_name
@@ -170,10 +172,9 @@ if ($is_admin) {
     ");
     $stmt->execute([$patient_id, $user_id]);
 }
-$stmt->execute([$patient_id]);
 $all_lab_tests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-// Get all vital signs
+// Get all vital signs (WITH OXYGEN SATURATION)
 $stmt = $db->prepare("
     SELECT vs.*, u.full_name as recorded_by_name
     FROM vital_signs vs
@@ -254,7 +255,7 @@ if (file_exists($logo_absolute)) {
     
     <style>
         /* ================================================================
-           PDF STYLES - SAME AS VISIT PDF
+           PDF STYLES - SAME AS VISIT
            ================================================================ */
         @page {
             margin: 15mm;
@@ -362,6 +363,7 @@ if (file_exists($logo_absolute)) {
         .section-title.purple { color: #7C3AED; border-color: #7C3AED; }
         .section-title.orange { color: #D97706; border-color: #D97706; }
         .section-title.red { color: #DC2626; border-color: #DC2626; }
+        .section-title.sky { color: #0284C7; border-color: #0284C7; }
         
         /* ================================================================
            GRIDS
@@ -402,6 +404,7 @@ if (file_exists($logo_absolute)) {
         .info-card.purple { border-left: 3px solid #7C3AED; }
         .info-card.orange { border-left: 3px solid #D97706; }
         .info-card.red { border-left: 3px solid #DC2626; }
+        .info-card.sky { border-left: 3px solid #0EA5E9; }
         
         /* ================================================================
            SUMMARY CARDS
@@ -469,12 +472,22 @@ if (file_exists($logo_absolute)) {
         .data-table thead th:first-child { border-radius: 4px 0 0 0; }
         .data-table thead th:last-child { border-radius: 0 4px 0 0; }
         
+        .data-table thead th.spo2-header {
+            background: #0284C7;
+        }
+        
         .data-table tbody td {
             padding: 5px 10px;
             border-bottom: 1px solid #E2E8F0;
             color: #1E293B;
             vertical-align: middle;
             font-size: 8px;
+        }
+        
+        .data-table tbody td.spo2-value {
+            background: #E0F2FE;
+            font-weight: 700;
+            color: #0284C7;
         }
         
         .data-table tbody tr:nth-child(even) { background: #F8FAFC; }
@@ -495,6 +508,7 @@ if (file_exists($logo_absolute)) {
         .badge-info { background: #E8F0FE; color: #0B5ED7; }
         .badge-secondary { background: #E2E8F0; color: #64748B; }
         .badge-purple { background: #EDE9FE; color: #7C3AED; }
+        .badge-sky { background: #E0F2FE; color: #0284C7; }
         
         /* ================================================================
            DETAIL ROWS
@@ -668,6 +682,16 @@ if (file_exists($logo_absolute)) {
             .stamp { break-inside: avoid; }
             .summary-card { break-inside: avoid; }
             .data-table tbody tr:nth-child(even) { background: #F8FAFC; }
+            .data-table tbody td.spo2-value { 
+                background: #E0F2FE !important; 
+                -webkit-print-color-adjust: exact; 
+                print-color-adjust: exact; 
+            }
+            .data-table thead th.spo2-header {
+                background: #0284C7 !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
         }
         
         @media (max-width: 768px) {
@@ -784,16 +808,16 @@ if (file_exists($logo_absolute)) {
             <span class="label">Vital Signs</span>
         </div>
         <div class="summary-card">
-            <span class="number"><?= $patient['id'] ?></span>
-            <span class="label">Patient ID</span>
+            <span class="number">🫁 7</span>
+            <span class="label">Signs Tracked</span>
         </div>
     </div>
 
     <!-- ================================================================ -->
-    <!-- VITAL SIGNS -->
+    <!-- VITAL SIGNS - 7 SIGNS (WITH OXYGEN SATURATION) -->
     <!-- ================================================================ -->
     <?php if (count($all_vital_signs) > 0): ?>
-    <div class="section-title purple">❤️ Vital Signs History (<?= count($all_vital_signs) ?>)</div>
+    <div class="section-title sky">❤️ Vital Signs History - 7 Signs (<?= count($all_vital_signs) ?>)</div>
     <div class="table-wrap">
         <table class="data-table">
             <thead>
@@ -802,9 +826,10 @@ if (file_exists($logo_absolute)) {
                     <th>Date</th>
                     <th>Temp (°C)</th>
                     <th>BP (mmHg)</th>
-                    <th>Pulse</th>
-                    <th>Weight</th>
-                    <th>Height</th>
+                    <th>Pulse (bpm)</th>
+                    <th class="spo2-header">🫁 SpO2 (%)</th>
+                    <th>Weight (kg)</th>
+                    <th>Height (cm)</th>
                     <th>BMI</th>
                     <th>Recorded By</th>
                 </tr>
@@ -817,6 +842,7 @@ if (file_exists($logo_absolute)) {
                     <td><?= $vs['temperature'] ?? '-' ?></td>
                     <td><?= ($vs['blood_pressure_systolic'] ?? '') ? $vs['blood_pressure_systolic'] . '/' . ($vs['blood_pressure_diastolic'] ?? '') : '-' ?></td>
                     <td><?= $vs['pulse_rate'] ?? '-' ?></td>
+                    <td class="spo2-value"><?= $vs['oxygen_saturation'] ?? '-' ?></td>
                     <td><?= $vs['weight'] ?? '-' ?></td>
                     <td><?= $vs['height'] ?? '-' ?></td>
                     <td><?= $vs['bmi'] ?? '-' ?></td>
@@ -825,6 +851,9 @@ if (file_exists($logo_absolute)) {
                 <?php endforeach; ?>
             </tbody>
         </table>
+    </div>
+    <div style="font-size:7px;color:#64748B;margin-top:4px;font-style:italic;">
+        🫁 SpO2 = Oxygen Saturation (Normal range: 95-100%)
     </div>
     <?php endif; ?>
 
@@ -1013,6 +1042,8 @@ if (file_exists($logo_absolute)) {
             Patient Report: <?= htmlspecialchars($patient['full_name']) ?>
             <span style="color:#94A3B8;">|</span> 
             Generated: <?= date('d M Y, h:i A') ?>
+            <span style="color:#94A3B8;">|</span> 
+            <span style="color:#0284C7;">🫁 7 Vital Signs Tracked</span>
             <?php if ($is_admin): ?>
                 <span style="color:#94A3B8;">|</span> 
                 <span style="color:#DC2626;">👑 Admin</span>
@@ -1048,12 +1079,13 @@ if (file_exists($logo_absolute)) {
         // Ctrl+P = Print (already handled by browser)
     });
 
-    console.log('%c📄 Braick Dispensary - Patient Report', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📄 Braick Dispensary - Patient Report (7 Vital Signs)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Visits: <?= $total_visits ?> | Bills: <?= $total_bills ?>', 'font-size:13px; color:#0B5ED7;');
     console.log('%c💊 Prescriptions: <?= $total_prescriptions ?> | 🧪 Lab Tests: <?= $total_lab_tests ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c❤️ Vital Signs: <?= $total_vital_signs ?>', 'font-size:13px; color:#EC4899;');
+    console.log('%c❤️ Vital Signs: <?= $total_vital_signs ?> (7 signs each)', 'font-size:13px; color:#EC4899;');
+    console.log('%c🫁 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI', 'font-size:13px; color:#0284C7;');
     console.log('%c⭐ Braick Dispensary - Tunajali Afya Yako', 'font-size:13px; color:#0B5ED7;');
     console.log('%c🖨️ Auto-print in 500ms | ESC to Close', 'font-size:13px; color:#64748B;');
 </script>

@@ -7,6 +7,7 @@
 // FIXED: All undefined variables initialized properly
 // FIXED: Discount = discount_amount + pharmacy_discount + cashier_discount
 // FIXED: Subtotal shows total before discount (410,000)
+// WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION)
 // ================================================================
 
 // Start session
@@ -224,6 +225,11 @@ function getVitalStatus($value, $type) {
             if ($value > 100) return ['label' => 'HIGH', 'class' => 'high'];
             if ($value < 60) return ['label' => 'LOW', 'class' => 'low'];
             return ['label' => 'NORMAL', 'class' => 'normal'];
+        case 'spo2':
+            // SpO2 normal range: 95-100%
+            if ($value >= 95) return ['label' => 'NORMAL', 'class' => 'normal'];
+            if ($value >= 90) return ['label' => 'LOW', 'class' => 'low'];
+            return ['label' => 'CRITICAL', 'class' => 'high'];
         case 'bmi':
             if ($value >= 30) return ['label' => 'OBESE', 'class' => 'high'];
             if ($value >= 25) return ['label' => 'OVERWEIGHT', 'class' => 'high'];
@@ -238,7 +244,7 @@ function getVitalStatus($value, $type) {
 // GET ADDITIONAL DATA
 // ================================================================
 
-// 1. Vital Signs
+// 1. Vital Signs - 7 SIGNS WITH OXYGEN SATURATION
 $vital_signs = null;
 $stmt = $db->prepare("
     SELECT 
@@ -246,6 +252,7 @@ $stmt = $db->prepare("
         blood_pressure_systolic,
         blood_pressure_diastolic,
         pulse_rate,
+        oxygen_saturation,
         weight,
         height,
         bmi,
@@ -576,12 +583,12 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     </div>
 
     <!-- ================================================================ -->
-    <!-- 3. VITAL SIGNS -->
+    <!-- 3. VITAL SIGNS - 7 SIGNS WITH OXYGEN SATURATION -->
     <!-- ================================================================ -->
     <div class="section-title">
         <span class="section-icon">❤️</span>
-        VITAL SIGNS
-        <span class="section-count">6 Parameters</span>
+        VITAL SIGNS (7 Signs)
+        <span class="section-count">🫁 SpO2 Normal: 95-100%</span>
     </div>
     <?php if ($vital_signs): ?>
         <div class="vital-grid-cards">
@@ -590,6 +597,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             $sys = $vital_signs['blood_pressure_systolic'] ?? null;
             $bp_status = getVitalStatus($sys, 'systolic');
             $pulse_status = getVitalStatus($vital_signs['pulse_rate'] ?? null, 'pulse');
+            $spo2_status = getVitalStatus($vital_signs['oxygen_saturation'] ?? null, 'spo2');
             $bmi_status = getVitalStatus($vital_signs['bmi'] ?? null, 'bmi');
             ?>
             <div class="vital-card-pdf temp">
@@ -610,6 +618,12 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
                 <span class="vital-label">Pulse Rate</span>
                 <span class="vital-status <?= $pulse_status['class'] ?>"><?= $pulse_status['label'] ?></span>
             </div>
+            <div class="vital-card-pdf spo2">
+                <span class="vital-icon">🫁</span>
+                <span class="vital-value"><?= $vital_signs['oxygen_saturation'] ?? '--' ?> <span class="vital-unit">%</span></span>
+                <span class="vital-label">Oxygen (SpO2)</span>
+                <span class="vital-status <?= $spo2_status['class'] ?>"><?= $spo2_status['label'] ?></span>
+            </div>
             <div class="vital-card-pdf weight">
                 <span class="vital-icon">⚖️</span>
                 <span class="vital-value"><?= $vital_signs['weight'] ?? '--' ?> <span class="vital-unit">kg</span></span>
@@ -626,6 +640,11 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
                 <span class="vital-label">BMI</span>
                 <span class="vital-status <?= $bmi_status['class'] ?>"><?= $bmi_status['label'] ?></span>
             </div>
+        </div>
+        <div class="vital-signs-footer-pdf">
+            <i class="fas fa-lungs" style="color:#0EA5E9;"></i>
+            <span style="color:#0284C7;">SpO2 (Oxygen Saturation) Normal Range: <strong>95-100%</strong></span>
+            <span style="color:#64748B;"> • 7 Vital Signs Tracked</span>
         </div>
         <?php if ($vital_signs['recorded_by']): ?>
             <div class="vital-recorded-by">
@@ -1228,18 +1247,18 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .info-value strong { color: #0B5ED7; }
         
         /* ================================================================ */
-        /* VITAL SIGNS CARDS */
+        /* VITAL SIGNS CARDS - 7 SIGNS */
         /* ================================================================ */
         .vital-grid-cards {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
-            gap: 10px;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 8px;
             margin: 6px 0 8px 0;
         }
         .vital-card-pdf {
             background: #FFFFFF;
             border-radius: 10px;
-            padding: 10px 8px 8px 8px;
+            padding: 8px 5px 6px 5px;
             text-align: center;
             border: 2px solid #E2E8F0;
             box-shadow: 0 2px 8px rgba(0,0,0,0.05);
@@ -1260,6 +1279,11 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .vital-card-pdf.bp { border-color: #93C5FD; }
         .vital-card-pdf.pulse::before { background: linear-gradient(90deg, #7C3AED, #A78BFA); }
         .vital-card-pdf.pulse { border-color: #C4B5FD; }
+        .vital-card-pdf.spo2::before { background: linear-gradient(90deg, #0EA5E9, #38BDF8); }
+        .vital-card-pdf.spo2 { 
+            border-color: #0EA5E9; 
+            background: linear-gradient(135deg, rgba(14,165,233,0.05), rgba(14,165,233,0.12));
+        }
         .vital-card-pdf.weight::before { background: linear-gradient(90deg, #D97706, #FBBF24); }
         .vital-card-pdf.weight { border-color: #FCD34D; }
         .vital-card-pdf.height::before { background: linear-gradient(90deg, #0D9488, #34D399); }
@@ -1267,31 +1291,31 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .vital-card-pdf.bmi::before { background: linear-gradient(90deg, #2563EB, #60A5FA); }
         .vital-card-pdf.bmi { border-color: #93C5FD; }
         
-        .vital-card-pdf .vital-icon { font-size: 1.1rem; display: block; margin-bottom: 2px; }
+        .vital-card-pdf .vital-icon { font-size: 1rem; display: block; margin-bottom: 2px; }
         .vital-card-pdf .vital-value {
-            font-size: 11.5pt;
+            font-size: 10.5pt;
             font-weight: 700;
             display: block;
             line-height: 1.2;
         }
         .vital-card-pdf .vital-label {
-            font-size: 5.5pt;
+            font-size: 5pt;
             color: #64748B;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.3px;
             display: block;
             font-weight: 600;
             margin-top: 2px;
         }
-        .vital-card-pdf .vital-unit { font-size: 6pt; font-weight: 400; color: #94A3B8; }
+        .vital-card-pdf .vital-unit { font-size: 5.5pt; font-weight: 400; color: #94A3B8; }
         .vital-card-pdf .vital-status {
-            font-size: 5.5pt;
+            font-size: 5pt;
             font-weight: 700;
-            padding: 2px 8px;
-            border-radius: 10px;
+            padding: 1px 6px;
+            border-radius: 8px;
             display: inline-block;
-            margin-top: 3px;
-            letter-spacing: 0.3px;
+            margin-top: 2px;
+            letter-spacing: 0.2px;
         }
         .vital-card-pdf .vital-status.normal {
             background: #D1FAE5;
@@ -1317,6 +1341,8 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         .vital-card-pdf.temp .vital-value { color: #DC2626; }
         .vital-card-pdf.bp .vital-value { color: #0B5ED7; }
         .vital-card-pdf.pulse .vital-value { color: #7C3AED; }
+        .vital-card-pdf.spo2 .vital-value { color: #0284C7; }
+        .vital-card-pdf.spo2 .vital-label { color: #0284C7; }
         .vital-card-pdf.weight .vital-value { color: #D97706; }
         .vital-card-pdf.height .vital-value { color: #0D9488; }
         .vital-card-pdf.bmi .vital-value { color: #2563EB; }
@@ -1338,6 +1364,18 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             background: #F8FAFC;
             border-radius: 4px;
             border-left: 3px solid #0B5ED7;
+        }
+        .vital-signs-footer-pdf {
+            margin-top: 6px;
+            padding: 4px 12px;
+            background: #F0F9FF;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 6.5pt;
+            border: 1px dashed #0EA5E9;
         }
         
         /* ================================================================ */
@@ -1740,7 +1778,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             }
             .header-contact { text-align: center; }
             .header-contact .contact-row { justify-content: center; }
-            .vital-grid-cards { grid-template-columns: repeat(3, 1fr); }
+            .vital-grid-cards { grid-template-columns: repeat(4, 1fr); }
             .info-grid-2 { grid-template-columns: 1fr; }
             .info-grid-3 { grid-template-columns: 1fr; }
             .bill-grid-4 { grid-template-columns: 1fr 1fr; }
@@ -1752,7 +1790,7 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
         }
         
         @media (max-width: 480px) {
-            .vital-grid-cards { grid-template-columns: 1fr 1fr; }
+            .vital-grid-cards { grid-template-columns: repeat(3, 1fr); }
             .bill-grid-4 { grid-template-columns: 1fr; }
             .header-logo-area { flex-direction: column; }
             .header-logo-img { height: 40px; }
@@ -1766,6 +1804,11 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
             #pdfContent { padding: 20px; }
             .header-actions { display: none !important; }
             .vital-card-pdf { break-inside: avoid; }
+            .vital-card-pdf.spo2 { 
+                background: #E0F2FE !important; 
+                -webkit-print-color-adjust: exact; 
+                print-color-adjust: exact; 
+            }
             .pdf-table { break-inside: auto; }
             .prescription-box { break-inside: avoid; }
             .no-print { display: none !important; }
@@ -1858,6 +1901,9 @@ function buildPDFContent($visit, $vital_signs, $lab_results, $lab_requests, $pre
     console.log('🩺 Diagnosis (from visits): <?= htmlspecialchars($diagnosis_display ?: 'Not recorded') ?>');
     console.log('🔑 Disease Code (from visits): <?= htmlspecialchars($disease_code_display ?: 'Not recorded') ?>');
     console.log('💊 Treatment (from visits): <?= htmlspecialchars($treatment_display ?: 'Not recorded') ?>');
+    console.log('❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI');
+    console.log('🫁 SpO2 (Oxygen Saturation): Normal 95-100%');
+    console.log('🫁 SpO2 Value: <?= $vital_signs['oxygen_saturation'] ?? "N/A" ?>%');
     console.log('🏢 Branch: <?= htmlspecialchars($branch_location ?: $doctor_branch_name) ?>');
     console.log('📞 Admin Phones (from users table): <?= implode(', ', $admin_phones) ?>');
     console.log('💰 Bill: Subtotal=TSh <?= number_format($bill_subtotal, 0) ?>, Paid=TSh <?= number_format($paid_total, 0) ?>, Discount=TSh <?= number_format($bill_total_discount, 0) ?>, Balance=TSh <?= number_format($bill_balance, 0) ?>');

@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/admin/view_patient.php
 // VIEW PATIENT - COMPLETE PATIENT DETAILS WITH PDF
+// WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION - SpO2)
 // ORDER: Personal Info → Assigned Doctor → Vitals → Visit History → Symptoms → Lab Tests → Diagnosis → Medical Info → Prescriptions → Procedures → Tools → Bills
 // BRAICK DISPENSARY - TUNAJARI AFYA YAKO
 // ================================================================
@@ -210,10 +211,24 @@ try {
     $tools = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     // ================================================================
-    // GET VITAL SIGNS
+    // ✅ GET VITAL SIGNS - WITH OXYGEN SATURATION (SpO2) - 7 SIGNS
     // ================================================================
     $stmt = $db->prepare("
-        SELECT vs.*, u.full_name as recorded_by_name
+        SELECT 
+            vs.id,
+            vs.patient_id,
+            vs.visit_id,
+            vs.temperature,
+            vs.blood_pressure_systolic,
+            vs.blood_pressure_diastolic,
+            vs.pulse_rate,
+            vs.oxygen_saturation,
+            vs.weight,
+            vs.height,
+            vs.bmi,
+            vs.notes,
+            vs.recorded_at,
+            u.full_name as recorded_by_name
         FROM vital_signs vs
         LEFT JOIN users u ON vs.recorded_by = u.id
         WHERE vs.patient_id = ?
@@ -287,6 +302,19 @@ try {
 }
 
 // ================================================================
+// ✅ HELPER: Get SpO2 Status
+// ================================================================
+function getSpO2Status($spo2) {
+    if ($spo2 === null || $spo2 === '') {
+        return ['label' => 'N/A', 'class' => 'unknown', 'color' => '#64748B'];
+    }
+    $spo2 = (int)$spo2;
+    if ($spo2 >= 95) return ['label' => 'NORMAL', 'class' => 'normal', 'color' => '#059669'];
+    if ($spo2 >= 90) return ['label' => 'LOW', 'class' => 'low', 'color' => '#D97706'];
+    return ['label' => 'CRITICAL', 'class' => 'critical', 'color' => '#DC2626'];
+}
+
+// ================================================================
 // GET UNREAD NOTIFICATIONS
 // ================================================================
 $unread_notifications = 0;
@@ -350,6 +378,9 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --warning-bg: #FEF3C7;
             --purple: #7C3AED;
             --purple-bg: #EDE9FE;
+            --sky: #0EA5E9;
+            --sky-dark: #0284C7;
+            --sky-bg: #E0F2FE;
             --white: #FFFFFF;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
@@ -371,6 +402,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --bg-nav: #FFFFFF;
             --text-primary: #1E293B;
             --text-secondary: #64748B;
+            --text-muted: #94A3B8;
             --border-color: #E2E8F0;
             --shadow-blue: 0 4px 16px rgba(11, 94, 215, 0.15);
         }
@@ -381,6 +413,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             --bg-nav: #1E293B;
             --text-primary: #F1F5F9;
             --text-secondary: #94A3B8;
+            --text-muted: #64748B;
             --border-color: #334155;
             --shadow: 0 1px 3px rgba(0,0,0,0.3);
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
@@ -766,7 +799,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         .pdf-content .pdf-vital-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 8px;
             margin: 8px 0;
         }
@@ -1161,9 +1194,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        .vital-grid-6 {
+        /* ================================================================
+           ✅ VITAL SIGNS - 7 SIGNS WITH SpO2 (COMPACT)
+           ================================================================ */
+        .vital-grid-7 {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
         }
         
@@ -1174,6 +1210,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             border-left: 4px solid var(--primary);
             text-align: center;
             transition: all 0.3s ease;
+            position: relative;
         }
         
         .vital-item-blue:hover {
@@ -1202,6 +1239,36 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-secondary);
         }
         
+        /* SpO2 Special Styling - Sky Blue */
+        .vital-item-blue.spo2-item {
+            border-left-color: #0EA5E9;
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(14, 165, 233, 0.12));
+        }
+        .vital-item-blue.spo2-item .vital-value {
+            color: #0284C7;
+        }
+        .vital-item-blue.spo2-item .vital-label {
+            color: #0284C7;
+        }
+        .vital-item-blue.spo2-item:hover {
+            box-shadow: 0 4px 16px rgba(14, 165, 233, 0.2);
+        }
+        
+        /* SpO2 Status Badge */
+        .spo2-status-badge {
+            display: inline-block;
+            font-size: 0.5rem;
+            font-weight: 700;
+            padding: 1px 8px;
+            border-radius: 8px;
+            margin-top: 3px;
+            letter-spacing: 0.4px;
+        }
+        .spo2-status-badge.normal { background: #D1FAE5; color: #059669; border: 1px solid #6EE7B7; }
+        .spo2-status-badge.low { background: #FEF3C7; color: #D97706; border: 1px solid #FCD34D; }
+        .spo2-status-badge.critical { background: #FEE2E2; color: #DC2626; border: 1px solid #FCA5A5; }
+        .spo2-status-badge.unknown { background: var(--gray-200); color: var(--text-secondary); }
+        
         .vital-item-blue.green { border-left-color: var(--success); }
         .vital-item-blue.green .vital-value { color: var(--success-dark); }
         .vital-item-blue.purple { border-left-color: var(--purple); }
@@ -1225,6 +1292,24 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .bmi-label.underweight { background: var(--warning-bg); color: var(--warning); }
         .bmi-label.overweight { background: var(--warning-bg); color: var(--warning); }
         .bmi-label.obese { background: var(--danger-bg); color: var(--danger); }
+        
+        /* SpO2 Info Footer */
+        .spo2-footer-info {
+            margin-top: 12px;
+            padding: 8px 14px;
+            background: linear-gradient(135deg, #F0F9FF, #E0F2FE);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 0.7rem;
+            border: 1px dashed #0EA5E9;
+        }
+        [data-theme="dark"] .spo2-footer-info {
+            background: #0C2A3A;
+            border-color: #0EA5E9;
+        }
         
         .badge {
             display: inline-block;
@@ -1398,7 +1483,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
-            .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(3, 1fr); }
             .pdf-content .pdf-vital-grid { grid-template-columns: repeat(2, 1fr); }
             .pdf-content .pdf-grid-2 { grid-template-columns: 1fr; }
         }
@@ -1412,7 +1497,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .profile-header { flex-direction: column; text-align: center; }
             .profile-info .patient-meta { justify-content: center; }
             .profile-actions { justify-content: center; width: 100%; }
-            .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(3, 1fr); }
             .pdf-modal-body .pdf-content { padding: 16px; }
             .pdf-content .pdf-row { flex-direction: column; }
             .pdf-content .pdf-row .pdf-label { width: 100%; }
@@ -1426,7 +1511,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .top-nav .search-wrapper .search-btn { padding: 8px 10px; font-size: 0.7rem; }
             .detail-card { padding: 16px; }
             .profile-actions .btn { flex: 1; justify-content: center; }
-            .vital-grid-6 { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(2, 1fr); }
             .pdf-modal-header { flex-direction: column; gap: 10px; align-items: stretch; }
             .pdf-modal-header .modal-actions { justify-content: center; }
             .pdf-modal-body .pdf-content { padding: 12px; }
@@ -1451,6 +1536,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .detail-card { border: 1px solid #ddd !important; page-break-inside: avoid; break-inside: avoid; }
             .badge { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             .vital-item-blue { background: #E8F0FE !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+            .vital-item-blue.spo2-item { background: #E0F2FE !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
             .footer { display: none !important; }
         }
     </style>
@@ -1518,7 +1604,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             <h1 class="page-title">
                 <i class="fas fa-user-circle"></i>
                 Patient Details
-                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;">RECEPTION</span>
+                <span class="role-badge-display" style="background:rgba(255,255,255,0.2);color:white;"><?= strtoupper($role) ?></span>
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-id-card"></i>
@@ -1720,22 +1806,28 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
     
     <!-- ================================================================ -->
-    <!-- 3. LATEST VITAL SIGNS -->
+    <!-- 3. LATEST VITAL SIGNS - 7 SIGNS WITH SpO2 -->
     <!-- ================================================================ -->
-    <?php if ($latest_vitals): ?>
+    <?php if ($latest_vitals): 
+        // ✅ GET SpO2 STATUS
+        $spo2_status = getSpO2Status($latest_vitals['oxygen_saturation'] ?? null);
+    ?>
     <div class="detail-card animate-fade-in-up" style="animation-delay:0.15s;">
         <div class="card-title" style="border-bottom: 2px solid var(--primary-light);">
             <i class="fas fa-heartbeat" style="color:#DC2626;"></i>
-            Latest Vital Signs
+            Latest Vital Signs (7 Signs)
+            <span style="font-size:0.7rem;font-weight:400;color:#0284C7;">🫁 SpO2 Normal: 95-100%</span>
             <span class="text-xs text-gray-400">(<?= date('d M Y h:i A', strtotime($latest_vitals['recorded_at'])) ?>)</span>
         </div>
         
-        <div class="vital-grid-6">
+        <div class="vital-grid-7">
+            <!-- 1. Temperature -->
             <div class="vital-item-blue">
                 <span class="vital-label">🌡️ Temperature</span>
                 <span class="vital-value"><?= $latest_vitals['temperature'] ?? 'N/A' ?> <span class="vital-unit">°C</span></span>
             </div>
             
+            <!-- 2. Blood Pressure -->
             <div class="vital-item-blue green">
                 <span class="vital-label">❤️ Blood Pressure</span>
                 <span class="vital-value">
@@ -1749,21 +1841,37 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 </span>
             </div>
             
+            <!-- 3. Pulse Rate -->
             <div class="vital-item-blue purple">
                 <span class="vital-label">💓 Pulse Rate</span>
                 <span class="vital-value"><?= $latest_vitals['pulse_rate'] ?? 'N/A' ?> <span class="vital-unit">bpm</span></span>
             </div>
             
+            <!-- 4. ✅ OXYGEN SATURATION (SpO2) - 7TH VITAL SIGN -->
+            <div class="vital-item-blue spo2-item">
+                <span class="vital-label">🫁 Oxygen (SpO2)</span>
+                <span class="vital-value">
+                    <?= ($latest_vitals['oxygen_saturation'] !== null && $latest_vitals['oxygen_saturation'] !== '') ? $latest_vitals['oxygen_saturation'] : '--' ?> 
+                    <span class="vital-unit">%</span>
+                </span>
+                <?php if ($latest_vitals['oxygen_saturation'] !== null && $latest_vitals['oxygen_saturation'] !== ''): ?>
+                    <span class="spo2-status-badge <?= $spo2_status['class'] ?>"><?= $spo2_status['label'] ?></span>
+                <?php endif; ?>
+            </div>
+            
+            <!-- 5. Weight -->
             <div class="vital-item-blue orange">
                 <span class="vital-label">⚖️ Weight</span>
                 <span class="vital-value"><?= $latest_vitals['weight'] ?? 'N/A' ?> <span class="vital-unit">kg</span></span>
             </div>
             
+            <!-- 6. Height -->
             <div class="vital-item-blue teal">
                 <span class="vital-label">📏 Height</span>
                 <span class="vital-value"><?= $latest_vitals['height'] ?? 'N/A' ?> <span class="vital-unit">cm</span></span>
             </div>
             
+            <!-- 7. BMI -->
             <div class="vital-item-blue red">
                 <span class="vital-label">📊 BMI</span>
                 <span class="vital-value">
@@ -1782,6 +1890,13 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                     <?php endif; ?>
                 </span>
             </div>
+        </div>
+        
+        <!-- SpO2 Info Footer -->
+        <div class="spo2-footer-info">
+            <i class="fas fa-lungs" style="color:#0EA5E9;"></i>
+            <span style="color:#0284C7;">SpO2 (Oxygen Saturation) Normal Range: <strong>95-100%</strong></span>
+            <span style="color:#64748B;"> • 7 Vital Signs Tracked</span>
         </div>
         
         <?php if (!empty($latest_vitals['notes'])): ?>
@@ -2381,7 +2496,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     
     document.addEventListener('click', function(e) {
         if (window.innerWidth <= 1024) {
-            if (!sidebar.contains(e.target) && e.target !== sidebarToggle) {
+            if (sidebar && !sidebar.contains(e.target) && e.target !== sidebarToggle) {
                 sidebar.classList.remove('open');
             }
         }
@@ -2429,7 +2544,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // GENERATE PDF - WITH OFFICIAL STAMP
+    // GENERATE PDF - WITH 7 VITAL SIGNS (SpO2) & OFFICIAL STAMP
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -2484,11 +2599,24 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var reportDate = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' });
         var reportTime = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: true });
         
-        // Build vitals HTML
+        // ✅ Build vitals HTML - 7 SIGNS WITH SpO2
         var vitalsHtml = '';
         if (vitals) {
+            // Calculate SpO2 status
+            var spo2Value = vitals.oxygen_saturation;
+            var spo2Label = 'N/A';
+            var spo2Color = '#64748B';
+            var spo2Bg = '#F1F5F9';
+            var spo2Border = '#CBD5E1';
+            if (spo2Value !== null && spo2Value !== '' && spo2Value !== undefined) {
+                var spo2Int = parseInt(spo2Value);
+                if (spo2Int >= 95) { spo2Label = 'NORMAL'; spo2Color = '#059669'; spo2Bg = '#D1FAE5'; spo2Border = '#6EE7B7'; }
+                else if (spo2Int >= 90) { spo2Label = 'LOW'; spo2Color = '#D97706'; spo2Bg = '#FEF3C7'; spo2Border = '#FCD34D'; }
+                else { spo2Label = 'CRITICAL'; spo2Color = '#DC2626'; spo2Bg = '#FEE2E2'; spo2Border = '#FCA5A5'; }
+            }
+            
             vitalsHtml = `
-                <div class="pdf-vital-grid">
+                <div class="pdf-vital-grid" style="grid-template-columns: repeat(4, 1fr);">
                     <div class="pdf-vital-item">
                         <div class="vital-label">🌡️ Temperature</div>
                         <div class="vital-value">${vitals.temperature || 'N/A'} <span class="vital-unit">°C</span></div>
@@ -2505,6 +2633,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <div class="vital-label">💓 Pulse Rate</div>
                         <div class="vital-value">${vitals.pulse_rate || 'N/A'} <span class="vital-unit">bpm</span></div>
                     </div>
+                    <div class="pdf-vital-item" style="background:linear-gradient(135deg, #E0F2FE, #BAE6FD);border-left:4px solid #0EA5E9;">
+                        <div class="vital-label" style="color:#0284C7;">🫁 Oxygen (SpO2)</div>
+                        <div class="vital-value" style="color:#0284C7;">
+                            ${spo2Value !== null && spo2Value !== '' && spo2Value !== undefined ? spo2Value : '--'} <span class="vital-unit">%</span>
+                        </div>
+                        ${spo2Value !== null && spo2Value !== '' && spo2Value !== undefined ? 
+                            `<div style="display:inline-block;font-size:0.5rem;font-weight:700;padding:1px 8px;border-radius:8px;margin-top:3px;letter-spacing:0.4px;background:${spo2Bg};color:${spo2Color};border:1px solid ${spo2Border};">${spo2Label}</div>` : ''}
+                    </div>
                     <div class="pdf-vital-item">
                         <div class="vital-label">⚖️ Weight</div>
                         <div class="vital-value">${vitals.weight || 'N/A'} <span class="vital-unit">kg</span></div>
@@ -2517,6 +2653,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                         <div class="vital-label">📊 BMI</div>
                         <div class="vital-value">${vitals.bmi || 'N/A'} <span class="vital-unit">kg/m²</span></div>
                     </div>
+                </div>
+                <div style="margin-top:8px;padding:6px 12px;background:#F0F9FF;border-radius:6px;border:1px dashed #0EA5E9;font-size:0.65rem;">
+                    <span style="color:#0284C7;">🫁 SpO2 (Oxygen Saturation) Normal Range: <strong>95-100%</strong></span>
+                    <span style="color:#64748B;"> • 7 Vital Signs Tracked</span>
                 </div>
                 ${vitals.notes ? `<div style="margin-top:6px;font-size:0.75rem;color:var(--text-secondary);"><strong>Notes:</strong> ${vitals.notes}</div>` : ''}
                 ${vitals.recorded_by_name ? `<div style="margin-top:4px;font-size:0.65rem;color:var(--text-muted);">Recorded By: ${vitals.recorded_by_name}</div>` : ''}
@@ -2623,7 +2763,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             billsHtml = `<p style="color:var(--text-secondary);">No bills found</p>`;
         }
         
-        // Build prescriptions HTML        var prescriptionsHtml = '';
+        // Build prescriptions HTML
+        var prescriptionsHtml = '';
         if (prescriptions && prescriptions.length > 0) {
             prescriptionsHtml = `
                 <table class="pdf-table">
@@ -2790,8 +2931,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <div class="pdf-row"><span class="pdf-label">Active Visit</span><span class="pdf-value">${activeVisit ? activeVisit.visit_number + ' (' + activeVisit.status + ')' : 'No active visit'}</span></div>
             </div>
             
-            <!-- 3. Vital Signs -->
-            <div class="section-title">❤️ Vital Signs</div>
+            <!-- 3. Vital Signs - 7 SIGNS WITH SpO2 -->
+            <div class="section-title">❤️ Vital Signs (7 Signs - including SpO2)</div>
             ${vitalsHtml}
             
             <!-- 4. Visit History -->
@@ -2900,7 +3041,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     // ================================================================
     // CLICK OUTSIDE TO CLOSE PDF MODAL
     // ================================================================
-    document.getElementById('pdfModal').addEventListener('click', function(e) {
+    document.getElementById('pdfModal')?.addEventListener('click', function(e) {
         if (e.target === this) {
             closePDFModal();
         }
@@ -2913,9 +3054,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         showToast('📄 PDF Download', 'Downloading patient PDF...', 'info');
     });
 
-    console.log('%c👤 Braick - View Patient (Updated Order)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c👤 Braick - View Patient (7 Vital Signs with SpO2)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Patient: <?= htmlspecialchars($patient['full_name'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c🆔 ID: <?= htmlspecialchars($patient['patient_id'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI', 'font-size:13px; color:#DC2626;');
+    console.log('%c🫁 SpO2 (Oxygen Saturation): Normal 95-100%', 'font-size:13px; color:#0EA5E9;');
     console.log('%c✅ ORDER: Personal Info → Assigned Doctor → Vitals → Visit History → Symptoms → Lab Tests → Diagnosis → Medical Info → Prescriptions → Procedures → Tools → Bills', 'font-size:13px; color:#0B5ED7;');
     console.log('%c❤️ Footer: BRAICK DISPENSARY, TUNAJARI AFYA YAKO', 'font-size:13px; color:#DC2626;');
 </script>

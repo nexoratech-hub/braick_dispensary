@@ -1,7 +1,8 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/doctor/consultation.php
-// COMPLETE CONSULTATION - FULLY FIXED WITH PREMIUM SUPPORT
+// COMPLETE CONSULTATION - FULLY FIXED WITH ALL SECTIONS
+// WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION - SpO2)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -256,11 +257,8 @@ try {
 
 // ================================================================
 // BILL TOTAL FUNCTION - WITH PREMIUM INCLUDED
-// FORMULA: total_amount = subtotal + premium_amount - total_discount
-//          balance      = total_amount - paid_amount
 // ================================================================
 function updateBillTotal($db, $bill_id) {
-    // 1. Get subtotal from bill_items
     $stmt = $db->prepare("
         SELECT SUM(total_price) as total 
         FROM bill_items 
@@ -269,7 +267,6 @@ function updateBillTotal($db, $bill_id) {
     $stmt->execute([$bill_id]);
     $subtotal = (float)($stmt->fetch(PDO::FETCH_ASSOC)['total'] ?? 0);
     
-    // 2. Get discounts AND premium from bills
     $stmt = $db->prepare("
         SELECT 
             discount_amount, 
@@ -289,20 +286,15 @@ function updateBillTotal($db, $bill_id) {
     $cashier_discount = (float)($bill_data['cashier_discount'] ?? 0);
     $total_discount = $pharmacy_discount + $cashier_discount;
     $discount_amount = $pharmacy_discount;
-    
-    // GET PREMIUM AMOUNT
     $premium_amount = (float)($bill_data['premium_amount'] ?? 0);
     
-    // Cap discount at subtotal
     if ($total_discount > $subtotal) {
         $total_discount = $subtotal;
     }
     
-    // FORMULA: total_amount = subtotal + premium - total_discount
     $total_amount = $subtotal + $premium_amount - $total_discount;
     if ($total_amount < 0) $total_amount = 0;
     
-    // Get paid amount
     $stmt = $db->prepare("
         SELECT SUM(amount) as payment_total 
         FROM payments 
@@ -311,7 +303,6 @@ function updateBillTotal($db, $bill_id) {
     $stmt->execute([$bill_id]);
     $paid_amount = (float)($stmt->fetch(PDO::FETCH_ASSOC)['payment_total'] ?? 0);
     
-    // FORMULA: balance = total_amount - paid_amount
     $balance = $total_amount - $paid_amount;
     if ($balance < 0) {
         $balance = 0;
@@ -320,7 +311,6 @@ function updateBillTotal($db, $bill_id) {
         }
     }
     
-    // Determine status
     if ($total_amount <= 0) {
         $status = 'paid';
     } elseif ($balance <= 0.01) {
@@ -331,7 +321,6 @@ function updateBillTotal($db, $bill_id) {
         $status = 'pending';
     }
     
-    // Update bill
     $stmt = $db->prepare("
         UPDATE bills 
         SET subtotal = ?, 
@@ -397,7 +386,7 @@ function getBillDiscount($db, $bill_id) {
 }
 
 // ================================================================
-// AUTO-COMPLETE - AUTOMATIC WHEN BILLS ARE PAID
+// AUTO-COMPLETE
 // ================================================================
 function checkAndAutoCompleteVisit($db, $visit_id, $bill_id) {
     $stmt = $db->prepare("SELECT status FROM visits WHERE id = ?");
@@ -447,7 +436,7 @@ function checkAndAutoCompleteVisit($db, $visit_id, $bill_id) {
 }
 
 // ================================================================
-// CHECK LAB RESULTS - UPDATES TO 'prescribed' ONLY
+// CHECK LAB RESULTS
 // ================================================================
 function checkLabResultsAndUpdateStatus($db, $visit_id) {
     $stmt = $db->prepare("
@@ -488,7 +477,7 @@ function checkLabResultsAndUpdateStatus($db, $visit_id) {
 }
 
 // ================================================================
-// SAVE DIAGNOSIS - NO DUPLICATES - EACH DISEASE SEPARATE ROW
+// SAVE DIAGNOSIS
 // ================================================================
 function saveDiagnosisToDatabase($db, $visit_id, $doctor_id, $doctor_branch_id, $data) {
     $selected_diseases = isset($data['diagnosis_ids']) ? $data['diagnosis_ids'] : [];
@@ -737,11 +726,14 @@ try {
     $equipment_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (Exception $e) { $equipment_list = []; }
 
+// ================================================================
+// GET VITAL SIGNS - 7 SIGNS WITH OXYGEN SATURATION
+// ================================================================
 $vital_signs = null;
 if ($visit_id > 0) {
     $stmt = $db->prepare("
         SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
-               pulse_rate, weight, height, bmi, notes, recorded_at,
+               pulse_rate, oxygen_saturation, weight, height, bmi, notes, recorded_at,
                u.full_name as recorded_by_name
         FROM vital_signs vs
         LEFT JOIN users u ON vs.recorded_by = u.id
@@ -751,6 +743,22 @@ if ($visit_id > 0) {
     ");
     $stmt->execute([$visit_id]);
     $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+    
+    // Fallback: get latest vital signs for this patient if not tied to visit
+    if (!$vital_signs) {
+        $stmt = $db->prepare("
+            SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
+                   pulse_rate, oxygen_saturation, weight, height, bmi, notes, recorded_at,
+                   u.full_name as recorded_by_name
+            FROM vital_signs vs
+            LEFT JOIN users u ON vs.recorded_by = u.id
+            WHERE vs.patient_id = ? 
+            ORDER BY vs.recorded_at DESC 
+            LIMIT 1
+        ");
+        $stmt->execute([$patient_id]);
+        $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
 }
 
 $lab_requests = [];
@@ -840,6 +848,7 @@ $total_bill_amount = 0;
 $paid_total = 0;
 $pending_total = 0;
 $total_discount = 0;
+$total_premium = 0;
 
 try {
     $stmt = $db->prepare("
@@ -936,6 +945,17 @@ function getStatusBadgeClass($status) {
     return $map[$status] ?? 'badge-purple';
 }
 
+// ================================================================
+// HELPER: SpO2 STATUS COLOR
+// ================================================================
+function getSpO2Status($spo2) {
+    if ($spo2 === null || $spo2 === '') return ['label' => 'N/A', 'color' => '#64748B', 'bg' => '#F1F5F9', 'class' => 'unknown'];
+    $spo2 = (int)$spo2;
+    if ($spo2 >= 95) return ['label' => 'NORMAL', 'color' => '#059669', 'bg' => '#D1FAE5', 'class' => 'normal'];
+    if ($spo2 >= 90) return ['label' => 'LOW', 'color' => '#D97706', 'bg' => '#FEF3C7', 'class' => 'low'];
+    return ['label' => 'CRITICAL', 'color' => '#DC2626', 'bg' => '#FEE2E2', 'class' => 'high'];
+}
+
 $selected_disease_ids = [];
 if (!empty($visit['disease_id'])) {
     $selected_disease_ids = array_map('trim', explode(',', $visit['disease_id']));
@@ -1009,9 +1029,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         exit;
     }
     
-    // ================================================================
-    // AJAX: GET BILL TOTALS - WITH PREMIUM
-    // ================================================================
+    // AJAX: GET BILL TOTALS
     if ($action === 'get_bill_totals') {
         header('Content-Type: application/json');
         
@@ -1050,7 +1068,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $pharmacy_discount = (float)($discount_data['pharmacy_discount'] ?? 0);
         $cashier_discount = (float)($discount_data['cashier_discount'] ?? 0);
         
-        // FORMULA: total = subtotal + premium - discount
         $grand_total = $total_bill_amount + $premium_amount - $total_discount;
         if ($grand_total < 0) $grand_total = 0;
         
@@ -1195,7 +1212,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !$is_completed) {
         $pharmacy_discount = (float)($discount_data['pharmacy_discount'] ?? 0);
         $cashier_discount = (float)($discount_data['cashier_discount'] ?? 0);
         
-        // FORMULA: total = subtotal + premium - discount
         $grand_total = $total_bill_amount + $premium_amount - $total_discount;
         if ($grand_total < 0) $grand_total = 0;
         
@@ -2385,6 +2401,9 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --purple-bg: #EDE9FE;
             --teal: #0D9488;
             --teal-bg: #CCFBF1;
+            --sky: #0EA5E9;
+            --sky-dark: #0284C7;
+            --sky-bg: #E0F2FE;
             --premium: #D97706;
             --premium-bg: #FEF3C7;
             --gray-50: #F8FAFC;
@@ -2424,6 +2443,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --danger-bg: #7F1D1D;
             --warning-bg: #78350F;
             --purple-bg: #4C1D95;
+            --sky-bg: #0C2A3A;
         }
         
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2500,7 +2520,17 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .status-badge.badge-info { background: #0B5ED7 !important; }
         .status-badge.badge-danger { background: #DC2626 !important; }
         
-        /* ✅ BILL SUMMARY CARDS - INCLUDING PREMIUM */
+        .badge {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.65rem;
+            font-weight: 600;
+        }
+        .badge-purple { background: var(--purple-bg); color: var(--purple); }
+        .badge-info { background: var(--primary-bg); color: var(--primary); }
+        .badge-success { background: var(--success-bg); color: var(--success); }
+        
         .bill-summary-card {
             background: var(--bg-card);
             border-radius: 14px;
@@ -2572,7 +2602,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .bill-summary-card.discount-card .bill-summary-icon { background: var(--purple-bg); color: var(--purple); }
         .bill-summary-card.discount-card .bill-summary-value { color: var(--purple); }
         
-        /* ✅ PREMIUM CARD */
         .bill-summary-card.premium-card { border-color: #D97706; }
         .bill-summary-card.premium-card::before { background: linear-gradient(90deg, #D97706, #F59E0B); }
         .bill-summary-card.premium-card .bill-summary-icon { background: #FEF3C7; color: #D97706; }
@@ -2842,19 +2871,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .chief-complaint-grid .left-col { grid-column: 1; }
         .chief-complaint-grid .right-col { grid-column: 2; }
 
+        /* ============================================================ */
+        /* VITAL SIGNS - COMPACT 7 SIGNS WITH SpO2                       */
+        /* ============================================================ */
         .vital-signs-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 16px;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
         }
 
         .vital-sign-item {
             background: var(--bg-card);
-            border-radius: 14px;
-            padding: 20px 16px;
+            border-radius: 10px;
+            padding: 12px 10px;
             text-align: center;
             transition: all 0.3s ease;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+            box-shadow: 0 1px 4px rgba(0,0,0,0.05);
             position: relative;
             overflow: hidden;
             border: 2px solid var(--border-color);
@@ -2863,10 +2895,10 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             content: '';
             position: absolute;
             top: 0; left: 0; right: 0;
-            height: 4px;
-            border-radius: 14px 14px 0 0;
+            height: 3px;
+            border-radius: 10px 10px 0 0;
         }
-        .vital-sign-item:hover { transform: translateY(-4px) scale(1.01); box-shadow: 0 8px 30px rgba(0,0,0,0.12); }
+        .vital-sign-item:hover { transform: translateY(-2px) scale(1.01); box-shadow: 0 4px 16px rgba(0,0,0,0.1); }
 
         .vital-sign-item.temp-item::before { background: linear-gradient(90deg, #EF4444, #F87171); }
         .vital-sign-item.temp-item .vital-icon, .vital-sign-item.temp-item .vital-value { color: #EF4444; }
@@ -2874,6 +2906,19 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .vital-sign-item.bp-item .vital-icon, .vital-sign-item.bp-item .vital-value { color: #3B82F6; }
         .vital-sign-item.pulse-item::before { background: linear-gradient(90deg, #EC4899, #F472B6); }
         .vital-sign-item.pulse-item .vital-icon, .vital-sign-item.pulse-item .vital-value { color: #EC4899; }
+
+        /* SpO2 SPECIAL STYLING - SKY BLUE */
+        .vital-sign-item.spo2-item::before { background: linear-gradient(90deg, #0EA5E9, #38BDF8); }
+        .vital-sign-item.spo2-item .vital-icon, .vital-sign-item.spo2-item .vital-value { color: #0284C7; }
+        .vital-sign-item.spo2-item {
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(14, 165, 233, 0.12));
+            border-color: var(--sky);
+        }
+        .vital-sign-item.spo2-item:hover {
+            border-color: var(--sky-dark);
+            box-shadow: 0 4px 16px rgba(14, 165, 233, 0.2);
+        }
+
         .vital-sign-item.weight-item::before { background: linear-gradient(90deg, #8B5CF6, #A78BFA); }
         .vital-sign-item.weight-item .vital-icon, .vital-sign-item.weight-item .vital-value { color: #8B5CF6; }
         .vital-sign-item.height-item::before { background: linear-gradient(90deg, #22C55E, #4ADE80); }
@@ -2881,10 +2926,40 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .vital-sign-item.bmi-item::before { background: linear-gradient(90deg, #F59E0B, #FBBF24); }
         .vital-sign-item.bmi-item .vital-icon, .vital-sign-item.bmi-item .vital-value { color: #F59E0B; }
 
-        .vital-sign-item .vital-icon { font-size: 2rem; display: block; margin-bottom: 6px; }
-        .vital-sign-item .vital-label { font-size: 0.6rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.08em; display: block; }
-        .vital-sign-item .vital-value { font-size: 1.5rem; font-weight: 700; display: block; margin-top: 4px; }
-        .vital-sign-item .vital-unit { font-size: 0.7rem; color: var(--text-secondary); font-weight: 400; }
+        .vital-sign-item .vital-icon { font-size: 1.4rem; display: block; margin-bottom: 3px; }
+        .vital-sign-item .vital-label { font-size: 0.5rem; font-weight: 700; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.06em; display: block; }
+        .vital-sign-item .vital-value { font-size: 1.1rem; font-weight: 700; display: block; margin-top: 2px; }
+        .vital-sign-item .vital-unit { font-size: 0.55rem; color: var(--text-secondary); font-weight: 400; }
+
+        .vital-sign-item .vital-status {
+            font-size: 0.5rem;
+            font-weight: 700;
+            padding: 1px 8px;
+            border-radius: 8px;
+            display: inline-block;
+            margin-top: 4px;
+            letter-spacing: 0.4px;
+        }
+        .vital-sign-item .vital-status.spo2-normal { background: #D1FAE5; color: #059669; border: 1px solid #6EE7B7; }
+        .vital-sign-item .vital-status.spo2-low { background: #FEF3C7; color: #D97706; border: 1px solid #FCD34D; }
+        .vital-sign-item .vital-status.spo2-critical { background: #FEE2E2; color: #DC2626; border: 1px solid #FCA5A5; }
+
+        .vital-signs-footer {
+            margin-top: 10px;
+            padding: 6px 12px;
+            background: linear-gradient(135deg, #F0F9FF, #E0F2FE);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            font-size: 0.7rem;
+            border: 1px dashed var(--sky);
+        }
+        [data-theme="dark"] .vital-signs-footer {
+            background: #0C2A3A;
+            border-color: #0EA5E9;
+        }
 
         .consultation-card {
             background: var(--bg-card);
@@ -3319,7 +3394,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 grid-template-columns: repeat(2, 1fr) !important;
             }
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
-            .vital-signs-grid { grid-template-columns: repeat(2, 1fr); }
+            .vital-signs-grid { grid-template-columns: repeat(3, 1fr); }
             .row-2col { grid-template-columns: 1fr; }
         }
         
@@ -3329,7 +3404,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .form-actions { flex-direction: column; }
             .form-actions .btn { width: 100%; }
             .bill-summary-grid { grid-template-columns: 1fr 1fr; }
-            .vital-signs-grid { grid-template-columns: 1fr 1fr; }
+            .vital-signs-grid { grid-template-columns: repeat(3, 1fr); }
             .patient-info-grid { grid-template-columns: 1fr; }
             .chief-complaint-grid { grid-template-columns: 1fr; }
             .chief-complaint-grid .left-col,
@@ -3337,6 +3412,22 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             #diseaseCheckboxContainer .diseases-grid,
             #labTestsGrid, #medicationsGrid, #proceduresGrid, #equipmentGrid {
                 grid-template-columns: 1fr !important;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .vital-signs-grid { grid-template-columns: repeat(2, 1fr); }
+        }
+        
+        @media print {
+            .top-nav, .sidebar, .btn, .btn-pdf, .footer, .no-print { display: none !important; }
+            .main-content { margin: 0 !important; padding: 20px !important; }
+            .consultation-card { border: 1px solid #ddd !important; box-shadow: none !important; page-break-inside: avoid; }
+            .vital-sign-item { border: 1px solid #ddd !important; break-inside: avoid; }
+            .vital-sign-item.spo2-item { 
+                background: #E0F2FE !important; 
+                -webkit-print-color-adjust: exact; 
+                print-color-adjust: exact; 
             }
         }
     </style>
@@ -3446,7 +3537,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- ✅ BILL SUMMARY - INCLUDING PREMIUM -->
+    <!-- BILL SUMMARY -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-receipt"></i> Bill Summary</h3>
         <div class="bill-summary-grid" id="billSummaryGrid">
@@ -3478,7 +3569,6 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                     <span class="bill-summary-value" id="discountAmountDisplay">TSh <?= number_format($total_discount, 0) ?></span>
                 </div>
             </div>
-            <!-- ✅ NEW: PREMIUM CARD -->
             <div class="bill-summary-card premium-card" style="<?= $total_premium > 0 ? '' : 'opacity: 0.5;' ?>">
                 <div class="bill-summary-icon"><i class="fas fa-crown"></i></div>
                 <div class="bill-summary-content">
@@ -3552,41 +3642,88 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         </div>
     </div>
 
-    <!-- VITAL SIGNS -->
+    <!-- ✅ VITAL SIGNS - 7 SIGNS (COMPACT) -->
     <div class="consultation-card mb-6">
-        <h3 class="card-title"><i class="fas fa-heartbeat"></i> Vital Signs</h3>
-        <?php if ($vital_signs): ?>
-            <div class="vital-signs-grid">
+        <h3 class="card-title">
+            <i class="fas fa-heartbeat"></i> Vital Signs (7 Signs)
+            <span style="font-size:0.7rem;font-weight:400;color:#0284C7;">🫁 SpO2 Normal: 95-100%</span>
+        </h3>
+        <?php if ($vital_signs): 
+            $spo2_status = getSpO2Status($vital_signs['oxygen_saturation'] ?? null);
+        ?>
+            <!-- Row 1: Temp, BP, Pulse, SpO2 -->
+            <div class="vital-signs-grid" style="margin-bottom:12px;">
+                <!-- 1. Temperature -->
                 <div class="vital-sign-item temp-item">
                     <span class="vital-icon">🌡️</span>
                     <span class="vital-label">Temperature</span>
                     <span class="vital-value"><?= $vital_signs['temperature'] ?? '--' ?> <span class="vital-unit">°C</span></span>
                 </div>
+                <!-- 2. Blood Pressure -->
                 <div class="vital-sign-item bp-item">
                     <span class="vital-icon">💓</span>
                     <span class="vital-label">Blood Pressure</span>
                     <span class="vital-value"><?= ($vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($vital_signs['blood_pressure_diastolic'] ?? '--') ?> <span class="vital-unit">mmHg</span></span>
                 </div>
+                <!-- 3. Pulse Rate -->
                 <div class="vital-sign-item pulse-item">
                     <span class="vital-icon">💓</span>
                     <span class="vital-label">Pulse Rate</span>
                     <span class="vital-value"><?= $vital_signs['pulse_rate'] ?? '--' ?> <span class="vital-unit">bpm</span></span>
                 </div>
+                <!-- 4. OXYGEN SATURATION (SpO2) - 7TH VITAL SIGN -->
+                <div class="vital-sign-item spo2-item">
+                    <span class="vital-icon">🫁</span>
+                    <span class="vital-label">Oxygen (SpO2)</span>
+                    <span class="vital-value"><?= $vital_signs['oxygen_saturation'] ?? '--' ?> <span class="vital-unit">%</span></span>
+                    <?php if (!empty($vital_signs['oxygen_saturation'])): ?>
+                        <span class="vital-status spo2-<?= strtolower($spo2_status['label']) ?>"><?= $spo2_status['label'] ?></span>
+                    <?php endif; ?>
+                </div>
+            </div>
+            
+            <!-- Row 2: Weight, Height, BMI, (empty) -->
+            <div class="vital-signs-grid">
+                <!-- 5. Weight -->
                 <div class="vital-sign-item weight-item">
                     <span class="vital-icon">⚖️</span>
                     <span class="vital-label">Weight</span>
                     <span class="vital-value"><?= $vital_signs['weight'] ?? '--' ?> <span class="vital-unit">kg</span></span>
                 </div>
+                <!-- 6. Height -->
                 <div class="vital-sign-item height-item">
                     <span class="vital-icon">📏</span>
                     <span class="vital-label">Height</span>
                     <span class="vital-value"><?= $vital_signs['height'] ?? '--' ?> <span class="vital-unit">cm</span></span>
                 </div>
+                <!-- 7. BMI -->
                 <div class="vital-sign-item bmi-item">
                     <span class="vital-icon">📊</span>
                     <span class="vital-label">BMI</span>
                     <span class="vital-value"><?= $vital_signs['bmi'] ?? '--' ?> <span class="vital-unit">kg/m²</span></span>
                 </div>
+                <!-- Empty slot -->
+                <div style="visibility:hidden;"></div>
+            </div>
+            
+            <!-- SpO2 Info Footer -->
+            <div class="vital-signs-footer">
+                <i class="fas fa-lungs" style="color:#0EA5E9;"></i>
+                <span style="color:#0284C7;">SpO2 (Oxygen Saturation) Normal Range: <strong>95-100%</strong></span>
+                <span style="color:#64748B;"> • 7 Vital Signs Tracked</span>
+            </div>
+            
+            <?php if (!empty($vital_signs['notes'])): ?>
+                <div class="mt-2 text-sm" style="color:var(--text-secondary);padding:6px 12px;background:var(--bg-body);border-radius:6px;border-left:3px solid var(--primary);">
+                    <strong>Notes:</strong> <?= htmlspecialchars($vital_signs['notes']) ?>
+                </div>
+            <?php endif; ?>
+            <div class="mt-2 text-xs" style="color:var(--text-secondary);">
+                <i class="fas fa-user"></i> Recorded by: <?= htmlspecialchars($vital_signs['recorded_by_name'] ?? 'N/A') ?>
+                <?php if (!empty($vital_signs['recorded_at'])): ?>
+                    <span class="mx-2">|</span>
+                    <i class="fas fa-clock"></i> <?= date('M d, Y h:i A', strtotime($vital_signs['recorded_at'])) ?>
+                <?php endif; ?>
             </div>
         <?php else: ?>
             <div class="empty-state"><i class="fas fa-heartbeat"></i><p>No vital signs recorded</p></div>
@@ -4293,45 +4430,98 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
     <?php else: ?>
     
-    <!-- COMPLETED VIEW (read-only) -->
+    <!-- ============================================================ -->
+    <!-- COMPLETED VIEW - ALL SECTIONS                                 -->
+    <!-- ============================================================ -->
+    
+    <!-- 1. CHIEF COMPLAINT & HISTORY -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-list-ul"></i> Chief Complaint & History</h3>
-        <div class="form-group">
-            <label class="form-label">Chief Complaint</label>
-            <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['symptoms'] ?? 'No complaint recorded')) ?></div>
+        <div class="row-2col">
+            <div class="form-group">
+                <label class="form-label">Chief Complaint</label>
+                <div class="form-control" style="min-height:60px;background:var(--gray-50);">
+                    <?= nl2br(htmlspecialchars($visit['symptoms'] ?? 'No complaint recorded')) ?>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Notes</label>
+                <div class="form-control" style="min-height:60px;background:var(--gray-50);">
+                    <?= nl2br(htmlspecialchars($visit['notes'] ?? 'No notes recorded')) ?>
+                </div>
+            </div>
         </div>
-        <div class="form-group">
-            <label class="form-label">Notes</label>
-            <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['notes'] ?? 'No notes recorded')) ?></div>
-        </div>
-        <div class="form-group">
-            <label class="form-label">HPI</label>
-            <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['hpi'] ?? 'No HPI recorded')) ?></div>
-        </div>
-        <div class="form-group">
-            <label class="form-label">Physical Examination</label>
-            <div class="form-control" style="min-height:60px;background:var(--gray-50);"><?= nl2br(htmlspecialchars($visit['physical_exam'] ?? 'No physical exam recorded')) ?></div>
+        <div class="row-2col">
+            <div class="form-group">
+                <label class="form-label">History of Presenting Illness (HPI)</label>
+                <div class="form-control" style="min-height:60px;background:var(--gray-50);">
+                    <?= nl2br(htmlspecialchars($visit['hpi'] ?? 'No HPI recorded')) ?>
+                </div>
+            </div>
+            <div class="form-group">
+                <label class="form-label">Physical Examination</label>
+                <div class="form-control" style="min-height:60px;background:var(--gray-50);">
+                    <?= nl2br(htmlspecialchars($visit['physical_exam'] ?? 'No physical exam recorded')) ?>
+                </div>
+            </div>
         </div>
     </div>
 
+    <!-- 2. LAB RESULTS -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title">
+            <i class="fas fa-flask"></i> Laboratory Results
+            <?php if ($lab_results_available): ?>
+                <span class="frozen-badge success">✅ Results Available</span>
+            <?php endif; ?>
+        </h3>
+        <?php if ($lab_results_available): ?>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Test Name</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Result</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Reference Range</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($lab_results as $result): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><?= htmlspecialchars($result['test_name'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:600;color:var(--success);"><?= htmlspecialchars($result['results'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-size:0.8rem;color:var(--text-secondary);"><?= htmlspecialchars($result['reference_range'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><span class="status-badge badge-success">✅ Completed</span></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-flask"></i><p>No lab tests were requested</p></div>
+        <?php endif; ?>
+    </div>
+
+    <!-- 3. DIAGNOSIS & TREATMENT -->
     <div class="consultation-card mb-6">
         <h3 class="card-title"><i class="fas fa-diagnoses"></i> Diagnosis & Treatment</h3>
         <?php if (!empty($visit['diagnosis']) || !empty($visit['disease_name'])): ?>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-                <div>
+            <div class="row-2col">
+                <div class="form-group">
                     <label class="form-label">Diagnosis</label>
                     <div class="form-control" style="background:var(--gray-50);font-weight:600;color:var(--success);">
                         <?= htmlspecialchars($visit['diagnosis'] ?? $visit['disease_name'] ?? 'N/A') ?>
                     </div>
                 </div>
-                <div>
+                <div class="form-group">
                     <label class="form-label">Disease Code</label>
                     <div class="form-control" style="background:var(--gray-50);font-family:monospace;">
                         <?= htmlspecialchars($visit['disease_code'] ?? 'N/A') ?>
                     </div>
                 </div>
             </div>
-            <div class="form-group mt-3">
+            <div class="form-group">
                 <label class="form-label">Treatment Plan</label>
                 <div class="form-control" style="min-height:60px;background:var(--gray-50);">
                     <?= nl2br(htmlspecialchars($visit['treatment'] ?? 'No treatment recorded')) ?>
@@ -4342,13 +4532,201 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         <?php endif; ?>
     </div>
 
+    <!-- 4. MEDICATIONS -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title">
+            <i class="fas fa-prescription"></i> Prescribed Medications
+            <span class="section-total green">
+                <span class="label">💊 Total:</span>
+                <span class="amount">TSh <?= number_format($medications_total, 0) ?></span>
+            </span>
+        </h3>
+        <?php if (count($prescriptions) > 0): ?>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Medication</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Dosage</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Frequency</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Duration</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Qty</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Total</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($prescriptions as $med): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:500;"><?= htmlspecialchars($med['medication_name'] ?? 'Unknown') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><?= htmlspecialchars($med['dosage'] ?? '-') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><?= htmlspecialchars($med['frequency'] ?? '-') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><?= htmlspecialchars($med['duration'] ?? '-') ?> days</td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);">x<?= $med['quantity'] ?? 0 ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:600;color:var(--success);">TSh <?= number_format($med['total_price'] ?? 0, 0) ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);">
+                                    <?php if (($med['status'] ?? '') === 'dispensed'): ?>
+                                        <span class="status-badge badge-success">✅ Dispensed</span>
+                                    <?php else: ?>
+                                        <span class="status-badge badge-warning">⏳ Pending</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-prescription"></i><p>No medications prescribed</p></div>
+        <?php endif; ?>
+    </div>
+
+    <!-- 5. PROCEDURES & EQUIPMENT -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title">
+            <i class="fas fa-syringe"></i> Procedures & Equipment
+            <span class="section-total purple">
+                <span class="label">🛠️ Total:</span>
+                <span class="amount">TSh <?= number_format($procedure_total + $equipment_total, 0) ?></span>
+            </span>
+        </h3>
+        
+        <?php if (count($procedures) > 0 || count($equipment_items_display) > 0): ?>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Item</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Type</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Qty</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Unit Price</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Total</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($procedures as $proc): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:500;"><?= htmlspecialchars($proc['procedure_name'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><span class="badge badge-purple">Procedure</span></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);">1</td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);">TSh <?= number_format($proc['procedure_price'] ?? 0, 0) ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:600;color:var(--success);">TSh <?= number_format($proc['procedure_price'] ?? 0, 0) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                        <?php foreach ($equipment_items_display as $eq_item): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:500;"><?= htmlspecialchars($eq_item['item_name'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><span class="badge badge-info">Equipment</span></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><?= $eq_item['quantity'] ?? 0 ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);">TSh <?= number_format($eq_item['unit_price'] ?? 0, 0) ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:600;color:var(--success);">TSh <?= number_format($eq_item['total_price'] ?? 0, 0) ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-syringe"></i><p>No procedures or equipment used</p></div>
+        <?php endif; ?>
+    </div>
+
+    <!-- 6. BILL ITEMS SUMMARY -->
+    <div class="consultation-card mb-6">
+        <h3 class="card-title">
+            <i class="fas fa-receipt"></i> Bill Items Summary
+            <span class="section-total">
+                <span class="label">💰 Grand Total:</span>
+                <span class="amount">TSh <?= number_format($bill_total, 0) ?></span>
+            </span>
+        </h3>
+        <?php if (count($bill_items) > 0): ?>
+            <div style="overflow-x:auto;">
+                <table style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                    <thead>
+                        <tr>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Item</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Type</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Qty</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Price</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Total</th>
+                            <th style="text-align:left;padding:10px 14px;font-weight:600;font-size:0.7rem;text-transform:uppercase;color:var(--text-secondary);border-bottom:2px solid var(--border-color);">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php foreach ($bill_items as $item): ?>
+                            <tr>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:500;"><?= htmlspecialchars($item['item_name'] ?? 'N/A') ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);">
+                                    <?php 
+                                    $type_labels = [
+                                        'consultation' => 'Consultation',
+                                        'lab_test' => 'Lab Test',
+                                        'medication' => 'Medication',
+                                        'procedure' => 'Procedure',
+                                        'equipment' => 'Equipment',
+                                        'registration' => 'Registration'
+                                    ];
+                                    echo $type_labels[$item['item_type']] ?? ucfirst($item['item_type']);
+                                    ?>
+                                </td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);"><?= $item['quantity'] ?? 0 ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);">TSh <?= number_format($item['unit_price'] ?? 0, 0) ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);font-weight:600;">TSh <?= number_format($item['total_price'] ?? 0, 0) ?></td>
+                                <td style="padding:10px 14px;border-bottom:1px solid var(--border-color);">
+                                    <?php if (($item['status'] ?? '') === 'paid'): ?>
+                                        <span class="status-badge badge-success">✅ Paid</span>
+                                    <?php else: ?>
+                                        <span class="status-badge badge-warning">⏳ Pending</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            
+            <div style="margin-top:16px;padding:14px 20px;background:var(--gray-50);border-radius:var(--radius);border:1px solid var(--border-color);">
+                <div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:4px 0;">
+                    <span style="color:var(--text-secondary);">Subtotal:</span>
+                    <span style="font-weight:500;">TSh <?= number_format($bill_subtotal, 0) ?></span>
+                </div>
+                <?php if ($total_discount > 0): ?>
+                <div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:4px 0;">
+                    <span style="color:var(--purple);">Total Discount:</span>
+                    <span style="font-weight:500;color:var(--purple);">- TSh <?= number_format($total_discount, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                <?php if ($total_premium > 0): ?>
+                <div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:4px 0;">
+                    <span style="color:#D97706;">Premium:</span>
+                    <span style="font-weight:500;color:#D97706;">+ TSh <?= number_format($total_premium, 0) ?></span>
+                </div>
+                <?php endif; ?>
+                <div style="display:flex;justify-content:space-between;font-size:1rem;padding:8px 0;border-top:2px solid var(--border-color);margin-top:4px;">
+                    <span style="font-weight:700;">Grand Total:</span>
+                    <span style="font-weight:700;color:var(--primary);">TSh <?= number_format($bill_total, 0) ?></span>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:4px 0;">
+                    <span style="color:var(--success);">Paid:</span>
+                    <span style="font-weight:500;color:var(--success);">TSh <?= number_format($bill_paid, 0) ?></span>
+                </div>
+                <div style="display:flex;justify-content:space-between;font-size:0.85rem;padding:4px 0;">
+                    <span style="color:<?= $bill_balance > 0 ? 'var(--danger)' : 'var(--success)' ?>;">Balance:</span>
+                    <span style="font-weight:600;color:<?= $bill_balance > 0 ? 'var(--danger)' : 'var(--success)' ?>;">TSh <?= number_format($bill_balance, 0) ?></span>
+                </div>
+            </div>
+        <?php else: ?>
+            <div class="empty-state"><i class="fas fa-receipt"></i><p>No bill items recorded</p></div>
+        <?php endif; ?>
+    </div>
+
     <?php endif; ?>
 
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span style="color:var(--gray-300);margin:0 8px;">|</span>
-            <?= $is_completed ? 'Consultation Summary' : 'Consultation' ?>
+            <?= $is_completed ? 'Consultation Summary' : 'Consultation' ?> (7 Vital Signs)
             <span style="color:var(--gray-300);margin:0 8px;">|</span>
             <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>
             <span style="color:var(--gray-300);margin:0 8px;">|</span>
@@ -4369,7 +4747,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
 
 <script>
 // ================================================================
-// CONSULTATION JAVASCRIPT - WITH PREMIUM SUPPORT
+// CONSULTATION JAVASCRIPT - WITH PREMIUM SUPPORT & SpO2
 // ================================================================
 
 var AUTO_UPDATE_INTERVAL = 3000;
@@ -4400,7 +4778,6 @@ var diagnosisAlreadySaved = false;
 var manualDiseaseCount = <?= count($manual_diseases_saved) ?>;
 var lastSavedHash = '';
 
-// TOAST
 function showToast(title, message, type) {
     var toast = document.getElementById('toast');
     var toastTitle = document.getElementById('toastTitle');
@@ -4444,7 +4821,6 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-// COMPLAINTS
 function addInstruction(text) {
     var textarea = document.getElementById('medInstructions');
     if (textarea) {
@@ -4485,7 +4861,6 @@ function updateComplaints() {
     }
 }
 
-// TOGGLE DROPDOWNS
 function toggleLabDropdown() {
     var body = document.getElementById('labDropdownBody');
     var header = body.previousElementSibling;
@@ -4510,7 +4885,6 @@ function toggleMedicationDropdown() {
     if (body.classList.contains('open')) document.getElementById('medicationSearch').focus();
 }
 
-// FILTERS
 function filterLabTestsInside() {
     var input = document.getElementById('labTestSearch');
     var filter = input.value.toLowerCase().trim();
@@ -4540,7 +4914,6 @@ function filterMedicationsInside() {
     });
 }
 
-// LAB TESTS
 function toggleLabTestCheckbox(element) {
     element.classList.toggle('selected');
     var testId = element.getAttribute('data-test-id');
@@ -4673,7 +5046,6 @@ function removeLabTest(testId) {
     });
 }
 
-// MEDICATIONS
 function toggleMedicationCheckbox(element) {
     element.classList.toggle('selected');
     
@@ -4865,7 +5237,6 @@ function updateMedicationTotals() {
     }
 }
 
-// SAVE DISEASES
 function saveDiseasesToVisit() {
     if (isCompleted || isWaiting) return;
     
@@ -4938,7 +5309,6 @@ function saveDiseasesToVisit() {
     .catch(function(error) { if (saveIndicator) saveIndicator.style.display = 'none'; });
 }
 
-// MANUAL DISEASES
 function addManualDisease() {
     var input = document.getElementById('manualDiseaseInput');
     var container = document.getElementById('manualDiseasesContainer');
@@ -5004,7 +5374,6 @@ function getDiagnosisData() {
     };
 }
 
-// CHECK LAB RESULTS
 function checkLabResultsAndUpdateStatus() {
     if (isCompleted || isWaiting || isPrescribed) return;
     
@@ -5023,7 +5392,6 @@ function checkLabResultsAndUpdateStatus() {
     .catch(function(err) {});
 }
 
-// AUTO-COMPLETE
 function checkAndTriggerAutoComplete() {
     if (isCompleted || autoCompleteTriggered) return;
     if (!isWaiting) return;
@@ -5047,7 +5415,6 @@ function checkAndTriggerAutoComplete() {
     .catch(function(err) {});
 }
 
-// UPDATE BILL TOTALS - WITH PREMIUM
 function updateBillTotals(billData) {
     if (!billData) return;
     
@@ -5078,7 +5445,6 @@ function updateBillTotals(billData) {
     var discountEl = document.getElementById('discountAmountDisplay');
     if (discountEl) discountEl.textContent = 'TSh ' + Number(billData.discount || 0).toLocaleString();
     
-    // ✅ UPDATE PREMIUM
     var premiumEl = document.getElementById('premiumAmountDisplay');
     if (premiumEl) {
         var premium = Number(billData.premium || 0);
@@ -5143,7 +5509,6 @@ function fetchBillTotals() {
     .catch(function(err) {});
 }
 
-// FULL STATE
 function fetchFullState() {
     if (isUpdating || isCompleted) return;
     isUpdating = true;
@@ -5213,7 +5578,6 @@ function updateMedicationsUI(prescriptions) {
     list.innerHTML = html;
 }
 
-// PROCEDURES
 function toggleProcedure(element) {
     element.classList.toggle('selected');
     updateProcedureSelection();
@@ -5287,7 +5651,6 @@ function clearProcedureSelections() {
     if (countEl) countEl.textContent = 'Selected: 0';
 }
 
-// EQUIPMENT
 function toggleEquipment(element) {
     element.classList.toggle('selected');
     updateEquipmentSelection();
@@ -5375,7 +5738,6 @@ function clearEquipmentSelections() {
     if (countEl) countEl.textContent = 'Selected: 0';
 }
 
-// REMOVE ADDED ITEM
 function removeAddedItem(type, id) {
     if (!confirm('Remove this ' + type + '?')) return;
     
@@ -5427,7 +5789,6 @@ function updateAddedItemsUI() {
     }
 }
 
-// LAB STATUS
 var labStatusHash = '';
 
 function checkLabStatus() {
@@ -5465,7 +5826,6 @@ function checkLabStatus() {
     .catch(function(err) {});
 }
 
-// MANUAL REFRESH
 function manualRefresh() {
     var btn = document.getElementById('refreshBtn');
     if (btn) { btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...'; btn.disabled = true; }
@@ -5477,7 +5837,6 @@ function manualRefresh() {
     }, 1500);
 }
 
-// AUTO UPDATE
 function startAutoUpdate() {
     if (isCompleted) return;
     if (updateInterval) clearInterval(updateInterval);
@@ -5509,7 +5868,7 @@ function startAutoUpdate() {
     }
     
     console.log('🔄 Auto-update started');
-    console.log('✅ Premium included in bill totals');
+    console.log('✅ 7 Vital Signs (SpO2 included)');
 }
 
 function stopAutoUpdate() {
@@ -5519,7 +5878,6 @@ function stopAutoUpdate() {
     if (autoSaveInterval) { clearInterval(autoSaveInterval); autoSaveInterval = null; }
 }
 
-// DOM READY
 document.addEventListener('DOMContentLoaded', function() {
     if (!isCompleted) {
         setTimeout(startAutoUpdate, 1000);
@@ -5548,6 +5906,12 @@ document.addEventListener('visibilitychange', function() {
     if (document.hidden) stopAutoUpdate();
     else startAutoUpdate();
 });
+
+console.log('%c🩺 Braick Consultation (7 Vital Signs with SpO2)', 'font-size:16px; font-weight:bold; color:#0B5ED7;');
+console.log('%c❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI', 'font-size:12px; color:#DC2626;');
+console.log('%c🫁 SpO2 (Oxygen Saturation): Normal 95-100%', 'font-size:12px; color:#0EA5E9;');
+console.log('%c🫁 SpO2 Value: <?= $vital_signs['oxygen_saturation'] ?? "N/A" ?>%', 'font-size:12px; color:#0EA5E9;');
+console.log('%c📋 COMPLETED VIEW: All sections displayed (Complaint, Lab, Diagnosis, Medications, Procedures, Bill)', 'font-size:12px; color:#059669;');
 </script>
 
 </body>

@@ -4,6 +4,7 @@
 // ADMIN - REPORTS DASHBOARD - FIXED VERSION
 // PDF: Logo starts at top, proper page breaks
 // BRAICK DISPENSARY
+// ✅ VITAL SIGNS 7 - WITH HEIGHT & OXYGEN SATURATION (SpO2)
 // ================================================================
 
 // ================================================================
@@ -135,9 +136,7 @@ function getStatusBadgeClass($status) {
 }
 
 // ================================================================
-// ================================================================
 // 1. PATIENT REPORT - FIXED
-// ================================================================
 // ================================================================
 
 $patient_data = null;
@@ -195,9 +194,7 @@ if ($report_type === 'patient') {
         $stmt->execute([$patient_id]);
         $patient_visits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // ============================================================
         // FIXED: Get ALL bills directly from bills table using patient_id
-        // ============================================================
         $stmt = $db->prepare("
             SELECT * FROM bills 
             WHERE patient_id = ? 
@@ -206,9 +203,7 @@ if ($report_type === 'patient') {
         $stmt->execute([$patient_id]);
         $all_patient_bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
-        // ============================================================
         // FIXED: Calculate summary from ALL bills
-        // ============================================================
         foreach ($all_patient_bills as $bill) {
             $patient_bills_summary['total_bills']++;
             $patient_bills_summary['total_amount'] += (float)($bill['total_amount'] ?? 0);
@@ -225,9 +220,7 @@ if ($report_type === 'patient') {
             }
         }
 
-        // ============================================================
         // FIXED: Process visits with their data
-        // ============================================================
         foreach ($patient_visits as &$visit) {
             $visit_id = $visit['id'];
             
@@ -316,9 +309,7 @@ if ($report_type === 'patient') {
 }
 
 // ================================================================
-// ================================================================
 // 2. CASHIER REPORT - WITH DISCOUNTS
-// ================================================================
 // ================================================================
 
 $cashier_data = [];
@@ -415,9 +406,7 @@ if ($report_type === 'cashier') {
 }
 
 // ================================================================
-// ================================================================
 // 3. PHARMACY REPORT
-// ================================================================
 // ================================================================
 
 $pharmacy_data = [];
@@ -509,9 +498,7 @@ if ($report_type === 'pharmacy') {
 }
 
 // ================================================================
-// ================================================================
 // 4. LAB REPORT
-// ================================================================
 // ================================================================
 
 $lab_data = [];
@@ -1221,9 +1208,6 @@ include_once '../../components/admin_sidebar.php';
             opacity: 0.7;
         }
         
-        /* ================================================================
-           BADGE - PAID = GREEN
-           ================================================================ */
         .badge {
             display: inline-flex;
             align-items: center;
@@ -1393,9 +1377,6 @@ include_once '../../components/admin_sidebar.php';
             font-weight: 700;
         }
         
-        /* ================================================================
-           PDF MODAL
-           ================================================================ */
         .pdf-modal-overlay {
             display: none;
             position: fixed;
@@ -1501,9 +1482,6 @@ include_once '../../components/admin_sidebar.php';
             padding-top: 28px;
         }
         
-        /* ================================================================
-           PDF STYLES - Logo starts at top
-           ================================================================ */
         .pdf-content {
             font-family: 'Inter', 'Segoe UI', sans-serif;
         }
@@ -1759,9 +1737,7 @@ include_once '../../components/admin_sidebar.php';
 </head>
 <body>
 
-<!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav no-print">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -1806,14 +1782,10 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </nav>
 
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1839,9 +1811,7 @@ include_once '../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- REPORT TABS -->
-    <!-- ================================================================ -->
     <div class="report-tabs animate-fade-in-up no-print">
         <a href="?type=patient&branch=<?= urlencode($selected_branch_id) ?>" 
            class="report-tab <?= $report_type === 'patient' ? 'active' : '' ?>">
@@ -1861,9 +1831,7 @@ include_once '../../components/admin_sidebar.php';
         </a>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FILTER BAR -->
-    <!-- ================================================================ -->
     <div class="filter-bar animate-fade-in-up no-print" style="animation-delay:0.05s;">
         <form method="GET" action="" class="flex flex-wrap gap-2 items-center w-full">
             <input type="hidden" name="type" value="<?= htmlspecialchars($report_type) ?>">
@@ -1901,34 +1869,28 @@ include_once '../../components/admin_sidebar.php';
         </form>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- PATIENT REPORT - FIXED -->
-    <!-- ================================================================ -->
+    <!-- PATIENT REPORT -->
     <?php if ($report_type === 'patient'): ?>
     
         <?php if ($patient_data && !empty($all_patient_bills)): ?>
         
         <div class="summary-grid animate-fade-in-up" style="animation-delay:0.1s;">
             <div class="summary-card">
-                <span class="card-icon-mini blue"><i class="fas fa-money-bill-wave"></i></span>
                 <p class="number blue">TSh <?= number_format($patient_bills_summary['total_paid'] ?? 0, 0) ?></p>
                 <p class="label">Total Paid</p>
                 <p class="sub-label">Bills: <?= number_format($patient_bills_summary['total_bills'] ?? 0) ?></p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini red"><i class="fas fa-receipt"></i></span>
                 <p class="number red">TSh <?= number_format($patient_bills_summary['total_discount'] ?? 0, 0) ?></p>
                 <p class="label">Total Discount</p>
                 <p class="sub-label">Pharmacy: TSh <?= number_format($patient_bills_summary['total_pharmacy_discount'] ?? 0, 0) ?> | Cashier: TSh <?= number_format($patient_bills_summary['total_cashier_discount'] ?? 0, 0) ?></p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini teal"><i class="fas fa-chart-line"></i></span>
                 <p class="number teal">TSh <?= number_format($patient_bills_summary['total_amount'] ?? 0, 0) ?></p>
                 <p class="label">Total Amount</p>
                 <p class="sub-label">Balance: TSh <?= number_format($patient_bills_summary['total_balance'] ?? 0, 0) ?></p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini green"><i class="fas fa-check-circle"></i></span>
                 <p class="number green"><?= number_format($patient_bills_summary['paid_count'] ?? 0) ?></p>
                 <p class="label">Paid Bills</p>
                 <p class="sub-label">Pending: <?= number_format($patient_bills_summary['pending_count'] ?? 0) ?></p>
@@ -1952,9 +1914,6 @@ include_once '../../components/admin_sidebar.php';
             </div>
         </div>
         
-        <!-- ============================================================ -->
-        <!-- FIXED: Bills Table - Shows ALL bills for this patient -->
-        <!-- ============================================================ -->
         <div class="card animate-fade-in-up" style="animation-delay:0.14s;">
             <div class="card-header">
                 <h3 class="card-title"><i class="fas fa-file-invoice"></i> All Bills (<?= count($all_patient_bills) ?>)</h3>
@@ -2040,25 +1999,20 @@ include_once '../../components/admin_sidebar.php';
         
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- CASHIER REPORT -->
-    <!-- ================================================================ -->
     <?php if ($report_type === 'cashier'): ?>
     
         <div class="summary-grid animate-fade-in-up" style="animation-delay:0.1s;">
             <div class="summary-card">
-                <span class="card-icon-mini green"><i class="fas fa-money-bill-wave"></i></span>
                 <p class="number green">TSh <?= number_format($cashier_data['total_revenue'] ?? 0, 0) ?></p>
                 <p class="label">Total Revenue</p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini red"><i class="fas fa-receipt"></i></span>
                 <p class="number red">TSh <?= number_format($cashier_data['total_discounts'] ?? 0, 0) ?></p>
                 <p class="label">Total Discounts</p>
                 <p class="sub-label">Pharmacy: TSh <?= number_format($cashier_data['total_pharmacy_discount'] ?? 0, 0) ?> | Cashier: TSh <?= number_format($cashier_data['total_cashier_discount'] ?? 0, 0) ?></p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini teal"><i class="fas fa-chart-line"></i></span>
                 <p class="number teal">TSh <?= number_format($cashier_data['total_profit'] ?? 0, 0) ?></p>
                 <p class="label">Net Profit</p>
                 <p class="sub-label">Revenue - Discounts</p>
@@ -2115,26 +2069,21 @@ include_once '../../components/admin_sidebar.php';
         
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- PHARMACY REPORT -->
-    <!-- ================================================================ -->
     <?php if ($report_type === 'pharmacy'): ?>
     
         <div class="summary-grid animate-fade-in-up" style="animation-delay:0.1s;">
             <div class="summary-card">
-                <span class="card-icon-mini purple"><i class="fas fa-prescription"></i></span>
                 <p class="number purple">TSh <?= number_format($pharmacy_data['total_prescription_amount'] ?? 0, 0) ?></p>
                 <p class="label">Prescription Sales</p>
                 <p class="sub-label"><?= number_format($pharmacy_data['total_prescription_count'] ?? 0) ?> items</p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini orange"><i class="fas fa-cash-register"></i></span>
                 <p class="number orange">TSh <?= number_format($pharmacy_data['total_otc_amount'] ?? 0, 0) ?></p>
                 <p class="label">OTC Sales</p>
                 <p class="sub-label"><?= number_format($pharmacy_data['total_otc_count'] ?? 0) ?> transactions</p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini blue"><i class="fas fa-prescription-bottle"></i></span>
                 <p class="number blue">TSh <?= number_format(($pharmacy_data['total_prescription_amount'] ?? 0) + ($pharmacy_data['total_otc_amount'] ?? 0), 0) ?></p>
                 <p class="label">Total Pharmacy Revenue</p>
             </div>
@@ -2214,29 +2163,23 @@ include_once '../../components/admin_sidebar.php';
         
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- LAB REPORT -->
-    <!-- ================================================================ -->
     <?php if ($report_type === 'lab'): ?>
     
         <div class="summary-grid animate-fade-in-up" style="animation-delay:0.1s;">
             <div class="summary-card">
-                <span class="card-icon-mini purple"><i class="fas fa-money-bill-wave"></i></span>
                 <p class="number purple">TSh <?= number_format($lab_data['total_revenue'] ?? 0, 0) ?></p>
                 <p class="label">Total Revenue</p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini blue"><i class="fas fa-flask"></i></span>
                 <p class="number blue"><?= number_format($lab_data['total_tests'] ?? 0) ?></p>
                 <p class="label">Total Tests</p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini green"><i class="fas fa-check-circle"></i></span>
                 <p class="number green"><?= number_format($lab_data['completed_tests'] ?? 0) ?></p>
                 <p class="label">Completed</p>
             </div>
             <div class="summary-card">
-                <span class="card-icon-mini orange"><i class="fas fa-clock"></i></span>
                 <p class="number orange"><?= number_format(($lab_data['pending_tests'] ?? 0) + ($lab_data['in_progress_tests'] ?? 0)) ?></p>
                 <p class="label">In Progress</p>
             </div>
@@ -2308,9 +2251,7 @@ include_once '../../components/admin_sidebar.php';
         
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -2325,9 +2266,7 @@ include_once '../../components/admin_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- PDF MODAL -->
-<!-- ================================================================ -->
 <div class="pdf-modal-overlay" id="pdfModal">
     <div class="pdf-modal">
         <div class="pdf-modal-header">
@@ -2355,9 +2294,7 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -2366,13 +2303,8 @@ include_once '../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
     // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -2402,9 +2334,6 @@ include_once '../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
-    // DOM ELEMENTS
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     var searchBtn = document.getElementById('searchBtn');
@@ -2459,9 +2388,6 @@ include_once '../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
-    // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -2482,14 +2408,10 @@ include_once '../../components/admin_sidebar.php';
         }, 3500);
     }
 
-    // ================================================================
-    // DATA FOR PDF
-    // ================================================================
     var adminPhones = <?= json_encode($admin_phones) ?>;
     var branchName = '<?= htmlspecialchars($branch_name) ?>';
     var reportType = '<?= $report_type ?>';
     
-    // Patient Data - FIXED
     var patientName = '<?= isset($patient_data['full_name']) ? htmlspecialchars($patient_data['full_name']) : '' ?>';
     var patientId = '<?= isset($patient_data['patient_id']) ? htmlspecialchars($patient_data['patient_id']) : '' ?>';
     var patientPhone = '<?= isset($patient_data['phone']) ? htmlspecialchars($patient_data['phone']) : 'N/A' ?>';
@@ -2500,23 +2422,12 @@ include_once '../../components/admin_sidebar.php';
     var patientDob = '<?= isset($patient_data['date_of_birth']) ? date('F d, Y', strtotime($patient_data['date_of_birth'])) : 'N/A' ?>';
     var patientAllergies = '<?= isset($patient_data['allergies']) ? htmlspecialchars($patient_data['allergies']) : 'None' ?>';
     var visitsData = <?= json_encode($patient_visits) ?>;
-    
-    // FIXED: All bills data for patient
     var allBillsData = <?= json_encode($all_patient_bills) ?>;
     var billsSummary = <?= json_encode($patient_bills_summary) ?>;
-    
-    // Cashier Data
     var cashierData = <?= json_encode($cashier_data) ?>;
-    
-    // Pharmacy Data
     var pharmacyData = <?= json_encode($pharmacy_data) ?>;
-    
-    // Lab Data
     var labData = <?= json_encode($lab_data) ?>;
 
-    // ================================================================
-    // PDF GENERATION - FIXED
-    // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
         var content = document.getElementById('pdfContent');
@@ -2582,7 +2493,7 @@ include_once '../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // BUILD PATIENT PDF - FIXED with ALL bills
+    // BUILD PATIENT PDF - WITH 7 VITAL SIGNS
     // ================================================================
     function buildPatientPDF() {
         var adminPhonesText = adminPhones.length > 0 ? adminPhones.join(' | ') : '+255 700 000 001';
@@ -2593,7 +2504,6 @@ include_once '../../components/admin_sidebar.php';
             hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         
-        // FIXED: Build bills table from allBillsData
         var billsHTML = '';
         var totalAmount = 0;
         var totalPaid = 0;
@@ -2611,7 +2521,6 @@ include_once '../../components/admin_sidebar.php';
                 totalCashierDisc += parseFloat(bill.cashier_discount || 0);
                 totalDiscount += parseFloat(bill.total_discount || 0);
                 
-                var statusClass = bill.status === 'paid' ? 'paid' : '';
                 var statusColor = bill.status === 'paid' ? '#059669' : '#D97706';
                 
                 billsHTML += `
@@ -2630,7 +2539,6 @@ include_once '../../components/admin_sidebar.php';
             });
         }
         
-        // Build visits HTML
         var visitsHTML = '';
         var visitCount = 0;
         
@@ -2653,6 +2561,44 @@ include_once '../../components/admin_sidebar.php';
                 var proceduresTools = visit.procedures_tools || [];
                 var visitBills = visit.bills || [];
                 
+                // ✅ VITAL SIGNS - 7 MEASUREMENTS WITH SpO2
+                var vitalsHtml = '';
+                var hasVitals = vs.temperature || vs.blood_pressure_systolic || vs.pulse_rate || vs.weight || vs.height || vs.bmi || vs.oxygen_saturation;
+                
+                if (hasVitals) {
+                    // SpO2 status
+                    var spo2Value = vs.oxygen_saturation ? parseInt(vs.oxygen_saturation) : null;
+                    var spo2Class = '';
+                    var spo2Icon = '✅';
+                    var spo2Label = 'Normal';
+                    if (spo2Value !== null) {
+                        if (spo2Value < 90) {
+                            spo2Class = 'spo2-critical';
+                            spo2Icon = '🚨';
+                            spo2Label = 'Critical';
+                        } else if (spo2Value < 95) {
+                            spo2Class = 'spo2-low';
+                            spo2Icon = '⚠️';
+                            spo2Label = 'Low';
+                        }
+                    }
+                    
+                    vitalsHtml = `
+                        <div style="margin-bottom:8px;">
+                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">❤️ Vital Signs (7 Measurements)</div>
+                            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;">
+                                ${vs.temperature ? `<div style="background:#EFF6FF;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0B5ED7;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">🌡️ Temperature</div><div style="font-weight:700;color:#0B5ED7;font-size:14px;">${vs.temperature} °C</div></div>` : ''}
+                                ${vs.blood_pressure_systolic || vs.blood_pressure_diastolic ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #059669;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">❤️ Blood Pressure</div><div style="font-weight:700;color:#059669;font-size:14px;">${vs.blood_pressure_systolic || '?'}/${vs.blood_pressure_diastolic || '?'} mmHg</div></div>` : ''}
+                                ${vs.pulse_rate ? `<div style="background:#EDE9FE;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #7C3AED;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">💓 Pulse Rate</div><div style="font-weight:700;color:#7C3AED;font-size:14px;">${vs.pulse_rate} bpm</div></div>` : ''}
+                                ${vs.weight ? `<div style="background:#FEF3C7;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #D97706;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">⚖️ Weight</div><div style="font-weight:700;color:#D97706;font-size:14px;">${vs.weight} kg</div></div>` : ''}
+                                ${vs.height ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0D9488;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">📏 Height</div><div style="font-weight:700;color:#0D9488;font-size:14px;">${vs.height} cm</div></div>` : ''}
+                                ${vs.bmi ? `<div style="background:#FEE2E2;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #DC2626;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">📊 BMI</div><div style="font-weight:700;color:#DC2626;font-size:14px;">${vs.bmi} kg/m²</div></div>` : ''}
+                                ${spo2Value !== null ? `<div style="background:#ECFEFF;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0891B2;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">🫁 Oxygen Saturation</div><div style="font-weight:700;color:#0891B2;font-size:14px;">${spo2Value} % ${spo2Icon}</div></div>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }
+                
                 visitsHTML += `
                     <div class="pdf-visit-block" style="margin-bottom:12px;page-break-inside:avoid;break-inside:avoid;">
                         <div class="visit-header" style="margin-bottom:6px;">
@@ -2669,26 +2615,14 @@ include_once '../../components/admin_sidebar.php';
                             </div>
                         </div>
                         
+                        ${vitalsHtml}
+                        
                         ${diagnosis || treatment || notes ? `
                         <div style="margin-bottom:8px;">
                             <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">🩺 Clinical Information</div>
                             ${diagnosis ? `<div style="padding:2px 4px;background:#EFF6FF;border-radius:4px;border-left:3px solid #0B5ED7;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Diagnosis:</span> ${escapeHtml(diagnosis)}</div>` : ''}
                             ${treatment ? `<div style="padding:2px 4px;background:#D1FAE5;border-radius:4px;border-left:3px solid #059669;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Treatment:</span> ${escapeHtml(treatment)}</div>` : ''}
                             ${notes ? `<div style="padding:2px 4px;background:#F1F5F9;border-radius:4px;border-left:3px solid #94A3B8;margin:2px 0;font-size:13px;"><span style="font-weight:600;color:#64748B;">Notes:</span> ${escapeHtml(notes)}</div>` : ''}
-                        </div>
-                        ` : ''}
-                        
-                        ${vs.temperature || vs.blood_pressure_systolic || vs.pulse_rate || vs.weight || vs.height || vs.bmi ? `
-                        <div style="margin-bottom:8px;">
-                            <div style="font-size:13px;font-weight:700;color:#0B5ED7;border-bottom:1px solid #6EA8FE;padding-bottom:2px;margin-bottom:4px;">❤️ Vital Signs</div>
-                            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
-                                ${vs.temperature ? `<div style="background:#EFF6FF;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0B5ED7;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Temperature</div><div style="font-weight:700;color:#0B5ED7;font-size:14px;">${vs.temperature} °C</div></div>` : ''}
-                                ${vs.blood_pressure_systolic || vs.blood_pressure_diastolic ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #059669;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Blood Pressure</div><div style="font-weight:700;color:#059669;font-size:14px;">${vs.blood_pressure_systolic || '?'}/${vs.blood_pressure_diastolic || '?'} mmHg</div></div>` : ''}
-                                ${vs.pulse_rate ? `<div style="background:#EDE9FE;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #7C3AED;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Pulse Rate</div><div style="font-weight:700;color:#7C3AED;font-size:14px;">${vs.pulse_rate} bpm</div></div>` : ''}
-                                ${vs.weight ? `<div style="background:#FEF3C7;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #D97706;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Weight</div><div style="font-weight:700;color:#D97706;font-size:14px;">${vs.weight} kg</div></div>` : ''}
-                                ${vs.height ? `<div style="background:#D1FAE5;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #0D9488;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">Height</div><div style="font-weight:700;color:#0D9488;font-size:14px;">${vs.height} cm</div></div>` : ''}
-                                ${vs.bmi ? `<div style="background:#FEE2E2;padding:2px 6px;border-radius:4px;text-align:center;border-left:3px solid #DC2626;"><div style="font-size:0.5rem;font-weight:600;color:#64748B;text-transform:uppercase;">BMI</div><div style="font-weight:700;color:#DC2626;font-size:14px;">${vs.bmi} kg/m²</div></div>` : ''}
-                            </div>
                         </div>
                         ` : ''}
                         
@@ -2809,7 +2743,6 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
             
-            <!-- FIXED: All Bills Summary -->
             <div style="margin-bottom:10px;">
                 <div class="section-title"><i class="fas fa-file-invoice"></i> All Bills Summary (${allBillsData.length})</div>
                 <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin:4px 0;">
@@ -2833,7 +2766,6 @@ include_once '../../components/admin_sidebar.php';
                 </div>
             </div>
             
-            <!-- FIXED: All Bills Table -->
             <div style="margin-bottom:10px;">
                 <div class="section-title"><i class="fas fa-list"></i> All Bills (${allBillsData.length})</div>
                 ${allBillsData.length > 0 ? `
@@ -3215,9 +3147,6 @@ include_once '../../components/admin_sidebar.php';
         `;
     }
 
-    // ================================================================
-    // HELPER FUNCTIONS
-    // ================================================================
     function escapeHtml(text) {
         if (!text) return '';
         var div = document.createElement('div');
@@ -3258,27 +3187,18 @@ include_once '../../components/admin_sidebar.php';
         html2pdf().set(opt).from(element).save();
     }
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             closePDFModal();
         }
     });
 
-    // ================================================================
-    // CLICK OUTSIDE TO CLOSE
-    // ================================================================
     document.getElementById('pdfModal').addEventListener('click', function(e) {
         if (e.target === this) {
             closePDFModal();
         }
     });
 
-    // ================================================================
-    // FIX: Make status badges visible on page load
-    // ================================================================
     document.addEventListener('DOMContentLoaded', function() {
         document.querySelectorAll('.data-table .badge').forEach(function(badge) {
             badge.style.color = '#ffffff';
@@ -3297,6 +3217,7 @@ include_once '../../components/admin_sidebar.php';
         console.log('✅ PDF Export for ALL reports');
         console.log('✅ PDF Logo starts at top');
         console.log('✅ PDF Page breaks working properly');
+        console.log('❤️ VITAL SIGNS: 7 MEASUREMENTS (Temp, BP, Pulse, Weight, Height, BMI, SpO2)');
     });
 
     console.log('%c📊 Braick Dispensary - Reports FIXED', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
@@ -3305,6 +3226,7 @@ include_once '../../components/admin_sidebar.php';
     console.log('%c✅ Discounts: pharmacy_discount + cashier_discount = total_discount', 'font-size:13px; color:#34D399;');
     console.log('%c✅ PDF Export for ALL reports (Patient, Cashier, Pharmacy, Lab)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ PDF Logo starts at top left', 'font-size:13px; color:#34D399;');
+    console.log('%c❤️ VITAL SIGNS: 7 MEASUREMENTS (Temp, BP, Pulse, Weight, Height, BMI, SpO2)', 'font-size:13px; color:#DC2626; font-weight:bold;');
 </script>
 
 </body>

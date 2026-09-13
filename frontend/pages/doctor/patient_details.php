@@ -3,9 +3,10 @@
 // FILE: frontend/pages/doctor/patient_details.php
 // DOCTOR - PATIENT DETAILS WITH FULL REDESIGN V2
 // FIXED: Uses database from dispensary_db
-// NEW FLOW: Patient Info → Visit Info → Vital Signs (2 rows, 3 per row) → 
+// NEW FLOW: Patient Info → Visit Info → Vital Signs (7 signs) → 
 // Clinical Assessment Table (Symptoms, Complaints, Notes, HPI, Physical Exam) → 
 // Lab Tests → Diagnosis → Prescriptions → Procedures/Equipment → Appointments → Bills
+// WITH OXYGEN SATURATION (SpO2) - 7 VITAL SIGNS
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -174,7 +175,7 @@ $stmt->execute([$patient_id]);
 $latest_visit = $stmt->fetch(PDO::FETCH_ASSOC);
 
 // ================================================================
-// GET VITAL SIGNS - LATEST
+// GET VITAL SIGNS - LATEST (7 SIGNS INCLUDING OXYGEN SATURATION)
 // ================================================================
 $stmt = $db->prepare("
     SELECT vs.*, 
@@ -451,6 +452,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             --purple-bg: #EDE9FE;
             --pink: #EC4899;
             --pink-bg: #FCE7F3;
+            --sky: #0EA5E9;
+            --sky-bg: #E0F2FE;
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -639,6 +642,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .stat-card-mini .stat-number.red { color: var(--danger); }
         .stat-card-mini .stat-number.purple { color: var(--purple); }
         .stat-card-mini .stat-number.pink { color: var(--pink); }
+        .stat-card-mini .stat-number.sky { color: var(--sky); }
         
         .stat-card-mini .stat-label {
             font-size: 0.7rem;
@@ -765,6 +769,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .badge-secondary { background: var(--gray-200) !important; color: var(--gray-600) !important; }
         .badge-purple { background: var(--purple-bg) !important; color: var(--purple) !important; }
         .badge-pink { background: var(--pink-bg) !important; color: var(--pink) !important; }
+        .badge-sky { background: var(--sky-bg) !important; color: var(--sky) !important; }
         
         [data-theme="dark"] .badge-success { background: #1A3A2A !important; color: #34D399 !important; }
         [data-theme="dark"] .badge-warning { background: #3A2A1A !important; color: #FBBF24 !important; }
@@ -772,6 +777,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         [data-theme="dark"] .badge-info { background: #1E3A5F !important; color: #6EA8FE !important; }
         [data-theme="dark"] .badge-secondary { background: #2D3748 !important; color: #94A3B8 !important; }
         [data-theme="dark"] .badge-purple { background: #2A1A4A !important; color: #A78BFA !important; }
+        [data-theme="dark"] .badge-sky { background: #0C2A3A !important; color: #7DD3FC !important; }
         
         /* ================================================================ */
         /* INFO ROWS */
@@ -798,11 +804,11 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         }
         
         /* ================================================================ */
-        /* VITAL SIGNS CARDS - 2 ROWS, 3 PER ROW */
+        /* VITAL SIGNS CARDS - 4 COLUMNS (for 7 signs) */
         /* ================================================================ */
         .vital-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
         }
         
@@ -871,6 +877,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         .vital-card.indigo::before { background: linear-gradient(90deg, #4F46E5, #818CF8); }
         .vital-card.indigo .vital-value { color: #4F46E5; }
         
+        /* SpO2 SPECIAL STYLING - SKY BLUE */
+        .vital-card.sky::before { background: linear-gradient(90deg, #0EA5E9, #38BDF8); }
+        .vital-card.sky .vital-value { color: #0EA5E9; }
+        .vital-card.sky {
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(14, 165, 233, 0.1));
+            border-color: var(--sky);
+        }
+        .vital-card.sky:hover {
+            border-color: #0284C7;
+            box-shadow: 0 8px 30px rgba(14, 165, 233, 0.2);
+        }
+        
         [data-theme="dark"] .vital-card { background: #1E293B; border-color: #334155; }
         [data-theme="dark"] .vital-card:hover { border-color: #0B5ED7; box-shadow: 0 8px 30px rgba(0,0,0,0.3); }
         [data-theme="dark"] .vital-card .vital-value { color: #F1F5F9; }
@@ -880,6 +898,13 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
         [data-theme="dark"] .vital-card.purple .vital-value { color: #A78BFA; }
         [data-theme="dark"] .vital-card.green .vital-value { color: #34D399; }
         [data-theme="dark"] .vital-card.indigo .vital-value { color: #A5B4FC; }
+        [data-theme="dark"] .vital-card.sky { background: #0C2A3A; border-color: #0EA5E9; }
+        [data-theme="dark"] .vital-card.sky .vital-value { color: #7DD3FC; }
+        
+        /* SpO2 value indicator */
+        .spo2-normal { color: #059669 !important; }
+        .spo2-warning { color: #D97706 !important; }
+        .spo2-danger { color: #DC2626 !important; }
         
         /* ================================================================ */
         /* CLINICAL ASSESSMENT TABLE */
@@ -1227,7 +1252,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
             .grid-cols-2 { grid-template-columns: 1fr; }
             .grid-cols-3 { grid-template-columns: 1fr; }
             .grid-cols-4 { grid-template-columns: 1fr 1fr; }
-            .vital-grid { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid { grid-template-columns: repeat(3, 1fr); }
             .bill-summary-grid { grid-template-columns: 1fr; }
             .vital-card { min-height: 70px; padding: 10px 8px; }
             .vital-card .vital-value { font-size: 1rem; }
@@ -1311,7 +1336,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 </div>
             </div>
             <div class="flex gap-2 flex-wrap no-print">
-                <!-- View PDF Button - Replaced New Visit and Consultation -->
+                <!-- View PDF Button -->
                 <button onclick="window.location.href='view_patient_pdf.php?id=<?= $patient['id'] ?>'" class="btn-pdf">
                     <i class="fas fa-file-pdf"></i> View PDF
                 </button>
@@ -1498,50 +1523,81 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 3. VITAL SIGNS - 2 ROWS, 3 PER ROW -->
+    <!-- 3. VITAL SIGNS - 7 SIGNS (4 per row) -->
     <!-- ================================================================ -->
     <div class="section-title">
         <i class="fas fa-heartbeat" style="color:#EC4899;"></i> Vital Signs
-        <span class="badge-count"><?= $total_vital_signs ?> records</span>
+        <span class="badge-count"><?= $total_vital_signs ?> records • 7 Signs</span>
     </div>
     <div class="card">
         <?php if ($latest_vital_signs): ?>
-            <!-- Row 1: Temperature, Blood Pressure, Pulse Rate -->
+            <!-- Row 1: Temperature, Blood Pressure, Pulse Rate, Oxygen Saturation -->
             <div class="vital-grid mb-3">
+                <!-- 1. Temperature -->
                 <div class="vital-card blue">
                     <div class="vital-icon"><i class="fas fa-thermometer-half"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['temperature'] ?? '--' ?> <span class="vital-unit">°C</span></div>
                     <div class="vital-label">Temperature</div>
                 </div>
+                
+                <!-- 2. Blood Pressure -->
                 <div class="vital-card red">
                     <div class="vital-icon"><i class="fas fa-heart"></i></div>
                     <div class="vital-value"><?= ($latest_vital_signs['blood_pressure_systolic'] ?? '--') . '/' . ($latest_vital_signs['blood_pressure_diastolic'] ?? '--') ?> <span class="vital-unit">mmHg</span></div>
                     <div class="vital-label">Blood Pressure</div>
                 </div>
+                
+                <!-- 3. Pulse Rate -->
                 <div class="vital-card pink">
                     <div class="vital-icon"><i class="fas fa-heartbeat"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['pulse_rate'] ?? '--' ?> <span class="vital-unit">bpm</span></div>
                     <div class="vital-label">Pulse Rate</div>
                 </div>
+                
+                <!-- 4. OXYGEN SATURATION (SpO2) - MPYA -->
+                <div class="vital-card sky">
+                    <div class="vital-icon"><i class="fas fa-lungs"></i></div>
+                    <div class="vital-value <?php 
+                        $spo2 = $latest_vital_signs['oxygen_saturation'] ?? null;
+                        if ($spo2 !== null) {
+                            if ($spo2 >= 95) echo 'spo2-normal';
+                            elseif ($spo2 >= 90) echo 'spo2-warning';
+                            else echo 'spo2-danger';
+                        }
+                    ?>">
+                        <?= $spo2 ?? '--' ?> <span class="vital-unit">%</span>
+                    </div>
+                    <div class="vital-label">🫁 Oxygen (SpO2)</div>
+                </div>
             </div>
-            <!-- Row 2: Weight, Height, BMI -->
+            
+            <!-- Row 2: Weight, Height, BMI (3 signs) -->
             <div class="vital-grid">
+                <!-- 5. Weight -->
                 <div class="vital-card purple">
                     <div class="vital-icon"><i class="fas fa-weight"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['weight'] ?? '--' ?> <span class="vital-unit">kg</span></div>
                     <div class="vital-label">Weight</div>
                 </div>
+                
+                <!-- 6. Height -->
                 <div class="vital-card green">
                     <div class="vital-icon"><i class="fas fa-ruler-vertical"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['height'] ?? '--' ?> <span class="vital-unit">cm</span></div>
                     <div class="vital-label">Height</div>
                 </div>
+                
+                <!-- 7. BMI -->
                 <div class="vital-card indigo">
                     <div class="vital-icon"><i class="fas fa-calculator"></i></div>
                     <div class="vital-value"><?= $latest_vital_signs['bmi'] ?? '--' ?></div>
                     <div class="vital-label">BMI</div>
                 </div>
+                
+                <!-- Empty slot for grid alignment (optional) -->
+                <div style="visibility:hidden;"></div>
             </div>
+            
             <div class="text-xs text-gray-400 mt-3">
                 <i class="fas fa-user"></i> Recorded by: <?= htmlspecialchars($latest_vital_signs['recorded_by_name'] ?? 'N/A') ?>
                 <?php if ($latest_vital_signs['visit_number']): ?>
@@ -1550,6 +1606,8 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
                 <?php endif; ?>
                 <span class="mx-2">|</span>
                 <i class="fas fa-clock"></i> <?= formatDate($latest_vital_signs['recorded_at']) ?>
+                <span class="mx-2">|</span>
+                <span style="color:#0EA5E9;"><i class="fas fa-lungs"></i> 7 Vital Signs (SpO2 Normal: 95-100%)</span>
             </div>
             <?php if ($latest_vital_signs['notes']): ?>
                 <div class="mt-2 content-block"><?= nl2br(htmlspecialchars($latest_vital_signs['notes'])) ?></div>
@@ -1563,7 +1621,7 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     </div>
 
     <!-- ================================================================ -->
-    <!-- 4. CLINICAL ASSESSMENT TABLE - Symptoms, Complaints, Notes, HPI, Physical Exam -->
+    <!-- 4. CLINICAL ASSESSMENT TABLE -->
     <!-- ================================================================ -->
     <div class="section-title">
         <i class="fas fa-clipboard-list" style="color:#D97706;"></i> Clinical Assessment
@@ -2090,18 +2148,18 @@ include_once __DIR__ . '/../../components/doctor_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    console.log('%c🏥 Braick Dispensary - Patient Details (Redesigned V2)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
-    console.log('%c📋 New Flow: Patient Info → Visit Info → Vital Signs (2 rows, 3 per row) → Clinical Assessment Table → Lab Tests → Diagnosis → Prescriptions → Procedures → Appointments → Bills', 'font-size:12px; color:#059669;');
-    console.log('%c📊 Clinical Assessment Table: Symptoms, Complaints, Notes, HPI, Physical Exam', 'font-size:12px; color:#D97706;');
+    console.log('%c🏥 Braick Dispensary - Patient Details (7 Vital Signs)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📋 Flow: Patient Info → Visit Info → Vital Signs (7) → Clinical Assessment → Lab Tests → Diagnosis → Prescriptions → Procedures → Appointments → Bills', 'font-size:12px; color:#059669;');
+    console.log('%c❤️ 7 Vital Signs: Temperature, BP, Pulse Rate, SpO2, Weight, Height, BMI', 'font-size:13px; color:#EC4899;');
+    console.log('%c🫁 SpO2 (Oxygen Saturation): Normal 95-100%', 'font-size:13px; color:#0EA5E9;');
     console.log('%c👤 Patient: <?= htmlspecialchars($patient['full_name']) ?>', 'font-size:13px; color:#059669;');
     console.log('%c📋 ID: <?= htmlspecialchars($patient['patient_id']) ?>', 'font-size:13px; color:#64748B;');
-    console.log('%c❤️ Vital Signs: <?= $total_vital_signs ?> records (2 rows, 3 per row)', 'font-size:13px; color:#EC4899;');
+    console.log('%c❤️ Vital Signs: <?= $total_vital_signs ?> records', 'font-size:13px; color:#EC4899;');
+    console.log('%c🫁 SpO2 Value: <?= $latest_vital_signs['oxygen_saturation'] ?? 'N/A' ?>%', 'font-size:13px; color:#0EA5E9;');
     console.log('%c💰 Bills: <?= $total_bills ?> | Total: TSh <?= number_format($total_bill_amount, 0) ?>', 'font-size:13px; color:#0B5ED7;');
-    console.log('%c📊 Bill Cards: Total, Paid, Pending, Cancelled', 'font-size:13px; color:#059669;');
     console.log('%c✅ Diagnosis: <?= count($diagnosis_history) ?> records', 'font-size:13px; color:#7C3AED;');
     console.log('%c💊 Prescriptions: <?= $total_prescriptions ?>', 'font-size:13px; color:#059669;');
     console.log('%c🔬 Lab Tests: <?= $total_lab_tests ?>', 'font-size:13px; color:#7C3AED;');
-    console.log('%c📄 View PDF button only (New Visit & Consultation removed)', 'font-size:13px; color:#DC2626;');
 </script>
 
 </body>

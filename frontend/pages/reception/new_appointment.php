@@ -1,7 +1,7 @@
 <?php
 // ================================================================
 // FILE: frontend/pages/reception/new_appointment.php
-// RECEPTION - NEW APPOINTMENT WITH 6 VITAL SIGNS
+// RECEPTION - NEW APPOINTMENT WITH 7 VITAL SIGNS
 // WITH AJAX AUTO-UPDATE FOR DOCTOR STATUS (EVERY 3 SECONDS)
 // BRAICK DISPENSARY - USING NEW DATABASE: dispensary_db
 // ================================================================
@@ -97,12 +97,12 @@ try {
     }
     
     // ================================================================
-    // GET LATEST VITAL SIGNS FOR SELECTED PATIENT (6 signs only)
+    // GET LATEST VITAL SIGNS FOR SELECTED PATIENT (7 signs only)
     // ================================================================
     if ($patient_id > 0) {
         $stmt = $db->prepare("
             SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
-                   pulse_rate, weight, height, bmi, notes, recorded_at
+                   pulse_rate, oxygen_saturation, weight, height, bmi, notes, recorded_at
             FROM vital_signs 
             WHERE patient_id = ? 
             ORDER BY recorded_at DESC 
@@ -136,11 +136,12 @@ try {
         $status = trim($_POST['status'] ?? 'scheduled');
         $visit_type = trim($_POST['visit_type'] ?? 'new');
         
-        // 6 Vital Signs
+        // 7 Vital Signs
         $temperature = $_POST['temperature'] ?? null;
         $bp_systolic = $_POST['bp_systolic'] ?? null;
         $bp_diastolic = $_POST['bp_diastolic'] ?? null;
         $pulse_rate = $_POST['pulse_rate'] ?? null;
+        $oxygen_saturation = $_POST['oxygen_saturation'] ?? null;  // MPYA - SpO2
         $weight = $_POST['weight'] ?? null;
         $height = $_POST['height'] ?? null;
         $vital_notes = trim($_POST['vital_notes'] ?? '');
@@ -198,13 +199,14 @@ try {
                 $appointment_id = $db->lastInsertId();
                 
                 // ================================================================
-                // INSERT VITAL SIGNS (6 signs only)
+                // INSERT VITAL SIGNS (7 signs only)
                 // ================================================================
                 $has_vital = (
                     (!empty($temperature) || $temperature === '0') || 
                     (!empty($bp_systolic) || $bp_systolic === '0') || 
                     (!empty($bp_diastolic) || $bp_diastolic === '0') || 
                     (!empty($pulse_rate) || $pulse_rate === '0') || 
+                    (!empty($oxygen_saturation) || $oxygen_saturation === '0') || 
                     (!empty($weight) || $weight === '0') || 
                     (!empty($height) || $height === '0')
                 );
@@ -214,8 +216,8 @@ try {
                         INSERT INTO vital_signs (
                             patient_id, appointment_id, recorded_by, branch_id,
                             temperature, blood_pressure_systolic, blood_pressure_diastolic,
-                            pulse_rate, weight, height, bmi, notes, recorded_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+                            pulse_rate, oxygen_saturation, weight, height, bmi, notes, recorded_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
                     ");
                     $stmt->execute([
                         $patient_id,
@@ -226,6 +228,7 @@ try {
                         !empty($bp_systolic) || $bp_systolic === '0' ? (int)$bp_systolic : null,
                         !empty($bp_diastolic) || $bp_diastolic === '0' ? (int)$bp_diastolic : null,
                         !empty($pulse_rate) || $pulse_rate === '0' ? (int)$pulse_rate : null,
+                        !empty($oxygen_saturation) || $oxygen_saturation === '0' ? (int)$oxygen_saturation : null,
                         !empty($weight) || $weight === '0' ? (float)$weight : null,
                         !empty($height) || $height === '0' ? (float)$height : null,
                         $bmi,
@@ -814,7 +817,7 @@ include_once '../../components/reception_sidebar.php';
         
         .vital-signs-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
         }
         
@@ -1041,6 +1044,9 @@ include_once '../../components/reception_sidebar.php';
             .main-content { margin-left: 0; padding: 16px; }
             .top-nav .search-wrapper { max-width: 300px; }
             .form-card { padding: 20px; }
+            .vital-signs-grid {
+                grid-template-columns: repeat(3, 1fr);
+            }
         }
         
         @media (max-width: 768px) {
@@ -1199,6 +1205,21 @@ include_once '../../components/reception_sidebar.php';
         .doctor-status-info .status-count {
             font-weight: 700;
         }
+
+        /* SpO2 special styling */
+        .vital-sign-item.spo2-item {
+            border-color: #0EA5E9;
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(14, 165, 233, 0.1));
+        }
+        
+        .vital-sign-item.spo2-item:hover {
+            border-color: #0284C7;
+            box-shadow: 0 2px 12px rgba(14, 165, 233, 0.15);
+        }
+        
+        .vital-sign-item.spo2-item .vital-label {
+            color: #0284C7;
+        }
     </style>
 </head>
 <body>
@@ -1259,7 +1280,7 @@ include_once '../../components/reception_sidebar.php';
             </h1>
             <p class="page-subtitle">
                 <i class="fas fa-hospital"></i>
-                Schedule a new appointment with <strong>6 Vital Signs</strong> in <?= htmlspecialchars($branch_name) ?>
+                Schedule a new appointment with <strong>7 Vital Signs</strong> in <?= htmlspecialchars($branch_name) ?>
                 
                 <span class="header-badge" id="onlineDoctorBadge">
                     <i class="fas fa-user-md"></i>
@@ -1300,7 +1321,7 @@ include_once '../../components/reception_sidebar.php';
             </div>
             <div>
                 <h3 class="form-title">Schedule New Appointment</h3>
-                <p class="form-subtitle">Fill in the details below to schedule an appointment with 6 vital signs</p>
+                <p class="form-subtitle">Fill in the details below to schedule an appointment with 7 vital signs</p>
             </div>
         </div>
         
@@ -1454,11 +1475,11 @@ include_once '../../components/reception_sidebar.php';
                 <textarea name="purpose" class="form-control" placeholder="Reason for appointment..." rows="3"></textarea>
             </div>
             
-            <!-- 6 VITAL SIGNS SECTION -->
+            <!-- 7 VITAL SIGNS SECTION -->
             <div class="vital-signs-section">
                 <div class="vital-title">
                     <i class="fas fa-heartbeat"></i>
-                    6 Vital Signs
+                    7 Vital Signs
                     <span class="text-sm font-normal text-gray-400">(Record patient vital signs)</span>
                     <?php if ($patient_id > 0 && $latest_vital_signs): ?>
                         <span class="text-xs text-green-500 ml-auto">
@@ -1502,7 +1523,16 @@ include_once '../../components/reception_sidebar.php';
                         <span class="vital-unit">bpm</span>
                     </div>
                     
-                    <!-- 4. Weight -->
+                    <!-- 4. Oxygen Saturation (SpO2) - MPYA -->
+                    <div class="vital-sign-item spo2-item">
+                        <label class="vital-label">🫁 Oxygen Saturation (SpO2)</label>
+                        <input type="number" name="oxygen_saturation" class="vital-input" 
+                               placeholder="98" min="0" max="100"
+                               value="<?= htmlspecialchars($latest_vital_signs['oxygen_saturation'] ?? '') ?>">
+                        <span class="vital-unit">% (Normal: 95-100%)</span>
+                    </div>
+                    
+                    <!-- 5. Weight -->
                     <div class="vital-sign-item">
                         <label class="vital-label">⚖️ Weight</label>
                         <input type="number" name="weight" class="vital-input" 
@@ -1513,7 +1543,7 @@ include_once '../../components/reception_sidebar.php';
                         <span class="vital-unit">kg</span>
                     </div>
                     
-                    <!-- 5. Height -->
+                    <!-- 6. Height -->
                     <div class="vital-sign-item">
                         <label class="vital-label">📏 Height</label>
                         <input type="number" name="height" class="vital-input" 
@@ -1524,7 +1554,7 @@ include_once '../../components/reception_sidebar.php';
                         <span class="vital-unit">cm</span>
                     </div>
                     
-                    <!-- 6. BMI -->
+                    <!-- 7. BMI -->
                     <div class="vital-sign-item bmi-item">
                         <label class="vital-label">📊 BMI</label>
                         <input type="number" name="bmi" class="vital-input" 
@@ -1565,7 +1595,7 @@ include_once '../../components/reception_sidebar.php';
             <!-- FOOTER INFO -->
             <div class="mt-4 pt-3 text-xs text-gray-400 text-center border-t border-gray-200 dark:border-gray-700">
                 <i class="fas fa-info-circle mr-1"></i>
-                Schedule an appointment with 6 vital signs: BP, Weight, Height, Temperature, Pulse, BMI
+                Schedule an appointment with 7 vital signs: BP, Weight, Height, Temperature, Pulse, SpO2, BMI
                 <span class="mx-2">|</span>
                 <span id="formTimestamp"><?= date('h:i:s A') ?></span>
             </div>
@@ -1603,7 +1633,7 @@ include_once '../../components/reception_sidebar.php';
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
             <span class="text-gray-300 mx-2">|</span>
-            New Appointment with 6 Vital Signs
+            New Appointment with 7 Vital Signs
             <span class="text-gray-300 mx-2">|</span>
             <span id="footerTimestamp">Last updated: <?= date('h:i:s A') ?></span>
             <span class="text-gray-300 mx-2">|</span>
@@ -1736,6 +1766,39 @@ include_once '../../components/reception_sidebar.php';
             }
             if (this.value.length === 1) {
                 this.value = '0' + this.value;
+            }
+        });
+    }
+
+    // ================================================================
+    // SpO2 VALIDATION (0-100)
+    // ================================================================
+    var spo2Input = document.querySelector('input[name="oxygen_saturation"]');
+    if (spo2Input) {
+        spo2Input.addEventListener('input', function() {
+            var val = parseInt(this.value);
+            if (this.value !== '') {
+                if (val < 0) this.value = 0;
+                if (val > 100) this.value = 100;
+            }
+        });
+        
+        spo2Input.addEventListener('blur', function() {
+            if (this.value !== '') {
+                var val = parseInt(this.value);
+                if (val < 70) {
+                    this.style.color = '#DC2626';
+                    this.title = '⚠️ SpO2 chini sana - Hatari!';
+                } else if (val < 95) {
+                    this.style.color = '#D97706';
+                    this.title = '⚠️ SpO2 chini ya kawaida';
+                } else {
+                    this.style.color = '#059669';
+                    this.title = '✅ SpO2 nzuri';
+                }
+            } else {
+                this.style.color = '';
+                this.title = '';
             }
         });
     }
@@ -2091,15 +2154,16 @@ include_once '../../components/reception_sidebar.php';
         }, 500);
     });
 
-    console.log('%c📅 Braick - New Appointment with 6 Vital Signs', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+    console.log('%c📅 Braick - New Appointment with 7 Vital Signs', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c👤 User: <?= htmlspecialchars($full_name) ?> (<?= htmlspecialchars($role) ?>)', 'font-size:13px; color:#059669;');
     console.log('%c🏢 Branch: <?= htmlspecialchars($branch_name) ?>', 'font-size:13px; color:#059669;');
     console.log('%c👥 Patients: <?= count($patients) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c👨‍⚕️ Doctors: <?= $total_doctors ?> (<?= $online_doctors ?> online)', 'font-size:13px; color:#64748B;');
-    console.log('%c💓 6 Vital Signs: BP, Weight, Height, Temperature, Pulse Rate, BMI', 'font-size:13px; color:#DC2626;');
+    console.log('%c💓 7 Vital Signs: BP, Weight, Height, Temperature, Pulse Rate, SpO2, BMI', 'font-size:13px; color:#DC2626;');
     console.log('%c🔄 Auto-update: Every 3 seconds (Doctor status via AJAX)', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Dropdown updates WITHOUT page refresh', 'font-size:13px; color:#059669;');
     console.log('%c🕐 Time format: 12-hour (Manual input or select)', 'font-size:13px; color:#64748B;');
+    console.log('%c🫁 SpO2 range: 0-100% (Normal: 95-100%)', 'font-size:13px; color:#0EA5E9;');
     console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
 </script>
 

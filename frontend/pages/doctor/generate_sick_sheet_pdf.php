@@ -2,6 +2,7 @@
 // ================================================================
 // FILE: frontend/pages/doctor/generate_sick_sheet_pdf.php
 // GENERATE SICK SHEET PDF - WITH BRAICK LOGO (MULTIPLE PATHS)
+// WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION)
 // ================================================================
 
 // ================================================================
@@ -64,22 +65,15 @@ try {
 // ================================================================
 $logo_url = '';
 $logo_paths = [
-    // Absolute paths with document root
     $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
     $_SERVER['DOCUMENT_ROOT'] . '/dispensary_system/assets/uploads/profiles/braick_logo.png',
     $_SERVER['DOCUMENT_ROOT'] . '/frontend/assets/uploads/profiles/braick_logo.png',
     $_SERVER['DOCUMENT_ROOT'] . '/assets/uploads/profiles/braick_logo.png',
-    
-    // Relative paths
     __DIR__ . '/../../assets/uploads/profiles/braick_logo.png',
     __DIR__ . '/../../../assets/uploads/profiles/braick_logo.png',
     __DIR__ . '/../../../frontend/assets/uploads/profiles/braick_logo.png',
-    
-    // XAMPP paths
     'C:/xampp/htdocs/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
     'C:/xampp/htdocs/dispensary_system/assets/uploads/profiles/braick_logo.png',
-    
-    // WAMP paths
     'C:/wamp64/www/dispensary_system/frontend/assets/uploads/profiles/braick_logo.png',
     'C:/wamp64/www/dispensary_system/assets/uploads/profiles/braick_logo.png',
 ];
@@ -88,11 +82,8 @@ $logo_found = false;
 foreach ($logo_paths as $path) {
     if (file_exists($path)) {
         $logo_found = true;
-        // Convert to URL path
         $logo_url = str_replace($_SERVER['DOCUMENT_ROOT'], '', $path);
         $logo_url = str_replace('\\', '/', $logo_url);
-        
-        // If still not a valid URL, try to construct
         if (strpos($logo_url, '/') !== 0) {
             $logo_url = '/' . $logo_url;
         }
@@ -100,16 +91,15 @@ foreach ($logo_paths as $path) {
     }
 }
 
-// Fallback if logo not found - use inline SVG/Base64
 if (!$logo_found) {
-    // Use a simple SVG as fallback
-    $logo_url = 'data:image/svg+xml;base64,' . base64_encode('
+    $svg_logo = <<<HTML
         <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
             <rect width="100" height="100" rx="15" fill="#0B5ED7"/>
             <text x="50" y="65" text-anchor="middle" fill="white" font-size="40" font-weight="bold" font-family="Arial">B</text>
             <text x="50" y="85" text-anchor="middle" fill="rgba(255,255,255,0.7)" font-size="10" font-family="Arial">BRAICK</text>
         </svg>
-    ');
+HTML;
+    $logo_url = 'data:image/svg+xml;base64,' . base64_encode($svg_logo);
 }
 
 // ================================================================
@@ -118,6 +108,7 @@ if (!$logo_found) {
 $sick_sheet = null;
 $is_external = true;
 $data_source = 'none';
+$latest_vitals = null;  // MPYA - Kwa vital signs
 
 // ================================================================
 // SEARCH 1: external_sick_sheets (External Patients)
@@ -146,6 +137,10 @@ if ($sick_sheet_id > 0) {
     if ($sick_sheet) {
         $is_external = true;
         $data_source = 'external_sick_sheets';
+        
+        // ✅ FETCH VITAL SIGNS ZA EXTERNAL PATIENT (kama zipo kwenye table)
+        // External patients hawana patient_id ya kawaida, kwa hiyo tunatumia NULL
+        // Ila kama una vital signs kwa external, unaweza kuongeza table hapa
     }
 }
 
@@ -202,6 +197,7 @@ if (!$sick_sheet && $sick_sheet_id > 0) {
             'bp_systolic' => null,
             'bp_diastolic' => null,
             'pulse_rate' => null,
+            'oxygen_saturation' => null,
             'weight' => null,
             'height' => null,
             'bmi' => null,
@@ -224,7 +220,8 @@ if (!$sick_sheet && $sick_sheet_id > 0) {
             'branch_email' => $doc['branch_email'] ?? '',
             'created_at' => $doc['upload_date'] ?? date('Y-m-d H:i:s'),
             'patient_type' => 'registered',
-            'source_type' => 'patient_documents'
+            'source_type' => 'patient_documents',
+            'db_patient_id' => $doc['patient_id'] ?? 0
         ];
         $is_external = false;
         $data_source = 'patient_documents';
@@ -285,6 +282,7 @@ if (!$sick_sheet && $visit_id > 0) {
             'bp_systolic' => null,
             'bp_diastolic' => null,
             'pulse_rate' => null,
+            'oxygen_saturation' => null,
             'weight' => null,
             'height' => null,
             'bmi' => null,
@@ -307,7 +305,8 @@ if (!$sick_sheet && $visit_id > 0) {
             'branch_email' => $visit['branch_email'] ?? '',
             'created_at' => date('Y-m-d H:i:s'),
             'patient_type' => 'registered',
-            'source_type' => 'visit'
+            'source_type' => 'visit',
+            'db_patient_id' => $visit['patient_id'] ?? 0
         ];
         $is_external = false;
         $data_source = 'visit';
@@ -356,9 +355,41 @@ if (!$sick_sheet) {
 }
 
 // ================================================================
+// ✅ FETCH LATEST VITAL SIGNS FOR THIS PATIENT (7 SIGNS)
+// ================================================================
+// Kama tuna db_patient_id (registered patient), tunachukua vitals za huyo patient
+if (!$is_external && !empty($sick_sheet['db_patient_id'])) {
+    try {
+        $stmt = $db->prepare("
+            SELECT temperature, blood_pressure_systolic, blood_pressure_diastolic,
+                   pulse_rate, oxygen_saturation, weight, height, bmi, notes, recorded_at
+            FROM vital_signs 
+            WHERE patient_id = ? 
+            ORDER BY recorded_at DESC 
+            LIMIT 1
+        ");
+        $stmt->execute([$sick_sheet['db_patient_id']]);
+        $latest_vitals = $stmt->fetch(PDO::FETCH_ASSOC);
+        
+        // Update sick_sheet array na vitals zilizopatikana
+        if ($latest_vitals) {
+            $sick_sheet['temperature'] = $latest_vitals['temperature'] ?? null;
+            $sick_sheet['bp_systolic'] = $latest_vitals['blood_pressure_systolic'] ?? null;
+            $sick_sheet['bp_diastolic'] = $latest_vitals['blood_pressure_diastolic'] ?? null;
+            $sick_sheet['pulse_rate'] = $latest_vitals['pulse_rate'] ?? null;
+            $sick_sheet['oxygen_saturation'] = $latest_vitals['oxygen_saturation'] ?? null;
+            $sick_sheet['weight'] = $latest_vitals['weight'] ?? null;
+            $sick_sheet['height'] = $latest_vitals['height'] ?? null;
+            $sick_sheet['bmi'] = $latest_vitals['bmi'] ?? null;
+        }
+    } catch (Exception $e) {
+        // Silent fail - vitals ni optional
+    }
+}
+
+// ================================================================
 // GENERATE HTML - A4 SIZE WITH LOGO
 // ================================================================
-
 ?>
 <!DOCTYPE html>
 <html>
@@ -594,10 +625,12 @@ if (!$sick_sheet) {
         .section-title.purple { color: #7C3AED; border-color: #7C3AED; }
         .section-title.orange { color: #D97706; border-color: #D97706; }
         .section-title.red { color: #DC2626; border-color: #DC2626; }
+        .section-title.sky { color: #0284C7; border-color: #0284C7; }
         
         /* Grids */
         .row-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
         .row-6col { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr; gap: 6px; }
+        .row-7col { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr 1fr; gap: 5px; }
         
         /* Info Cards */
         .info-card {
@@ -629,6 +662,7 @@ if (!$sick_sheet) {
         .info-card.purple { border-left: 3px solid #7C3AED; }
         .info-card.orange { border-left: 3px solid #D97706; }
         .info-card.red { border-left: 3px solid #DC2626; }
+        .info-card.sky { border-left: 3px solid #0EA5E9; }
         
         .external-tag {
             font-size: 6px;
@@ -644,7 +678,7 @@ if (!$sick_sheet) {
         .vital-item {
             background: #F8FAFC;
             border-radius: 4px;
-            padding: 6px 8px;
+            padding: 6px 4px;
             text-align: center;
             border: 1px solid #E2E8F0;
         }
@@ -655,6 +689,7 @@ if (!$sick_sheet) {
             color: #64748B;
             text-transform: uppercase;
             display: block;
+            line-height: 1.2;
         }
         
         .vital-item .vital-value {
@@ -673,8 +708,16 @@ if (!$sick_sheet) {
         .vital-item.temp .vital-value { color: #DC2626; }
         .vital-item.bp .vital-value { color: #0B5ED7; }
         .vital-item.pulse .vital-value { color: #7C3AED; }
+        .vital-item.spo2 .vital-value { color: #0284C7; }
         .vital-item.weight .vital-value { color: #D97706; }
+        .vital-item.height .vital-value { color: #0D9488; }
         .vital-item.bmi .vital-value { color: #059669; }
+        
+        /* SpO2 special background */
+        .vital-item.spo2 {
+            background: #E0F2FE;
+            border-color: #0EA5E9;
+        }
         
         /* Detail Rows */
         .detail-row {
@@ -905,6 +948,13 @@ if (!$sick_sheet) {
             .info-card .value { font-size: 9px; }
             .vital-item .vital-value { font-size: 10px; }
             .sick-box .sick-item .svalue { font-size: 11px; }
+            
+            /* Print-safe SpO2 */
+            .vital-item.spo2 {
+                background: #E0F2FE !important;
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
         }
         
         /* ================================================================
@@ -924,6 +974,7 @@ if (!$sick_sheet) {
             }
             .row-2col { grid-template-columns: 1fr; }
             .row-6col { grid-template-columns: 1fr 1fr 1fr; }
+            .row-7col { grid-template-columns: 1fr 1fr 1fr 1fr; }
             .sick-box .sick-grid { grid-template-columns: 1fr; }
             .footer-section { flex-direction: column; }
             .stamp-container { justify-content: flex-start; }
@@ -942,6 +993,7 @@ if (!$sick_sheet) {
                 min-width: auto;
             }
             .row-6col { grid-template-columns: 1fr 1fr; }
+            .row-7col { grid-template-columns: 1fr 1fr; }
             .detail-row { flex-direction: column; }
             .detail-label { width: 100%; margin-bottom: 1px; }
             .signature-area { flex-direction: column; gap: 6px; }
@@ -980,7 +1032,6 @@ if (!$sick_sheet) {
         <!-- Header with Logo - LIKE VISIT -->
         <div class="header">
             <div class="header-left">
-                <!-- BRAICK LOGO - REAL IMAGE -->
                 <div class="header-logo">
                     <img src="<?= $logo_url ?>" 
                          alt="Braick Dispensary" 
@@ -1069,6 +1120,83 @@ if (!$sick_sheet) {
                 <span class="value"><?= htmlspecialchars($sick_sheet['doctor_specialty'] ?? 'Medical Doctor') ?></span>
             </div>
         </div>
+
+        <!-- ================================================================ -->
+        <!-- ✅ VITAL SIGNS (7 SIGNS - WITH OXYGEN SATURATION) -->
+        <!-- ================================================================ -->
+        <?php 
+        // Onyesha vital signs tu kama zipo (au kama ni registered patient)
+        $has_vitals = (
+            !empty($sick_sheet['temperature']) || 
+            !empty($sick_sheet['bp_systolic']) || 
+            !empty($sick_sheet['bp_diastolic']) || 
+            !empty($sick_sheet['pulse_rate']) || 
+            !empty($sick_sheet['oxygen_saturation']) || 
+            !empty($sick_sheet['weight']) || 
+            !empty($sick_sheet['height'])
+        );
+        
+        if ($has_vitals || !$is_external):
+        ?>
+        <div class="section-title sky">❤️ Vital Signs (7 Signs)</div>
+        <div class="row-7col">
+            
+            <!-- 1. Temperature -->
+            <div class="vital-item temp">
+                <span class="vital-label">🌡️ Temp</span>
+                <span class="vital-value"><?= $sick_sheet['temperature'] ?? '—' ?><span class="vital-unit">°C</span></span>
+            </div>
+            
+            <!-- 2. Blood Pressure -->
+            <div class="vital-item bp">
+                <span class="vital-label">❤️ BP</span>
+                <span class="vital-value">
+                    <?php if (!empty($sick_sheet['bp_systolic']) && !empty($sick_sheet['bp_diastolic'])): ?>
+                        <?= $sick_sheet['bp_systolic'] ?>/<?= $sick_sheet['bp_diastolic'] ?>
+                    <?php elseif (!empty($sick_sheet['bp_systolic'])): ?>
+                        <?= $sick_sheet['bp_systolic'] ?>
+                    <?php else: ?>
+                        —
+                    <?php endif; ?>
+                    <span class="vital-unit">mmHg</span>
+                </span>
+            </div>
+            
+            <!-- 3. Pulse Rate -->
+            <div class="vital-item pulse">
+                <span class="vital-label">💓 Pulse</span>
+                <span class="vital-value"><?= $sick_sheet['pulse_rate'] ?? '—' ?><span class="vital-unit">bpm</span></span>
+            </div>
+            
+            <!-- 4. OXYGEN SATURATION (SpO2) - MPYA -->
+            <div class="vital-item spo2">
+                <span class="vital-label">🫁 SpO2</span>
+                <span class="vital-value"><?= $sick_sheet['oxygen_saturation'] ?? '—' ?><span class="vital-unit">%</span></span>
+            </div>
+            
+            <!-- 5. Weight -->
+            <div class="vital-item weight">
+                <span class="vital-label">⚖️ Weight</span>
+                <span class="vital-value"><?= $sick_sheet['weight'] ?? '—' ?><span class="vital-unit">kg</span></span>
+            </div>
+            
+            <!-- 6. Height -->
+            <div class="vital-item height">
+                <span class="vital-label">📏 Height</span>
+                <span class="vital-value"><?= $sick_sheet['height'] ?? '—' ?><span class="vital-unit">cm</span></span>
+            </div>
+            
+            <!-- 7. BMI -->
+            <div class="vital-item bmi">
+                <span class="vital-label">📊 BMI</span>
+                <span class="vital-value"><?= $sick_sheet['bmi'] ?? '—' ?><span class="vital-unit">kg/m²</span></span>
+            </div>
+            
+        </div>
+        <div style="font-size:6px;color:#64748B;margin-top:3px;font-style:italic;">
+            🫁 SpO2 = Oxygen Saturation (Normal: 95-100%) • 7 Vital Signs Tracked
+        </div>
+        <?php endif; ?>
 
         <!-- Clinical Details -->
         <div class="section-title purple">🩺 Clinical Details</div>
@@ -1170,6 +1298,8 @@ if (!$sick_sheet) {
                 Generated: <?= date('d M Y, h:i A') ?>
                 <span style="color:#94A3B8;">|</span> 
                 Source: <span style="color:#0B5ED7;"><?= $data_source ?></span>
+                <span style="color:#94A3B8;">|</span> 
+                <span style="color:#0284C7;">🫁 7 Vital Signs</span>
             </div>
             <div class="slogan">⭐ Braick Dispensary - Tunajali Afya Yako ⭐</div>
         </div>
@@ -1196,7 +1326,6 @@ if (!$sick_sheet) {
         btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Generating...';
         btn.disabled = true;
         
-        // Load html2canvas and jsPDF from CDN
         var script1 = document.createElement('script');
         script1.src = 'https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
         document.head.appendChild(script1);
@@ -1232,7 +1361,6 @@ if (!$sick_sheet) {
                     btn.disabled = false;
                 });
             } else {
-                // Fallback: Use print
                 alert('PDF library loading. Please use Print > Save as PDF.');
                 btn.innerHTML = originalText;
                 btn.disabled = false;
@@ -1257,6 +1385,8 @@ if (!$sick_sheet) {
     console.log('📋 Document #: <?= htmlspecialchars($sick_sheet['document_number'] ?? 'N/A') ?>');
     console.log('🔍 Source: <?= $data_source ?>');
     console.log('🖼️ Logo Path: <?= $logo_url ?>');
+    console.log('❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI');
+    console.log('🫁 SpO2: <?= $sick_sheet['oxygen_saturation'] ?? 'N/A' ?>% (Normal: 95-100%)');
     console.log('⭐ Braick Dispensary - Tunajali Afya Yako');
 </script>
 

@@ -4,6 +4,7 @@
 // RECEPTION - VIEW APPOINTMENT DETAILS
 // USING dispensary_db (new database structure)
 // BRAICK DISPENSARY
+// ✅ ADDED: Oxygen Saturation (SpO2) in vital signs - 7 vitals
 // ================================================================
 
 // ================================================================
@@ -112,7 +113,7 @@ try {
     }
     
     // ================================================================
-    // ✅ GET LATEST VITAL SIGNS FOR PATIENT
+    // ✅ GET LATEST VITAL SIGNS FOR PATIENT (WITH SPO2)
     // ================================================================
     $vital_signs = null;
     $stmt = $db->prepare("
@@ -272,6 +273,10 @@ include_once '../../components/reception_sidebar.php';
             --purple-light: #A78BFA;
             --purple-bg: #EDE9FE;
             
+            --cyan: #0891B2;
+            --cyan-dark: #0E7490;
+            --cyan-bg: #CFFAFE;
+            
             --gray-50: #F8FAFC;
             --gray-100: #F1F5F9;
             --gray-200: #E2E8F0;
@@ -313,6 +318,7 @@ include_once '../../components/reception_sidebar.php';
             --shadow-md: 0 4px 12px rgba(0,0,0,0.3);
             --shadow-lg: 0 10px 25px rgba(0,0,0,0.4);
             --purple-bg: #2D1B5F;
+            --cyan-bg: #164E63;
         }
         
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -713,6 +719,90 @@ include_once '../../components/reception_sidebar.php';
         .days-badge-blue.new {
             background: var(--success) !important;
             box-shadow: 0 2px 4px rgba(5, 150, 105, 0.2);
+        }
+        
+        /* ================================================================
+           VITAL SIGNS GRID - 7 CARDS
+           ================================================================ */
+        .vital-grid-7 {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 12px;
+        }
+        
+        @media (max-width: 1400px) {
+            .vital-grid-7 {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+        
+        @media (max-width: 1024px) {
+            .vital-grid-7 {
+                grid-template-columns: repeat(3, 1fr);
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .vital-grid-7 {
+                grid-template-columns: repeat(2, 1fr);
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .vital-grid-7 {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 8px;
+            }
+        }
+        
+        .vital-card-display {
+            text-align: center;
+            padding: 14px 10px;
+            border-radius: 10px;
+            border: 2px solid var(--border-color);
+            transition: all 0.3s ease;
+            background: var(--bg-body);
+            min-height: 95px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+        
+        .vital-card-display:hover {
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .vital-card-display .vital-icon {
+            font-size: 1.2rem;
+            display: block;
+            margin-bottom: 4px;
+        }
+        
+        .vital-card-display .vital-label {
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            display: block;
+            margin-bottom: 4px;
+        }
+        
+        .vital-card-display .vital-value {
+            font-size: 1.05rem;
+            font-weight: 700;
+            display: block;
+            line-height: 1.2;
+        }
+        
+        .vital-card-display .vital-unit {
+            font-size: 0.55rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            display: block;
+            margin-top: 2px;
         }
         
         /* ================================================================
@@ -1254,7 +1344,7 @@ include_once '../../components/reception_sidebar.php';
     <?php endif; ?>
 
     <!-- ================================================================ -->
-    <!-- VITAL SIGNS (If available) -->
+    <!-- VITAL SIGNS (If available) - 7 CARDS WITH SPO2 -->
     <!-- ================================================================ -->
     <?php if ($vital_signs): ?>
     <div class="detail-card mt-5 animate-fade-in-up" style="animation-delay:0.25s;">
@@ -1264,17 +1354,22 @@ include_once '../../components/reception_sidebar.php';
                 Recorded: <?= date('F d, Y h:i A', strtotime($vital_signs['recorded_at'])) ?>
             </span>
         </h3>
-        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
+        
+        <div class="vital-grid-7">
             <?php if ($vital_signs['temperature']): ?>
-            <div class="text-center p-3 bg-blue-50 rounded-lg border border-blue-200 dark:bg-blue-900/20 dark:border-blue-800">
-                <p class="text-xs text-gray-500">🌡️ Temperature</p>
-                <p class="text-lg font-bold text-blue-600"><?= $vital_signs['temperature'] ?>°C</p>
+            <div class="vital-card-display" style="border-color:#DC2626;background:rgba(220,38,38,0.05);">
+                <span class="vital-icon">🌡️</span>
+                <span class="vital-label">Temperature</span>
+                <span class="vital-value" style="color:#DC2626;"><?= $vital_signs['temperature'] ?></span>
+                <span class="vital-unit">°C</span>
             </div>
             <?php endif; ?>
+            
             <?php if ($vital_signs['blood_pressure_systolic'] || $vital_signs['blood_pressure_diastolic']): ?>
-            <div class="text-center p-3 bg-green-50 rounded-lg border border-green-200 dark:bg-green-900/20 dark:border-green-800">
-                <p class="text-xs text-gray-500">❤️ Blood Pressure</p>
-                <p class="text-lg font-bold text-green-600">
+            <div class="vital-card-display" style="border-color:#0B5ED7;background:rgba(11,94,215,0.05);">
+                <span class="vital-icon">💓</span>
+                <span class="vital-label">Blood Pressure</span>
+                <span class="vital-value" style="color:#0B5ED7;">
                     <?php 
                         $sys = $vital_signs['blood_pressure_systolic'] ?? '';
                         $dia = $vital_signs['blood_pressure_diastolic'] ?? '';
@@ -1286,35 +1381,63 @@ include_once '../../components/reception_sidebar.php';
                             echo 'N/A';
                         }
                     ?>
-                    mmHg
-                </p>
+                </span>
+                <span class="vital-unit">mmHg</span>
             </div>
             <?php endif; ?>
+            
             <?php if ($vital_signs['pulse_rate']): ?>
-            <div class="text-center p-3 bg-purple-50 rounded-lg border border-purple-200 dark:bg-purple-900/20 dark:border-purple-800">
-                <p class="text-xs text-gray-500">💓 Pulse Rate</p>
-                <p class="text-lg font-bold text-purple-600"><?= $vital_signs['pulse_rate'] ?> bpm</p>
+            <div class="vital-card-display" style="border-color:#059669;background:rgba(5,150,105,0.05);">
+                <span class="vital-icon">❤️</span>
+                <span class="vital-label">Pulse Rate</span>
+                <span class="vital-value" style="color:#059669;"><?= $vital_signs['pulse_rate'] ?></span>
+                <span class="vital-unit">bpm</span>
             </div>
             <?php endif; ?>
+            
             <?php if ($vital_signs['weight']): ?>
-            <div class="text-center p-3 bg-orange-50 rounded-lg border border-orange-200 dark:bg-orange-900/20 dark:border-orange-800">
-                <p class="text-xs text-gray-500">⚖️ Weight</p>
-                <p class="text-lg font-bold text-orange-600"><?= $vital_signs['weight'] ?> kg</p>
+            <div class="vital-card-display" style="border-color:#D97706;background:rgba(217,119,6,0.05);">
+                <span class="vital-icon">⚖️</span>
+                <span class="vital-label">Weight</span>
+                <span class="vital-value" style="color:#D97706;"><?= $vital_signs['weight'] ?></span>
+                <span class="vital-unit">kg</span>
             </div>
             <?php endif; ?>
+            
             <?php if ($vital_signs['height']): ?>
-            <div class="text-center p-3 bg-teal-50 rounded-lg border border-teal-200 dark:bg-teal-900/20 dark:border-teal-800">
-                <p class="text-xs text-gray-500">📏 Height</p>
-                <p class="text-lg font-bold text-teal-600"><?= $vital_signs['height'] ?> cm</p>
+            <div class="vital-card-display" style="border-color:#7C3AED;background:rgba(124,58,237,0.05);">
+                <span class="vital-icon">📏</span>
+                <span class="vital-label">Height</span>
+                <span class="vital-value" style="color:#7C3AED;"><?= $vital_signs['height'] ?></span>
+                <span class="vital-unit">cm</span>
             </div>
             <?php endif; ?>
+            
             <?php if ($vital_signs['bmi']): ?>
-            <div class="text-center p-3 bg-red-50 rounded-lg border border-red-200 dark:bg-red-900/20 dark:border-red-800">
-                <p class="text-xs text-gray-500">📊 BMI</p>
-                <p class="text-lg font-bold text-red-600"><?= $vital_signs['bmi'] ?> kg/m²</p>
+            <div class="vital-card-display" style="border-color:#0D9488;background:rgba(13,148,136,0.05);">
+                <span class="vital-icon">📊</span>
+                <span class="vital-label">BMI</span>
+                <span class="vital-value" style="color:#0D9488;"><?= $vital_signs['bmi'] ?></span>
+                <span class="vital-unit">kg/m²</span>
+            </div>
+            <?php endif; ?>
+            
+            <!-- ✅ MPYA: Oxygen Saturation (SpO2) -->
+            <?php if (!empty($vital_signs['oxygen_saturation'])): 
+                $spo2 = (int)$vital_signs['oxygen_saturation'];
+                $spo2_color = $spo2 >= 95 ? '#0891B2' : ($spo2 >= 90 ? '#D97706' : '#DC2626');
+                $spo2_bg = $spo2 >= 95 ? 'rgba(8,145,178,0.05)' : ($spo2 >= 90 ? 'rgba(217,119,6,0.05)' : 'rgba(220,38,38,0.05)');
+                $spo2_label = $spo2 >= 95 ? 'Normal' : ($spo2 >= 90 ? 'Low' : 'Critical');
+            ?>
+            <div class="vital-card-display" style="border-color:<?= $spo2_color ?>;background:<?= $spo2_bg ?>;">
+                <span class="vital-icon">🫁</span>
+                <span class="vital-label">Oxygen Saturation</span>
+                <span class="vital-value" style="color:<?= $spo2_color ?>;"><?= $spo2 ?>%</span>
+                <span class="vital-unit" style="color:<?= $spo2_color ?>;font-weight:600;"><?= $spo2_label ?></span>
             </div>
             <?php endif; ?>
         </div>
+        
         <?php if (!empty($vital_signs['notes'])): ?>
             <div class="mt-3 text-sm text-gray-500">
                 <i class="fas fa-sticky-note mr-1"></i> Notes: <?= htmlspecialchars($vital_signs['notes']) ?>
@@ -1534,6 +1657,8 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c👨‍⚕️ Doctor: <?= htmlspecialchars($appointment['doctor_name']) ?>', 'font-size:13px; color:#64748B;');
     console.log('%c📊 Total Visits: <?= $visit_count['total_visits'] ?? 0 ?>', 'font-size:13px; color:#64748B;');
     console.log('%c🎨 Blue theme applied to all cards', 'font-size:13px; color:#2563EB;');
+    console.log('%c❤️ VITAL SIGNS: 7 CARDS (with SpO2)', 'font-size:13px; color:#DC2626;');
+    console.log('%c🫁 SpO2 with category (Normal/Low/Critical)', 'font-size:13px; color:#0891B2;');
     console.log('%c📋 Appointment History shown', 'font-size:13px; color:#7C3AED;');
     console.log('%c💾 Using NEW DATABASE: dispensary_db', 'font-size:13px; color:#34D399;');
     console.log('%c🔒 Login protection: Active', 'font-size:13px; color:#0B5ED7;');

@@ -6,6 +6,7 @@
 // ✅ FIXED: Lab test card is now bigger and readable
 // ✅ FIXED: 3 cards left, 3 cards right - Uniform sizes
 // ✅ FIXED: Lab mode - Doctor dropdown HIDDEN completely
+// ✅ ADDED: Oxygen Saturation (SpO2) in vital signs - 7 vitals
 // ================================================================
 
 if (session_status() === PHP_SESSION_NONE) {
@@ -709,15 +710,17 @@ try {
                     }
                 }
                 
+                // ✅ VITAL SIGNS WITH SPO2
                 $temperature = $_POST['temperature'] ?? null;
                 $bp_systolic = $_POST['bp_systolic'] ?? null;
                 $bp_diastolic = $_POST['bp_diastolic'] ?? null;
                 $pulse_rate = $_POST['pulse_rate'] ?? null;
                 $weight = $_POST['weight'] ?? null;
                 $height = $_POST['height'] ?? null;
+                $oxygen_saturation = isset($_POST['oxygen_saturation']) && $_POST['oxygen_saturation'] !== '' ? (int)$_POST['oxygen_saturation'] : null;
                 $vital_notes = trim($_POST['vital_notes'] ?? '');
                 
-                $has_vital = ($temperature !== null && $temperature !== '') || ($bp_systolic !== null && $bp_systolic !== '') || ($bp_diastolic !== null && $bp_diastolic !== '') || ($pulse_rate !== null && $pulse_rate !== '') || ($weight !== null && $weight !== '') || ($height !== null && $height !== '');
+                $has_vital = ($temperature !== null && $temperature !== '') || ($bp_systolic !== null && $bp_systolic !== '') || ($bp_diastolic !== null && $bp_diastolic !== '') || ($pulse_rate !== null && $pulse_rate !== '') || ($weight !== null && $weight !== '') || ($height !== null && $height !== '') || $oxygen_saturation !== null;
                 
                 if ($has_vital && $visit_id) {
                     $bmi = null;
@@ -725,8 +728,8 @@ try {
                         $height_m = $height / 100;
                         $bmi = round($weight / ($height_m * $height_m), 1);
                     }
-                    $stmt = $db->prepare("INSERT INTO vital_signs (patient_id, visit_id, recorded_by, branch_id, temperature, blood_pressure_systolic, blood_pressure_diastolic, pulse_rate, weight, height, bmi, notes, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
-                    $stmt->execute([$patient_id, $visit_id, $user_id, $selected_branch_id, $temperature ?: null, $bp_systolic ?: null, $bp_diastolic ?: null, $pulse_rate ?: null, $weight ?: null, $height ?: null, $bmi, $vital_notes ?: null]);
+                    $stmt = $db->prepare("INSERT INTO vital_signs (patient_id, visit_id, recorded_by, branch_id, temperature, blood_pressure_systolic, blood_pressure_diastolic, pulse_rate, weight, height, bmi, oxygen_saturation, notes, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())");
+                    $stmt->execute([$patient_id, $visit_id, $user_id, $selected_branch_id, $temperature ?: null, $bp_systolic ?: null, $bp_diastolic ?: null, $pulse_rate ?: null, $weight ?: null, $height ?: null, $bmi, $oxygen_saturation, $vital_notes ?: null]);
                 }
                 
                 $db->commit();
@@ -1309,6 +1312,55 @@ include_once '../../components/reception_sidebar.php';
         .vital-item-modern.bmi-item { 
             background: var(--primary-bg); 
             border-color: var(--primary); 
+        }
+        
+        /* ✅ SPO2 CARD STYLES */
+        .vital-item-modern.spo2-item {
+            background: rgba(8, 145, 178, 0.05);
+            border-color: #0891B2;
+        }
+        
+        .vital-item-modern.spo2-item .vital-label {
+            color: #0891B2;
+        }
+        
+        .vital-item-modern.spo2-item .vital-input {
+            color: #0891B2;
+            font-weight: 700;
+        }
+        
+        .spo2-category {
+            display: inline-block;
+            font-size: 0.55rem;
+            font-weight: 600;
+            padding: 2px 8px;
+            border-radius: 6px;
+            margin-top: 2px;
+            background: var(--gray-200);
+            color: var(--text-secondary);
+        }
+        
+        .spo2-category.spo2-normal {
+            background: rgba(5, 150, 105, 0.15);
+            color: #059669;
+        }
+        
+        .spo2-category.spo2-low {
+            background: rgba(217, 119, 6, 0.15);
+            color: #D97706;
+            animation: pulse-spo2 1.5s infinite;
+        }
+        
+        .spo2-category.spo2-critical {
+            background: rgba(220, 38, 38, 0.3);
+            color: #DC2626;
+            font-weight: 700;
+            animation: pulse-spo2 1s infinite;
+        }
+        
+        @keyframes pulse-spo2 {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
         }
         
         /* BUTTONS */
@@ -2164,11 +2216,11 @@ include_once '../../components/reception_sidebar.php';
                 
             </div>
             
-            <!-- VITAL SIGNS - Full Width -->
+            <!-- VITAL SIGNS - Full Width - 7 CARDS -->
             <div class="form-card-item" style="margin-top:18px;">
                 <div class="card-item-title">
                     <i class="fas fa-heartbeat" style="color:#DC2626;"></i> Vital Signs
-                    <span class="badge-label">Optional</span>
+                    <span class="badge-label">Optional - 7 Vitals</span>
                     <?php if ($selected_patient_id > 0 && $latest_vital_signs): ?>
                         <span style="font-size:0.65rem;color:var(--success);margin-left:8px;">
                             <i class="fas fa-check-circle"></i> Latest: <?= date('d/m/Y H:i', strtotime($latest_vital_signs['recorded_at'])) ?>
@@ -2214,6 +2266,14 @@ include_once '../../components/reception_sidebar.php';
                         <span class="vital-label">📊 BMI</span>
                         <input type="number" name="bmi" class="vital-input" id="bmiOutput" readonly step="0.1" placeholder="22.5" value="<?= $latest_vital_signs['bmi'] ?? '' ?>">
                         <span class="vital-unit">kg/m²</span>
+                    </div>
+                    
+                    <!-- ✅ MPYA: Oxygen Saturation (SpO2) -->
+                    <div class="vital-item-modern spo2-item">
+                        <span class="vital-label">🫁 Oxygen Saturation (SpO₂)</span>
+                        <input type="number" name="oxygen_saturation" class="vital-input" placeholder="98" value="<?= $latest_vital_signs['oxygen_saturation'] ?? '' ?>" id="spo2Input" oninput="updateSpO2Status()">
+                        <span class="vital-unit">%</span>
+                        <span class="spo2-category" id="spo2Category">Auto</span>
                     </div>
                 </div>
                 
@@ -2410,6 +2470,41 @@ include_once '../../components/reception_sidebar.php';
         } else {
             bmiOutput.value = '';
         }
+    }
+
+    // ================================================================
+    // SPO2 CATEGORY CALCULATOR
+    // ================================================================
+    function calculateSpO2Category() {
+        var spo2Input = document.getElementById('spo2Input');
+        var spo2Category = document.getElementById('spo2Category');
+        
+        if (!spo2Input || !spo2Category) return;
+        
+        var spo2 = parseFloat(spo2Input.value);
+        
+        if (!spo2 || spo2 <= 0) {
+            spo2Category.textContent = 'Auto';
+            spo2Category.className = 'spo2-category';
+            return;
+        }
+        
+        var category = '';
+        var categoryClass = '';
+        
+        if (spo2 >= 95) {
+            category = 'Normal';
+            categoryClass = 'spo2-normal';
+        } else if (spo2 >= 90) {
+            category = 'Low';
+            categoryClass = 'spo2-low';
+        } else {
+            category = 'Critical';
+            categoryClass = 'spo2-critical';
+        }
+        
+        spo2Category.textContent = category;
+        spo2Category.className = 'spo2-category ' + categoryClass;
     }
 
     // TOGGLE ASSIGNMENT TYPE
@@ -2767,6 +2862,7 @@ include_once '../../components/reception_sidebar.php';
     // INIT
     document.addEventListener('DOMContentLoaded', function() {
         calculateBMI();
+        calculateSpO2Category();
         updateVisitTypePrice();
         
         document.getElementById('patientSelect')?.addEventListener('change', function() {
@@ -2789,7 +2885,8 @@ include_once '../../components/reception_sidebar.php';
     console.log('%c👨‍⚕️ Braick - Assign Doctor (BIGGER CARDS)', 'font-size:18px; font-weight:bold; color:#2563EB;');
     console.log('%c✅ Cards size increased - min-height: 160px', 'font-size:13px; color:#34D399;');
     console.log('%c✅ Lab test card bigger - 320px scroll area, 18px checkboxes', 'font-size:13px; color:#34D399;');
-    console.log('%c✅ Form controls bigger - 44px min-height', 'font-size:13px; color:#34D399;');
+    console.log('%c✅ VITAL SIGNS: 7 CARDS (with SpO2)', 'font-size:13px; color:#DC2626;');
+    console.log('%c✅ SpO2 with category (Normal/Low/Critical)', 'font-size:13px; color:#0891B2;');
 </script>
 
 </body>

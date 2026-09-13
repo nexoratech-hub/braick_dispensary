@@ -1,10 +1,11 @@
 <?php
 // ================================================================
-// FILE: frontend/pages/doctor/view_visit_pdf.php
+// FILE: frontend/pages/doctor/view_patient_pdf.php
 // DOCTOR - VIEW VISIT PDF (FULLY REDESIGNED)
 // STRUCTURE: Same as view_visit.php with Official Stamp
 // A4 SIZE with Download, Print & Cancel buttons
 // FIXED: Bill number wraps to 2 rows in table
+// WITH 7 VITAL SIGNS (INCLUDING OXYGEN SATURATION)
 // BRAICK DISPENSARY
 // ================================================================
 
@@ -132,6 +133,11 @@ function getVitalStatus($value, $type) {
             if ($value > 100) return ['label' => 'HIGH', 'class' => 'high'];
             if ($value < 60) return ['label' => 'LOW', 'class' => 'low'];
             return ['label' => 'NORMAL', 'class' => 'normal'];
+        case 'spo2':
+            // SpO2 normal range: 95-100%
+            if ($value >= 95) return ['label' => 'NORMAL', 'class' => 'normal'];
+            if ($value >= 90) return ['label' => 'LOW', 'class' => 'low'];
+            return ['label' => 'CRITICAL', 'class' => 'high'];
         case 'bmi':
             if ($value >= 30) return ['label' => 'OBESE', 'class' => 'high'];
             if ($value >= 25) return ['label' => 'OVERWEIGHT', 'class' => 'high'];
@@ -222,7 +228,7 @@ if (!$visit) {
 }
 
 // ================================================================
-// GET VITAL SIGNS FOR THIS VISIT
+// GET VITAL SIGNS FOR THIS VISIT - 7 SIGNS WITH OXYGEN SATURATION
 // ================================================================
 $stmt = $db->prepare("
     SELECT vs.*, u.full_name as recorded_by_name
@@ -617,6 +623,11 @@ if (!file_exists($logo_path)) {
             gap: 8px;
         }
         
+        .section-title.sky {
+            color: #0284C7;
+            border-color: #0284C7;
+        }
+        
         .section-title .badge-count {
             font-size: 7pt;
             font-weight: 400;
@@ -662,11 +673,11 @@ if (!file_exists($logo_path)) {
         .col-span-2 { grid-column: span 2; }
         
         /* ================================================================ */
-        /* VITAL SIGNS - 2 ROWS, 3 PER ROW */
+        /* VITAL SIGNS - 7 SIGNS (4 PER ROW) */
         /* ================================================================ */
         .vital-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 8px;
             margin: 4px 0 8px 0;
         }
@@ -737,6 +748,18 @@ if (!file_exists($logo_path)) {
         .vital-card.indigo::before { background: #4F46E5; }
         .vital-card.indigo .vital-value { color: #4F46E5; }
         
+        /* SpO2 SPECIAL STYLING */
+        .vital-card.sky::before { background: linear-gradient(90deg, #0EA5E9, #38BDF8); }
+        .vital-card.sky .vital-value { color: #0284C7; }
+        .vital-card.sky {
+            background: linear-gradient(135deg, rgba(14, 165, 233, 0.05), rgba(14, 165, 233, 0.12));
+            border-color: #0EA5E9;
+        }
+        .vital-card.sky:hover {
+            border-color: #0284C7;
+            box-shadow: 0 4px 16px rgba(14, 165, 233, 0.2);
+        }
+        
         .vital-notes {
             font-size: 7.5pt;
             color: #64748B;
@@ -745,6 +768,19 @@ if (!file_exists($logo_path)) {
             border-radius: 4px;
             border-left: 3px solid #0B5ED7;
             margin-top: 4px;
+        }
+        
+        .vital-signs-footer {
+            margin-top: 6px;
+            padding: 4px 12px;
+            background: #F0F9FF;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            font-size: 7pt;
+            border: 1px dashed #0EA5E9;
         }
         
         /* ================================================================ */
@@ -1071,6 +1107,11 @@ if (!file_exists($logo_path)) {
             }
             
             .vital-card { break-inside: avoid; }
+            .vital-card.sky { 
+                background: #E0F2FE !important; 
+                -webkit-print-color-adjust: exact; 
+                print-color-adjust: exact; 
+            }
             .diagnosis-box { break-inside: avoid; }
             .bill-summary-card { break-inside: avoid; }
             .data-table tbody tr { break-inside: avoid; }
@@ -1080,6 +1121,17 @@ if (!file_exists($logo_path)) {
         @page {
             size: A4;
             margin: 12mm 10mm;
+        }
+        
+        /* ================================================================ */
+        /* RESPONSIVE */
+        /* ================================================================ */
+        @media (max-width: 768px) {
+            .vital-grid { grid-template-columns: repeat(3, 1fr); }
+        }
+        
+        @media (max-width: 480px) {
+            .vital-grid { grid-template-columns: repeat(2, 1fr); }
         }
     </style>
 </head>
@@ -1178,19 +1230,21 @@ if (!file_exists($logo_path)) {
         </div>
 
         <!-- ================================================================ -->
-        <!-- 3. VITAL SIGNS - 2 ROWS, 3 PER ROW -->
+        <!-- 3. VITAL SIGNS - 7 SIGNS (4 PER ROW) -->
         <!-- ================================================================ -->
-        <div class="section-title">
-            ❤️ Vital Signs
-            <span class="badge-count">Latest Record</span>
+        <div class="section-title sky">
+            ❤️ Vital Signs (7 Signs)
+            <span class="badge-count">🫁 SpO2 Normal: 95-100%</span>
         </div>
         <?php if ($vital_signs): 
             $temp_status = getVitalStatus($vital_signs['temperature'] ?? null, 'temperature');
             $sys = $vital_signs['blood_pressure_systolic'] ?? null;
             $bp_status = getVitalStatus($sys, 'systolic');
             $pulse_status = getVitalStatus($vital_signs['pulse_rate'] ?? null, 'pulse');
+            $spo2_status = getVitalStatus($vital_signs['oxygen_saturation'] ?? null, 'spo2');
             $bmi_status = getVitalStatus($vital_signs['bmi'] ?? null, 'bmi');
         ?>
+        <!-- Row 1: Temp, BP, Pulse, SpO2 -->
         <div class="vital-grid">
             <div class="vital-card blue">
                 <span class="vital-icon">🌡️</span>
@@ -1210,6 +1264,15 @@ if (!file_exists($logo_path)) {
                 <span class="vital-label">Pulse Rate</span>
                 <span class="vital-status <?= $pulse_status['class'] ?>"><?= $pulse_status['label'] ?></span>
             </div>
+            <div class="vital-card sky">
+                <span class="vital-icon">🫁</span>
+                <span class="vital-value"><?= $vital_signs['oxygen_saturation'] ?? '--' ?> <span class="vital-unit">%</span></span>
+                <span class="vital-label">Oxygen (SpO2)</span>
+                <span class="vital-status <?= $spo2_status['class'] ?>"><?= $spo2_status['label'] ?></span>
+            </div>
+        </div>
+        <!-- Row 2: Weight, Height, BMI, (empty) -->
+        <div class="vital-grid">
             <div class="vital-card purple">
                 <span class="vital-icon">⚖️</span>
                 <span class="vital-value"><?= $vital_signs['weight'] ?? '--' ?> <span class="vital-unit">kg</span></span>
@@ -1227,6 +1290,14 @@ if (!file_exists($logo_path)) {
                 <span class="vital-status <?= $bmi_status['class'] ?>"><?= $bmi_status['label'] ?></span>
             </div>
         </div>
+        
+        <!-- SpO2 Info Footer -->
+        <div class="vital-signs-footer">
+            <i class="fas fa-lungs" style="color:#0EA5E9;"></i>
+            <span style="color:#0284C7;">SpO2 (Oxygen Saturation) Normal Range: <strong>95-100%</strong></span>
+            <span style="color:#64748B;"> • 7 Vital Signs Tracked</span>
+        </div>
+        
         <?php if (!empty($vital_signs['notes'])): ?>
             <div class="vital-notes">
                 <strong>Notes:</strong> <?= nl2br(htmlspecialchars($vital_signs['notes'])) ?>
@@ -1517,10 +1588,8 @@ if (!file_exists($logo_path)) {
                     <td><?= $index + 1 ?></td>
                     <td>
                         <?php 
-                            // Split bill number into two parts for wrapping
                             $bill_num = $bill['bill_number'] ?? 'N/A';
                             if (strlen($bill_num) > 20) {
-                                // Split at the second dash
                                 $parts = explode('-', $bill_num);
                                 if (count($parts) >= 3) {
                                     $part1 = $parts[0] . '-' . $parts[1];
@@ -1638,14 +1707,17 @@ if (!file_exists($logo_path)) {
             }
         });
 
-        console.log('%c📄 Braick Dispensary - Visit PDF Report', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
+        console.log('%c📄 Braick Dispensary - Visit PDF Report (7 Vital Signs)', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
         console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
         console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'Unknown') ?>', 'font-size:13px; color:#64748B;');
         console.log('%c📅 Generated: <?= date('d/m/Y h:i A') ?>', 'font-size:13px; color:#0B5ED7;');
         console.log('%c📄 A4 Size | Download, Print & Cancel buttons', 'font-size:13px; color:#DC2626;');
         console.log('%c✅ Official Stamp included', 'font-size:13px; color:#34D399;');
         console.log('%c✅ Bill Number wraps to 2 rows in table', 'font-size:13px; color:#34D399;');
-        console.log('%c📋 Flow: Patient Info → Visit Info → Vital Signs (2 rows, 3 per row) → Clinical Table → Lab Tests → Diagnosis → Prescriptions → Procedures/Equipment → Bills with Cards', 'font-size:12px; color:#34D399;');
+        console.log('%c❤️ 7 Vital Signs: Temp, BP, Pulse, SpO2, Weight, Height, BMI', 'font-size:13px; color:#DC2626;');
+        console.log('%c🫁 SpO2 (Oxygen Saturation): Normal 95-100%', 'font-size:13px; color:#0EA5E9;');
+        console.log('%c🫁 SpO2 Value: <?= $vital_signs['oxygen_saturation'] ?? "N/A" ?>%', 'font-size:13px; color:#0EA5E9;');
+        console.log('%c📋 Flow: Patient Info → Visit Info → Vital Signs (7 signs) → Clinical Table → Lab Tests → Diagnosis → Prescriptions → Procedures/Equipment → Bills with Cards', 'font-size:12px; color:#34D399;');
     </script>
 
 </body>

@@ -9,6 +9,7 @@
 // FIXED: PDF starts at top of page
 // FIXED: All 10 sections appear in PDF (even empty ones)
 // FIXED: Removed Complete Button | Reduced Spacing to 1cm
+// ✅ VITAL SIGNS 7 - WITH OXYGEN SATURATION (SpO2)
 // ================================================================
 
 // ================================================================
@@ -166,7 +167,6 @@ try {
         $stmt->execute([$visit_id]);
         $prescriptions = $stmt->fetchAll(PDO::FETCH_ASSOC);
         
-        // Get prescription items with medication details
         foreach ($prescriptions as $pres) {
             $stmt = $db->prepare("
                 SELECT pi.*, mi.medication_name as inventory_medication_name,
@@ -216,6 +216,24 @@ try {
         ");
         $stmt->execute([$visit_id]);
         $vital_signs = $stmt->fetch(PDO::FETCH_ASSOC);
+    }
+    
+    // ================================================================
+    // CALCULATE SpO2 STATUS
+    // ================================================================
+    $spo2_value = null;
+    $spo2_class = 'normal';
+    $spo2_label = 'Normal';
+    
+    if ($vital_signs && !empty($vital_signs['oxygen_saturation'])) {
+        $spo2_value = (int)$vital_signs['oxygen_saturation'];
+        if ($spo2_value < 90) {
+            $spo2_class = 'critical';
+            $spo2_label = 'Critical';
+        } elseif ($spo2_value < 95) {
+            $spo2_class = 'low';
+            $spo2_label = 'Low';
+        }
     }
     
     // ================================================================
@@ -334,6 +352,9 @@ try {
     $unread_notifications = 0;
     $admin_phones = [];
     $branch_phone = '';
+    $spo2_value = null;
+    $spo2_class = 'normal';
+    $spo2_label = 'Normal';
 }
 
 // ================================================================
@@ -574,9 +595,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             min-height: calc(100vh - 68px);
         }
         
-        /* ================================================================
-           PAGE HEADER - BLUE THEME
-           ================================================================ */
         .page-header {
             background: var(--primary-gradient);
             border-radius: var(--radius-lg);
@@ -681,9 +699,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             box-shadow: 0 4px 16px rgba(0,0,0,0.15);
         }
         
-        /* ================================================================
-           DETAIL CARD - WITH 1cm SPACING
-           ================================================================ */
         .detail-card {
             background: var(--bg-card);
             border-radius: var(--radius-lg);
@@ -758,9 +773,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .col-span-2 { grid-column: span 2; }
         .col-span-3 { grid-column: span 3; }
         
-        /* ================================================================
-           STATUS BADGES
-           ================================================================ */
         .status-badge-visit {
             display: inline-block;
             font-size: 0.65rem;
@@ -781,12 +793,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .status-badge-visit.confirmed { background: #E8F0FE; color: #0B5ED7; }
         
         /* ================================================================
-           VITAL SIGNS CARDS (6 CARDS)
+           VITAL SIGNS - 7 CARDS (Row 1: 4, Row 2: 3)
            ================================================================ */
-        .vital-grid-6 {
+        .vital-grid-7 {
             display: grid;
-            grid-template-columns: repeat(6, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 8px;
+        }
+        
+        .vital-grid-7-row2 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+            margin-top: 8px;
         }
         
         .vital-card {
@@ -815,6 +834,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .vital-card.orange::before { background: var(--warning); }
         .vital-card.red::before { background: var(--danger); }
         .vital-card.teal::before { background: #0D9488; }
+        .vital-card.cyan::before { background: #0891B2; }
         
         .vital-card:hover {
             transform: translateY(-3px);
@@ -856,6 +876,26 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .vital-card.orange .vital-value { color: var(--warning); }
         .vital-card.red .vital-value { color: var(--danger); }
         .vital-card.teal .vital-value { color: #0D9488; }
+        .vital-card.cyan .vital-value { color: #0891B2; }
+        
+        /* SpO2 Status Badge */
+        .spo2-status {
+            display: inline-block;
+            font-size: 0.5rem;
+            font-weight: 600;
+            padding: 1px 8px;
+            border-radius: 10px;
+            margin-left: 4px;
+        }
+        
+        .spo2-status.normal { background: #D1FAE5; color: #059669; }
+        .spo2-status.low { background: #FEF3C7; color: #D97706; }
+        .spo2-status.critical { background: #FEE2E2; color: #DC2626; animation: pulse-spo2 1.5s infinite; }
+        
+        @keyframes pulse-spo2 {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
         
         /* ================================================================
            BILL SUMMARY CARDS
@@ -918,7 +958,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         [data-theme="dark"] .bill-card.cancelled { background: var(--bg-card); }
         
         /* ================================================================
-           TABLE STYLES - GREEN HEADERS WITH BEAUTIFUL CSS
+           TABLE STYLES - GREEN HEADERS
            ================================================================ */
         .table-wrapper {
             overflow-x: auto;
@@ -962,7 +1002,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             max-width: 200px;
         }
         
-        /* Medication table specific styles - Beautiful CSS */
         .medication-table td {
             padding: 10px 12px;
         }
@@ -1053,9 +1092,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .table-wrapper table .status-badge.paid { background: #D1FAE5; color: #059669; }
         .table-wrapper table .status-badge.dispensed { background: #D1FAE5; color: #059669; }
         
-        /* ================================================================
-           TECH INFO
-           ================================================================ */
         .tech-info {
             display: flex;
             align-items: center;
@@ -1078,9 +1114,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-primary);
         }
         
-        /* ================================================================
-           DOCTOR AVATAR
-           ================================================================ */
         .doctor-avatar-lg {
             width: 48px;
             height: 48px;
@@ -1122,9 +1155,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
         .footer .footer-brand { color: var(--primary); font-weight: 600; }
         
-        /* ================================================================
-           BRAND HEADER - BLUE THEME - FIXED: Logo Centered
-           ================================================================ */
         .brand-header {
             text-align: center;
             padding: 12px 0 10px 0;
@@ -1187,13 +1217,11 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-weight: 600;
         }
         
-        /* ================================================================
-           RESPONSIVE
-           ================================================================ */
         @media (max-width: 1024px) {
             .top-nav { left: 0; }
             .main-content { margin-left: 0; padding: 16px; }
-            .vital-grid-6 { grid-template-columns: repeat(3, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(3, 1fr); }
+            .vital-grid-7-row2 { grid-template-columns: repeat(3, 1fr); }
             .bill-summary-grid { grid-template-columns: repeat(2, 1fr); }
             .grid-4 { grid-template-columns: 1fr 1fr; }
             .grid-3 { grid-template-columns: 1fr 1fr; }
@@ -1204,7 +1232,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             .top-nav .datetime { display: none; }
             .page-header { padding: 16px 18px; }
             .page-header .page-title { font-size: 1.3rem; }
-            .vital-grid-6 { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid-7-row2 { grid-template-columns: repeat(2, 1fr); }
             .bill-summary-grid { grid-template-columns: 1fr; }
             .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
             .col-span-2, .col-span-3 { grid-column: span 1; }
@@ -1213,7 +1242,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         @media (max-width: 480px) {
             .main-content { padding: 10px; }
-            .vital-grid-6 { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid-7 { grid-template-columns: repeat(2, 1fr); }
+            .vital-grid-7-row2 { grid-template-columns: repeat(2, 1fr); }
             .page-header .btn-outline-light { padding: 4px 8px; font-size: 0.65rem; }
         }
         
@@ -1227,9 +1257,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             to { opacity: 1; transform: translateY(0); }
         }
         
-        /* ================================================================
-           TOAST
-           ================================================================ */
         .toast-custom {
             position: fixed;
             bottom: 24px;
@@ -1252,9 +1279,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         .toast-custom.error { background: var(--danger); }
         .toast-custom.info { background: var(--primary); }
         
-        /* ================================================================
-           PDF MODAL
-           ================================================================ */
         .pdf-modal-overlay {
             display: none;
             position: fixed;
@@ -1359,7 +1383,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             padding-top: 28px;
         }
         
-        /* PDF Styles - Natural page breaks */
         .pdf-content .pdf-section {
             page-break-inside: avoid;
             break-inside: avoid;
@@ -1380,7 +1403,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             padding-top: 0;
         }
         
-        /* PDF Content Styles - Logo Centered at Top */
         .pdf-content .pdf-header {
             text-align: center;
             padding-bottom: 12px;
@@ -1478,7 +1500,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         
         .pdf-content .pdf-vital-grid {
             display: grid;
-            grid-template-columns: repeat(3, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 4px;
             margin: 4px 0;
         }
@@ -1502,6 +1524,15 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             font-size: 0.85rem;
             font-weight: 700;
             color: var(--primary-dark);
+        }
+        
+        .pdf-content .pdf-vital-item.spo2-item {
+            background: #ECFEFF;
+            border-left-color: #0891B2;
+        }
+        
+        .pdf-content .pdf-vital-item.spo2-item .vital-value {
+            color: #0891B2;
         }
         
         .pdf-content .pdf-table {
@@ -1628,7 +1659,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
             color: var(--text-muted);
         }
         
-        /* Two row text wrap for PDF */
         .pdf-content .text-wrap-2 {
             display: -webkit-box;
             -webkit-line-clamp: 2;
@@ -1646,9 +1676,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 </head>
 <body>
 
-<!-- ================================================================ -->
 <!-- TOP NAVIGATION -->
-<!-- ================================================================ -->
 <nav class="top-nav no-print">
     <div class="flex items-center gap-4 flex-1">
         <button id="sidebarToggle" class="lg:hidden icon-btn">
@@ -1691,9 +1719,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 </nav>
 
-<!-- ================================================================ -->
 <!-- MAIN CONTENT -->
-<!-- ================================================================ -->
 <main class="main-content">
 
     <?php if ($error): ?>
@@ -1707,9 +1733,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     <?php elseif ($visit): ?>
     
-    <!-- ================================================================ -->
-    <!-- BRAND HEADER - FIXED: Logo Centered with Admin Numbers -->
-    <!-- ================================================================ -->
+    <!-- BRAND HEADER -->
     <div class="brand-header no-print">
         <div class="brand-logo">
             <img src="<?= $logo_path ?>" alt="Braick Logo" onerror="this.style.display='none'">
@@ -1733,9 +1757,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- PAGE HEADER -->
-    <!-- ================================================================ -->
     <div class="page-header">
         <div>
             <h1 class="page-title">
@@ -1768,9 +1790,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 1. VISIT INFORMATION -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-info-circle" style="color:var(--primary);font-size:1.2rem;"></i>
@@ -1820,9 +1840,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 2. PATIENT INFORMATION -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-user" style="color:var(--primary);font-size:1.2rem;"></i>
@@ -1879,9 +1897,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 3. DOCTOR INFORMATION -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-user-md" style="color:var(--primary);font-size:1.2rem;"></i>
@@ -1929,17 +1945,19 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
-    <!-- 4. VITAL SIGNS (6 CARDS) -->
-    <!-- ================================================================ -->
+    <!-- ================================================================
+         4. VITAL SIGNS - 7 CARDS (Row 1: 4, Row 2: 3)
+         ================================================================ -->
     <?php if ($vital_signs): ?>
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-heartbeat" style="color:var(--danger);font-size:1.2rem;"></i>
-            <h3>4. Vital Signs</h3>
+            <h3>4. Vital Signs (7 Measurements)</h3>
             <span class="badge-count"><?= isset($vital_signs['recorded_at']) ? date('M d, Y h:i A', strtotime($vital_signs['recorded_at'])) : 'N/A' ?></span>
         </div>
-        <div class="vital-grid-6">
+        
+        <!-- ROW 1: Temperature, BP, Pulse, Weight -->
+        <div class="vital-grid-7">
             <div class="vital-card blue">
                 <span class="vital-icon">🌡️</span>
                 <span class="vital-label">Temperature</span>
@@ -1966,6 +1984,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="vital-label">Weight</span>
                 <span class="vital-value"><?= $vital_signs['weight'] ?? 'N/A' ?> <span class="vital-unit">kg</span></span>
             </div>
+        </div>
+        
+        <!-- ROW 2: Height, BMI, SpO2 -->
+        <div class="vital-grid-7-row2">
             <div class="vital-card teal">
                 <span class="vital-icon">📏</span>
                 <span class="vital-label">Height</span>
@@ -1976,7 +1998,25 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <span class="vital-label">BMI</span>
                 <span class="vital-value"><?= $vital_signs['bmi'] ?? 'N/A' ?> <span class="vital-unit">kg/m²</span></span>
             </div>
+            <!-- ✅ MPYA: Oxygen Saturation (SpO2) -->
+            <div class="vital-card cyan">
+                <span class="vital-icon">🫁</span>
+                <span class="vital-label">Oxygen Saturation</span>
+                <span class="vital-value">
+                    <?= $spo2_value !== null ? $spo2_value : 'N/A' ?> 
+                    <span class="vital-unit">%</span>
+                    <?php if ($spo2_value !== null): ?>
+                        <span class="spo2-status <?= $spo2_class ?>">
+                            <?php if ($spo2_class === 'normal'): ?>✅
+                            <?php elseif ($spo2_class === 'low'): ?>⚠️
+                            <?php else: ?>🚨<?php endif; ?>
+                            <?= $spo2_label ?>
+                        </span>
+                    <?php endif; ?>
+                </span>
+            </div>
         </div>
+        
         <?php if (!empty($vital_signs['notes'])): ?>
             <div class="mt-2 text-sm" style="margin-top:8px;font-size:0.75rem;color:var(--text-secondary);">
                 <i class="fas fa-sticky-note mr-1"></i> Notes: <?= htmlspecialchars($vital_signs['notes']) ?>
@@ -1985,9 +2025,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
     <?php endif; ?>
 
-    <!-- ================================================================ -->
     <!-- 5. CLINICAL INFORMATION -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-file-medical-alt" style="color:var(--primary);font-size:1.2rem;"></i>
@@ -2037,9 +2075,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         </div>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 6. LAB TESTS -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-flask" style="color:var(--purple);font-size:1.2rem;"></i>
@@ -2106,9 +2142,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 7. DIAGNOSIS -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-stethoscope" style="color:var(--primary);font-size:1.2rem;"></i>
@@ -2157,9 +2191,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 8. MEDICATIONS -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-prescription" style="color:var(--success);font-size:1.2rem;"></i>
@@ -2250,9 +2282,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 9. PROCEDURES & EQUIPMENT -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-syringe" style="color:var(--purple);font-size:1.2rem;"></i>
@@ -2344,9 +2374,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
     <!-- 10. BILL SUMMARY -->
-    <!-- ================================================================ -->
     <div class="detail-card animate-fade-in-up">
         <div class="card-title-section">
             <i class="fas fa-money-bill-wave" style="color:var(--success);font-size:1.2rem;"></i>
@@ -2426,9 +2454,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         <?php endif; ?>
     </div>
 
-    <!-- ================================================================ -->
     <!-- FOOTER -->
-    <!-- ================================================================ -->
     <footer class="footer no-print">
         <p>
             <span class="footer-brand">Braick Dispensary</span> Management System
@@ -2453,9 +2479,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
 
 </main>
 
-<!-- ================================================================ -->
 <!-- PDF MODAL -->
-<!-- ================================================================ -->
 <div class="pdf-modal-overlay" id="pdfModal">
     <div class="pdf-modal">
         <div class="pdf-modal-header">
@@ -2483,9 +2507,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
 <!-- TOAST -->
-<!-- ================================================================ -->
 <div id="toast" class="toast-custom" style="display:none;">
     <i class="fas fa-info-circle" style="font-size:1.1rem;"></i>
     <div>
@@ -2494,13 +2516,8 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     </div>
 </div>
 
-<!-- ================================================================ -->
-<!-- JAVASCRIPT -->
-<!-- ================================================================ -->
 <script>
-    // ================================================================
     // DARK MODE
-    // ================================================================
     var darkModeToggle = document.getElementById('darkModeToggle');
     var darkIcon = document.getElementById('darkIcon');
     var darkText = document.getElementById('darkText');
@@ -2528,9 +2545,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
     // SIDEBAR TOGGLE
-    // ================================================================
     var sidebar = document.getElementById('sidebar');
     var sidebarToggle = document.getElementById('sidebarToggle');
     
@@ -2546,22 +2561,14 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         }
     });
 
-    // ================================================================
     // DATE & TIME
-    // ================================================================
     function updateDateTime() {
         var now = new Date();
         var dateStr = now.toLocaleDateString('en-US', {
-            weekday: 'short',
-            month: 'short', 
-            day: 'numeric', 
-            year: 'numeric'
+            weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
         });
         var timeStr = now.toLocaleTimeString('en-US', {
-            hour: '2-digit', 
-            minute: '2-digit', 
-            second: '2-digit', 
-            hour12: true
+            hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true
         });
         
         var dtEl = document.getElementById('currentDateTime');
@@ -2578,9 +2585,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     updateDateTime();
     setInterval(updateDateTime, 1000);
 
-    // ================================================================
     // SEARCH
-    // ================================================================
     var searchBtn = document.getElementById('searchBtn');
     var searchInput = document.getElementById('searchInput');
     
@@ -2596,9 +2601,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         if (e.key === 'Enter') performSearch();
     });
 
-    // ================================================================
     // TOAST
-    // ================================================================
     function showToast(title, message, type) {
         var toast = document.getElementById('toast');
         var toastTitle = document.getElementById('toastTitle');
@@ -2621,7 +2624,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     }
 
     // ================================================================
-    // GENERATE PDF - FIXED: Starts at top, All 10 sections included
+    // GENERATE PDF - WITH 7 VITAL SIGNS
     // ================================================================
     function generatePDF() {
         var modal = document.getElementById('pdfModal');
@@ -2635,16 +2638,27 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         var hasProcedures = <?= (count($procedures) > 0 || count($equipment_used) > 0) ? 'true' : 'false' ?>;
         var hasBills = <?= !empty($bills) ? 'true' : 'false' ?>;
         
+        // ================================================================
+        // VITAL SIGNS - 7 MEASUREMENTS WITH SpO2
+        // ================================================================
         var vitalSignsHTML = '';
         if (hasVitalSigns) {
+            var spo2Value = <?= $spo2_value !== null ? $spo2_value : 'null' ?>;
+            var spo2Icon = '✅';
+            if (spo2Value !== null) {
+                if (spo2Value < 90) spo2Icon = '🚨';
+                else if (spo2Value < 95) spo2Icon = '⚠️';
+            }
+            
             vitalSignsHTML = `
-                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:4px;">
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:4px;">
                     <div style="background:#E8F0FE;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #0B5ED7;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">🌡️ Temperature</div><div style="font-weight:700;color:#0B5ED7;font-size:14px;"><?= $vital_signs['temperature'] ?? 'N/A' ?> °C</div></div>
                     <div style="background:#D1FAE5;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #059669;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">❤️ Blood Pressure</div><div style="font-weight:700;color:#059669;font-size:14px;"><?= !empty($vital_signs['blood_pressure_systolic']) && !empty($vital_signs['blood_pressure_diastolic']) ? $vital_signs['blood_pressure_systolic'] . ' / ' . $vital_signs['blood_pressure_diastolic'] . ' mmHg' : 'N/A' ?></div></div>
                     <div style="background:#EDE9FE;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #7C3AED;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">💓 Pulse Rate</div><div style="font-weight:700;color:#7C3AED;font-size:14px;"><?= $vital_signs['pulse_rate'] ?? 'N/A' ?> bpm</div></div>
                     <div style="background:#FEF3C7;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #D97706;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">⚖️ Weight</div><div style="font-weight:700;color:#D97706;font-size:14px;"><?= $vital_signs['weight'] ?? 'N/A' ?> kg</div></div>
                     <div style="background:#D1FAE5;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #0D9488;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">📏 Height</div><div style="font-weight:700;color:#0D9488;font-size:14px;"><?= $vital_signs['height'] ?? 'N/A' ?> cm</div></div>
                     <div style="background:#FEE2E2;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #DC2626;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">📊 BMI</div><div style="font-weight:700;color:#DC2626;font-size:14px;"><?= $vital_signs['bmi'] ?? 'N/A' ?> kg/m²</div></div>
+                    <div style="background:#ECFEFF;padding:4px 6px;border-radius:6px;text-align:center;border-left:3px solid #0891B2;grid-column:span 2;"><div style="font-size:0.45rem;font-weight:600;color:#64748B;text-transform:uppercase;">🫁 Oxygen Saturation (SpO₂)</div><div style="font-weight:700;color:#0891B2;font-size:14px;"><?= $spo2_value !== null ? $spo2_value : 'N/A' ?> % ${spo2Icon}</div></div>
                 </div>
             `;
         } else {
@@ -2964,10 +2978,10 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
                 <?php endif; ?>
             </div>
             
-            <!-- 4. VITAL SIGNS -->
+            <!-- 4. VITAL SIGNS - 7 MEASUREMENTS -->
             <div class="pdf-section">
                 <div style="font-size:14px;font-weight:700;color:#0B5ED7;border-bottom:2px solid #6EA8FE;padding-bottom:4px;margin:6px 0 4px 0;">
-                    <i class="fas fa-heartbeat"></i> 4. Vital Signs
+                    <i class="fas fa-heartbeat"></i> 4. Vital Signs (7 Measurements)
                 </div>
                 ` + vitalSignsHTML + `
             </div>
@@ -3043,7 +3057,6 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         content.innerHTML = html;
         modal.classList.add('active');
         
-        // Scroll to top of modal body
         var modalBody = document.getElementById('pdfModalBody');
         if (modalBody) {
             modalBody.scrollTop = 0;
@@ -3080,18 +3093,12 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
         html2pdf().set(opt).from(element).save();
     }
 
-    // ================================================================
-    // KEYBOARD SHORTCUTS
-    // ================================================================
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
             closePDFModal();
         }
     });
 
-    // ================================================================
-    // CLICK OUTSIDE TO CLOSE PDF MODAL
-    // ================================================================
     document.getElementById('pdfModal').addEventListener('click', function(e) {
         if (e.target === this) {
             closePDFModal();
@@ -3101,6 +3108,7 @@ include_once __DIR__ . '/../../components/admin_sidebar.php';
     console.log('%c🏥 Braick Dispensary - Complete Visit Details', 'font-size:18px; font-weight:bold; color:#0B5ED7;');
     console.log('%c📋 Visit: <?= htmlspecialchars($visit['visit_number'] ?? 'N/A') ?>', 'font-size:13px; color:#059669;');
     console.log('%c👤 Patient: <?= htmlspecialchars($visit['patient_name'] ?? 'N/A') ?>', 'font-size:13px; color:#64748B;');
+    console.log('%c❤️ VITAL SIGNS: 7 MEASUREMENTS (Temp, BP, Pulse, Weight, Height, BMI, SpO2)', 'font-size:13px; color:#DC2626; font-weight:bold;');
     console.log('%c✅ FIXED: PDF starts at top | All 10 sections included | Empty sections show "No data" message', 'font-size:13px; color:#0B5ED7;');
     console.log('%c📞 Admin Contacts: <?= !empty($admin_phones) ? implode(' | ', $admin_phones) : ($branch_phone ?? '+255 700 000 001') ?>', 'font-size:13px; color:#D97706;');
 </script>
